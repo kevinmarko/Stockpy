@@ -368,21 +368,11 @@ class StrategyEngine:
             _weight = _effective_weights.get(_name, 0.0)
             score_components[_name] = float(_output.score) * float(_weight)
 
-        # Determine trend direction for options and sizing
+        # Determine trend direction for sizing and advice
         if aroon_osc is not None and not pd.isna(aroon_osc):
             is_uptrend = aroon_osc >= 50
         else:
             is_uptrend = trend_strength >= 50.0
-
-        # Options overlay uses lookahead-free strong uptrend filter
-        if roc_12m != 0.0:
-            if sma_200 > 0:
-                is_strong_uptrend = (roc_12m > 0) and (current_price > sma_200)
-            else:
-                is_strong_uptrend = roc_12m > 0
-        else:
-            # Fallback to legacy trend filter in unit tests when roc_12m is not provided
-            is_strong_uptrend = is_uptrend
 
         # ---------------------------------------------------------------------
         # PHASE 5: ACTION ADVICE GENERATOR
@@ -436,9 +426,13 @@ class StrategyEngine:
         sell_side_range = apply_sell_side_range(signal, range_params)
 
         # ---------------------------------------------------------------------
-        # PHASE 7 & 8: OPTIONS & SIZING
+        # PHASE 7 & 8: SIZING
         # ---------------------------------------------------------------------
-        option_strategy, option_details = self._select_options_overlay(bar, fundamentals, signal, is_strong_uptrend, atr)
+        # The text-only "OPTIONS HEDGE" overlay (covered call / cash-secured put
+        # / collar suggestions) left core with the options desk (2026-09, step
+        # 3d); "Option Strategy" stays in the output as an empty string until
+        # the COLUMN_SCHEMA trim in step 4.
+        option_strategy = ""
         raw_weight, kelly_fraction_pre_regime, sizing_path_tag = self._calculate_kelly_sizing_detailed(
             garch_vol, strategy_id=strategy_id
         )
@@ -516,7 +510,6 @@ class StrategyEngine:
             f"SCORE {final_score}/100: {'; '.join(score_log)}.",
             f"MACD ENV: {macro.market_regime} | Ticker: {ticker}.",
             f"RISK FRAME: Sizing target {kelly_fraction * 100:.1f}% based on win probability models [{sizing_path_tag}].",
-            f"OPTIONS HEDGE: {option_strategy} - {option_details}"
         ]
         if warnings:
             verbose_notes.append(f"CRITICAL WARNINGS: {', '.join(warnings)}")
@@ -584,55 +577,6 @@ class StrategyEngine:
     # =============================================================================
     # OPTION STRATEGY OVERLAY SELECTION MATRIX
     # =============================================================================
-    def _select_options_overlay(self, 
-                                 bar: MarketBarDTO, 
-                                 fundamentals: FundamentalDataDTO, 
-                                 signal: str, 
-                                 is_uptrend: bool,
-                                 atr: float = 0.0) -> Tuple[str, str]:
-        """
-        Determines the optimal derivatives hedge or income overlay based on volatility.
-        """
-        sector = fundamentals.sector
-        price = bar.close
-        safe_atr = atr if atr > 0 else (price * 0.02)
-        is_yield_asset = "Real Estate" in sector or "Financial" in sector
-        
-        if signal in ["STRONG BUY", "BUY"]:
-            if is_uptrend:
-                strike = math.ceil(price + (1.5 * safe_atr))
-                delta = "delta-15" if is_yield_asset else "delta-20"
-                return (
-                    f"OTM Covered Call ({delta})", 
-                    f"Sell 30-day Call at strike ${strike:.2f} to capture premium while allowing upside."
-                )
-            else:
-                strike = math.floor(price - (1.25 * safe_atr))
-                return (
-                    "Cash Secured Put", 
-                    f"Sell 45-day Put at strike ${strike:.2f} (delta-30) to acquire shares at deep discount."
-                )
-        elif signal == "HOLD":
-            upper_strike = math.ceil(price + (2.0 * safe_atr))
-            lower_strike = math.floor(price - (2.0 * safe_atr))
-            return (
-                "Iron Condor / Strangle", 
-                f"Sell credit spreads at ${lower_strike:.2f} Put and ${upper_strike:.2f} Call to capture volatility."
-            )
-        else: # RISK REDUCE / BEARISH
-            if is_yield_asset:
-                strike = math.floor(price + (0.5 * safe_atr))
-                return (
-                    "Defensive Covered Call", 
-                    f"Sell near-the-money 15-day Call at strike ${strike:.2f} to buffer downward capital drag."
-                )
-            else:
-                strike = math.floor(price * 0.90)
-                return (
-                    "Protective Collar", 
-                    f"Purchase protective Put at strike ${strike:.2f} financed by selling near-the-money Covered Calls."
-                )
-
     # =============================================================================
     # POSITION SIZING: VOLATILITY TARGETING + ESTIMATED-p FRACTIONAL KELLY
     # =============================================================================

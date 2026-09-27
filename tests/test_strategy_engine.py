@@ -20,9 +20,8 @@ Coverage:
      buy/hold/reduce branches, Graham cap, support>resistance fallback, stop clamp.
   5. TestGenerateRobinhoodAdvice   — the ``_generate_robinhood_advice`` helper's
      no-position / accumulate / maintain / trim branches and break-even adjustment.
-  6. TestSelectOptionsOverlay      — every branch of the ``_select_options_overlay``
-     derivatives matrix (covered call / cash-secured put / iron condor /
-     defensive covered call / protective collar; yield vs non-yield split).
+  6. TestNoOptionsOverlay          — the text-only options overlay is gone
+     ("Option Strategy" is empty, no "OPTIONS HEDGE" note).
 
 Files checked to AVOID duplication (their surfaces are deliberately not re-tested here):
   - tests/test_sell_side_range.py       (owns apply_sell_side_range + sellRange schema)
@@ -574,36 +573,17 @@ class TestGenerateRobinhoodAdvice:
 
 
 # ===========================================================================
-# 6. _select_options_overlay (derivatives matrix)
+# 6. The options overlay is gone (options desk left core, 2026-09, step 3d)
 # ===========================================================================
-class TestSelectOptionsOverlay:
-    def _select(self, signal, is_uptrend, sector="Technology", price=100.0, atr=2.0):
-        eng = _engine()
-        bar = _bar("XYZ", price)
-        fund = _fund(sector=sector)
-        return eng._select_options_overlay(bar, fund, signal, is_uptrend, atr)
+class TestNoOptionsOverlay:
+    @pytest.mark.parametrize("forecast_price", [120.0, 157.5, 200.0])
+    def test_option_strategy_is_empty_and_no_hedge_note(self, forecast_price):
+        out = _engine().evaluate_security(
+            bar=_bar(), fundamentals=_fund(sector="Real Estate"), macro=_macro_riskon(),
+            forecast_price=forecast_price, trend_strength=72.0, atr=2.50, garch_vol=0.20,
+        )
+        assert out["Option Strategy"] == ""
+        assert "OPTIONS HEDGE" not in out["Strategy Explainer Notes"]
 
-    def test_buy_uptrend_non_yield_is_covered_call_delta20(self):
-        strat, detail = self._select("BUY", True, sector="Technology")
-        assert "OTM Covered Call" in strat and "delta-20" in strat
-        assert "$" in detail
-
-    def test_buy_uptrend_yield_asset_is_covered_call_delta15(self):
-        strat, _ = self._select("BUY", True, sector="Real Estate (mREIT)")
-        assert "OTM Covered Call" in strat and "delta-15" in strat
-
-    def test_buy_downtrend_is_cash_secured_put(self):
-        strat, _ = self._select("BUY", False, sector="Technology")
-        assert strat == "Cash Secured Put"
-
-    def test_hold_is_iron_condor(self):
-        strat, _ = self._select("HOLD", True, sector="Technology")
-        assert "Iron Condor" in strat
-
-    def test_risk_reduce_yield_asset_is_defensive_covered_call(self):
-        strat, _ = self._select("RISK REDUCE", False, sector="Financial Services")
-        assert strat == "Defensive Covered Call"
-
-    def test_risk_reduce_non_yield_is_protective_collar(self):
-        strat, _ = self._select("RISK REDUCE", False, sector="Technology")
-        assert strat == "Protective Collar"
+    def test_select_options_overlay_is_removed(self):
+        assert not hasattr(StrategyEngine, "_select_options_overlay")

@@ -8,7 +8,7 @@ Design principles
 -----------------
 * **Integrate, don't reinvent** (CONSTRAINT #7): calls the existing
   StrategyEngine, ForecastingEngine, ProcessingEngine,
-  TechnicalOptionsEngine, and fractional_kelly — never re-implements
+  GarchVolatilityEstimator, and fractional_kelly — never re-implements
   their math.
 * **Resilience** (CONSTRAINT #6): every module call is wrapped in
   try/except.  Missing outputs lower conviction and/or set
@@ -53,7 +53,7 @@ ADVISORY_MAX_POSITION_PCT = "advisory_max_position_pct"
 from processing_engine import ProcessingEngine
 from forecasting_engine import ForecastingEngine
 from forecasting.forecast_tracker import ForecastTracker
-from technical_options_engine import TechnicalOptionsEngine
+from volatility.garch import GarchVolatilityEstimator
 from strategy_engine import StrategyEngine
 from transactions_store import TransactionsStore, _OfflineTransactionsStore
 from data.historical_store import HistoricalStore
@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Lazy module-level engine singletons (PR A / A2 — hot-path performance)
 # ---------------------------------------------------------------------------
-# evaluate() previously RECONSTRUCTED ProcessingEngine, TechnicalOptionsEngine,
+# evaluate() previously RECONSTRUCTED ProcessingEngine, GarchVolatilityEstimator,
 # ForecastingEngine, StrategyEngine, and TransactionsStore on EVERY call — i.e.
 # once (or 2-3× for the store) per symbol, per cycle.  TransactionsStore.__init__
 # alone runs Base.metadata.create_all + inspect + a conditional ALTER TABLE (real
@@ -73,15 +73,15 @@ logger = logging.getLogger(__name__)
 # build each engine ONCE per process and reuse it.
 #
 # Thread-safety (the orchestrator calls evaluate() CONCURRENTLY across symbols):
-#   * ProcessingEngine / TechnicalOptionsEngine / ForecastingEngine /
+#   * ProcessingEngine / GarchVolatilityEstimator / ForecastingEngine /
 #     StrategyEngine store only immutable config on ``self``; their compute
 #     methods (calculate_technical_metrics, estimate_gjr_garch_volatility,
 #     generate_forecast, evaluate_security) never mutate instance state, so one
 #     shared instance is safe for concurrent READ use.  StrategyEngine's only
 #     lazy self-write (the ``transactions_store`` property at strategy_engine.py
 #     ~524) is pre-empted because we always inject a store at construction, so
-#     it never fires.  TechnicalOptionsEngine (technical_options_engine.py ~361)
-#     has no __init__ at all — it is fully stateless.
+#     it never fires.  GarchVolatilityEstimator (volatility/garch.py) has no
+#     __init__ at all — it is fully stateless.
 #   * TransactionsStore shares one thread-safe SQLAlchemy engine and opens a
 #     FRESH per-call session in every read method (closed_trades_df/
 #     open_trades_df/…), so a shared singleton is safe for concurrent reads.
@@ -99,14 +99,14 @@ logger = logging.getLogger(__name__)
 _ENGINE_LOCK = threading.Lock()
 
 _ProcessingEngine_orig = ProcessingEngine
-_TechnicalOptionsEngine_orig = TechnicalOptionsEngine
+_GarchVolatilityEstimator_orig = GarchVolatilityEstimator
 _ForecastingEngine_orig = ForecastingEngine
 _StrategyEngine_orig = StrategyEngine
 _TransactionsStore_orig = TransactionsStore
 _HistoricalStore_orig = HistoricalStore
 
 _PROCESSING_ENGINE: Optional[Any] = None
-_TECH_OPTIONS_ENGINE: Optional[Any] = None
+_GARCH_ESTIMATOR: Optional[Any] = None
 _FORECASTING_ENGINE: Optional[Any] = None
 _STRATEGY_ENGINE: Optional[Any] = None
 _TRANSACTIONS_STORE: Optional[Any] = None
@@ -143,16 +143,16 @@ def _get_processing_engine() -> Any:
     return _PROCESSING_ENGINE
 
 
-def _get_technical_options_engine() -> Any:
-    """Process-wide TechnicalOptionsEngine singleton (fresh/uncached when patched)."""
-    global _TECH_OPTIONS_ENGINE
-    if TechnicalOptionsEngine is not _TechnicalOptionsEngine_orig:
-        return TechnicalOptionsEngine()
-    if _TECH_OPTIONS_ENGINE is None:
+def _get_garch_estimator() -> Any:
+    """Process-wide GarchVolatilityEstimator singleton (fresh/uncached when patched)."""
+    global _GARCH_ESTIMATOR
+    if GarchVolatilityEstimator is not _GarchVolatilityEstimator_orig:
+        return GarchVolatilityEstimator()
+    if _GARCH_ESTIMATOR is None:
         with _ENGINE_LOCK:
-            if _TECH_OPTIONS_ENGINE is None:
-                _TECH_OPTIONS_ENGINE = TechnicalOptionsEngine()
-    return _TECH_OPTIONS_ENGINE
+            if _GARCH_ESTIMATOR is None:
+                _GARCH_ESTIMATOR = GarchVolatilityEstimator()
+    return _GARCH_ESTIMATOR
 
 
 def _get_forecasting_engine() -> Any:
@@ -526,7 +526,7 @@ def evaluate(
     context_extras: Optional[Dict[str, Any]] = None,
     *,
     processing_engine: Optional[Any] = None,
-    technical_options_engine: Optional[Any] = None,
+    garch_estimator: Optional[Any] = None,
     forecasting_engine: Optional[Any] = None,
     strategy_engine: Optional[Any] = None,
     precomputed_garch: Optional[float] = None,
@@ -579,7 +579,7 @@ def evaluate(
         multifactor signals score correctly instead of falling back to 0
         (their neutral value when the context dicts are empty).
         ``None`` (the default) reproduces pre-wiring behavior exactly.
-    processing_engine, technical_options_engine, forecasting_engine, strategy_engine :
+    processing_engine, garch_estimator, forecasting_engine, strategy_engine :
         Optional pre-built engine instances (keyword-only).  When ``None`` (the
         default) a process-wide lazy singleton is used instead of reconstructing
         the engine per call — see the ``_get_*`` getters at module top.  A caller
@@ -793,7 +793,7 @@ def evaluate(
             partial_flags.append("technical_metrics_failed")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Step 5 — GJR-GARCH volatility (TechnicalOptionsEngine)
+    # Step 5 — GJR-GARCH volatility (volatility.garch.GarchVolatilityEstimator)
     # OUTPUT-CHANGING opt-in: reuse the orchestrator's already-fit GARCH vol for
     # this ticker (settings.ADVISORY_REUSE_PIPELINE_COMPUTE) instead of a second
     # independent fit. Only trusted when it's a real positive number; otherwise
@@ -817,9 +817,9 @@ def evaluate(
     elif has_sufficient_history:
         try:
             toe = (
-                technical_options_engine
-                if technical_options_engine is not None
-                else _get_technical_options_engine()
+                garch_estimator
+                if garch_estimator is not None
+                else _get_garch_estimator()
             )
             # ONE fit covers both this step's horizon=1 sizing use (garch_vol,
             # unchanged) and Step 6's per-horizon (10/30/60/90) forecast sigma

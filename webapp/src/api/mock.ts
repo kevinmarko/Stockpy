@@ -2265,7 +2265,7 @@ interface MockTunableDef {
 // comment.
 // ---------------------------------------------------------------------------
 const MOCK_CAPTURE_SITES: Record<string, string[]> = {
-  RISK_FREE_RATE: ["processing_engine.py:37", "technical_options_engine.py:25"],
+  RISK_FREE_RATE: ["processing_engine.py:37", "technical_options_engine.py:24"],
   MARKET_RISK_PREMIUM: ["processing_engine.py:38"],
   REQUIRED_RETURN_RATE: ["processing_engine.py:39"],
   MAX_PORTFOLIO_HEAT: ["execution/risk_gate.py:153"],

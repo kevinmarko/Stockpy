@@ -815,10 +815,10 @@ class TestPrecomputedGarchSigma:
 
     def test_precomputed_term_structure_folds_in_and_skips_estimator(self, engine, monkeypatch):
         captured = self._capture_mc_sigma_by_horizon(engine, monkeypatch)
-        from technical_options_engine import TechnicalOptionsEngine
+        from volatility.garch import GarchVolatilityEstimator
         spy = mock.MagicMock()
         monkeypatch.setattr(
-            TechnicalOptionsEngine, "estimate_gjr_garch_volatility_term_structure", spy
+            GarchVolatilityEstimator, "estimate_gjr_garch_volatility_term_structure", spy
         )
 
         # A genuine mean-reverting term structure (annualized vol shrinking
@@ -844,10 +844,10 @@ class TestPrecomputedGarchSigma:
 
     def test_none_precomputed_routes_to_estimator(self, engine, monkeypatch):
         captured = self._capture_mc_sigma_by_horizon(engine, monkeypatch)
-        from technical_options_engine import TechnicalOptionsEngine
+        from volatility.garch import GarchVolatilityEstimator
         spy = mock.MagicMock(return_value={10: 0.50, 30: 0.50, 60: 0.50, 90: 0.50})
         monkeypatch.setattr(
-            TechnicalOptionsEngine, "estimate_gjr_garch_volatility_term_structure", spy
+            GarchVolatilityEstimator, "estimate_gjr_garch_volatility_term_structure", spy
         )
 
         history = _price_series(60, seed=32)
@@ -870,10 +870,10 @@ class TestPrecomputedGarchSigma:
         genuine, mean-reversion-aware value instead of the scalar naively
         broadcast via sigma*sqrt(T)."""
         self._capture_mc_sigma_by_horizon(engine, monkeypatch)
-        from technical_options_engine import TechnicalOptionsEngine
+        from volatility.garch import GarchVolatilityEstimator
         spy = mock.MagicMock(return_value={10: 0.50, 30: 0.50, 60: 0.50, 90: 0.50})
         monkeypatch.setattr(
-            TechnicalOptionsEngine, "estimate_gjr_garch_volatility_term_structure", spy
+            GarchVolatilityEstimator, "estimate_gjr_garch_volatility_term_structure", spy
         )
 
         history = _price_series(60, seed=33)

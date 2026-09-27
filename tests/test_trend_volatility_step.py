@@ -1,24 +1,17 @@
 """
-tests/test_options_analysis_step_garch_none.py
-=================================================
-Regression coverage for pipeline/production_steps.py::OptionsAnalysisStep's
-``_options_one`` closure crashing (and silently dropping the WHOLE per-ticker
-options step -- Aroon/Coppock/Chandelier/Realized_Vol_Rank/True_IVR/VRP/
-Option_Strategy_Matrix, none of which depend on GARCH at all) whenever
-``TechnicalOptionsEngine.estimate_gjr_garch_volatility_term_structure``
-returns ``None`` for a ticker with too little price history (< 22 rows) to
-measure ANY volatility figure, GARCH or historical-stdev (CONSTRAINT #4).
+tests/test_trend_volatility_step.py
+===================================
+Regression coverage for pipeline/production_steps.py::TrendVolatilityStep's
+``_trend_vol_one`` closure (the per-ticker half of the old
+``OptionsAnalysisStep``, split out in 2026-09, step 3d).
 
-Before the fix, ``garch_term_structure[1]`` raised ``TypeError`` (subscripting
-``None``), caught by ``_options_one``'s own broad ``except Exception`` and
-turned into ``return ticker, None, None, None`` -- so ``tech_opt_indicators``
-had NO entry at all for that ticker, discarding every unrelated indicator
-too. After the fix, ``vol`` degrades to ``NaN`` and the rest of the per-
-ticker computation proceeds normally, matching this codebase's existing VRP
-gate contract (``vrp = current_iv - vol`` propagates the NaN and correctly
-gates the VRP leg closed downstream).
-
-See docs/known_issues/forecast_ito_double_correction_and_horizon_units.md.
+A ticker with too little price history (< 22 rows) to measure ANY volatility
+figure makes ``GarchVolatilityEstimator.estimate_gjr_garch_volatility_term_structure``
+return ``None`` (CONSTRAINT #4). That must degrade ``GARCH_Vol`` to ``NaN``
+while the Aroon/Coppock/Chandelier indicators (which don't depend on GARCH)
+are still computed -- the whole per-ticker entry must never be dropped.
+Originally fixed in the options step; see
+docs/known_issues/forecast_ito_double_correction_and_horizon_units.md.
 """
 from __future__ import annotations
 
@@ -33,7 +26,7 @@ from data_engine import MockDataEngine
 from macro_engine import MacroEngine
 from main_orchestrator import EngineContext
 from pipeline.context import RunContext
-from pipeline.production_steps import OptionsAnalysisStep
+from pipeline.production_steps import TrendVolatilityStep
 
 
 class _FakeFred:
@@ -88,29 +81,25 @@ def _make_ctx(symbols, tech_raw) -> RunContext:
     )
 
 
-class TestOptionsOneSurvivesInsufficientGarchHistory:
+class TestTrendVolOneSurvivesInsufficientGarchHistory:
     def test_short_history_ticker_still_gets_a_result_not_dropped_entirely(self):
         """The regression: a ticker with < 22 rows of history must still
-        produce a tech_opt_indicators entry (Aroon/Coppock/Chandelier/
-        Realized_Vol_Rank/True_IVR/VRP/Option_Strategy_Matrix), not be
-        silently absent from the dict because GARCH alone couldn't be
+        produce a trend_vol_indicators entry (Aroon/Coppock/Chandelier), not
+        be silently absent from the dict because GARCH alone couldn't be
         measured."""
         ctx = _make_ctx(["SHORTHIST"], {"SHORTHIST": _short_ohlcv(15)})
 
-        OptionsAnalysisStep().run(ctx)  # must not raise
+        TrendVolatilityStep().run(ctx)  # must not raise
 
-        tech_opt = ctx.context_extras["tech_opt_indicators"]
-        assert "SHORTHIST" in tech_opt, (
+        trend_vol = ctx.context_extras["trend_vol_indicators"]
+        assert "SHORTHIST" in trend_vol, (
             "ticker was dropped entirely instead of degrading GARCH_Vol to NaN"
         )
-        result = tech_opt["SHORTHIST"]
+        result = trend_vol["SHORTHIST"]
         assert math.isnan(result["GARCH_Vol"])
-        # VRP = current_iv - GARCH_vol propagates the NaN and correctly
-        # gates the VRP leg closed downstream (existing, unrelated contract).
-        assert math.isnan(result["VRP"]) or result["VRP"] is None
-        # The strategy matrix must degrade to Cash/Wait, never crash or
-        # fabricate a directive off an unmeasurable vol.
-        assert "Cash" in result["Option_Strategy_Matrix"]
+        # The options-only outputs are no longer produced at all.
+        for gone in ("VRP", "True_IVR", "Realized_Vol_Rank", "Option_Strategy_Matrix"):
+            assert gone not in result
         # Indicators independent of GARCH must still be real, finite floats
         # -- proving the rest of the per-ticker computation actually ran.
         for key in ("Aroon_Oscillator", "Coppock_Curve", "Chandelier_Long", "Chandelier_Short"):
@@ -121,7 +110,7 @@ class TestOptionsOneSurvivesInsufficientGarchHistory:
         per-horizon Monte Carlo sigma) must simply omit a ticker whose GARCH
         term structure is None, rather than storing a None value or crashing."""
         ctx = _make_ctx(["SHORTHIST"], {"SHORTHIST": _short_ohlcv(15)})
-        OptionsAnalysisStep().run(ctx)
+        TrendVolatilityStep().run(ctx)
         garch_term_structures = ctx.context_extras.get("garch_term_structures", {})
         assert "SHORTHIST" not in garch_term_structures
 
@@ -129,7 +118,7 @@ class TestOptionsOneSurvivesInsufficientGarchHistory:
         """A ticker with plenty of history still gets a real, finite
         GARCH_Vol -- the fix only changes the < 22-row degenerate path."""
         ctx = _make_ctx(["LONGHIST"], {"LONGHIST": _short_ohlcv(150, seed=7)})
-        OptionsAnalysisStep().run(ctx)
-        result = ctx.context_extras["tech_opt_indicators"]["LONGHIST"]
+        TrendVolatilityStep().run(ctx)
+        result = ctx.context_extras["trend_vol_indicators"]["LONGHIST"]
         assert math.isfinite(result["GARCH_Vol"])
         assert result["GARCH_Vol"] > 0.0

@@ -396,7 +396,7 @@ class TestAdvisoryTailoringRules:
 
         with patch("engine.advisory.ProcessingEngine", return_value=pe_mock), \
              patch("engine.advisory.ForecastingEngine", return_value=fe_mock), \
-             patch("engine.advisory.TechnicalOptionsEngine", return_value=toe_mock), \
+             patch("engine.advisory.GarchVolatilityEstimator", return_value=toe_mock), \
              patch("engine.advisory.StrategyEngine", return_value=se_mock):
 
             return evaluate(

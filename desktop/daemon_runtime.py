@@ -506,7 +506,7 @@ class OrchestratorDaemon:
         # skipped as "data still fresh".
         force = reason != "interval"
         try:
-            macro_dto = asyncio.run(
+            asyncio.run(
                 main_orchestrator._main_body(
                     self._dry_run,
                     strict=self._strict,
@@ -518,31 +518,6 @@ class OrchestratorDaemon:
             )
             state = RunState.SUCCEEDED
             error = None
-
-            # Automated options paper execution and dynamic lifecycle
-            # (auto-exits, strategy auto-execution, delta hedging).
-            # Sourced from execution.options_lifecycle without side-effects.
-            # Only run when a real cycle actually executed this wake -- NOT on
-            # a DATA_FRESHNESS_TTL_SECONDS freshness-skip (macro_dto is then
-            # main_orchestrator.CYCLE_SKIPPED, not a real macro context),
-            # otherwise every skipped interval wake would silently bypass the
-            # VIX/CREDIT-EVENT premium-selling gate that macro_dto threading
-            # exists to enforce. run_0dte=False because _timer_loop already
-            # evaluates 0DTE exits directly on every interval wake (see its
-            # own comment below) -- re-running it here would double-fire it.
-            if (
-                mode == "full"
-                and not self._dry_run
-                and macro_dto is not main_orchestrator.CYCLE_SKIPPED
-            ):
-                try:
-                    from execution.options_lifecycle import run_automated_options_lifecycle
-                    run_automated_options_lifecycle(macro_dto=macro_dto, run_0dte=False)
-                except Exception as opt_exc:  # noqa: BLE001 - non-fatal to daemon cycle
-                    logger.warning(
-                        "Daemon options lifecycle execution failed (non-critical): %s",
-                        opt_exc,
-                    )
         except main_orchestrator.PipelineFatalError as exc:
             state = RunState.FAILED
             error = str(exc)
@@ -1134,18 +1109,6 @@ class OrchestratorDaemon:
             ):
                 logger.debug("Market-hours gate: skipping interval cycle (outside 4am-8pm ET weekday window).")
                 continue
-            # Periodically evaluate and manage 0DTE exits (F5) during market hours.
-            # Runs on every interval tick during market hours for fast response
-            # to intraday profit targets and stop losses. Full options lifecycle
-            # (auto-exits, strategy auto-execution, delta hedging) runs on each
-            # full pipeline cycle in _run_one_cycle.
-            if getattr(settings, "OPTIONS_0DTE_ENABLED", False):
-                try:
-                    from pilots.zero_dte_engine import manage_0dte_exits
-                    manage_0dte_exits()
-                except Exception as exc:  # noqa: BLE001 - defensive only (CONSTRAINT #6)
-                    logger.debug("0DTE daemon periodic exit evaluation skipped: %s", exc)
-
             self.trigger_run(reason="interval")
 
     # ------------------------------------------------------------------

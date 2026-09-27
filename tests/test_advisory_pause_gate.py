@@ -145,7 +145,7 @@ def _patched_evaluate(symbol: str, macro_dto: Any, sector: str = "Technology") -
 
     with (
         mock.patch("engine.advisory.ProcessingEngine") as _pe_cls,
-        mock.patch("engine.advisory.TechnicalOptionsEngine") as _toe_cls,
+        mock.patch("engine.advisory.GarchVolatilityEstimator") as _toe_cls,
         mock.patch("engine.advisory.ForecastingEngine") as _fe_cls,
         mock.patch("engine.advisory.StrategyEngine") as _se_cls,
         mock.patch("engine.advisory.TransactionsStore") as _ts_cls,

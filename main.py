@@ -533,7 +533,7 @@ def _build_macro_dto() -> MacroEconomicDTO:
         # meaning this DTO's Sahm-driven kill-switch input never reflected a
         # real reading. Fixed by actually computing it via
         # MacroEngine._calculate_sahm_rule_detailed(), the same primitive
-        # pipeline/production_steps.py's OptionsAnalysisStep already uses.
+        # pipeline/production_steps.py's MacroStep already uses.
         sahm_val, sahm_used_fallback = me._calculate_sahm_rule_detailed()
 
         data_unavailable = (
@@ -974,27 +974,6 @@ def _log_summary(result: RunResult) -> None:
             err["symbol"], err["stage"],
             err["error_type"], err["message"][:80],
         )
-
-
-def _run_automated_delta_hedge_cycle(executor: Any) -> Optional[Dict[str, Any]]:
-    """Resolves ONE real SPY quote and, only if available, sizes and
-    executes the automated dynamic SPY delta hedge off that single value.
-
-    Delegates to shared ``execution.options_lifecycle.run_automated_delta_hedge_cycle``.
-    """
-    from execution.options_lifecycle import run_automated_delta_hedge_cycle
-    return run_automated_delta_hedge_cycle(executor=executor)
-
-
-def _run_automated_options_lifecycle(macro_dto: Optional[MacroEconomicDTO] = None) -> None:
-    """Runs the automated options paper-trading lifecycle: exit management,
-    0DTE fast exits, new-position auto-execution, and dynamic SPY delta
-    hedging.
-
-    Delegates to shared ``execution.options_lifecycle.run_automated_options_lifecycle``.
-    """
-    from execution.options_lifecycle import run_automated_options_lifecycle
-    run_automated_options_lifecycle(macro_dto=macro_dto, delta_hedge_fn=_run_automated_delta_hedge_cycle)
 
 
 # ---------------------------------------------------------------------------
@@ -1487,35 +1466,6 @@ def main() -> None:
                 "Execution queue emit failed (non-critical): %s", _queue_exc,
             )
         # ─────────────────────────────────────────────────────────────────────
-
-        # ── Robinhood OPTIONS execution queue (Tier 8) — non-fatal, advisory ──
-        # Sibling of the equity queue above, for multi-leg premium-selling
-        # directives.  Emits a GATED, DRY-RUN queue to
-        # output/options_execution_queue.json for the Robinhood execution agent.
-        # Same off-mode no-op + best-effort try/except contract as the equity
-        # path; NEVER contacts a broker or places an order.
-        try:
-            from execution.options_queue_builder import (  # noqa: PLC0415
-                emit_options_execution_queue,
-            )
-
-            _opt_queue_path = emit_options_execution_queue(result, macro_dto=result.macro_dto)
-            if _opt_queue_path is not None:
-                logger.info(
-                    "Robinhood options execution queue emitted → %s", _opt_queue_path,
-                )
-        except Exception as _opt_queue_exc:
-            logger.warning(
-                "Options execution queue emit failed (non-critical): %s",
-                _opt_queue_exc,
-            )
-
-        # ── Automated Strategy Options Paper Execution & Lifecycle ────────────
-        # See _run_automated_options_lifecycle()'s own docstring for the gate
-        # (including the fixed OPTIONS_0DTE_ENABLED outer-gate omission bug).
-        _run_automated_options_lifecycle(macro_dto=result.macro_dto)
-        # ─────────────────────────────────────────────────────────────────────
-
 
         market = get_provider()
         _write_to_sheet(result, market=market)

@@ -483,8 +483,9 @@ class ForecastingEngine:
         Returns a frame containing at least ``LSTM_FEATURE_COLS`` with NaN rows
         (warm-up window) dropped.
         """
-        from technical_options_engine import TechnicalOptionsEngine
-        tech_engine = TechnicalOptionsEngine()
+        import pandas_ta_classic  # noqa: F401 -- registers the DataFrame.ta accessor used below
+        from volatility.garch import GarchVolatilityEstimator
+        tech_engine = GarchVolatilityEstimator()
         df_features = tech_engine.sanitize_ohlcv(history_df).copy()
 
         # Aroon Oscillator (causal)
@@ -1304,8 +1305,8 @@ class ForecastingEngine:
                 return fallback_daily_sigma
             return max(daily, 1e-6)
         try:
-            from technical_options_engine import TechnicalOptionsEngine
-            annual_sigma = float(TechnicalOptionsEngine().estimate_gjr_garch_volatility(history_df))
+            from volatility.garch import GarchVolatilityEstimator
+            annual_sigma = float(GarchVolatilityEstimator().estimate_gjr_garch_volatility(history_df))
             daily = annual_sigma / np.sqrt(252.0)
             if not np.isfinite(daily) or daily <= 0:
                 return fallback_daily_sigma
@@ -1319,7 +1320,7 @@ class ForecastingEngine:
                                              ) -> Dict[int, float]:
         """Per-horizon counterpart to _estimate_daily_sigma: returns a DAILY
         volatility for Monte Carlo for EACH requested horizon, sourced from
-        the GJR-GARCH(1,1) term structure (technical_options_engine.py's
+        the GJR-GARCH(1,1) term structure (volatility/garch.py's
         estimate_gjr_garch_volatility_term_structure -- forward-looking,
         mean-reversion-aware) when available, else the caller's historical
         daily stdev broadcast flatly to every horizon.
@@ -1368,8 +1369,8 @@ class ForecastingEngine:
                 return daily_by_horizon
 
         try:
-            from technical_options_engine import TechnicalOptionsEngine
-            term_structure = TechnicalOptionsEngine().estimate_gjr_garch_volatility_term_structure(
+            from volatility.garch import GarchVolatilityEstimator
+            term_structure = GarchVolatilityEstimator().estimate_gjr_garch_volatility_term_structure(
                 history_df, horizons=horizons
             )
             # None means "not enough history to measure anything" (CONSTRAINT
