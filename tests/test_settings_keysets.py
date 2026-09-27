@@ -300,13 +300,15 @@ class TestExistingEditorsAreNotBootstrap:
             # CORRELATION_CLUSTER_LOOKBACK_DAYS, CORRELATION_CLUSTER_THRESHOLD,
             # FEATURE_DRIFT_PSI_ENABLED, DAEMON_SHUTDOWN_TIMEOUT_SECONDS,
             # PIPELINE_STALL_ALERT_SECONDS). 13+6+6 = 25 keys total.
-            "_TUNABLE_INDEX": 114,
+            # 114 -> 108 (2026-09, step 3b): the "Circuit Breaker" group was
+            # removed when the dynamic circuit breaker was unwired.
+            "_TUNABLE_INDEX": 108,
             "_SENTIMENT_INDEX": 33,
             "_SECTOR_SELECTION_INDEX": 11,
             "_FMP_INDEX": 32,
             "_ETF_TRANSMISSION_INDEX": 19,
         }
-        assert len(ALL_EDITOR_KEYS) == 209
+        assert len(ALL_EDITOR_KEYS) == 203
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

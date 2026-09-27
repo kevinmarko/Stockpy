@@ -48,8 +48,6 @@ import type { StrategyReportCardSnapshot,
   CalibrationSummary,
   CircuitBreakerSummary,
   CircuitBreakerTrip,
-  CircuitBreakerState,
-  CircuitBreakerStatusResponse,
   ControlStatus,
   CronStatus,
   CorrelationCluster,
@@ -2270,41 +2268,41 @@ interface MockTunableDef {
 // comment.
 // ---------------------------------------------------------------------------
 const MOCK_CAPTURE_SITES: Record<string, string[]> = {
-  RISK_FREE_RATE: ["processing_engine.py:36", "technical_options_engine.py:22"],
-  MARKET_RISK_PREMIUM: ["processing_engine.py:37"],
-  REQUIRED_RETURN_RATE: ["processing_engine.py:38"],
-  MAX_PORTFOLIO_HEAT: ["execution/risk_gate.py:136"],
+  RISK_FREE_RATE: ["processing_engine.py:37", "technical_options_engine.py:25"],
+  MARKET_RISK_PREMIUM: ["processing_engine.py:38"],
+  REQUIRED_RETURN_RATE: ["processing_engine.py:39"],
+  MAX_PORTFOLIO_HEAT: ["execution/risk_gate.py:153"],
   CORRELATION_CLUSTER_LOOKBACK_DAYS: ["api/pilots_api.py:4122"],
-  MAX_POSITION_WEIGHT: ["execution/risk_gate.py:133"],
-  MAX_CORRELATION: ["execution/risk_gate.py:139"],
-  DAILY_LOSS_LIMIT_PCT: ["execution/risk_gate.py:144"],
-  MAX_ORDER_RATE_PER_MIN: ["execution/risk_gate.py:149"],
-  HMM_RISK_OFF_BLOCK_THRESHOLD: ["execution/risk_gate.py:154"],
-  RISK_GATE_ENFORCE_MARKET_HOURS: ["execution/risk_gate.py:159"],
-  MARKET_DATA_PROVIDER: ["data/market_data.py:1834"],
-  MARKET_DATA_QUOTE_TTL_SECONDS: ["data/market_data.py:1771"],
+  MAX_POSITION_WEIGHT: ["execution/risk_gate.py:150"],
+  MAX_CORRELATION: ["execution/risk_gate.py:156"],
+  DAILY_LOSS_LIMIT_PCT: ["execution/risk_gate.py:161"],
+  MAX_ORDER_RATE_PER_MIN: ["execution/risk_gate.py:166"],
+  HMM_RISK_OFF_BLOCK_THRESHOLD: ["execution/risk_gate.py:171"],
+  RISK_GATE_ENFORCE_MARKET_HOURS: ["execution/risk_gate.py:176"],
+  MARKET_DATA_PROVIDER: ["data/market_data.py:1922"],
+  MARKET_DATA_QUOTE_TTL_SECONDS: ["data/market_data.py:1854"],
   MARKET_DATA_BARS_TTL_SECONDS: [
-    "data/market_data.py:1776",
-    "data/market_data.py:2094",
+    "data/market_data.py:1859",
+    "data/market_data.py:2287",
   ],
-  FUNDAMENTALS_SOURCE: ["data/market_data.py:1809"],
-  DASHBOARD_REFRESH_SECONDS: ["api/pilots_api.py:4234", "pilots/settings_domains.py:138"],
-  SECTOR_FORECAST_CONFIG_PATH: ["forecasting_engine.py:144"],
-  SECTOR_FORECAST_CONFIGS: ["forecasting_engine.py:146"],
-  CORS_ALLOWED_ORIGINS: ["api/control_api.py:166", "api/data_api.py:117"],
-  SENTIMENT_SOURCES: ["data/sentiment_sources.py:1865"],
-  SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: ["data/sentiment_sources.py:1895"],
-  EDGAR_FULLTEXT_FORMS: ["api/pilots_api.py:4128"],
-  EDGAR_FULLTEXT_CHUNK_TOKENS: ["api/pilots_api.py:4129"],
+  FUNDAMENTALS_SOURCE: ["data/market_data.py:1892"],
+  DASHBOARD_REFRESH_SECONDS: ["api/pilots_api.py:4234", "pilots/settings_domains.py:132"],
+  SECTOR_FORECAST_CONFIG_PATH: ["forecasting_engine.py:165"],
+  SECTOR_FORECAST_CONFIGS: ["forecasting_engine.py:167"],
+  CORS_ALLOWED_ORIGINS: ["api/control_api.py:169", "api/data_api.py:132"],
+  SENTIMENT_SOURCES: ["data/sentiment_sources.py:1932"],
+  SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: ["data/sentiment_sources.py:1962"],
+  EDGAR_FULLTEXT_FORMS: ["api/pilots_api.py:4879"],
+  EDGAR_FULLTEXT_CHUNK_TOKENS: ["api/pilots_api.py:4880"],
   FINNHUB_RATE_LIMIT_PER_MIN: [
-    "data/market_data.py:1470",
-    "data/market_data.py:1504",
+    "data/market_data.py:1554",
+    "data/market_data.py:1587",
   ],
-  FMP_QUOTES_REALTIME: ["data/market_data.py:979"],
-  FMP_BARS_ADJUSTMENT: ["data/market_data.py:1850"],
-  FMP_ECON_INDICATORS: ["api/pilots_api.py:4233"],
-  ETF_HOLDINGS_TICKERS: ["api/pilots_api.py:4253"],
-  SYMBOL_RATING_DROP_THRESHOLD_CYCLES: ["pipeline/production_steps.py:531"],
+  FMP_QUOTES_REALTIME: ["data/market_data.py:1011"],
+  FMP_BARS_ADJUSTMENT: ["data/market_data.py:1942"],
+  FMP_ECON_INDICATORS: ["api/pilots_api.py:5021"],
+  ETF_HOLDINGS_TICKERS: ["api/pilots_api.py:5049"],
+  SYMBOL_RATING_DROP_THRESHOLD_CYCLES: ["pipeline/production_steps.py:752"],
 };
 
 // `settings_keysets.DANGEROUS_KEYS`, in full -- copied from the real set.
@@ -2370,6 +2368,8 @@ const MOCK_DEMO_ONLY_STATES: Record<string, "env_pinned" | "no_effect"> = {
   // Toggle, exactly the misleading "control that does nothing" trap
   // `writable`'s no_op exclusion (mockSettingsReference()) exists to prevent.
   OPTIONS_EARNINGS_CRUSH_ENABLED: "no_effect",
+  // Same: read nowhere since the dynamic circuit breaker was unwired (2026-09).
+  CIRCUIT_BREAKER_ENABLED: "no_effect",
 };
 
 function mockLiveness(key: string): TunableLiveness {
@@ -3663,67 +3663,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     min: 1,
     max: 100,
     step: 1,
-  },
-  // ---- Circuit Breaker ----
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Master switch for automatic live circuit-breaker updates. Live when enabled: volatility-jump detector, VPIN (coarse bar-level BVC approximation), and the loss-velocity brake (sampled from PaperAccountStore equity). OFI remains unwired (no configured provider populates bid/ask size), so the compound OFI+VPIN flash-crash shield still cannot trigger automatically even with VPIN now real — see docstring on the daemon updater (desktop/daemon_runtime.py::maybe_update_circuit_breaker) for full scope. Defaults False to preserve today's exact (inert) behavior.",
-  },
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
-    type: "number",
-    value: 3.5,
-    default: 3.5,
-    description: "Volatility jump Z-score threshold to trigger SOFT_HALT (VOLATILITY_BURST_HALT).",
-    min: 1.0,
-    max: 10.0,
-    step: 0.25,
-  },
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_VPIN_THRESHOLD",
-    type: "number",
-    value: 0.4,
-    default: 0.4,
-    description: "Volume-Synchronized Probability of Toxicity threshold to trigger FLASH_CRASH_SHIELD.",
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-  },
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_OFI_THRESHOLD",
-    type: "number",
-    value: 1000.0,
-    default: 1000.0,
-    description: "Order Flow Imbalance threshold (selling pressure) to trigger FLASH_CRASH_SHIELD.",
-    min: 0.0,
-    max: 10000.0,
-    step: 10.0,
-  },
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS",
-    type: "number",
-    value: 30.0,
-    default: 30.0,
-    description: "Loss velocity rolling time window in minutes relative to daily loss limit.",
-    min: 1,
-    max: 120,
-    step: 1,
-  },
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
-    type: "string",
-    value: "SPY",
-    default: "SPY",
-    description: "Reference symbol used for the live volatility-jump circuit-breaker updater's baseline/reactive vol computation.",
   },
 ];
 
@@ -5662,11 +5601,11 @@ function mockSettingsReference(): SettingsReferenceResponse {
       value: false,
       default: false,
       type: "boolean",
-      description: "Master switch for automatic live circuit-breaker updates.",
+      description: "Retired (2026-09): the dynamic circuit breaker is no longer wired in, so this flag has no effect.",
       domain: "Strategy Overlays",
       dangerous: false,
       liveness: mockLiveness("CIRCUIT_BREAKER_ENABLED"),
-      editable_at: "/settings/tunables",
+      editable_at: null,
     },
     {
       key: "LOCAL_DATA_ROOT",
@@ -17350,11 +17289,6 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
     return delay({ ...proposal });
   },
 
-  // ---- Dynamic Circuit Breaker ----
-  async getCircuitBreakerStatus(): Promise<CircuitBreakerStatusResponse> {
-    return delay(getMockCircuitBreakerStatus());
-  },
-
   // ---- Trends Stitching Demo ----
   //
   // Genuinely demonstrates the overlapping-window stitching algorithm
@@ -18295,54 +18229,4 @@ export function getMockPortfolioRiskStreamEvent(): PortfolioRiskStreamEvent {
     missing_positions: [],
   };
 }
-
-/**
- * Realistic mock dynamic circuit breaker status fixture.
- */
-export function getMockCircuitBreakerStatus(stateOverride?: CircuitBreakerState): CircuitBreakerStatusResponse {
-  const state = stateOverride ?? "NORMAL";
-  if (state === "CAUTION") {
-    return {
-      state: "CAUTION",
-      volatility_zscore: 2.35,
-      vpin: 0.32,
-      ofi: -450.2,
-      loss_velocity_per_min: -85.5,
-      reason: "Elevated market volatility detected across monitored universe",
-      updated_at: new Date().toISOString(),
-    };
-  }
-  if (state === "SOFT_HALT") {
-    return {
-      state: "SOFT_HALT",
-      volatility_zscore: 3.82,
-      vpin: 0.46,
-      ofi: -1250.0,
-      loss_velocity_per_min: -210.0,
-      reason: "VOLATILITY_BURST_HALT: 5m EWMA realized vol Z-score 3.82 > threshold 3.50",
-      updated_at: new Date().toISOString(),
-    };
-  }
-  if (state === "HARD_HALT") {
-    return {
-      state: "HARD_HALT",
-      volatility_zscore: 4.15,
-      vpin: 0.58,
-      ofi: -2400.0,
-      loss_velocity_per_min: -750.0,
-      reason: "LOSS_VELOCITY_BREACH: Intraday loss rate $750.00/min exceeds allowable rate $666.67/min",
-      updated_at: new Date().toISOString(),
-    };
-  }
-  return {
-    state: "NORMAL",
-    volatility_zscore: 0.85,
-    vpin: 0.18,
-    ofi: 120.5,
-    loss_velocity_per_min: -15.4,
-    reason: null,
-    updated_at: new Date().toISOString(),
-  };
-}
-
 

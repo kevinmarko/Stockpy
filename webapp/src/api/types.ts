@@ -6011,23 +6011,6 @@ export interface PortfolioRiskStreamEvent {
   missing_positions: string[];
 }
 
-/**
- * Dynamic circuit breaker operational state.
- */
-export type CircuitBreakerState = "NORMAL" | "CAUTION" | "SOFT_HALT" | "HARD_HALT";
-
-/**
- * GET /risk/circuit-breaker/status response shape.
- */
-export interface CircuitBreakerStatusResponse {
-  state: CircuitBreakerState;
-  volatility_zscore: number;
-  vpin: number;
-  ofi: number;
-  loss_velocity_per_min: number;
-  reason: string | null;
-  updated_at: string;
-}
 
 
 

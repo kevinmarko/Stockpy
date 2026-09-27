@@ -109,6 +109,16 @@ class TestDeriveBlockLogTrips:
         assert t.severity == "CRITICAL"
         assert t.threshold == 0.05
 
+    @pytest.mark.parametrize("check", ["kill_switch_halt", "dynamic_circuit_breaker"])
+    def test_kill_switch_halt_classified_under_new_and_legacy_name(self, check: str) -> None:
+        """Check #0 was renamed dynamic_circuit_breaker -> kill_switch_halt;
+        block-log rows written under either name land in one CRITICAL breaker."""
+        trips = derive_block_log_trips([_block(check, symbol="AAPL")], now=_NOW)
+        assert len(trips) == 1
+        assert trips[0].name == "kill_switch_halt"
+        assert trips[0].severity == "CRITICAL"
+        assert trips[0].summary == "Kill-switch halt blocked AAPL"
+
     def test_unknown_check_bubbles_through_as_warning(self) -> None:
         trips = derive_block_log_trips(
             [_block("some_new_check", strategy_id="x")], now=_NOW,

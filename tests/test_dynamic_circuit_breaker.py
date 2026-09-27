@@ -26,32 +26,26 @@ Coverage
    - SOFT_HALT blocks BUY (risk-increasing) and permits SELL (risk-reducing).
    - HARD_HALT blocks all orders.
    - NORMAL / CAUTION permits all orders.
-6. Integration with PreTradeRiskGate (Check #0):
-   - Injected DynamicCircuitBreaker instance.
-   - Explicit RiskContext states.
-   - File-backed GlobalKillSwitch soft-halt sentinel.
-   - Alert dispatching on circuit breaker veto.
+6. GlobalKillSwitch soft-halt lifecycle and alert.
+
+The breaker is no longer wired into PreTradeRiskGate (check #0 reads only the
+kill switch; see tests/test_risk_gate.py). This module is slated for legacy/.
 """
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
 import numpy as np
-import pandas as pd
 import pytest
 
 from execution.broker_base import (
-    AccountSnapshot,
     OrderIntent,
     OrderSide,
     OrderType,
 )
 from execution.dynamic_circuit_breaker import (
-    CircuitBreakerMetrics,
     CircuitBreakerState,
     DynamicCircuitBreaker,
     calculate_volatility_zscore_from_vols,
@@ -62,7 +56,6 @@ from execution.dynamic_circuit_breaker import (
     compute_vpin,
 )
 from execution.kill_switch import GlobalKillSwitch
-from execution.risk_gate import PreTradeRiskGate, RiskContext
 
 
 # ---------------------------------------------------------------------------
@@ -435,78 +428,3 @@ class TestGlobalKillSwitchSoftHalt:
         assert args[0] == "WARNING"
         assert "Soft halt ACTIVATED" in args[1]
         assert kwargs.get("dedup_key") == "soft_halt_activate"
-
-
-# ---------------------------------------------------------------------------
-# 7. Risk Gate Check #0 Integration Tests
-# ---------------------------------------------------------------------------
-
-class TestRiskGateCheck0Integration:
-    def _context(self) -> RiskContext:
-        return RiskContext(
-            account=AccountSnapshot(equity=100_000.0, cash=50_000.0, buying_power=50_000.0),
-            current_prices={"NVDA": 120.0},
-            start_of_day_equity=100_000.0,
-            timestamp=datetime(2024, 1, 17, 17, 0, 0, tzinfo=timezone.utc),
-        )
-
-    def test_check_0_passes_under_normal_conditions(self):
-        gate = PreTradeRiskGate()
-        passed, results = gate.run_all(_buy("NVDA"), self._context())
-        assert passed
-        assert results[0].check_name == "dynamic_circuit_breaker"
-        assert results[0].passed
-
-    def test_check_0_blocks_buy_under_soft_halt(self, tmp_cb: DynamicCircuitBreaker):
-        tmp_cb.update_metrics(volatility_zscore=4.5, persist=False)
-        gate = PreTradeRiskGate(circuit_breaker=tmp_cb)
-
-        passed, results = gate.run_all(_buy("NVDA"), self._context())
-        assert not passed
-        assert len(results) == 1
-        assert results[0].check_name == "dynamic_circuit_breaker"
-        assert not results[0].passed
-        assert "SOFT_HALT active" in results[0].reason
-        assert "BUY orders blocked" in results[0].reason
-
-    def test_check_0_allows_sell_under_soft_halt(self, tmp_cb: DynamicCircuitBreaker):
-        tmp_cb.update_metrics(volatility_zscore=4.5, persist=False)
-        gate = PreTradeRiskGate(circuit_breaker=tmp_cb, enforce_market_hours=False)
-
-        passed, results = gate.run_all(_sell("NVDA"), self._context())
-        assert passed
-        assert results[0].check_name == "dynamic_circuit_breaker"
-        assert results[0].passed
-        assert "SELL allowed" in results[0].reason
-
-    def test_check_0_blocks_both_under_hard_halt(self, tmp_cb: DynamicCircuitBreaker):
-        tmp_cb.update_metrics(
-            loss_velocity_per_min=-200.0,
-            account_equity=100_000.0,
-            persist=False,
-        )
-        gate = PreTradeRiskGate(circuit_breaker=tmp_cb)
-
-        buy_passed, buy_results = gate.run_all(_buy("NVDA"), self._context())
-        assert not buy_passed
-        assert not buy_results[0].passed
-        assert "HARD_HALT active" in buy_results[0].reason
-
-        sell_passed, sell_results = gate.run_all(_sell("NVDA"), self._context())
-        assert not sell_passed
-        assert not sell_results[0].passed
-        assert "HARD_HALT active" in sell_results[0].reason
-
-    def test_check_0_alerts_on_rejection(self):
-        gate = PreTradeRiskGate()
-        ctx = self._context()
-        ctx.circuit_breaker_state = CircuitBreakerState.SOFT_HALT
-        ctx.circuit_breaker_reason = "FLASH_CRASH_SHIELD"
-
-        with mock.patch("observability.alerts.send_alert") as m_alert:
-            passed, results = gate.run_all(_buy("NVDA"), ctx)
-        assert not passed
-        assert m_alert.called
-        args, kwargs = m_alert.call_args
-        assert args[0] == "WARNING"
-        assert "Dynamic circuit breaker SOFT_HALT blocked order for NVDA" in args[1]

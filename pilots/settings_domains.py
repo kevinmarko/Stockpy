@@ -101,12 +101,6 @@ _OVERRIDE_DOMAINS: Dict[str, str] = {
 
     # Strategy Overlays
     "STRATEGY_WRITES_ENABLED": "Strategy Overlays",
-    "CIRCUIT_BREAKER_ENABLED": "Strategy Overlays",
-    "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD": "Strategy Overlays",
-    "CIRCUIT_BREAKER_VPIN_THRESHOLD": "Strategy Overlays",
-    "CIRCUIT_BREAKER_OFI_THRESHOLD": "Strategy Overlays",
-    "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS": "Strategy Overlays",
-    "CIRCUIT_BREAKER_REFERENCE_SYMBOL": "Strategy Overlays",
     "USE_DUAL_MOMENTUM_OVERLAY": "Strategy Overlays",
     "SECTOR_SIMILARITY_EMBEDDER": "Strategy Overlays",
     "SECTOR_SIMILARITY_MODEL": "Strategy Overlays",

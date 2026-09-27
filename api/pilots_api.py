@@ -4311,17 +4311,6 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("MAX_CONCURRENT_OPTION_POSITIONS", "int", {"min": 1, "max": 100, "step": 1}),
         ],
     ),
-    (
-        "Circuit Breaker",
-        [
-            ("CIRCUIT_BREAKER_ENABLED", "bool", {}),
-            ("CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD", "float", {"min": 1.0, "max": 10.0, "step": 0.25}),
-            ("CIRCUIT_BREAKER_VPIN_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("CIRCUIT_BREAKER_OFI_THRESHOLD", "float", {"min": 0.0, "max": 10000.0, "step": 10.0}),
-            ("CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS", "int", {"min": 1, "max": 120, "step": 1}),
-            ("CIRCUIT_BREAKER_REFERENCE_SYMBOL", "str", {}),
-        ],
-    ),
 ]
 
 # Flat {key: (kind, extras)} index built once — its keyset IS the editor scope.
