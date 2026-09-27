@@ -3293,62 +3293,17 @@ class TestPilotsExecutionBrokersFailover:
 
 
 # ---------------------------------------------------------------------------
-# GET /pilots/execution/sec-606/report
+# GET /pilots/execution/sec-606/report -- retired (step 3c)
 # ---------------------------------------------------------------------------
 
 
-class TestPilotsExecutionSec606Report:
-    def test_sec_606_report_default_params(self):
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
-            resp = _client.get(
-                "/pilots/execution/sec-606/report",
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
-            )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "header" in body
-        assert "summary" in body
-        assert "order_category_breakdown" in body
-        assert "venue_breakdown" in body
-        assert body["header"]["year"] == 2026
-        assert body["header"]["quarter"] == 1
-
-    def test_sec_606_report_custom_year_quarter_is_option(self):
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
-            resp = _client.get(
-                "/pilots/execution/sec-606/report?year=2026&quarter=2&is_option=true",
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
-            )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["header"]["year"] == 2026
-        assert body["header"]["quarter"] == 2
-        assert body["header"]["is_option"] is True
-
-    def test_sec_606_report_invalid_quarter_422(self):
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
-            resp = _client.get(
-                "/pilots/execution/sec-606/report?quarter=5",
-                headers={"Authorization": f"Bearer {_READ_TOKEN}"},
-            )
-        assert resp.status_code in {400, 422}
-
-    def test_sec_606_report_wrong_token_401(self):
-        with mock_patch_settings(STATE_API_TOKEN=_READ_TOKEN):
-            resp = _client.get(
-                "/pilots/execution/sec-606/report",
-                headers={"Authorization": "Bearer WRONG_TOKEN"},
-            )
-        assert resp.status_code == 401
-
-    def test_sec_606_report_fail_open_without_token(self):
+class TestPilotsExecutionSec606ReportRetired:
+    def test_sec_606_report_route_is_gone(self):
+        """OrderManager no longer writes execution-audit rows, so the report
+        would only ever read a frozen table; the route was removed."""
         with mock_patch_settings(STATE_API_TOKEN=None):
             resp = _client.get("/pilots/execution/sec-606/report")
-        assert resp.status_code == 200
-        assert "header" in resp.json()
-        assert "summary" in resp.json()
-
-
+        assert resp.status_code == 404
 
 
 class TestPostOptionsZeroDteManageExits:

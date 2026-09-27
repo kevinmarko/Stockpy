@@ -280,16 +280,11 @@ def _isolate_execution_audit_db_in_tests(monkeypatch):
     db for every test, unless the test passes its own explicit ``db_url``/
     ``sqlite_path`` to ``ExecutionAuditStore``.
 
-    ``execution/order_manager.py::OrderManager._record_execution_audit`` now
-    lazily constructs ``ExecutionAuditStore()`` (no explicit URL) the first
-    time a real fill reaches it -- an IMPLICIT write, exactly like the
-    ``ValidationHistoryStore`` case just above, deep inside a widely-used
-    function (~15+ pre-existing test files construct ``OrderManager(broker,
-    ...)`` directly with no ``audit_store=`` of their own, and at least one --
-    ``tests/test_fmp_paper_broker.py``'s
-    ``test_order_manager_live_submission_reaches_the_paper_broker`` -- already
-    drives a real FILLED result through it). Left unguarded, running this
-    suite would silently write real order-audit rows into a real operator's
+    ``ExecutionAuditStore()`` with no explicit URL resolves to the real
+    shared DB. ``OrderManager`` used to construct one implicitly on every
+    real fill (removed 2026-09, step 3c); this guard stays until the store
+    itself moves to ``legacy/`` in step 4, so any remaining default
+    construction can never write real order-audit rows into a real operator's
     shared ``~/.stockpy_local/quant_platform.db`` on every test run. Same
     fixture shape as ``_isolate_validation_runs_db_in_tests`` above; a test
     that passes ``sqlite_path=``/``db_url=`` explicitly (e.g.

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "3d79c9c2db60dab8c34764db5b0a1bbe910a770f",
+    "git_commit": "f521df1d6c2b947958a71e4da015b7c9c56f5820",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3697,7 +3697,7 @@
         "route": "/pilots/ml/lstm-attention-forecast",
         "method": "POST",
         "function": "run_lstm_attention_forecast_endpoint",
-        "line": 8597,
+        "line": 8574,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],

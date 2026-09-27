@@ -8570,29 +8570,6 @@ def post_pilots_execution_brokers_failover(req: BrokerFailoverRequest) -> Dict[s
     }
 
 
-# ---------------------------------------------------------------------------
-# SEC Rule 606 Execution Quality Report Endpoint
-# ---------------------------------------------------------------------------
-
-
-@app.get(
-    "/pilots/execution/sec-606/report",
-    dependencies=[Depends(require_read_token)],
-)
-def get_pilots_execution_sec_606_report(
-    year: int = Query(2026, ge=2000, le=2100),
-    quarter: int = Query(1, ge=1, le=4),
-    is_option: Optional[bool] = Query(None),
-) -> Dict[str, Any]:
-    """Returns SEC Rule 606(a)(1) quarterly metrics and venue percentages."""
-    if quarter < 1 or quarter > 4:
-        raise HTTPException(status_code=400, detail="Quarter must be between 1 and 4.")
-
-    from execution.sec_rule_606_reporter import SecRule606Reporter
-
-    reporter = SecRule606Reporter()
-    return reporter.generate_quarterly_report(year=year, quarter=quarter, is_option=is_option)
-
 @app.post("/pilots/ml/lstm-attention-forecast", dependencies=[Depends(require_read_token)])
 def run_lstm_attention_forecast_endpoint(
     symbol: str = Query(..., min_length=1),
