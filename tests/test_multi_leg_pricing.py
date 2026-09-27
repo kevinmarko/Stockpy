@@ -1,17 +1,20 @@
 """
 tests/test_multi_leg_pricing.py
 ===============================
-Unit tests for the Multi-Leg Options Pricing Engine and FastAPI endpoints:
+Unit tests for the Multi-Leg Options Pricing Engine:
 - Black-Scholes Greeks with degenerate input guards (0DTE, zero-volatility, zero spot)
 - Strategy validation for Iron Condors, Vertical Spreads, Straddles, and Strangles
 - Multi-leg pricing, composite Greeks, max profit/loss, break-even detection, and payoff curves
-- FastAPI endpoint contracts and AST import safety
+- AST import safety
+
+(The FastAPI endpoint contract tests that used to live here -- for
+POST /pilots/options/multi-leg/price and /pilots/options/multi-leg/validate --
+were removed with the options desk, 2026-09, step 3e.)
 """
 
 import ast
 from pathlib import Path
 import pytest
-from fastapi.testclient import TestClient
 
 from pilots.multi_leg_pricing import (
     OptionLegSpec,
@@ -239,81 +242,9 @@ def test_price_bull_call_spread_net_debit():
     assert res["breakeven_points"][0] == pytest.approx(102.0, abs=0.5)
 
 
-# ===========================================================================
-# 4. FastAPI Endpoint Integration Tests
-# ===========================================================================
-
-def test_api_multi_leg_pricing_endpoint(monkeypatch):
-    """Tests POST /pilots/options/multi-leg/price."""
-    from api.pilots_api import app
-    from settings import settings
-
-    # This endpoint is gated by require_read_token (STATE_API_TOKEN). No
-    # Authorization header is sent below, relying on the
-    # fail-open-on-loopback path -- pinned explicitly so it doesn't depend
-    # on the machine's real .env leaving STATE_API_TOKEN unset.
-    monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
-
-    client = TestClient(app, client=("127.0.0.1", 54123))
-    payload = {
-        "symbol": "AAPL",
-        "structure_type": "IRON_CONDOR",
-        "underlying_price": 150.0,
-        "iv_override": 0.25,
-        "legs": [
-            {"strike": 140.0, "option_type": "put", "action": "buy", "premium": 1.0},
-            {"strike": 145.0, "option_type": "put", "action": "sell", "premium": 2.5},
-            {"strike": 155.0, "option_type": "call", "action": "sell", "premium": 2.5},
-            {"strike": 160.0, "option_type": "call", "action": "buy", "premium": 1.0},
-        ],
-    }
-
-    resp = client.post("/pilots/options/multi-leg/price", json=payload)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["symbol"] == "AAPL"
-    assert data["net_order_action"] == "CREDIT"
-    assert "composite_greeks" in data
-    assert "payoff_curve" in data
-    assert len(data["payoff_curve"]) > 0
-
-
-def test_api_multi_leg_validation_endpoint(monkeypatch):
-    """Tests POST /pilots/options/multi-leg/validate."""
-    from api.pilots_api import app
-    from settings import settings
-
-    # Gated by require_read_token (STATE_API_TOKEN); see the pricing
-    # endpoint test above for why this is pinned explicitly.
-    monkeypatch.setattr(settings, "STATE_API_TOKEN", None)
-
-    client = TestClient(app, client=("127.0.0.1", 54123))
-    # Valid vertical spread
-    resp = client.post(
-        "/pilots/options/multi-leg/validate",
-        json={
-            "structure_type": "VERTICAL_SPREAD",
-            "legs": [
-                {"strike": 100.0, "option_type": "call", "action": "buy"},
-                {"strike": 105.0, "option_type": "call", "action": "sell"},
-            ],
-        },
-    )
-    assert resp.status_code == 200
-    assert resp.json()["is_valid"] is True
-
-    # Invalid: non-positive strike triggers Pydantic 422
-    resp_invalid = client.post(
-        "/pilots/options/multi-leg/validate",
-        json={
-            "structure_type": "VERTICAL_SPREAD",
-            "legs": [
-                {"strike": -10.0, "option_type": "call", "action": "buy"},
-                {"strike": 105.0, "option_type": "call", "action": "sell"},
-            ],
-        },
-    )
-    assert resp_invalid.status_code == 422
+# (Section 4, "FastAPI Endpoint Integration Tests", covering
+# POST /pilots/options/multi-leg/price and /pilots/options/multi-leg/validate,
+# was removed with the options desk, 2026-09, step 3e -- those routes are gone.)
 
 
 # ===========================================================================
