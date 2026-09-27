@@ -64,12 +64,12 @@ describe("ForecastBackfillScreen (real mock API)", () => {
   it("also seeds the multi-select from the eligibility block, so an untrained-but-eligible signal is still selectable", async () => {
     renderScreen();
     await screen.findByText("timeseries_momentum_10d");
-    // sector_quality_rank/vrp_premium_selling have no metrics rows in the mock
+    // sector_quality_rank/cross_sectional_momentum have no metrics rows in the mock
     // fixture at all -- only an eligibility entry -- yet must still be a
     // selectable option (WP2's chicken-and-egg fix: an untrained signal can
     // never be re-run if it can never be selected).
     expect(screen.getByRole("option", { name: "sector_quality_rank" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "vrp_premium_selling" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "cross_sectional_momentum" })).toBeInTheDocument();
   });
 
   it("renders an honest 'Eligible Signals Not Trained' section with the real reason, never a fabricated metrics row", async () => {
@@ -79,13 +79,13 @@ describe("ForecastBackfillScreen (real mock API)", () => {
     // Both names also appear as <option>s in the multi-select above (WP2's
     // seed-from-eligibility fix), so scope these to the new table's cells.
     expect(screen.getByRole("cell", { name: "sector_quality_rank" })).toBeInTheDocument();
-    expect(screen.getByRole("cell", { name: "vrp_premium_selling" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "cross_sectional_momentum" })).toBeInTheDocument();
     expect(screen.getAllByText(/Insufficient training samples \(0\) at the 90d horizon/).length).toBe(2);
     // These two never got a fabricated metrics row -- confirm no
-    // sector_quality_rank_*/vrp_premium_selling_* model_key rendered in the
+    // sector_quality_rank_*/cross_sectional_momentum_* model_key rendered in the
     // Trained Meta-Labelers table.
     expect(screen.queryByText(/^sector_quality_rank_\d+d$/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/^vrp_premium_selling_\d+d$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^cross_sectional_momentum_\d+d$/)).not.toBeInTheDocument();
   });
 
   it("hides the 'Eligible Signals Not Trained' section entirely when every eligible signal has trained (or eligibility is absent)", async () => {

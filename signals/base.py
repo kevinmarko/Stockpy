@@ -76,7 +76,10 @@ class SignalContext:
     sector_quality_ranks: Dict[str, float] = field(default_factory=dict)
     # Institutional options order flow net sentiment score in [-1.0, 1.0],
     # keyed by symbol. Populated by OptionsFlowSentimentSignal.pre_compute()
-    # or pilots/unusual_options_flow.py.
+    # or pilots/unusual_options_flow.py. That module is no longer registered
+    # (retired from live scoring 2026-09, step 3d'), so this stays empty in
+    # the live pipeline; the field goes when the module moves to legacy/ in
+    # step 4.
     options_flow_sentiment: Dict[str, float] = field(default_factory=dict)
 
 

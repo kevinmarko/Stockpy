@@ -50,7 +50,6 @@ import pandas as pd
 
 from dto_models import MacroEconomicDTO
 from signals.base import SignalContext, SignalModule, SignalOutput
-from signals.registry import global_registry
 
 logger = logging.getLogger(__name__)
 
@@ -652,5 +651,8 @@ class OptionsFlowSentimentSignal(SignalModule):
         )
 
 
-# Auto-register with global signal registry
-global_registry.register(OptionsFlowSentimentSignal())
+# No longer auto-registered (2026-09, step 3d'): this module was retired from
+# live scoring with the options desk. Registering on import would let any
+# process that merely imports it (the MCP server, the quarantined VRP proxy,
+# a test) put it back into the live global_registry. The file stays until it
+# moves to legacy/ in step 4.

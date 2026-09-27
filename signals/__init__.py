@@ -40,7 +40,8 @@ def _register_all():
     import signals.lgbm_ranker
     import signals.news_catalyst
     import signals.sector_quality_rank
-    import signals.vrp_premium_selling
-    import signals.options_flow_sentiment
+    # vrp_premium_selling and options_flow_sentiment were retired from live
+    # scoring with the options desk (2026-09, step 3d'). Their module files
+    # stay (unregistered) until they move to legacy/ in step 4.
 
 _register_all()

@@ -599,7 +599,7 @@ class TestRegisterBackfillModelReal:
         before = list(tmp_models_dir.glob("*.pkl"))
 
         registered, skip_reason = register_backfill_model(
-            signal_id="vrp_premium_selling",
+            signal_id="sector_quality_rank",
             horizon_days=10,
             model=clf,
             feature_names=["Totally_Fake_Feature_Not_In_Whitelist", "Another_Fake_One"],  # not in LIVE_ROW_FEATURE_WHITELIST
@@ -616,25 +616,25 @@ class TestRegisterBackfillModelReal:
 
         import yaml
         data = yaml.safe_load(tmp_registry.read_text())
-        row = data["models"]["meta_labeler_backfill_vrp_premium_selling"]
+        row = data["models"]["meta_labeler_backfill_sector_quality_rank"]
         assert row["cpcv_dsr"] is None  # stub untouched
 
 
 class TestSixEligibleSignalsFeatureCompatibility:
     """The actual deliverable: LIVE_ROW_FEATURE_WHITELIST now genuinely
-    resolves every one of the 6 Forecast-Backfill-eligible signals' real,
+    resolves every Forecast-Backfill-eligible signal's real,
     currently-declared meta_label_features -- previously this always failed
-    for all 6, by construction, regardless of DSR/PBO. Features are imported
-    directly from the real signal modules (not hand-copied literals) so this
-    test can never silently go stale."""
+    for all of them, by construction, regardless of DSR/PBO. Features are
+    imported directly from the real signal modules (not hand-copied
+    literals) so this test can never silently go stale. (6 -> 4 eligible
+    signals in 2026-09, step 3d': vrp_premium_selling and
+    options_flow_sentiment were retired from live scoring.)"""
 
     @pytest.mark.parametrize("module_path,class_name", [
         ("signals.timeseries_momentum", "TimeSeriesMomentumSignal"),
         ("signals.cross_sectional_momentum", "CrossSectionalMomentumSignal"),
         ("signals.rsi2_mean_reversion", "RSI2MeanReversionSignal"),
         ("signals.sector_quality_rank", "SectorNeutralQualitySignal"),
-        ("signals.vrp_premium_selling", "VRPPremiumSellingSignal"),
-        ("signals.options_flow_sentiment", "OptionsFlowSentimentSignal"),
     ])
     def test_eligible_signal_features_are_now_compatible(self, module_path, class_name):
         import importlib

@@ -91,7 +91,7 @@ def _is_apply_axis1(node: ast.Call) -> bool:
 # non-overriding signal module inherits, not a bug in this file.
 ALLOWED_EXCEPTIONS: dict[str, dict[int, str]] = {
     "signals/base.py": {
-        220: (
+        223: (
             "Deliberate generic fallback for SignalModule.compute_vectorized() "
             "-- see test_registered_signal_module_overrides_compute_vectorized "
             "below for the guard on modules that inherit it."
