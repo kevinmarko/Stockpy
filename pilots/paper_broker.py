@@ -87,6 +87,28 @@ def execute_paper_order(
         provenance=provenance,
     )
 
+def execute_equity_order(
+    symbol: str,
+    *,
+    side: str = "buy",
+    quantity: Optional[float] = None,
+    dollar_amount: Optional[float] = None,
+    order_type: str = "market",
+    limit_price: Optional[float] = None,
+    is_live: bool = False,
+) -> Dict[str, Any]:
+    """Manual equity paper order (Quick Trade). See pilots.paper_equity_order."""
+    from pilots.paper_equity_order import execute_equity_order as _exec_equity
+    return _exec_equity(
+        symbol,
+        side=side,
+        quantity=quantity,
+        dollar_amount=dollar_amount,
+        order_type=order_type,
+        limit_price=limit_price,
+        is_live=is_live,
+    )
+
 def get_strategy_options_candidates(symbols: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """Fetches current gate-passing strategy option directives ready for automated paper execution."""
     from execution.options_paper_executor import OptionsPaperExecutor

@@ -221,6 +221,8 @@ import type { StrategyReportCardSnapshot,
   LiveTradeProposal,
   OptionsOrderRequest,
   OptionsOrderResult,
+  EquityOrderRequest,
+  EquityOrderResult,
   ScenarioMatrixResponse,
   ScenarioMatrixCell,
   VolSurfaceResponse,
@@ -11818,83 +11820,19 @@ export const mockApi = {
     let totalCost = 0;
 
     if (isStock) {
-      if (req.dollar_amount && req.dollar_amount > 0 && (!req.quantity || req.quantity <= 0)) {
-        qty = Math.max(1, +(req.dollar_amount / fillPrice).toFixed(4));
-      }
-      totalCost = qty * fillPrice;
-
       const orderSide: 'BUY' | 'SELL' = req.side?.toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
-      const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
-
-      if (orderSide === 'SELL' && (!existingPos || existingPos.qty < qty)) {
-        return delay({
-          ok: false,
-          message: `Order rejected: Insufficient funds or inventory for SELL ${qty} ${orderSymbol}.`
-        }, 500);
-      } else if (orderSide === 'BUY' && paperAccount.cash < totalCost) {
-        return delay({
-          ok: false,
-          message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
-        }, 500);
-      }
-
-      if (orderSide === 'SELL') {
-        const closingAvgCost = existingPos!.avg_cost;
-        paperAccount.cash += totalCost;
-        existingPos!.qty -= qty;
-        existingPos!.market_value = Math.max(0, (existingPos!.market_value || 0) - totalCost);
-        if (existingPos!.qty <= 0) {
-          paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
-          // Equity positions here are always long (this endpoint has no
-          // short-sale path), so the position's own opening side is "BUY".
-          pushMockClosedTrade({ symbol: orderSymbol, side: "BUY", qty, entryPrice: closingAvgCost, exitPrice: fillPrice });
-        }
-      } else {
-        paperAccount.cash -= totalCost;
-        if (existingPos) {
-          const prevTotal = existingPos.qty * existingPos.avg_cost;
-          existingPos.qty += qty;
-          existingPos.avg_cost = (prevTotal + totalCost) / existingPos.qty;
-          existingPos.market_value = (existingPos.market_value || 0) + totalCost;
-        } else {
-          paperPositions.push({
-            symbol: orderSymbol,
-            qty: qty,
-            avg_cost: fillPrice,
-            current_price: fillPrice,
-            market_value: totalCost,
-            unrealized_pl: 0,
-            unrealized_pl_pct: 0,
-            strategy_id: null,
-            pilot_id: null,
-            experiment_arm: null,
-          });
-        }
-      }
-      paperAccount.buying_power = paperAccount.cash;
-
-      const orderId = `mock_ord_${Date.now()}`;
-      paperOrders.unshift({
-        order_id: orderId,
+      const result = applyMockStockFill({
         symbol: orderSymbol,
         side: orderSide,
-        qty: qty,
-        price: fillPrice,
-        status: 'filled',
-        filled_qty: qty,
-        filled_avg_price: fillPrice,
-        created_at: new Date().toISOString(),
-        strategy_id: null,
-        pilot_id: null,
-        experiment_arm: null,
+        quantity: req.quantity,
+        dollarAmount: req.dollar_amount,
+        limitPrice: req.limit_price,
+        orderIdPrefix: "mock_ord",
       });
-
-      return delay({
-        ok: true,
-        order_id: orderId,
-        message: `Paper stock order for ${qty} shares of ${orderSymbol} filled at $${fillPrice.toFixed(2)} (Total: $${totalCost.toFixed(2)}).`
-      }, 600);
-
+      return delay(
+        { ok: result.ok, order_id: result.order_id ?? undefined, message: result.message },
+        600,
+      );
     } else if (req.legs && req.legs.length > 1) {
       // Multi-leg option order execution
       let netPrice = req.limit_price || 0.0;
@@ -12074,6 +12012,37 @@ export const mockApi = {
       }, 600);
     }
 
+  },
+
+  // Equity-only Quick Trade ticket -- options-free counterpart to
+  // postOptionsOrder's stock branch above (see EquityOrderTicket.tsx).
+  // Shares its fill math with that branch via applyMockStockFill so the two
+  // can't silently drift apart.
+  async postPaperEquityOrder(req: EquityOrderRequest): Promise<EquityOrderResult> {
+    console.log(`[mockApi] postPaperEquityOrder (${req.isLive ? 'LIVE' : 'PAPER'}):`, req);
+    if (req.isLive) {
+      return delay({
+        ok: false,
+        order_id: null,
+        message: "Live order execution is disabled in Advisory-Only mode. Please use paper mode.",
+      }, 500);
+    }
+
+    const symbol = (req.symbol || "").trim().toUpperCase();
+    if (!symbol) {
+      return delay({ ok: false, order_id: null, message: "Symbol is required." }, 200);
+    }
+    const side: 'BUY' | 'SELL' = req.side?.toLowerCase() === 'sell' ? 'SELL' : 'BUY';
+
+    const result = applyMockStockFill({
+      symbol,
+      side,
+      quantity: req.quantity,
+      dollarAmount: req.dollar_amount,
+      limitPrice: req.limit_price,
+      orderIdPrefix: "eq_ord",
+    });
+    return delay(result, 600);
   },
 
   async getObservabilitySummary(
@@ -14481,6 +14450,9 @@ export const mockApi = {
     });
   },
   async getPaperBrokerAccount() {
+    // Seed on first read too: tickets gate orders on this cash figure, so an
+    // unseeded $0 account made the very first mock order impossible.
+    ensureMockPaperAccountSeeded();
     return paperAccount;
   },
   async getPaperBrokerPositions() {
@@ -17936,6 +17908,13 @@ let paperAccount: PaperBrokerAccount = { equity: 0, cash: 0, buying_power: 0 };
 // trading" -- the account's cash/equity values alone can't tell those apart,
 // since both are genuinely 0 in the drained case.
 let paperAccountInitialized = false;
+
+function ensureMockPaperAccountSeeded(): void {
+  if (!paperAccountInitialized) {
+    paperAccount = { equity: 100000, cash: 100000, buying_power: 100000 };
+    paperAccountInitialized = true;
+  }
+}
 let paperPositions: PaperBrokerPosition[] = [];
 let paperOrders: PaperBrokerOrder[] = [];
 let paperClosedTrades: PaperBrokerClosedTrade[] = MOCK_RETROSPECTIVE_TRADES.map(t => ({
@@ -18005,6 +17984,152 @@ function pushMockClosedTrade(params: {
     close_reason: closeReason,
     leg_group_id: null,
   });
+}
+
+/**
+ * Deterministic per-symbol mock spot price -- same seed formula as
+ * `getDataQuotes` below, so a market-order fill (no `limit_price` supplied)
+ * uses a price consistent with what the rest of the mock surface would quote
+ * for that symbol, instead of a flat fallback unrelated to the symbol.
+ */
+function mockStockQuotePrice(symbol: string): number {
+  const sym = symbol.trim().toUpperCase();
+  const rng = seeded(sym.charCodeAt(0) * 31 + sym.length * 7);
+  const base = 40 + (sym.charCodeAt(sym.length - 1) % 40) * 5;
+  return +(base + rng() * 20).toFixed(2);
+}
+
+/**
+ * Shared equity paper-fill mutation, used by BOTH `postOptionsOrder`'s
+ * `asset_type === "stock"` branch (the options desk's Quick Trade path,
+ * pre-dating the equity/options split) and `postPaperEquityOrder` (the new,
+ * options-free equity ticket) -- factored out so the two mock paths can't
+ * drift apart. Mirrors `pilots/paper_equity_order.py::execute_equity_order`'s
+ * fill math exactly: an explicit positive `limitPrice` prices the fill,
+ * otherwise a live(-looking) quote; a missing/non-positive resolved price or
+ * a SELL with insufficient inventory rejects the order rather than fabricating
+ * a fill (CONSTRAINT #4); commission is $0.005/share, $1.00 minimum.
+ */
+function applyMockStockFill(params: {
+  symbol: string;
+  side: "BUY" | "SELL";
+  quantity?: number;
+  dollarAmount?: number;
+  limitPrice?: number;
+  orderIdPrefix: string;
+}): { ok: boolean; order_id: string | null; message: string } {
+  ensureMockPaperAccountSeeded();
+
+  const orderSymbol = params.symbol.trim().toUpperCase();
+  const fillPrice =
+    params.limitPrice && params.limitPrice > 0
+      ? params.limitPrice
+      : mockStockQuotePrice(orderSymbol);
+
+  if (!fillPrice || fillPrice <= 0) {
+    return {
+      ok: false,
+      order_id: null,
+      message: `No live quote available for ${orderSymbol}; order rejected rather than filled at a fabricated price.`,
+    };
+  }
+
+  let qty: number;
+  if (params.dollarAmount && params.dollarAmount > 0 && (!params.quantity || params.quantity <= 0)) {
+    qty = +(params.dollarAmount / fillPrice).toFixed(4);
+  } else {
+    qty = params.quantity && params.quantity > 0 ? params.quantity : 1;
+  }
+
+  if (qty <= 0) {
+    return { ok: false, order_id: null, message: "Calculated share quantity must be greater than zero." };
+  }
+
+  const orderSide = params.side;
+  const existingPos = paperPositions.find((p) => p.symbol === orderSymbol);
+
+  if (orderSide === "SELL" && (!existingPos || existingPos.qty < qty)) {
+    return {
+      ok: false,
+      order_id: null,
+      message: `Order rejected: Insufficient funds or inventory for SELL ${qty} ${orderSymbol}.`,
+    };
+  }
+
+  const commission = Math.max(1.0, +(qty * 0.005).toFixed(2));
+  const totalCost = orderSide === "SELL" ? qty * fillPrice - commission : qty * fillPrice + commission;
+
+  if (orderSide === "BUY" && paperAccount.cash < totalCost) {
+    return {
+      ok: false,
+      order_id: null,
+      message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`,
+    };
+  }
+
+  if (orderSide === "SELL") {
+    const closingAvgCost = existingPos!.avg_cost;
+    paperAccount.cash += totalCost;
+    existingPos!.qty -= qty;
+    existingPos!.market_value = Math.max(0, (existingPos!.market_value || 0) - qty * fillPrice);
+    if (existingPos!.qty <= 0) {
+      paperPositions = paperPositions.filter((p) => p.symbol !== orderSymbol);
+      // Equity positions here are always long (no short-sale path), so the
+      // position's own opening side is "BUY".
+      pushMockClosedTrade({
+        symbol: orderSymbol,
+        side: "BUY",
+        qty,
+        entryPrice: closingAvgCost,
+        exitPrice: fillPrice,
+        commission,
+      });
+    }
+  } else {
+    paperAccount.cash -= totalCost;
+    if (existingPos) {
+      const prevTotal = existingPos.qty * existingPos.avg_cost;
+      existingPos.qty += qty;
+      existingPos.avg_cost = (prevTotal + qty * fillPrice) / existingPos.qty;
+      existingPos.market_value = (existingPos.market_value || 0) + qty * fillPrice;
+    } else {
+      paperPositions.push({
+        symbol: orderSymbol,
+        qty,
+        avg_cost: fillPrice,
+        current_price: fillPrice,
+        market_value: qty * fillPrice,
+        unrealized_pl: 0,
+        unrealized_pl_pct: 0,
+        strategy_id: null,
+        pilot_id: null,
+        experiment_arm: null,
+      });
+    }
+  }
+  paperAccount.buying_power = paperAccount.cash;
+
+  const orderId = `${params.orderIdPrefix}_${Date.now()}`;
+  paperOrders.unshift({
+    order_id: orderId,
+    symbol: orderSymbol,
+    side: orderSide,
+    qty,
+    price: fillPrice,
+    status: "filled",
+    filled_qty: qty,
+    filled_avg_price: fillPrice,
+    created_at: new Date().toISOString(),
+    strategy_id: null,
+    pilot_id: null,
+    experiment_arm: null,
+  });
+
+  return {
+    ok: true,
+    order_id: orderId,
+    message: `Paper stock order filled: ${orderSide} ${qty.toFixed(2)} shares of ${orderSymbol} at $${fillPrice.toFixed(2)} (Total: $${totalCost.toFixed(2)}).`,
+  };
 }
 
 /**

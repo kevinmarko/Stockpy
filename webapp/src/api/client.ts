@@ -161,6 +161,8 @@ import type { StrategyReportCardSnapshot,
   OptionChainResponse,
   OptionsOrderRequest,
   OptionsOrderResult,
+  EquityOrderRequest,
+  EquityOrderResult,
   OptionsBacktestParams,
   OptionsBacktestResponse,
   OptionsMetaModelStatus,
@@ -544,6 +546,11 @@ const liveApi = {
     }),
   postOptionsOrder: (req: OptionsOrderRequest) =>
     http<OptionsOrderResult>("/brokerage/options/order", {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  postPaperEquityOrder: (req: EquityOrderRequest) =>
+    http<EquityOrderResult>("/pilots/paper-broker/order", {
       method: "POST",
       body: JSON.stringify(req),
     }),

@@ -37,7 +37,7 @@ vi.mock("../api/client", async (importOriginal) => {
       getThresholds: vi.fn(() => Promise.resolve({ VRP: 0, MAX_KELLY: 0, VIX_HIGH: 0, OPTION_MIN_IVR: 0, REGIME_LOOKAHEAD_DAYS: 0 })),
       // Quick Trade (any FMP-quotable symbol) + the SymbolInput it uses.
       getDataQuotes: vi.fn(),
-      postOptionsOrder: vi.fn(),
+      postPaperEquityOrder: vi.fn(),
       watchCandidate: vi.fn(),
       getUniverse: vi.fn(),
       // SymbolInput's "not yet tracked" FMP section + OptionsOrderTicket's
