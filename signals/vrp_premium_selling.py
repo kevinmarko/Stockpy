@@ -17,7 +17,6 @@ import pandas as pd
 from dto_models import MacroEconomicDTO
 from settings import settings
 from signals.base import SignalModule, SignalContext, SignalOutput
-from signals.registry import global_registry
 
 # Per-symbol gate thresholds -- mirrors the identical VRP regime rule already
 # enforced in
@@ -159,5 +158,8 @@ class VRPPremiumSellingSignal(SignalModule):
         return SignalOutput(score=score, confidence=1.0, explanation=explanation)
 
 
-# Auto-register module
-global_registry.register(VRPPremiumSellingSignal())
+# No longer auto-registered (2026-09, step 3d'): this module was retired from
+# live scoring with the options desk. Registering on import would let any
+# process that merely imports it (the MCP server, the quarantined VRP proxy,
+# a test) put it back into the live global_registry. The file stays until it
+# moves to legacy/ in step 4.

@@ -2533,7 +2533,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "signals/vrp_premium_selling.py:33",
+        "site": "signals/vrp_premium_selling.py:32",
         "via": []
       }
     ],

@@ -614,10 +614,10 @@ def _clean_signal_registry_between_tests() -> Any:
         "aroon_trend", "forecast_alignment", "relative_strength", "rsi_extremes",
         "sortino_drawdown", "edge_garch", "timeseries_momentum", "cross_sectional_momentum",
         "rsi2_mean_reversion", "multifactor", "regime_multiplier", "lgbm_ranker",
-        "news_catalyst", "sector_quality_rank", "vrp_premium_selling", "options_flow_sentiment",
+        "news_catalyst", "sector_quality_rank",
     }
     try:
-        import signals  # noqa: F401 -- ensures all 20 standard modules are registered
+        import signals  # noqa: F401 -- ensures all 18 standard modules are registered
         from signals.registry import global_registry
         for k in list(global_registry._modules.keys()):
             if k not in standard_names:

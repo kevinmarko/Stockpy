@@ -1,5 +1,7 @@
 # Signal: `options_flow_sentiment`
 
+> **Retired from live scoring (2026-09, step 3d').** No longer registered in `signals/__init__.py` and dropped from the default `SIGNAL_WEIGHTS`, its Pilot, and the Forecast Backfill bridge's eligible set, as part of cutting the options desk out of core. It was already in `DISABLED_SIGNAL_MODULES` in the live `.env`, so the change was score-neutral (the last live snapshot showed a 0 contribution for all 29 symbols). The module file stays, unregistered, until it moves to `legacy/` in step 4. The rest of this page describes the module as it was.
+
 * **File:** `signals/options_flow_sentiment.py`
 * **Default weight:** 10.0 (`settings.SIGNAL_WEIGHTS["options_flow_sentiment"]`)
 * **Score range:** `[-1.0, +1.0]`

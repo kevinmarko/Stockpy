@@ -89,12 +89,15 @@ class TestReplayExcludedModules:
         }
 
     def test_surviving_registry_has_fourteen_modules(self) -> None:
-        import signals  # noqa: F401 -- ensures all 20 modules are registered
+        import signals  # noqa: F401 -- ensures all 18 modules are registered
         from signals.registry import global_registry
 
         all_names = set(global_registry.get_all().keys())
         surviving = all_names - _REPLAY_EXCLUDED_MODULES
-        assert len(all_names) == 20
+        # 20 -> 18 (2026-09, step 3d'): vrp_premium_selling and
+        # options_flow_sentiment are no longer registered; both were already
+        # in the replay-excluded set, so the survivor count is unchanged.
+        assert len(all_names) == 18
         assert len(surviving) == 14
 
 

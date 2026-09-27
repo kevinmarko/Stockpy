@@ -449,7 +449,9 @@ _RSI2_NAME = "rsi2_mean_reversion"  # documented long-only [0, 1] exception
 class TestUniversalSignalModuleContract:
     def test_at_least_seventeen_modules_registered(self, name, module):
         # Sanity check the parametrization itself isn't silently empty.
-        assert len(_ALL_REGISTERED) == 20
+        # 20 -> 18 (2026-09, step 3d'): vrp_premium_selling and
+        # options_flow_sentiment were retired from live scoring.
+        assert len(_ALL_REGISTERED) == 18
 
     def test_abc_conformance(self, name, module):
         assert isinstance(module, SignalModule)

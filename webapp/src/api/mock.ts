@@ -17547,11 +17547,11 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
     // reporting. timeseries_momentum/rsi2_mean_reversion mirror their
     // trained metrics rows above (a real backend never sets trained: true
     // without a corresponding metrics row); sector_quality_rank/
-    // vrp_premium_selling illustrate the genuinely-blocked case this mock
-    // doesn't carry metrics rows for. cross_sectional_momentum and
-    // options_flow_sentiment are deliberately omitted from BOTH dicts here
-    // -- this fixture is illustrative, not an exhaustive mirror of every
-    // eligible signal's live state.
+    // cross_sectional_momentum illustrate the genuinely-blocked case this
+    // mock doesn't carry metrics rows for -- this fixture is illustrative,
+    // not an exhaustive mirror of every eligible signal's live state.
+    // (vrp_premium_selling / options_flow_sentiment are no longer eligible:
+    // retired from live scoring in 2026-09, step 3d'.)
     eligibility: {
       timeseries_momentum: { declares_meta_label_features: true, trained: true, reason: null },
       rsi2_mean_reversion: { declares_meta_label_features: true, trained: true, reason: null },
@@ -17560,7 +17560,7 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
         trained: false,
         reason: "insufficient_samples:0_for_90d",
       },
-      vrp_premium_selling: {
+      cross_sectional_momentum: {
         declares_meta_label_features: true,
         trained: false,
         reason: "insufficient_samples:0_for_90d",
