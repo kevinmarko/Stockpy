@@ -322,6 +322,28 @@ class TestRecordValidationRunToDb:
         assert rows[0]["strategy_id"] == "TestStrategy"
         assert rows[0]["sharpe"] == pytest.approx(0.42)
 
+    def test_record_to_history_db_false_writes_nothing(self, tmp_path, monkeypatch):
+        """Audit sandboxes (the Gravity suite's Random_Audit/Trending_Audit
+        controls) opt out; before this flag existed, 50 synthetic rows landed
+        in the operator's real validation_runs table and Trending_Audit read
+        back as a deployable strategy."""
+        import validation.validation_history_store as store_mod
+        from execution.cost_model import TieredCostModel
+        from validation.validation_history_store import ValidationHistoryStore
+
+        db_url = f"sqlite:///{tmp_path / 'validation.db'}"
+        monkeypatch.setattr(store_mod, "resolve_database_url", lambda: db_url)
+
+        harness = StrategyValidationHarness(
+            strategy_fn=lambda *a, **kw: [],
+            universe_fn=lambda d: [],
+            cost_model=TieredCostModel(),
+            record_to_history_db=False,
+        )
+        harness._record_validation_run_to_db(_make_report())
+
+        assert ValidationHistoryStore(db_url=db_url).get_recent(limit=10) == []
+
     def test_db_failure_is_swallowed_not_raised(self, monkeypatch):
         """A DB hiccup (e.g. sqlalchemy unavailable, unreachable Postgres)
         must be logged, never propagated (CONSTRAINT #6) — mirrors
