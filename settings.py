@@ -1679,7 +1679,7 @@ class Settings(BaseSettings):
     )
 
     # --- FIX 4.4 Gateway (execution/fix_gateway.py) ---
-    FIX_GATEWAY_ENABLED: bool = Field(default=True, description="Master switch for the simulated FIX 4.4 gateway's route/session endpoints (POST /pilots/execution/fix/route and session management). Defaults True since this module is fully simulated -- it never touches real capital or a real venue connection -- following this repo's 2026-08-03 convention that new admin/execution capabilities default ON unless they change live trading behavior.")
+    FIX_GATEWAY_ENABLED: bool = Field(default=True, description="Retired (2026-09, step 3e): the simulated FIX gateway routes this gated were removed with the options desk, so this switch has no effect. Kept until the settings trim in step 4.")
     FIX_HEARTBEAT_INTERVAL_SECONDS: int = Field(default=30, description="Heartbeat interval (seconds) for FixSession -- was previously hardcoded as the class constructor default; now operator-configurable.")
 
     # --- Pre-trade risk gate (execution/risk_gate.py) ---
@@ -1912,7 +1912,7 @@ class Settings(BaseSettings):
     PROGRESS_POLL_SECONDS: int = Field(
         default=5, description="Poll interval (seconds) for the Launcher pipeline-progress indicator."
     )
-    WS_RISK_STREAM_INTERVAL_SECONDS: float = Field(default=1.0, description="Poll interval (seconds) for the /ws/risk/portfolio WebSocket stream -- was previously a hardcoded asyncio.sleep(1.0).")
+    WS_RISK_STREAM_INTERVAL_SECONDS: float = Field(default=1.0, description="Retired (2026-09, step 3e): the /ws/risk/portfolio stream it paced was removed with the options desk, so this has no effect. Kept until the settings trim in step 4.")
     # ISO date string (YYYY-MM-DD) recording when paper trading began.
     # Used by scripts/preflight_check.py to verify >= 90 days of paper history.
     PAPER_TRADING_START_DATE: Optional[str] = Field(

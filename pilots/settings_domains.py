@@ -134,7 +134,6 @@ _OVERRIDE_DOMAINS: Dict[str, str] = {
     # Alerting / Observability
     "PIPELINE_STALL_ALERT_ENABLED": "Alerting/Observability",
     "PIPELINE_STALL_ALERT_SECONDS": "Alerting/Observability",
-    "WS_RISK_STREAM_INTERVAL_SECONDS": "Alerting/Observability",
     "BROWSER_DIAGNOSTICS_ENABLED": "Alerting/Observability",
     "BROWSER_DIAGNOSTICS_TIMEOUT_SECONDS": "Alerting/Observability",
     "SNAPSHOT_HISTORY_DAYS": "Alerting/Observability",

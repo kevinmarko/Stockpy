@@ -12,8 +12,8 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 373,
-    "no_op": 7,
+    "live_safe": 371,
+    "no_op": 9,
     "restart_required": 97,
     "total": 477
   },
@@ -42,35 +42,35 @@
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 187,
+      "line": 186,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3268,
+      "line": 3228,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4398,
+      "line": 4358,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4503,
+      "line": 4463,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5437,
+      "line": 5397,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -209,7 +209,6 @@
     "FINBERT_ENABLED",
     "FINBERT_SCORE_CACHE_ENABLED",
     "FINNHUB_API_KEY",
-    "FIX_GATEWAY_ENABLED",
     "FIX_HEARTBEAT_INTERVAL_SECONDS",
     "FLATTEN_ON_KILL",
     "FMP_ANALYST_ENABLED",
@@ -484,27 +483,28 @@
     "WEEKLY_DIGEST_ENABLED",
     "WEEKLY_DIGEST_INTERVAL_HOURS",
     "WIKIPEDIA_ATTENTION_ENABLED",
-    "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
-    "WS_RISK_STREAM_INTERVAL_SECONDS"
+    "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS"
   ],
   "no_op": [
     "CIRCUIT_BREAKER_ENABLED",
     "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
+    "FIX_GATEWAY_ENABLED",
     "GOOGLE_TRENDS_OVERLAP_DAYS",
     "GOOGLE_TRENDS_WINDOW_DAYS",
     "OPTIONS_EARNINGS_CRUSH_ENABLED",
     "PROMPT_MAX_CHARS",
-    "SENTIMENT_PIT_MIN_MONTHS"
+    "SENTIMENT_PIT_MIN_MONTHS",
+    "WS_RISK_STREAM_INTERVAL_SECONDS"
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 877,
+    "attr": 872,
     "factory_param": 4,
-    "getattr_const": 394,
+    "getattr_const": 393,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 280,
+    "attr": 278,
     "factory_param": 4,
     "getattr_const": 232,
     "os_environ": 2
@@ -650,7 +650,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4122",
+        "site": "api/pilots_api.py:4082",
         "via": []
       }
     ],
@@ -670,7 +670,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/data_api.py:132",
+        "site": "api/data_api.py:131",
         "via": []
       },
       {
@@ -679,7 +679,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/metrics_api.py:75",
+        "site": "api/metrics_api.py:74",
         "via": []
       },
       {
@@ -688,7 +688,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:345",
+        "site": "api/pilots_api.py:342",
         "via": []
       },
       {
@@ -728,7 +728,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4234",
+        "site": "api/pilots_api.py:4194",
         "via": []
       },
       {
@@ -1503,7 +1503,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4880",
+        "site": "api/pilots_api.py:4840",
         "via": []
       }
     ],
@@ -1514,7 +1514,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4879",
+        "site": "api/pilots_api.py:4839",
         "via": []
       }
     ],
@@ -1525,7 +1525,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:5049",
+        "site": "api/pilots_api.py:5009",
         "via": []
       }
     ],
@@ -1615,7 +1615,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:5021",
+        "site": "api/pilots_api.py:4981",
         "via": []
       }
     ],
@@ -1650,7 +1650,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:659",
+        "site": "api/pilots_api.py:656",
         "via": []
       }
     ],
@@ -2984,7 +2984,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:654",
+        "site": "api/pilots_api.py:651",
         "via": []
       },
       {

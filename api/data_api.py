@@ -9,7 +9,7 @@ Run standalone::
     uvicorn api.data_api:app --port 8603
 
 Auth posture: every GET endpoint, plus the compute-only ``POST /data/pairs/*``
-/ ``POST /data/options/recompute`` endpoints (no side effects — they read
+endpoints (no side effects — they read
 market data and return a computed result, never persist anything), use
 ``require_token`` (``api.auth.require_read_token``, copied from
 ``api/state_api.py``) — a **fail-open** bearer token when
@@ -66,7 +66,6 @@ from data.robinhood_portfolio import fetch_account_snapshot
 from data.portfolio_sync import async_sync_now, build_sync_report
 from data.symbol_view_store import SymbolViewStore
 from data_engine import DataEngine
-import options_ondemand
 import pairs_ondemand
 
 # ── On-demand AI generation (Section: /data/ai/*) ──────────────────────────
@@ -1230,14 +1229,15 @@ def get_account() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# On-demand Options / Pairs recompute — /data/options/recompute,
-# /data/pairs/analyze, /data/pairs/scan
+# On-demand Pairs recompute — /data/pairs/analyze, /data/pairs/scan
+# (the options recompute / chain routes left with the options desk, 2026-09,
+# step 3e)
 # ---------------------------------------------------------------------------
-# Backlog items 8a/8b: the persisted-snapshot views (GET /options, GET /pairs
-# on api/pilots_api.py) only ever serve the LAST PIPELINE-WRITTEN artifact —
+# Backlog items 8a/8b: the persisted-snapshot view (GET /pairs on
+# api/pilots_api.py) only ever serves the LAST PIPELINE-WRITTEN artifact —
 # there was no way for an operator to recompute against parameters/symbols
-# they choose. These heavy engines (technical_options_engine,
-# pairs.cointegration / signals.pairs_trading / statsmodels) must live here,
+# they choose. These heavy engines (pairs.cointegration /
+# signals.pairs_trading / statsmodels) must live here,
 # not on the AST-guarded api/pilots_api.py. Mirrors GET /symbols/compare's
 # (PR #379) "cap the input, stay synchronous, 422 outside the cap" convention
 # rather than building a job/poll pattern — these are single-request,
@@ -1275,27 +1275,6 @@ class PairsScanRequest(BaseModel):
     symbols: List[str] = Field(..., min_length=1, max_length=64)
     p_threshold: float = Field(0.05, ge=0.01, le=0.10)
     max_pairs: int = Field(20, ge=1, le=50)
-
-
-class OptionsRecomputeRequest(BaseModel):
-    """Body for ``POST /data/options/recompute``. A capped, operator-chosen
-    symbol list (1-8 after de-dup — see
-    ``options_ondemand.RECOMPUTE_MIN_SYMBOLS``/``RECOMPUTE_MAX_SYMBOLS``) plus
-    the same directive controls ``gui/panels/options_matrix.py`` exposes.
-    Every field defaults to the engine constant, so an untouched request
-    reproduces the pipeline writer's own defaults byte-for-byte."""
-
-    symbols: List[str] = Field(..., min_length=1, max_length=64)
-    target_dte: int = Field(30, ge=1, le=120)
-    delta_target_scale: float = Field(1.0, ge=0.25, le=2.0)
-    ivr_sell_threshold: float = Field(50.0, ge=0.0, le=100.0)
-    ivr_buy_threshold: float = Field(30.0, ge=0.0, le=100.0)
-    risk_free_rate_pct: Optional[float] = Field(
-        None, ge=0.0, le=15.0,
-        description="Annualized %, e.g. 4.5. None -> settings.RISK_FREE_RATE.",
-    )
-    strike_grid: float = Field(0.50, ge=0.5, le=10.0)
-    delta_tolerance: float = Field(0.05, ge=0.01, le=0.25)
 
 
 class CacheLongShortSimulateRequest(BaseModel):
@@ -1403,193 +1382,6 @@ def scan_pairs_ondemand(body: PairsScanRequest) -> Dict[str, Any]:
         deduped, provider, p_threshold=body.p_threshold, max_pairs=body.max_pairs
     )
     return _clean_nan(result)
-
-
-@app.post("/data/options/recompute", dependencies=[Depends(require_token)])
-def recompute_options_ondemand(body: OptionsRecomputeRequest) -> Dict[str, Any]:
-    """On-demand premium-selling directive recompute over a capped symbol
-    list, with adjustable delta-scale/IVR/risk-free-rate/strike-grid/DTE
-    controls.
-
-    Ports ``gui/panels/options_matrix.py``'s controls form + per-symbol
-    compute loop to a stateless HTTP call. 1-8 symbols after de-dup (422 with
-    a stable tag outside that range — each symbol pays a GJR-GARCH MLE fit,
-    the heaviest per-symbol compute in this codebase). A bad symbol
-    dead-letters into its own error-shaped row in ``directives`` (never aborts
-    the batch — CONSTRAINT #6); its message is also collected into
-    ``errors``. The VRP regime gate (VIX>=30 / CREDIT EVENT) is forwarded from
-    the latest persisted snapshot's macro state, exactly as the live pipeline
-    does — no premium-selling advice in a stress regime.
-    """
-    deduped = _dedupe_symbols(body.symbols)
-    if len(deduped) < options_ondemand.RECOMPUTE_MIN_SYMBOLS:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "too_few_symbols",
-                "message": f"Enter at least {options_ondemand.RECOMPUTE_MIN_SYMBOLS} symbol.",
-                "min": options_ondemand.RECOMPUTE_MIN_SYMBOLS,
-            },
-        )
-    if len(deduped) > options_ondemand.RECOMPUTE_MAX_SYMBOLS:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "too_many_symbols",
-                "message": f"Enter at most {options_ondemand.RECOMPUTE_MAX_SYMBOLS} symbols.",
-                "max": options_ondemand.RECOMPUTE_MAX_SYMBOLS,
-            },
-        )
-
-    snapshot = load_snapshot()
-    vix, market_regime = options_ondemand.macro_from_snapshot(snapshot)
-    risk_free_rate_pct = (
-        body.risk_free_rate_pct
-        if body.risk_free_rate_pct is not None
-        else float(settings.RISK_FREE_RATE) * 100.0
-    )
-
-    provider = get_provider()
-    rows: List[Dict[str, Any]] = []
-    errors: List[str] = []
-    for sym in deduped:
-        result = options_ondemand.compute_directive_row(
-            sym,
-            provider=provider,
-            target_dte=body.target_dte,
-            vix=vix,
-            market_regime=market_regime,
-            risk_free_rate=risk_free_rate_pct / 100.0,
-            ivr_sell_threshold=body.ivr_sell_threshold,
-            ivr_buy_threshold=body.ivr_buy_threshold,
-            delta_target_scale=body.delta_target_scale,
-            delta_tolerance=body.delta_tolerance,
-            strike_grid=body.strike_grid,
-        )
-        rows.append(result["row"])
-        if result["error"]:
-            errors.append(result["error"])
-
-    return _clean_nan(
-        {
-            "directives": rows,
-            "errors": errors,
-            "vix": vix,
-            "market_regime": market_regime,
-            "target_dte": body.target_dte,
-        }
-    )
-
-
-@app.get("/data/options/chain/{symbol}", dependencies=[Depends(require_token)])
-def get_options_chain(symbol: str, expiration: Optional[str] = None) -> Dict[str, Any]:
-    """On-demand full options chain fetcher.
-    If `expiration` is omitted, returns a list of available expiration dates.
-    If `expiration` is provided, returns the calls and puts for that date, enriched with Greeks.
-    """
-    symbol = symbol.upper()
-    from data.market_data import get_options_provider, get_provider
-    options_provider = get_options_provider()
-    provider = get_provider()
-    
-    if expiration is None:
-        expirations = options_provider.fetch_options_chain(symbol)
-        return _clean_nan({
-            "symbol": symbol,
-            "expirations": expirations
-        })
-    
-    chain = options_provider.fetch_options_chain(symbol, expiration)
-    if chain is None:
-        raise HTTPException(status_code=404, detail=f"Option chain not found for {symbol} at {expiration}")
-        
-    try:
-        # We rely on the configured provider (which we prefer to be FMP based on config)
-        # to fetch a reliable spot price for the Greek calculations.
-        quote = provider.get_latest_quote(symbol)
-        spot_price = quote.price
-        if spot_price is not None and isinstance(spot_price, float) and math.isnan(spot_price):
-            spot_price = None
-    except Exception:
-        spot_price = None
-
-    if spot_price is None:
-        # CONSTRAINT #4 (never fabricate): every Greek below is derived from
-        # `spot_price` -- silently substituting $0.00 here would compute a
-        # deeply-in-the-money Delta≈1 for every strike and present it as real,
-        # with no signal to the caller that the underlying quote never
-        # actually loaded. Fail honestly instead of returning invented Greeks.
-        raise HTTPException(status_code=503, detail=f"Unable to fetch a live spot price for {symbol}; cannot compute option Greeks.")
-
-
-    from technical_options_engine import OptionsPricingRecommender
-    import datetime
-    
-    # Calculate DTE
-    try:
-        exp_date = datetime.datetime.strptime(expiration, "%Y-%m-%d").date()
-        today = datetime.date.today()
-        dte = max(1, (exp_date - today).days)
-    except Exception:
-        dte = 30
-        
-    T = dte / 365.0
-    recommender = OptionsPricingRecommender(stock_price=spot_price, risk_free_rate=float(settings.RISK_FREE_RATE))
-    
-    def enrich_contract(row, option_type):
-        iv = float(row.get('impliedVolatility', 0.0))
-        strike = float(row.get('strike', 0.0))
-        greeks = recommender.black_scholes_pricing_and_greeks(strike, T, iv, option_type)
-        
-        # CONSTRAINT #4 (never fabricate): a contract with genuinely unreported
-        # volume/open-interest (common for far-OTM/illiquid strikes) must stay
-        # `null`, not be coerced to a fabricated `0` that's indistinguishable
-        # from a verified-zero reading. `_clean_nan` below only nulls actual
-        # NaN floats, so the "missing" case is passed through as `None` here
-        # rather than defaulted to `0` up front.
-        vol = row.get("volume", None)
-        vol = None if vol is None or (isinstance(vol, float) and math.isnan(vol)) else int(vol)
-
-        oi = row.get("openInterest", None)
-        oi = None if oi is None or (isinstance(oi, float) and math.isnan(oi)) else int(oi)
-
-        return {
-            "contractSymbol": row.get("contractSymbol"),
-            "strike": strike,
-            "lastPrice": float(row.get("lastPrice", 0.0)),
-            "bid": float(row.get("bid", 0.0)),
-            "ask": float(row.get("ask", 0.0)),
-            "volume": vol,
-            "openInterest": oi,
-            "impliedVolatility": iv,
-            "inTheMoney": bool(row.get("inTheMoney", False)),
-            "greeks": {
-                "delta": float(greeks['Delta']),
-                "gamma": float(greeks['Gamma']),
-                "theta": float(greeks['Theta_Daily']),
-                # OptionsPricingRecommender.black_scholes_pricing_and_greeks
-                # returns raw Black-Scholes vega (per 1.00/100% IV change) --
-                # rescale to the "per 1% IV" convention this chain response
-                # displays here, at this boundary only, so the shared engine
-                # primitive (and its existing ATM_Vega consumer) stays on its
-                # original scale.
-                "vega": float(greeks['Vega']) / 100.0,
-                "rho": float(greeks['Rho']),
-                "chanceOfProfit": float(greeks['ChanceOfProfit']),
-            }
-        }
-    
-    calls = [enrich_contract(row, 'call') for _, row in chain.calls.iterrows()] if not chain.calls.empty else []
-    puts = [enrich_contract(row, 'put') for _, row in chain.puts.iterrows()] if not chain.puts.empty else []
-    
-    return _clean_nan({
-        "symbol": symbol,
-        "expiration": expiration,
-        "spot_price": spot_price,
-        "calls": calls,
-        "puts": puts
-    })
-
 
 
 # ---------------------------------------------------------------------------
