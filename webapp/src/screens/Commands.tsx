@@ -73,9 +73,16 @@ export function Commands() {
   // refresh_validations.py must not show a button that opens nothing useful.
   const bulkValidateCommand =
     data?.commands.find((c) => c.name === "refresh_validations.py") ?? null;
-  // Same guard, for validation.harness's own bulk (options-only) mode.
+  // Same guard, for validation.harness's own bulk (options-only) mode. That
+  // mode was removed with the options desk (2026-09, step 4a), so the live
+  // manifest's validation.harness no longer has a --strategies option and
+  // this button stays hidden; an older manifest that still has it keeps it.
   const bulkValidateOptionsCommand =
-    data?.commands.find((c) => c.name === "validation.harness") ?? null;
+    data?.commands.find(
+      (c) =>
+        c.name === "validation.harness" &&
+        c.options.some((o) => o.name === "--strategies")
+    ) ?? null;
 
   // Check URL query parameters for builderCommand trigger (e.g. ?builder=validation.harness)
   useEffect(() => {

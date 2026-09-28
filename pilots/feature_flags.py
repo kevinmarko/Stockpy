@@ -88,9 +88,10 @@ WRITE_GATE_REASONS: dict[str, str] = {
         "real."
     ),
     "MULTI_BROKER_GATEWAY_ENABLED": (
-        "Enables multi-broker smart routing via MultiBrokerGateway in broker "
-        "execution tools (broker_live_execution_mcp.py). When false, falls "
-        "back directly to the primary broker backend without routing failover."
+        "RETIRED (2026-09, step 4a): read nowhere. The MultiBrokerGateway "
+        "branch was removed from broker_live_execution_mcp.py with the "
+        "options desk; brokers always resolve through "
+        "execution.broker_selection. The field itself is removed in step 4f."
     ),
 }
 

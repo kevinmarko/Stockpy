@@ -180,7 +180,6 @@ export function fuzzyMatch(pattern: string, text: string): boolean {
  * exactly this reason.
  */
 export const REGISTERED_STRATEGIES = [
-  "options_flow_sentiment",
   "rsi2_mean_reversion",
   "timeseries_momentum",
   "macd_trend",
@@ -199,15 +198,7 @@ export const REGISTERED_STRATEGIES = [
   "signal_replay_balanced_blend",
   "sector_quality_rank",
   "lgbm_ranker",
-  "vrp_premium_selling",
-  "vol_mispricing",
-  "put_credit_spread",
-  "call_credit_spread",
-  "call_debit_spread",
-  "put_debit_spread",
-  "covered_call",
   "pairs_trading",
-  "copula_stat_arb",
   "aroon_trend",
 ];
 

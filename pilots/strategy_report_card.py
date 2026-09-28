@@ -21,6 +21,24 @@ LEGACY_STRATEGY_ID_ALIASES: Dict[str, str] = {
     "Iron Condor": "iron-condor",
 }
 
+# The options Pilots were removed from the catalog with the options desk
+# (2026-09, step 4a). Historical paper trades recorded under their ids (or
+# under the legacy free-text labels above) still group here, and render as
+# honest, clearly-labelled retired rows -- never as a live Pilot and never
+# with a predicted (backtest) side.
+RETIRED_OPTIONS_PILOT_NAMES: Dict[str, str] = {
+    "earnings-crush": "Earnings Volatility Crush",
+    "dispersion-trading": "Dispersion Trading",
+    "zero-dte-momentum-breakout": "0DTE Momentum Breakout",
+    "copula-stat-arb": "Copula Stat Arb",
+    "put-credit-spread": "Put Credit Spread",
+    "call-credit-spread": "Call Credit Spread",
+    "call-debit-spread": "Call Debit Spread",
+    "put-debit-spread": "Put Debit Spread",
+    "covered-call": "Covered Call",
+    "iron-condor": "Iron Condor",
+}
+
 MIN_TRADES_FOR_VERDICT = 10
 
 
@@ -216,6 +234,7 @@ def strategy_report_card_rows() -> List[Dict[str, Any]]:
     for norm_id, t_list in grouped_trades.items():
         if norm_id not in pilot_ids:
             act = _actual_side(t_list)
+            retired_name = RETIRED_OPTIONS_PILOT_NAMES.get(norm_id)
             pred = {
                 "deployable": None,
                 "pbo": None,
@@ -226,12 +245,16 @@ def strategy_report_card_rows() -> List[Dict[str, Any]]:
                 "is_options_selling": None,
                 "stress_gate_passed": None,
                 "report_date": None,
-                "reason": "non-pilot bucket",
+                "reason": (
+                    "retired options pilot (options desk removed 2026-09)"
+                    if retired_name
+                    else "non-pilot bucket"
+                ),
             }
             row = {
                 "pilot_id": norm_id,
-                "name": norm_id,
-                "category": "Other",
+                "name": retired_name or norm_id,
+                "category": "Retired" if retired_name else "Other",
                 "is_pilot": False,
                 "predicted": pred,
                 "actual": act,

@@ -143,7 +143,7 @@ Coverage
 * ``query_investyo_db`` accepts a read-only ``WITH ... SELECT`` CTE while
   still rejecting INSERT/UPDATE/DELETE/DROP (incl. a CTE-prefixed mutation).
 * New read-only market-intelligence tools ``get_recommendation`` /
-  ``get_options_directive`` / ``get_regime_status`` /
+  ``get_regime_status`` /
   ``get_portfolio_coverage``: one happy-path each (markdown fields + a
   fenced ```json block) mocking the underlying engine, plus a dead-letter
   degradation path each.
@@ -2565,223 +2565,65 @@ class TestGetRecommendation:
         assert "error" in low or "unavailable" in low or "fail" in low
 
 
-class TestGetOptionsDirective:
-    def _directive(self):
-        return {
-            "Symbol": "AAPL",
-            "Strategy": "Put Credit Spread",
-            "Action": "SELL",
-            "Net_Premium": 1.25,
-            "Short_Strike": 145.0,
-            "Long_Strike": 140.0,
-            "Sigma_GARCH": 0.22,
-            "Trend_Bias": "Bullish",
-            "Integrity_OK": True,
-        }
+class TestRetiredOptionsTools:
+    """The options desk was retired (2026-09, step 4a). The three options
+    MCP tools stay registered as stubs: each returns an explicit retired
+    answer, never raises, and never imports an options module (proven by
+    blocking those modules in sys.modules)."""
 
-    def _patch_bars_provider(self, monkeypatch):
-        """The generic MagicMock() provider from _patch_advisory_inputs
-        returns a MagicMock (truthy .empty) for get_intraday_bars, which
-        trips the tool's "no bar data" guard before it ever reaches
-        build_premium_directive. Provide a fake with a real, non-empty
-        bars DataFrame instead."""
-        import data.market_data as md_mod
+    _BLOCKED = (
+        "technical_options_engine",
+        "pilots.options_risk",
+        "pilots.volatility_surface",
+        "pilots.vol_mispricing",
+        "pilots.zero_dte_engine",
+    )
 
-        idx = pd.bdate_range("2024-01-01", periods=30)
-        bars = pd.DataFrame(
-            {"Open": 150.0, "High": 152.0, "Low": 148.0, "Close": 150.0, "Volume": 1_000_000},
-            index=idx,
-        )
+    def _block_options_modules(self, monkeypatch):
+        import sys
 
-        fake_provider = MagicMock()
-        fake_provider.get_intraday_bars.return_value = bars
-        fake_provider.get_latest_quote.return_value = SimpleNamespace(price=150.0, is_stale=False)
-        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+        for name in self._BLOCKED:
+            monkeypatch.setitem(sys.modules, name, None)
 
-    def test_happy_path_renders_directive_and_json_block(self, monkeypatch):
-        import technical_options_engine as toe_mod
-
-        monkeypatch.setattr(toe_mod, "build_premium_directive", lambda *a, **k: self._directive())
-        monkeypatch.setattr(
-            toe_mod,
-            "validate_directive_integrity",
-            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
-        )
-        _patch_advisory_inputs(monkeypatch)
-        self._patch_bars_provider(monkeypatch)
+    def test_get_options_directive_is_retired_stub(self, monkeypatch):
+        self._block_options_modules(monkeypatch)
+        import investyo_mcp_server as srv
 
         result = srv.get_options_directive("aapl")
-
-        assert "AAPL" in result
-        assert "Put Credit Spread" in result or "SELL" in result
-        assert "```json" in result
-
-    def test_exception_degrades(self, monkeypatch):
-        import technical_options_engine as toe_mod
-
-        def _raise(*a, **k):
-            raise RuntimeError("garch failed")
-
-        monkeypatch.setattr(toe_mod, "build_premium_directive", _raise)
-        _patch_advisory_inputs(monkeypatch)
-        self._patch_bars_provider(monkeypatch)
-
-        result = srv.get_options_directive("AAPL")
         assert isinstance(result, str)
-        low = result.lower()
-        assert "error" in low or "unavailable" in low or "fail" in low
+        assert "retired" in result.lower()
+        assert "Net Premium" not in result
 
-    def test_nan_realizable_theta_renders_as_na_not_literal_nan(self, monkeypatch):
-        """A debit-spread/Covered-Call/Cash directive never computes
-        Realizable_Daily_Theta (engine leaves it NaN, CONSTRAINT #4). The
-        markdown renderer must show 'N/A', not the literal string 'nan'."""
-        import technical_options_engine as toe_mod
+    def test_analyze_options_chain_is_retired_stub(self, monkeypatch):
+        self._block_options_modules(monkeypatch)
+        import investyo_mcp_server as srv
 
-        directive = self._directive()
-        directive["Strategy"] = "Call Debit Spread"
-        directive["Realizable_Daily_Theta"] = float("nan")
+        result = srv.analyze_options_chain("spy", target_dte=7)
+        assert result["retired"] is True
+        assert result["ticker"] == "SPY"
+        assert "retired" in result["error"].lower()
+        assert result["directive"] is None
+        assert result["surface"] is None
+        assert result["mispricing"] is None
 
-        monkeypatch.setattr(toe_mod, "build_premium_directive", lambda *a, **k: directive)
-        monkeypatch.setattr(
-            toe_mod,
-            "validate_directive_integrity",
-            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
-        )
-        _patch_advisory_inputs(monkeypatch)
-        self._patch_bars_provider(monkeypatch)
+    def test_scan_0dte_signals_is_retired_stub(self, monkeypatch):
+        self._block_options_modules(monkeypatch)
+        import investyo_mcp_server as srv
 
-        result = srv.get_options_directive("aapl")
+        result = srv.scan_0dte_signals("qqq", contracts=2)
+        assert result["retired"] is True
+        assert result["ticker"] == "QQQ"
+        assert result["contracts"] == 2
+        assert result["signals"] is None
+        assert result["live_exit_gate_wired"] is False
 
-        assert "Realizable Daily Theta**: N/A" in result
-        assert "nan" not in result.lower().split("```json")[0]
+    def test_tools_remain_registered(self):
+        import asyncio
 
-    def _write_snapshot(self, tmp_path, data):
-        (tmp_path / "output").mkdir(exist_ok=True)
-        (tmp_path / "output" / "state_snapshot.json").write_text(
-            json.dumps(data), encoding="utf-8"
-        )
+        import investyo_mcp_server as srv
 
-    def test_passes_macro_proxy_and_vrp_none_from_snapshot(self, monkeypatch, tmp_path):
-        """Finding 7 regression: previously this tool called
-        ``build_premium_directive(sym, bars, spot_price=..., is_stale=...)``
-        with NO ``macro_dto``/``vrp`` -- the VRP regime gate (VIX>=30 / CREDIT
-        EVENT) inside the engine silently never fired. Verify the tool now
-        threads a ``_MacroProxy`` built from the persisted state snapshot's
-        vix/market_regime, plus an explicit ``vrp=None``, matching the 4 other
-        production callers of ``build_premium_directive``."""
-        import technical_options_engine as toe_mod
-        from settings import settings
-
-        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
-        self._write_snapshot(tmp_path, {"vix": 35.0, "market_regime": "CREDIT EVENT"})
-
-        captured = {}
-
-        def _fake_directive(symbol, bars, *, spot_price, is_stale=False, **kw):
-            captured.update(kw)
-            return self._directive()
-
-        monkeypatch.setattr(toe_mod, "build_premium_directive", _fake_directive)
-        monkeypatch.setattr(
-            toe_mod,
-            "validate_directive_integrity",
-            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
-        )
-        _patch_advisory_inputs(monkeypatch)
-        self._patch_bars_provider(monkeypatch)
-
-        srv.get_options_directive("AAPL")
-
-        assert "macro_dto" in captured
-        macro_dto = captured["macro_dto"]
-        assert macro_dto.vix == 35.0
-        assert macro_dto.market_regime == "CREDIT EVENT"
-        assert captured.get("vrp") is None
-
-    def test_macro_proxy_neutral_default_without_snapshot(self, monkeypatch, tmp_path):
-        """No persisted snapshot -> neutral defaults (vix=15.0/"RISK ON"),
-        matching options_ondemand.py's MACRO_DEFAULT_VIX/MACRO_DEFAULT_REGIME."""
-        import technical_options_engine as toe_mod
-        from settings import settings
-
-        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
-
-        captured = {}
-
-        def _fake_directive(symbol, bars, *, spot_price, is_stale=False, **kw):
-            captured.update(kw)
-            return self._directive()
-
-        monkeypatch.setattr(toe_mod, "build_premium_directive", _fake_directive)
-        monkeypatch.setattr(
-            toe_mod,
-            "validate_directive_integrity",
-            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
-        )
-        _patch_advisory_inputs(monkeypatch)
-        self._patch_bars_provider(monkeypatch)
-
-        srv.get_options_directive("AAPL")
-
-        macro_dto = captured["macro_dto"]
-        assert macro_dto.vix == 15.0
-        assert macro_dto.market_regime == "RISK ON"
-        assert captured.get("vrp") is None
-
-    def test_real_engine_gates_high_vix_snapshot_to_cash_wait(self, monkeypatch, tmp_path):
-        """End-to-end (no mocked strategy result): the persisted snapshot's
-        VIX >= 30 must genuinely gate the real
-        ``technical_options_engine.build_premium_directive`` call to
-        Cash/Wait, proving the wiring fix has a real effect and not just a
-        passed-but-ignored kwarg."""
-        import data.market_data as md_mod
-        import technical_options_engine as toe_mod
-        from settings import settings
-
-        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
-        self._write_snapshot(tmp_path, {"vix": 35.0, "market_regime": "RISK ON"})
-        _patch_advisory_inputs(monkeypatch)
-
-        # Realistic (non-degenerate) GBM-like bars -- the flat-price fixture
-        # from _patch_bars_provider would fail the GJR-GARCH fit outright
-        # (zero variance) and return Cash/Wait BEFORE ever reaching the VRP
-        # regime gate, making that a false-positive proof for this test.
-        rng = np.random.default_rng(0)
-        idx = pd.bdate_range("2023-01-01", periods=252)
-        returns = rng.normal(0.0005, 0.012, size=252)
-        close = 100 * np.exp(np.cumsum(returns))
-        bars = pd.DataFrame(
-            {
-                "Open": close * 0.999,
-                "High": close * 1.005,
-                "Low": close * 0.995,
-                "Close": close,
-                "Volume": rng.integers(1_000_000, 5_000_000, size=252),
-            },
-            index=idx,
-        )
-        fake_provider = MagicMock()
-        fake_provider.get_intraday_bars.return_value = bars
-        fake_provider.get_latest_quote.return_value = SimpleNamespace(
-            price=float(close[-1]), is_stale=False
-        )
-        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
-
-        # Force the HIGH IVR REGIME branch deterministically regardless of
-        # the synthetic bars' realized-vol-derived IVR proxy, so the only
-        # thing that can be varying the outcome is the VRP regime gate.
-        real_directive = toe_mod.build_premium_directive
-
-        def _low_threshold_directive(*args, **kwargs):
-            kwargs.setdefault("ivr_sell_threshold", 0.0)
-            return real_directive(*args, **kwargs)
-
-        monkeypatch.setattr(toe_mod, "build_premium_directive", _low_threshold_directive)
-
-        result = srv.get_options_directive("AAPL")
-
-        assert "Cash" in result
-        assert "Wait" in result
+        names = {t.name for t in asyncio.run(srv.mcp.list_tools())}
+        assert {"get_options_directive", "analyze_options_chain", "scan_0dte_signals"} <= names
 
 
 class TestGetRegimeStatus:
@@ -5453,7 +5295,8 @@ class TestValidateOrderCompliance:
         result = validate_order_compliance("GOOD", "buy", 10.0)
         assert "Overall verdict: PASSED" in result
         assert "kelly_sizing_cap**: PASS" in result
-        assert "vrp_premium_selling_regime**: PASS" in result
+        # The options VRP regime gate was removed with the options desk.
+        assert "vrp_premium_selling_regime" not in result
 
     def test_genuinely_failing_case_is_different_from_passing(self, monkeypatch, tmp_path):
         from settings import settings
@@ -5476,7 +5319,7 @@ class TestValidateOrderCompliance:
         assert "Overall verdict: FAILED" in result
         assert "kelly_sizing_cap**: FAIL" in result
         assert "exceeds KELLY_CAP" in result
-        assert "vrp_premium_selling_regime**: FAIL" in result
+        assert "vrp_premium_selling_regime" not in result
 
     def test_sell_side_skips_kelly_cap_check(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
@@ -5492,9 +5335,13 @@ class TestValidateOrderCompliance:
         assert "not applicable" not in result  # uses the real "only applies to..." wording
         assert "SELL order" in result
 
-    def test_missing_vrp_columns_are_unavailable_not_fabricated_pass(self, monkeypatch, tmp_path):
-        """A Kelly-only row (no VRP/True_IVR yet) must degrade that ONE
-        check to UNAVAILABLE, never silently pass it."""
+    def test_kelly_check_runs_with_vrp_signal_module_unimportable(self, monkeypatch, tmp_path):
+        """The Kelly-cap check must not depend on any options module: with
+        signals.vrp_premium_selling blocked, the tool still evaluates the
+        cap and returns a real verdict, never a blanket "unavailable"."""
+        import sys
+
+        monkeypatch.setitem(sys.modules, "signals.vrp_premium_selling", None)
         monkeypatch.chdir(tmp_path)
         _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
@@ -5504,6 +5351,7 @@ class TestValidateOrderCompliance:
         from investyo_mcp_server import validate_order_compliance
 
         result = validate_order_compliance("PARTIAL", "buy", 10.0)
-        assert "vrp_premium_selling_regime**: UNAVAILABLE" in result
-        assert "no VRP" in result or "no True_IVR/VRP" in result or "no True_IVR" in result
+        assert "Overall verdict: PASSED" in result
         assert "kelly_sizing_cap**: PASS" in result
+        assert "vrp_premium_selling_regime" not in result
+        assert "compliance check unavailable" not in result

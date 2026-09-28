@@ -26,40 +26,27 @@ describe("StrategyReportCard", () => {
     expect(within(tf).getByText("$12,500.00")).toBeInTheDocument(); // actual max DD usd
     expect(within(tf).getByText("42")).toBeInTheDocument(); // trade count
 
-    // 2. copula-stat-arb: predicted FAIL (real, documented numbers) alongside
-    // real actual (live paper-trading) numbers -- both sides render clearly,
-    // neither masking nor contradicting the other.
-    const csa = screen.getByTestId("report-card-row-copula-stat-arb");
-    expect(within(csa).getByText("Copula Stat Arb")).toBeInTheDocument();
-    expect(within(csa).getByText("FAIL")).toBeInTheDocument();
-    expect(within(csa).getByText("-0.46")).toBeInTheDocument(); // predicted sharpe
-    expect(within(csa).getByText("35.1%")).toBeInTheDocument(); // predicted max DD
-    // Backend only ever populates `predicted.reason` when a backtest is
-    // MISSING -- a genuine FAIL with real data reports reason: null, so no
-    // fabricated "why" text should render alongside the real numbers.
-    expect(within(csa).queryByText(/PBO > 0\.5/)).not.toBeInTheDocument();
-    // The real, live actual-side numbers still render plainly next to the FAIL.
-    expect(within(csa).getByText("0.12")).toBeInTheDocument(); // actual realized sharpe proxy
-    expect(within(csa).getByText("$45,000.00")).toBeInTheDocument(); // actual max DD usd
-    expect(within(csa).getByText("118")).toBeInTheDocument(); // trade count
-
-    // 3. iron-condor: no registry key -> predicted is a fully-nulled shape
-    // with the backend's real "no validated backtest for this pilot" reason
-    // (never a fabricated per-row explanation like the old fixture's
-    // "Requires intraday options data").
+    // 2. iron-condor: a retired options Pilot (removed from the catalog with
+    // the options desk, 2026-09 step 4a). Its historical paper trades still
+    // attribute, as a non-Pilot row whose predicted side is fully nulled with
+    // the backend's retired reason -- never a fabricated backtest.
     const ic = screen.getByTestId("report-card-row-iron-condor");
     expect(within(ic).getByText("Iron Condor")).toBeInTheDocument();
-    expect(within(ic).queryByText(/intraday options data/)).not.toBeInTheDocument();
-    expect(within(ic).getByText("no validated backtest for this pilot")).toBeInTheDocument();
+    expect(within(ic).getByText("Retired")).toBeInTheDocument();
+    expect(within(ic).getByText("non-pilot bucket")).toBeInTheDocument();
+    expect(
+      within(ic).getByText("retired options pilot (options desk removed 2026-09)")
+    ).toBeInTheDocument();
     // Every nulled predicted field (sharpe/max DD/PBO/DSR/Gate) renders an
     // honest "—", never a fabricated "N/A" or "0".
     expect(within(ic).getAllByText("—").length).toBeGreaterThanOrEqual(5);
     expect(within(ic).queryByText("N/A")).not.toBeInTheDocument();
     expect(within(ic).queryByText("0")).not.toBeInTheDocument();
-    // Actual side is still populated (this pilot HAS paper trades).
+    // Actual side is still populated (this retired pilot HAS paper trades).
     expect(within(ic).getByText("1.35")).toBeInTheDocument();
     expect(within(ic).getByText("$8,400.00")).toBeInTheDocument();
     expect(within(ic).getByText("56")).toBeInTheDocument();
+    expect(screen.queryByTestId("report-card-row-copula-stat-arb")).not.toBeInTheDocument();
 
     // 4. zero-trade Pilot: real predicted metrics, but zero paper trades ->
     // every actual evaluative field nulls out with an honest reason, while

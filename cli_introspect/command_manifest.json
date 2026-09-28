@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-05T18:26:29.310507+00:00",
+  "generated_at": "2026-09-28T00:31:16.929891+00:00",
   "command_count": 17,
   "dead_letters": [],
   "commands": [
@@ -223,24 +223,11 @@
           "aliases": [
             "--strategy"
           ],
-          "description": "Name of a single strategy to validate",
+          "description": "Name of the strategy to validate",
           "default": null,
           "choices": null,
-          "required": false,
-          "arg_kind": "optional",
-          "metavar": null,
-          "takes_value": true
-        },
-        {
-          "name": "--strategies",
-          "aliases": [
-            "--strategies"
-          ],
-          "description": "Comma-separated OPTIONS strategy names to validate in bulk. Only names registered in validation.options_harness.STANDARD_OPTIONS_STRATEGIES are supported here -- for equity/cross-sectional strategies use `python -m scripts.refresh_validations --strategies ...` instead.",
-          "default": null,
-          "choices": null,
-          "required": false,
-          "arg_kind": "optional",
+          "required": true,
+          "arg_kind": "required",
           "metavar": null,
           "takes_value": true
         },
@@ -269,46 +256,6 @@
           "arg_kind": "optional",
           "metavar": null,
           "takes_value": true
-        },
-        {
-          "name": "--ticker",
-          "aliases": [
-            "--ticker"
-          ],
-          "description": "Ticker for options strategy validation",
-          "default": "SPY",
-          "choices": null,
-          "required": false,
-          "arg_kind": "optional",
-          "metavar": null,
-          "takes_value": true
-        },
-        {
-          "name": "--workers",
-          "aliases": [
-            "--workers",
-            "-w"
-          ],
-          "description": "Number of concurrent workers for bulk (--strategies) validation (default: 1 for sequential).",
-          "default": 1,
-          "choices": null,
-          "required": false,
-          "arg_kind": "optional",
-          "metavar": null,
-          "takes_value": true
-        },
-        {
-          "name": "--json",
-          "aliases": [
-            "--json"
-          ],
-          "description": "In bulk mode, also print ONE machine-readable JSON line (the LAST line of stdout) mapping strategy name -> {deployable, pbo, dsr, sharpe, max_drawdown[, error]}. The human pass/fail table is still printed above it.",
-          "default": false,
-          "choices": null,
-          "required": false,
-          "arg_kind": "optional",
-          "metavar": null,
-          "takes_value": false
         }
       ],
       "positionals": [],
@@ -624,7 +571,7 @@
           "aliases": [
             "--strategies"
           ],
-          "description": "Comma-separated strategy names to validate. Default: all (aroon_trend, call_credit_spread, call_debit_spread, coppock_momentum, copula_stat_arb, covered_call, cross_sectional_momentum, deep_value_edgar_pit, dispersion_trading, dividend_yield_edgar_pit, earnings_crush, forecast_direction_arima_hw, gamma_scalper, garch_vol_target, lgbm_ranker, macd_trend, macro_regime_pit, multifactor_lowvol_size, options_flow_sentiment, pairs_trading, put_credit_spread, put_debit_spread, relative_strength_xsec, rsi14_extremes, rsi2_mean_reversion, sector_quality_rank, signal_replay_balanced_blend, sortino_drawdown, timeseries_momentum, value_quality_edgar_pit, vol_mispricing, vrp_premium_selling, zero_dte_engine).",
+          "description": "Comma-separated strategy names to validate. Default: all (aroon_trend, coppock_momentum, cross_sectional_momentum, deep_value_edgar_pit, dividend_yield_edgar_pit, forecast_direction_arima_hw, garch_vol_target, lgbm_ranker, macd_trend, macro_regime_pit, multifactor_lowvol_size, pairs_trading, relative_strength_xsec, rsi14_extremes, rsi2_mean_reversion, sector_quality_rank, signal_replay_balanced_blend, sortino_drawdown, timeseries_momentum, value_quality_edgar_pit).",
           "default": null,
           "choices": null,
           "required": false,
@@ -740,7 +687,7 @@
             "--output-dir"
           ],
           "description": "Directory containing state_snapshot.json, dead_letter.json, history/. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/stockpy-implementation-plan-c1cabd/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/agent-aa75eef9556eb858f/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -776,7 +723,7 @@
             "--output-dir"
           ],
           "description": "Directory containing decision_log.jsonl, heartbeat.txt, state_snapshot.json. Default: ./output",
-          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/stockpy-implementation-plan-c1cabd/output",
+          "default": "/Users/kevinlee/Stockpy-live/.claude/worktrees/agent-aa75eef9556eb858f/output",
           "choices": null,
           "required": false,
           "arg_kind": "optional",
@@ -1112,27 +1059,17 @@
   ],
   "strategy_registry": [
     "aroon_trend",
-    "call_credit_spread",
-    "call_debit_spread",
     "coppock_momentum",
-    "copula_stat_arb",
-    "covered_call",
     "cross_sectional_momentum",
     "deep_value_edgar_pit",
-    "dispersion_trading",
     "dividend_yield_edgar_pit",
-    "earnings_crush",
     "forecast_direction_arima_hw",
-    "gamma_scalper",
     "garch_vol_target",
     "lgbm_ranker",
     "macd_trend",
     "macro_regime_pit",
     "multifactor_lowvol_size",
-    "options_flow_sentiment",
     "pairs_trading",
-    "put_credit_spread",
-    "put_debit_spread",
     "relative_strength_xsec",
     "rsi14_extremes",
     "rsi2_mean_reversion",
@@ -1140,26 +1077,6 @@
     "signal_replay_balanced_blend",
     "sortino_drawdown",
     "timeseries_momentum",
-    "value_quality_edgar_pit",
-    "vol_mispricing",
-    "vrp_premium_selling",
-    "zero_dte_engine"
-  ],
-  "options_strategy_registry": [
-    "Bear Put Spread",
-    "Bull Call Spread",
-    "Call Credit Spread",
-    "Iron Condor",
-    "Long Straddle",
-    "Put Credit Spread"
-  ],
-  "paper_broker_options_strategy_registry": [
-    "call_credit_spread",
-    "call_debit_spread",
-    "covered_call",
-    "put_credit_spread",
-    "put_debit_spread",
-    "vol_mispricing",
-    "vrp_premium_selling"
+    "value_quality_edgar_pit"
   ]
 }

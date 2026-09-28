@@ -226,27 +226,17 @@ def test_sneqr_quality_facts_enabled_unblocks_sector_quality_rank_end_to_end():
 
 
 # ---------------------------------------------------------------------------
-# WP4: quarantined realized-vol proxy for vrp_premium_selling
-# (settings.FORECAST_BACKFILL_VRP_PROXY_ENABLED, opt-in, default False).
-# The real vrp_premium_selling signal can never train here (True_IVR/VRP are
-# options-chain-derived and structurally unavailable to this OHLCV-only
-# offline engine -- see docs/known_issues/vrp_premium_selling_no_historical_iv.md
-# -- and this is unrelated to and unaffected by this whole change either way).
-# ml/vrp_premium_selling_proxy_signal.py::VrpPremiumSellingProxySignal instead
-# trains a SEPARATE, quarantined model_type ("vrp_premium_selling_proxy")
-# against IVR_Proxy/VRP_Proxy (realized-vol-derived, OHLCV-only, no network) --
-# structurally excluded from ml/forecast_backfill_registry_bridge.py::
-# BACKFILL_ELIGIBLE_SIGNAL_IDS so it can never reach live inference. See
-# docs/plans/FORECAST_BACKFILL_PLAN.md's WP4 section.
+# The quarantined VRP premium-selling proxy (WP4) was removed with the options
+# desk (2026-09, step 4a). Even with its old opt-in flag set, the backfill
+# computes no IVR_Proxy/VRP_Proxy columns and trains no proxy model.
 # ---------------------------------------------------------------------------
 
 
-def test_vrp_proxy_disabled_by_default_adds_no_columns_and_leaves_real_signal_unaffected(monkeypatch):
-    """The default (flag off) must add nothing -- no IVR_Proxy/VRP_Proxy
-    columns and no vrp_premium_selling_proxy in active_strategies. The real
-    vrp_premium_selling signal no longer reaches the backfill at all (it was
-    retired from live scoring and unregistered in 2026-09, step 3d')."""
-    monkeypatch.setattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", False)
+def test_vrp_proxy_removed_even_with_legacy_flag_on(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "ml.vrp_premium_selling_proxy_signal", None)
+    monkeypatch.setattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", True, raising=False)
     engine = _synthetic_engine(["AAA", "BBB", "CCC", "DDD"])
 
     engine.step_2_calculate_technical_features()
@@ -256,141 +246,7 @@ def test_vrp_proxy_disabled_by_default_adds_no_columns_and_leaves_real_signal_un
     engine.step_3_generate_primary_signals()
     assert "vrp_premium_selling_proxy" not in engine.active_strategies
     assert "vrp_premium_selling" not in engine.active_strategies
-
-    engine.step_4_create_meta_targets()
-    metrics = engine.step_5_backtrain_meta_labelers()
-    assert not any(k.startswith("vrp_premium_selling_proxy_") for k in metrics)
     assert "vrp_premium_selling_proxy" not in engine.eligibility
-    assert "vrp_premium_selling" not in engine.eligibility
-
-
-def _regime_switching_prices(
-    tickers, n_days=1300, seed=7, low_vol=0.006, high_vol=0.045, low_len=55, high_len=18,
-):
-    """Alternating low/high daily-vol blocks -- unlike a flat-vol random
-    walk (``_synthetic_engine``'s default), this reliably produces rows
-    where the trailing-60-day realized vol (VRP_Proxy's slow leg) stays
-    elevated for a while after a high-vol block ends while the fast EWMA
-    GARCH_Vol (its quick leg) has already decayed back down -- i.e. genuine
-    VRP_Proxy > threshold readings, needed to give
-    vrp_premium_selling_proxy something non-degenerate to train on. A flat
-    single-regime random walk gates on far too few rows (well under the
-    30-sample training floor in ``_build_training_set``) to ever train --
-    verified separately before choosing this construction."""
-    rng = np.random.default_rng(seed)
-    dates = pd.bdate_range("2015-01-01", periods=n_days)
-    data = {}
-    for t in tickers:
-        vols, d, high = [], 0, False
-        while d < n_days:
-            block = high_len if high else low_len
-            vols.extend([high_vol if high else low_vol] * block)
-            d += block
-            high = not high
-        vols_arr = np.array(vols[:n_days])
-        rets = rng.normal(0.0001, 1.0, n_days) * vols_arr
-        data[t] = 100.0 * np.cumprod(1.0 + rets)
-    return pd.DataFrame(data, index=dates)
-
-
-def test_vrp_proxy_enabled_trains_at_least_one_horizon_offline(monkeypatch):
-    """Fully offline -- no network needed, unlike WP3's SNEQR facts test
-    above (IVR_Proxy/VRP_Proxy are pure OHLCV derivations, no EDGAR/FMP
-    call involved). A regime-switching synthetic universe genuinely trains
-    vrp_premium_selling_proxy at least one horizon once the flag is on."""
-    monkeypatch.setattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", True)
-    tickers = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
-    prices = _regime_switching_prices(tickers)
-    volumes = pd.DataFrame({t: 1_000_000.0 for t in tickers}, index=prices.index)
-
-    engine = AgenticForecastBackfiller(
-        tickers=tickers, horizons=[10, 30, 60, 90], use_fmp=False, n_estimators=10, max_depth=3,
-        # Restrict step 3 to the proxy alone -- this file's other tests
-        # already cover the other 6 signals extensively; without this the
-        # regime-switching universe below trains all 7 active strategies
-        # (~5x slower) for no additional coverage this test needs.
-        strategy_ids=["vrp_premium_selling_proxy"],
-    )
-    engine.prices, engine.volumes = prices, volumes
-
-    engine.step_2_calculate_technical_features()
-    assert "IVR_Proxy" in engine.data.columns
-    assert "VRP_Proxy" in engine.data.columns
-
-    engine.step_3_generate_primary_signals()
-    assert "vrp_premium_selling_proxy" in engine.active_strategies
-
-    engine.step_4_create_meta_targets()
-    metrics = engine.step_5_backtrain_meta_labelers()
-    trained_keys = [k for k in metrics if k.startswith("vrp_premium_selling_proxy_")]
-    assert trained_keys, "vrp_premium_selling_proxy must train at least one horizon given a regime-switching universe"
-    assert engine.eligibility["vrp_premium_selling_proxy"]["trained"] is True
-    assert engine.eligibility["vrp_premium_selling_proxy"]["reason"] is None
-
-
-def test_vrp_proxy_never_reaches_live_meta_labeler_registry_even_with_bridge_and_eligible_signals_set(monkeypatch):
-    """Even with the registry bridge on AND the proxy explicitly named in
-    the operator's own eligible-signals allowlist, step_7 must never
-    register anything for it. ml/forecast_backfill_registry_bridge.py::
-    BACKFILL_ELIGIBLE_SIGNAL_IDS is the structural gate --
-    step_7_register_live_meta_labelers's `active_and_eligible` is an
-    intersection of active_strategies, BACKFILL_ELIGIBLE_SIGNAL_IDS, AND
-    the operator allowlist, and BACKFILL_ELIGIBLE_SIGNAL_IDS deliberately
-    never lists "vrp_premium_selling_proxy" -- so the intersection is
-    guaranteed empty regardless of what the operator opts into."""
-    monkeypatch.setattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", True)
-    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_BRIDGE_ENABLED", True)
-    monkeypatch.setattr(settings, "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS", ["vrp_premium_selling_proxy"])
-
-    tickers = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]
-    prices = _regime_switching_prices(tickers)
-    volumes = pd.DataFrame({t: 1_000_000.0 for t in tickers}, index=prices.index)
-    engine = AgenticForecastBackfiller(
-        tickers=tickers, horizons=[10, 30, 60, 90], use_fmp=False, n_estimators=10, max_depth=3,
-        # Restrict step 3 to the proxy alone -- this file's other tests
-        # already cover the other 6 signals extensively; without this the
-        # regime-switching universe below trains all 7 active strategies
-        # (~5x slower) for no additional coverage this test needs.
-        strategy_ids=["vrp_premium_selling_proxy"],
-    )
-    engine.prices, engine.volumes = prices, volumes
-    engine.step_2_calculate_technical_features()
-    engine.step_3_generate_primary_signals()
-    assert "vrp_premium_selling_proxy" in engine.active_strategies
-    engine.step_4_create_meta_targets()
-    engine.step_5_backtrain_meta_labelers()
-    assert any(k.startswith("vrp_premium_selling_proxy_") for k in engine.models), (
-        "test setup assumption: the proxy must have genuinely trained a model before step 7 runs"
-    )
-
-    calls = []
-    import ml.forecast_backfill_registry_bridge as bridge_mod
-
-    def _spy_register_backfill_model(**kwargs):
-        calls.append(kwargs.get("signal_id"))
-        return (False, "should never be called")
-
-    monkeypatch.setattr(bridge_mod, "register_backfill_model", _spy_register_backfill_model)
-
-    engine.step_7_register_live_meta_labelers()
-    assert calls == [], f"register_backfill_model must never be called for the proxy, got calls={calls}"
-    assert not any(
-        "registered" in engine.metrics.get(k, {})
-        for k in engine.metrics if k.startswith("vrp_premium_selling_proxy_")
-    )
-
-
-def test_vrp_proxy_never_registered_in_global_signal_registry():
-    """VrpPremiumSellingProxySignal has no `global_registry.register(...)`
-    call at module scope (unlike every real SignalModule file's
-    convention) -- the structural mechanism that keeps it off the live
-    per-cycle scoring path entirely. Import the module fresh (side effects
-    only) and confirm the name still isn't resolvable."""
-    import ml.vrp_premium_selling_proxy_signal  # noqa: F401 -- import for its (lack of) side effects
-    from signals.registry import global_registry
-
-    with pytest.raises(KeyError):
-        global_registry.get("vrp_premium_selling_proxy")
 
 
 @pytest.mark.network

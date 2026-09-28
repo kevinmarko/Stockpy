@@ -22,12 +22,26 @@ from execution.options_queue_builder import (
     _resolve_symbols,
     passes_premium_gate,
 )
-from pilots.catalog import OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID
 from pilots.options_risk import parse_option_symbol
 from pilots.order_sizing import calculate_multi_leg_option_sizing
 from settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Directive "Strategy" string -> the strategy_id this executor stamps on a
+# paper order. This map used to live in pilots/catalog.py; it moved here when
+# the 10 options Pilots were removed from the catalog (2026-09, step 4a) so
+# this module (archived to legacy/ in step 4b) no longer imports the catalog.
+# The ids stay stable so historical paper trades keep attributing on the
+# Strategy Report Card.
+OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID = {
+    "Put Credit Spread": "put-credit-spread",
+    "Call Credit Spread": "call-credit-spread",
+    "Iron Condor": "iron-condor",
+    "Call Debit Spread": "call-debit-spread",
+    "Put Debit Spread": "put-debit-spread",
+    "Covered Call": "covered-call",
+}
 
 
 def _calculate_default_expiration(target_dte: int = 30) -> str:
