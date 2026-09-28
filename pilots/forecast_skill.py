@@ -104,7 +104,20 @@ def forecast_skill_view(symbol: str, horizon_days: int = _DEFAULT_HORIZON) -> Di
         reliability = []
 
     try:
-        raw_weights = tracker.get_skill_weights(sym, horizon) or {}
+        # Same window/threshold the live blend uses (ForecastingEngine.
+        # generate_forecast reads these two settings), so the screen shows
+        # the weights actually applied. Before forecasting rebuild F1 this
+        # call used get_skill_weights' own defaults (60 days / 30 obs) while
+        # the live blend used FORECAST_SKILL_WINDOW_DAYS (365 on the
+        # operator's install), so the UI showed different weights.
+        from settings import settings as _settings
+
+        raw_weights = tracker.get_skill_weights(
+            sym,
+            horizon,
+            window_days=int(_settings.FORECAST_SKILL_WINDOW_DAYS),
+            min_obs=int(_settings.FORECAST_SKILL_MIN_OBS),
+        ) or {}
         skill_weights = {
             str(k): w
             for k, v in raw_weights.items()

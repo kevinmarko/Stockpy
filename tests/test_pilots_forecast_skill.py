@@ -188,3 +188,76 @@ def test_never_imports_a_heavy_engine():
     assert not (roots & _HEAVY_ENGINE_DENYLIST), (
         f"pilots/forecast_skill.py imports a forbidden heavy engine: {roots & _HEAVY_ENGINE_DENYLIST}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Skill-weight window = the live blend's window (forecasting rebuild F1)
+# ---------------------------------------------------------------------------
+
+
+class TestSkillWeightsUseLiveBlendWindow:
+    """The screen must show the weights the live blend actually applies:
+    ForecastingEngine.generate_forecast calls get_skill_weights with
+    settings.FORECAST_SKILL_WINDOW_DAYS / FORECAST_SKILL_MIN_OBS, not the
+    method's own 60-day default."""
+
+    @staticmethod
+    def _seed_old_completed(db_path: str, days_ago: int, n: int) -> None:
+        import sqlite3
+        from datetime import timedelta
+
+        ForecastTracker(db_path=db_path)
+        now = datetime.now(timezone.utc)
+        with sqlite3.connect(db_path) as conn:
+            for i in range(n):
+                ts = (now - timedelta(days=days_ago + i)).isoformat()
+                conn.execute(
+                    "INSERT INTO forecast_errors (symbol, model_name, horizon_days, forecast_ts, "
+                    "forecast_price, actual_price, squared_error, recorded_at) "
+                    "VALUES ('AAPL', ?, 30, ?, 100.0, 101.0, 1.0, ?)",
+                    (MODEL_ARIMA, ts, ts),
+                )
+
+    def test_rows_older_than_60_days_count_under_a_365_day_window(self, tmp_path, monkeypatch):
+        from settings import settings as _settings
+
+        db = str(tmp_path / "t.db")
+        self._seed_old_completed(db, days_ago=100, n=3)
+        _point_at(monkeypatch, db)
+
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_WINDOW_DAYS", 365)
+        assert forecast_skill.forecast_skill_view("AAPL", 30)["skill_weights"] == {MODEL_ARIMA: 1.0}
+
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_WINDOW_DAYS", 60)
+        assert forecast_skill.forecast_skill_view("AAPL", 30)["skill_weights"] == {}
+
+    def test_passes_both_live_settings(self, monkeypatch):
+        from settings import settings as _settings
+
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_WINDOW_DAYS", 222)
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_MIN_OBS", 17)
+        seen = {}
+
+        class _FakeTracker:
+            def __init__(self, *, readonly=False):
+                pass
+
+            def get_forecast_reliability_curve(self, **_kw):
+                return None
+
+            def get_skill_weights(self, symbol, horizon_days, window_days=60, min_obs=30):
+                seen.update(window_days=window_days, min_obs=min_obs)
+                return {}
+
+            def get_error_by_model(self, *_a, **_kw):
+                return []
+
+            def pending_count(self, *_a):
+                return 0
+
+            def completed_count(self, *_a, **_kw):
+                return 0
+
+        monkeypatch.setattr("forecasting.forecast_tracker.ForecastTracker", _FakeTracker)
+        forecast_skill.forecast_skill_view("AAPL", 30)
+        assert seen == {"window_days": 222, "min_obs": 17}
