@@ -670,217 +670,64 @@ class TestCapEventSummary:
 
 
 # ===========================================================================
-# 7. ETF volatility-transmission derate (risk/etf_transmission.py) composed
-#    into size_position()'s step 3 alongside regime_multiplier.
+# 7. Step-3 composition cross-check (seeded grid).
+#
+# This grid used to prove the ETF volatility-transmission derate's no-op path
+# was byte-identical. That derate (and its ``etf_transmission_multiplier``
+# kwarg / ``SizingDecision`` field) was removed in the 2026-09 settings/schema
+# trim (step 4f): it was always 1.0 in live use, and ``x * 1.0 == x`` exactly,
+# so removing it cannot change a weight. The same grid now pins step 3 against
+# an independent reconstruction with EXACT equality.
 # ===========================================================================
-_LEGACY_FIELDS = (
-    "raw_weight", "pre_regime_weight", "regime_multiplier",
-    "meta_label_composite", "final_weight", "path_tag",
-    "binding_constraint", "was_capped", "constraints_applied",
-    "escalation_applied",
-)
-
-
-def _legacy_view(decision):
-    """Every ``SizingDecision`` field that existed BEFORE this feature.
-
-    Used to prove the flag-off path is byte-identical: the only permitted
-    difference between a pre-change decision and a post-change one is the
-    brand-new ``etf_transmission_multiplier`` field itself.
-    """
-    return {name: getattr(decision, name) for name in _LEGACY_FIELDS}
-
-
-def _reference_pre_change_composition(
+def _reference_composition(
     pre_regime_weight, regime_multiplier, meta_label_composite, max_position_weight,
 ):
-    """Independently reconstructs the PRE-CHANGE step-3 arithmetic + ceiling
-    binding, using only ``clamp_with_binding`` -- a public helper this PR did
-    NOT touch. Deliberately not a copy of ``size_position``'s body, so the
-    comparison below is a real cross-check rather than a tautology."""
+    """Independently reconstructs step 3 using only ``clamp_with_binding``,
+    so the comparison below is a real cross-check rather than a tautology."""
     composed = pre_regime_weight * regime_multiplier * meta_label_composite
     return clamp_with_binding(composed, max_position_weight, MAX_POSITION_WEIGHT_CONSTRAINT)
 
 
-class TestETFTransmissionNoOpIsByteIdentical:
-    """The single most important property of this feature: with the flag off
-    (i.e. the multiplier absent, None, NaN, or an explicit 1.0), every
-    pre-existing ``SizingDecision`` field must be EXACTLY what it was before
-    the feature existed -- not approximately, not usually."""
+def _seeded_grid():
+    """Deterministic randomized parameter grid (same seed as before step 4f)."""
+    import random
 
-    @staticmethod
-    def _grid():
-        """Deterministic randomized parameter grid (seeded -- a flaky
-        no-op proof would be worse than no proof)."""
-        import random
+    rng = random.Random(20260727)
+    for _ in range(200):
+        path_tag = rng.choice([
+            "", "aggregate_kelly", "bootstrap_kelly_5th_pct(n=1000)",
+            "vol_target_fallback(scale_in=1.00)", "unknown_path",
+        ])
+        yield {
+            "pre_regime_weight": rng.uniform(0.0, 0.6),
+            "regime_multiplier": rng.uniform(0.0, 1.2),
+            "meta_label_composite": rng.uniform(0.0, 1.2),
+            "max_position_weight": rng.choice([0.05, 0.2, 0.5, 1.0]),
+            "path_tag": path_tag,
+            "raw_weight": rng.choice([None, rng.uniform(0.0, 2.5)]),
+            "kelly_cap": 0.20,
+            "max_leverage": 2.0,
+        }
 
-        rng = random.Random(20260727)
-        for _ in range(200):
-            path_tag = rng.choice([
-                "", "aggregate_kelly", "bootstrap_kelly_5th_pct(n=1000)",
-                "vol_target_fallback(scale_in=1.00)", "unknown_path",
-            ])
-            yield {
-                "pre_regime_weight": rng.uniform(0.0, 0.6),
-                "regime_multiplier": rng.uniform(0.0, 1.2),
-                "meta_label_composite": rng.uniform(0.0, 1.2),
-                "max_position_weight": rng.choice([0.05, 0.2, 0.5, 1.0]),
-                "path_tag": path_tag,
-                "raw_weight": rng.choice([None, rng.uniform(0.0, 2.5)]),
-                "kelly_cap": 0.20,
-                "max_leverage": 2.0,
-            }
 
-    @pytest.mark.parametrize("multiplier", [None, 1.0, float("nan")])
-    def test_absent_or_neutral_multiplier_reproduces_every_legacy_field(self, multiplier):
-        for params in self._grid():
-            pre = params["pre_regime_weight"]
-            kwargs = {k: v for k, v in params.items() if k != "pre_regime_weight"}
-
-            baseline = size_position(pre, **kwargs)                       # kwarg omitted
-            with_mult = size_position(pre, etf_transmission_multiplier=multiplier, **kwargs)
-
-            assert _legacy_view(with_mult) == _legacy_view(baseline), (
-                f"flag-off path diverged for multiplier={multiplier!r}, params={params}"
-            )
-            # ... and the sanitized value recorded is exactly the 1.0 no-op.
-            assert with_mult.etf_transmission_multiplier == 1.0
-            assert baseline.etf_transmission_multiplier == 1.0
-
-    def test_no_op_final_weight_matches_an_independent_reconstruction(self):
-        """Cross-check against ``clamp_with_binding`` (untouched by this PR)
-        rather than against ``size_position`` itself."""
-        for params in self._grid():
+class TestStepThreeCompositionGrid:
+    def test_final_weight_matches_an_independent_reconstruction_exactly(self):
+        for params in _seeded_grid():
             out = size_position(
                 params["pre_regime_weight"],
                 **{k: v for k, v in params.items() if k != "pre_regime_weight"},
             )
-            expected, expected_bound = _reference_pre_change_composition(
+            expected, expected_bound = _reference_composition(
                 params["pre_regime_weight"], params["regime_multiplier"],
                 params["meta_label_composite"], params["max_position_weight"],
             )
-            if math.isnan(expected):
-                assert math.isnan(out.final_weight)
-            else:
-                assert out.final_weight == pytest.approx(expected, rel=1e-12, abs=1e-15)
+            assert out.final_weight == expected, params
             if expected_bound is not None:
                 assert out.binding_constraint == expected_bound
 
-
-class TestETFTransmissionDerateComposition:
-    def test_derate_scales_final_weight(self):
-        out = size_position(
-            0.10, etf_transmission_multiplier=0.7, max_position_weight=1.0,
-        )
-        assert out.final_weight == pytest.approx(0.07, rel=1e-12)
-        assert out.etf_transmission_multiplier == pytest.approx(0.7)
-
-    def test_composes_multiplicatively_with_regime_and_meta_label(self):
-        out = size_position(
-            0.20, regime_multiplier=0.5, meta_label_composite=0.8,
-            etf_transmission_multiplier=0.75, max_position_weight=1.0,
-        )
-        # 0.20 * 0.5 * 0.8 * 0.75
-        assert out.final_weight == pytest.approx(0.06, rel=1e-12)
-
-    def test_composition_is_order_independent(self):
-        """Multiplication commutes -- pinned so a future refactor that moves
-        the derate to a different point in step 3 cannot silently change the
-        number (only an ORDER-DEPENDENT step, e.g. an intermediate clamp
-        inserted between the multipliers, would break this)."""
-        a = size_position(
-            0.30, regime_multiplier=0.6, meta_label_composite=1.0,
-            etf_transmission_multiplier=0.5, max_position_weight=1.0,
-        )
-        b = size_position(
-            0.30, regime_multiplier=0.5, meta_label_composite=1.0,
-            etf_transmission_multiplier=0.6, max_position_weight=1.0,
-        )
-        assert a.final_weight == pytest.approx(b.final_weight, rel=1e-12)
-
-    def test_max_position_weight_still_binds_after_the_derate(self):
-        """The derate is applied BEFORE the ceiling re-clamp, so a name whose
-        derated weight still exceeds the ceiling is genuinely capped."""
-        out = size_position(
-            0.50, regime_multiplier=1.0, meta_label_composite=1.0,
-            etf_transmission_multiplier=0.9, max_position_weight=0.20,
-        )
-        assert out.final_weight == pytest.approx(0.20)
-        assert out.was_capped is True
-        assert out.binding_constraint == MAX_POSITION_WEIGHT_CONSTRAINT
-
-
-class TestETFTransmissionIsNotAGuardrailCap:
-    """THE contract of this PR. The ETF derate follows the ``regime_multiplier``
-    precedent exactly: continuous, signal-driven derating is surfaced as its
-    OWN field and must NEVER set ``was_capped`` / ``binding_constraint``,
-    which are reserved for hard ceilings. Folding it in would make the
-    guardrail fire on every ETF-heavy name and drown out genuine ceiling
-    events in sizing/cap_audit_store.py and the SIZING_CAP_ALERT_THRESHOLD_PCT
-    alert."""
-
-    @pytest.mark.parametrize("multiplier", [0.99, 0.75, 0.5, 0.01, 0.0])
-    def test_derate_alone_never_flags_was_capped(self, multiplier):
-        out = size_position(
-            0.05, regime_multiplier=1.0, meta_label_composite=1.0,
-            etf_transmission_multiplier=multiplier, max_position_weight=1.0,
-        )
-        assert out.was_capped is False
-        assert out.binding_constraint is None
-        assert out.constraints_applied == ()
-        assert out.etf_transmission_multiplier == pytest.approx(multiplier)
-
-    def test_maximal_derate_with_regime_derate_still_never_flags(self):
-        out = size_position(
-            0.05, regime_multiplier=0.1, meta_label_composite=0.9,
-            etf_transmission_multiplier=0.5, max_position_weight=1.0,
-        )
-        assert out.was_capped is False
-        assert out.binding_constraint is None
-
-
-class TestETFTransmissionNaNSafety:
-    """A missing measurement must degrade to the exact 1.0 no-op, NEVER to a
-    NaN. A NaN ``final_weight`` is EXCLUDED from
-    ``apply_portfolio_gross_cap``'s gross sum, so a coverage gap would shrink
-    the gross denominator and silently LOOSEN the portfolio-wide cap for
-    every name that DID have coverage -- a data outage relaxing a risk
-    limit."""
-
-    @pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), float("-inf"), "n/a", object()])
-    def test_unusable_multiplier_is_exactly_one_and_weight_stays_finite(self, bad):
-        out = size_position(
-            0.25, regime_multiplier=1.0, meta_label_composite=1.0,
-            etf_transmission_multiplier=bad, max_position_weight=1.0,
-        )
-        assert out.etf_transmission_multiplier == 1.0
-        assert not math.isnan(out.final_weight)
-        assert math.isfinite(out.final_weight)
-        assert out.final_weight == pytest.approx(0.25)
-
-    def test_missing_coverage_cannot_loosen_the_portfolio_gross_cap(self):
-        """End-to-end version of the trap: 3 of 4 names have no ETF coverage.
-        All four weights must remain finite, so all four stay inside the
-        gross-exposure sum and the cap still binds."""
-        weights = {}
-        for symbol, mult in [("A", float("nan")), ("B", None), ("C", float("nan")), ("D", 0.6)]:
-            weights[symbol] = size_position(
-                1.0, etf_transmission_multiplier=mult, max_position_weight=1.0,
-            ).final_weight
-        assert all(math.isfinite(w) for w in weights.values())
-        capped = apply_portfolio_gross_cap(weights, max_gross=1.0)
-        assert capped.was_capped is True
-        assert capped.binding_constraint == PORTFOLIO_GROSS
-        # gross = 1 + 1 + 1 + 0.6 = 3.6 -> scalar = 1/3.6. Had the three
-        # uncovered names gone NaN, gross would have been 0.6 and the cap
-        # would NOT have bound at all.
-        assert capped.scale_factor == pytest.approx(1.0 / 3.6, rel=1e-9)
-
-    def test_nan_regime_multiplier_still_yields_nan(self):
-        """The ETF sanitizer must NOT accidentally rescue an honest NaN in a
-        DIFFERENT input -- regime/meta NaN semantics are unchanged."""
-        out = size_position(
-            0.50, regime_multiplier=float("nan"),
-            etf_transmission_multiplier=0.5, max_position_weight=1.0,
-        )
-        assert math.isnan(out.final_weight)
+    def test_etf_transmission_multiplier_kwarg_is_gone(self):
+        """Retired in step 4f. A stale caller must fail loudly (TypeError),
+        not have a derate silently ignored."""
+        with pytest.raises(TypeError):
+            size_position(0.1, etf_transmission_multiplier=0.5, max_position_weight=1.0)
+        assert not hasattr(size_position(0.1, max_position_weight=1.0), "etf_transmission_multiplier")

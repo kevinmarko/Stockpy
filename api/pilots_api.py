@@ -4012,13 +4012,12 @@ _TUNABLE_GROUPS: List[tuple] = [
     (
         # HMM_RISK_OFF_BLOCK_THRESHOLD moved here from "Risk Gate" -- it's a
         # regime-model parameter, not a risk-gate-specific one, and belongs
-        # next to the other HMM/VRP regime tunables.
+        # next to the other HMM regime tunables.
         "Regime Model",
         [
             ("HMM_N_STATES", "int", {"min": 2, "max": 10, "step": 1}),
             ("HMM_RETRAIN_FREQ_DAYS", "int", {"min": 1, "max": 30, "step": 1}),
             ("HMM_RISK_OFF_BLOCK_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("OPTIONS_VRP_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.01}),
         ],
     ),
     (
@@ -4086,10 +4085,8 @@ _TUNABLE_GROUPS: List[tuple] = [
         ],
     ),
     (
-        "Options & Pairs Snapshots",
+        "Pairs Snapshot",
         [
-            ("OPTIONS_MATRIX_ENABLED", "bool", {}),
-            ("OPTIONS_TRUE_IVR_ENABLED", "bool", {}),
             ("PAIRS_SNAPSHOT_ENABLED", "bool", {}),
         ],
     ),
@@ -4117,24 +4114,6 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("RLHF_CALIBRATION_AUTO_APPROVE_ENABLED", "bool", {}),
             ("RLHF_CALIBRATION_CONFIDENCE_THRESHOLD", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
             ("RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", "bool", {}),
-        ],
-    ),
-    (
-        "Options Desk Automation",
-        [
-            ("PAPER_OPTIONS_AUTO_EXECUTE_ENABLED", "bool", {}),
-            ("OPTIONS_AUTO_EXIT_ENABLED", "bool", {}),
-            ("OPTIONS_PROFIT_TARGET_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("OPTIONS_STOP_LOSS_MULTIPLE", "float", {"min": 0.5, "max": 10.0, "step": 0.1}),
-            ("OPTIONS_MANAGE_DTE_THRESHOLD", "int", {"min": 0, "max": 60, "step": 1}),
-            ("OPTIONS_DELTA_HEDGE_ENABLED", "bool", {}),
-            ("OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES", "int", {"min": 1, "max": 500, "step": 5}),
-            ("OPTIONS_0DTE_ENABLED", "bool", {}),
-            ("OPTIONS_0DTE_PROFIT_TARGET_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("OPTIONS_0DTE_STOP_LOSS_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("OPTIONS_0DTE_HARD_EXIT_TIME", "str", {}),
-            ("MAX_OPTION_NOTIONAL_PER_TRADE", "float", {"min": 100.0, "max": 100000.0, "step": 500.0}),
-            ("MAX_CONCURRENT_OPTION_POSITIONS", "int", {"min": 1, "max": 100, "step": 1}),
         ],
     ),
 ]
@@ -4854,8 +4833,6 @@ _FMP_GROUPS = [
             ("FMP_NEWS_ENABLED", "bool", {}),
             ("FMP_NEWS_PAGE_LIMIT", "int", {"min": 1, "max": 1000, "step": 1}),
             ("FMP_NEWS_MAX_PAGES", "int", {"min": 1, "max": 1000, "step": 1}),
-            ("FMP_OPTIONS_HEALTH_ENABLED", "bool", {}),
-            ("FMP_OPTIONS_CONTEXT_ENABLED", "bool", {}),
             ("FMP_PEERS_ENABLED", "bool", {}),
         ],
     ),
@@ -5139,10 +5116,9 @@ def _build_reference_write_index() -> Dict[str, tuple]:
     outside its ``index_spec`` as ``unknown_key`` before it ever inspects the
     submitted value.
 
-    ``no_op`` fields (e.g. ``OPTIONS_EARNINGS_CRUSH_ENABLED`` — read nowhere
-    in production code) are excluded on purpose, matching the exact same
-    caution already applied when choosing which fields to promote into the
-    "Options Desk Automation" Tunables group below: a live-looking Toggle
+    ``no_op`` fields (read nowhere in production code) are excluded on
+    purpose, matching the caution applied when choosing which fields to
+    promote into the ``_TUNABLE_GROUPS`` editor: a live-looking Toggle
     switch for a field that provably does nothing on write would be
     CONSTRAINT #4-adjacent — technically not a fabricated VALUE, but a
     fabricated IMPLICATION that the control does something. The GET response

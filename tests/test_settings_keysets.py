@@ -301,14 +301,21 @@ class TestExistingEditorsAreNotBootstrap:
             # PIPELINE_STALL_ALERT_SECONDS). 13+6+6 = 25 keys total.
             # 114 -> 108 (2026-09, step 3b): the "Circuit Breaker" group was
             # removed when the dynamic circuit breaker was unwired.
-            "_TUNABLE_INDEX": 108,
+            # 108 -> 92 (2026-09, step 4f settings trim): the 13-key "Options
+            # Desk Automation" group, OPTIONS_VRP_THRESHOLD ("Regime Model"),
+            # and OPTIONS_MATRIX_ENABLED/OPTIONS_TRUE_IVR_ENABLED ("Options &
+            # Pairs Snapshots", renamed "Pairs Snapshot") were retired.
+            "_TUNABLE_INDEX": 92,
             "_SENTIMENT_INDEX": 33,
             "_SECTOR_SELECTION_INDEX": 11,
-            "_FMP_INDEX": 32,
+            # 32 -> 30 (step 4f): FMP_OPTIONS_HEALTH_ENABLED /
+            # FMP_OPTIONS_CONTEXT_ENABLED retired (read only by archived code).
+            "_FMP_INDEX": 30,
         }
         # 203 -> 184 (2026-09, step 4d): the 19-key /settings/etf-transmission
         # editor was removed when ETF volatility transmission was archived.
-        assert len(ALL_EDITOR_KEYS) == 184
+        # 184 -> 166 (step 4f): the 16 tunables + 2 FMP keys above.
+        assert len(ALL_EDITOR_KEYS) == 166
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

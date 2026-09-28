@@ -187,7 +187,7 @@ export function SettingsReference() {
         </div>
         <h2 style={{ margin: "0 0 var(--s-1)", fontSize: "var(--t-title)" }}>Settings Reference</h2>
         <p style={{ color: theme.textSecondary, margin: 0, fontSize: "var(--t-body)" }}>
-          Platform-wide explainer and reference for all {data?.total ?? 0} configuration fields across 14 functional domains.
+          Platform-wide explainer and reference for all {data?.total ?? 0} configuration fields across 13 functional domains.
         </p>
       </div>
 

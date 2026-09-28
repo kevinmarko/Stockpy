@@ -1,20 +1,22 @@
 """Domain taxonomy for Settings Reference (GET /settings/reference).
 
-Classifies every Settings field into one of 14 functional domains:
+Classifies every Settings field into one of 13 functional domains:
 1. Financial/Risk/Sizing
 2. Execution/Brokers
 3. Options Desk
 4. Market Data/DB
 5. Universe/Watchlist
 6. Forecasting/ML
-7. ETF Transmission
-8. Sentiment/News/Attention
-9. AI/LLM/RAG
-10. Orchestrator/Daemon/Jobs
-11. Alerting/Observability
-12. Strategy Overlays
-13. Filesystem/Bootstrap
-14. RLHF
+7. Sentiment/News/Attention
+8. AI/LLM/RAG
+9. Orchestrator/Daemon/Jobs
+10. Alerting/Observability
+11. Strategy Overlays
+12. Filesystem/Bootstrap
+13. RLHF
+
+(An "ETF Transmission" domain existed until 2026-09, step 4f, when its last
+fields were retired with the archived ETF volatility-transmission feature.)
 """
 
 from __future__ import annotations
@@ -29,7 +31,6 @@ DOMAINS: List[str] = [
     "Market Data/DB",
     "Universe/Watchlist",
     "Forecasting/ML",
-    "ETF Transmission",
     "Sentiment/News/Attention",
     "AI/LLM/RAG",
     "Orchestrator/Daemon/Jobs",
@@ -62,16 +63,11 @@ _OVERRIDE_DOMAINS: Dict[str, str] = {
     "FLATTEN_ON_KILL": "Execution/Brokers",
     "EXECUTION_PRIORITY_QUEUE_ENABLED": "Execution/Brokers",
     "EXECUTION_QUEUE_LEAK_RATE_PER_SEC": "Execution/Brokers",
-    "OFI_SHIELD_ENABLED": "Execution/Brokers",
     "PAPER_TRADING_START_DATE": "Execution/Brokers",
     "OVERNIGHT_LIQUIDITY_DEPTH_HEURISTIC": "Execution/Brokers",
     "QUEUE_SOURCE_MAX_AGE_SECONDS": "Execution/Brokers",
     "FOLLOW_API_TOKEN": "Execution/Brokers",
-    "FOLLOW_MIN_AMOUNT": "Execution/Brokers",
     "PILOTS_TOP_N": "Execution/Brokers",
-
-    # Options Desk
-    "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED": "Options Desk",
 
     # Market Data / DB
     "MCP_DATABASE_URL_RO": "Market Data/DB",
@@ -155,14 +151,12 @@ _OVERRIDE_DOMAINS: Dict[str, str] = {
 
 
 def classify_field(key: str) -> str:
-    """Classify a Settings field name into one of the 14 functional domains."""
+    """Classify a Settings field name into one of the 13 functional domains."""
     if key in _OVERRIDE_DOMAINS:
         return _OVERRIDE_DOMAINS[key]
 
     if key.startswith("RLHF_"):
         return "RLHF"
-    if key.startswith("ETF_"):
-        return "ETF Transmission"
 
     if (
         key.startswith("OPTIONS_")

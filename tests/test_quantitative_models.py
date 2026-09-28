@@ -198,7 +198,7 @@ def test_strategy_engine_buy_range_and_options_overlays(monkeypatch):
     assert result_equity["Action Signal"] == "STRONG BUY"
     assert result_equity["buyRange"] == "Buy Zone: $149.62 - $157.50"
 
-    assert result_equity["Option Strategy"] == ""  # options overlay removed (step 3d)
+    assert "Option Strategy" not in result_equity  # options overlay removed (steps 3d, 4f)
 
     # Case 2: REIT high-yielder in a Buy setup (AGNC - Real Estate)
     bar_reit = MarketBarDTO(datetime.now(), "AGNC", 9.80, 10.05, 9.75, 9.85, 2500000)
@@ -215,7 +215,7 @@ def test_strategy_engine_buy_range_and_options_overlays(monkeypatch):
 
 
     assert result_reit["Action Signal"] in ["BUY", "STRONG BUY"]
-    assert result_reit["Option Strategy"] == ""  # options overlay removed (step 3d)
+    assert "Option Strategy" not in result_reit  # options overlay removed (steps 3d, 4f)
 
     # Case 3: Neutral Stock in HOLD setup
     # Make trend strength neutral (40.0)
@@ -655,7 +655,7 @@ def test_main_orchestrator_pipeline():
     assert "Action Signal" in final_df.columns
     assert "buyRange" in final_df.columns
     assert "Kelly Target" in final_df.columns
-    assert "Option Strategy" in final_df.columns
+    assert "Option Strategy" not in final_df.columns  # retired in step 4f
 
     # run_pipeline() now returns the macro_dto with HMM probability
     assert _macro_dto is not None

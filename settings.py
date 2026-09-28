@@ -243,41 +243,16 @@ class Settings(BaseSettings):
         "docs/architecture/execution.md's 'Future extension point — automated "
         "Robinhood execution (not implemented)' section.",
     )
-    MULTI_BROKER_GATEWAY_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "When True, broker_live_execution_mcp.py::_get_broker() routes live-order "
-            "MCP calls through execution.multi_broker_gateway.MultiBrokerGateway "
-            "(health monitoring, latency tracking, automated circuit-breaker "
-            "failover across the configured broker adapters) instead of "
-            "execution.broker_selection.resolve_broker_backend()'s single-broker "
-            "resolution. False (default) preserves today's exact single-broker "
-            "behavior; falls back to resolve_broker_backend() if the gateway has "
-            "no active adapter or raises."
-        ),
-    )
     PAPER_BROKER_WRITES_ENABLED: bool = Field(
         default=True,
         description=(
-            "Gates every write/execution endpoint on the options desk's paper "
-            "broker (api/pilots_api.py's require_paper_broker_writes_enabled "
+            "Gates every write/execution endpoint on the paper broker "
+            "(api/pilots_api.py's require_paper_broker_writes_enabled "
             "dependency, alongside the command token on each route): "
-            "POST /pilots/paper-broker/reset, /brokerage/options/order, "
-            "/pilots/paper-broker/strategy-options/execute, "
-            "/pilots/paper-broker/manage-exits, /pilots/paper-broker/roll, "
-            "/pilots/paper-broker/delta-hedge/execute, "
-            "/pilots/options/meta-model/retrain, "
-            "/pilots/paper-broker/settle-expired, "
-            "/pilots/options/earnings-crush/execute, "
-            "/pilots/options/mispricing/execute, "
-            "/pilots/options/dispersion/execute, "
-            "/pilots/options/zero-dte/execute, and "
-            "/pilots/options/0dte/manage-exits. If False, all of these are blocked."
+            "POST /pilots/paper-broker/reset and /pilots/paper-broker/order. "
+            "If False, both are blocked. (The options-desk routes this also "
+            "gated were archived in 2026-09, step 4b.)"
         ),
-    )
-    PAPER_OPTIONS_AUTO_EXECUTE_ENABLED: bool = Field(
-        default=False,
-        description="Automatically execute valid options strategy directives into the paper broker every cycle.",
     )
     PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED: bool = Field(
         default=True,
@@ -310,143 +285,12 @@ class Settings(BaseSettings):
         description=(
             "TTL (seconds) of the in-process option-chain cache PaperAccountStore uses to mark "
             "paper option positions from real chain data (bid/ask mid, else Black-Scholes on the "
-            "contract's live IV). Bounds chain downloads for high-frequency readers such as the "
-            "1 Hz /ws/risk/portfolio stream and the daemon's per-tick equity sample."
+            "contract's live IV). Bounds chain downloads when marks are read repeatedly."
         ),
-    )
-    MAX_OPTION_NOTIONAL_PER_TRADE: float = Field(
-        default=2500.0,
-        description="Max risk notional collateral per automated options paper trade.",
-    )
-    MAX_CONCURRENT_OPTION_POSITIONS: int = Field(
-        default=10,
-        description="Max total concurrent open option positions in the paper broker.",
-    )
-    OPTIONS_META_LABELER_ENABLED: bool = Field(
-        default=True,
-        description="Enable Stage 4 ML meta-labeling for automated options trade gating and sizing.",
     )
     OPTIONS_RISK_FREE_RATE: float = Field(
         default=0.045,
         description="Annualized risk-free interest rate for options pricing and Greeks calculation.",
-    )
-    OPTIONS_AUTO_EXIT_ENABLED: bool = Field(
-        default=False,
-        description="Automatically manage and exit option positions on profit target, stop loss, or DTE threshold.",
-    )
-    OPTIONS_PROFIT_TARGET_PCT: float = Field(
-        default=0.50,
-        description="Profit target percentage threshold to trigger automated exit (e.g. 0.50 for 50% max profit).",
-    )
-    OPTIONS_STOP_LOSS_MULTIPLE: float = Field(
-        default=2.0,
-        description="Stop loss multiple of max credit/debit to trigger automated exit (e.g. 2.0 for 200% loss).",
-    )
-    OPTIONS_MANAGE_DTE_THRESHOLD: int = Field(
-        default=21,
-        description="DTE threshold at or below which options positions are proactively closed/rolled (e.g. 21 days).",
-    )
-    OPTIONS_DELTA_HEDGE_ENABLED: bool = Field(
-        default=False,
-        description="Enable automatic dynamic SPY delta hedging for options paper portfolio.",
-    )
-    OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES: float = Field(
-        default=25.0,
-        description="Deadband threshold in SPY delta shares before triggering a dynamic delta hedge order.",
-    )
-    OPTIONS_EARNINGS_CRUSH_ENABLED: bool = Field(
-        default=False,
-        description="Enable automated pre-earnings volatility crush option trading.",
-    )
-    OPTIONS_EARNINGS_MIN_EDGE: float = Field(
-        default=1.25,
-        description="Minimum ratio of implied move over historical median realized move to qualify for earnings crush trade.",
-    )
-    OPTIONS_EARNINGS_WING_MULTIPLIER: float = Field(
-        default=1.20,
-        description="Multiplier on expected move to set outer wings for earnings crush Iron Condors.",
-    )
-    OPTIONS_ALERT_WEBHOOK_URL: Optional[str] = Field(
-        default=None,
-        description="Dedicated webhook URL for real-time options alerts (UOA whale sweeps, earnings crush, delta hedging).",
-    )
-    OPTIONS_0DTE_ENABLED: bool = Field(
-        default=False,
-        description="Enable automated 0DTE options momentum breakout trading and lifecycle management.",
-    )
-    OPTIONS_0DTE_PROFIT_TARGET_PCT: float = Field(
-        default=0.75,
-        description="Profit target percentage threshold to trigger 0DTE exit (e.g. 0.75 for +75% gain in premium).",
-    )
-    OPTIONS_0DTE_STOP_LOSS_PCT: float = Field(
-        default=0.30,
-        description="Stop loss percentage threshold to trigger 0DTE exit (e.g. 0.30 for -30% loss).",
-    )
-    OPTIONS_0DTE_HARD_EXIT_TIME: str = Field(
-        default="15:45",
-        description="Mandatory hard exit time (ET, HH:MM) to close all open 0DTE positions and avoid pin/settlement risk.",
-    )
-    OPTIONS_DRL_RISK_AVERSION_GAMMA: float = Field(
-        default=0.10,
-        description=(
-            "Avellaneda-Stoikov (2008) absolute risk-aversion parameter gamma for "
-            "ml/drl_market_maker.py's DRL/AS market-making simulation engine — "
-            "controls inventory-skew strength in the reservation price R(s,q,t) = "
-            "s - q*gamma*sigma^2*(T-t) and the optimal quoting half-spread. "
-            "Matches this module's prior hardcoded DEFAULT_GAMMA default."
-        ),
-    )
-    OPTIONS_VPIN_TOXICITY_THRESHOLD: float = Field(
-        default=0.35,
-        description=(
-            "pilots/options_vpin.py's VPIN (Volume-Synchronized Probability of "
-            "Informed Trading / Toxicity) toxicity gating threshold from the "
-            "Easley/Lopez de Prado/O'Hara literature — VPIN above this value is "
-            "classified HIGH_TOXICITY (vs. LOW/MODERATE) and triggers defensive "
-            "spread-widening via apply_defensive_spread_concession(). Promoted "
-            "from the module's prior hardcoded DEFAULT_TOXICITY_THRESHOLD."
-        ),
-    )
-    OPTIONS_SOR_LEGGING_LATENCY_SECONDS: float = Field(
-        default=2.0,
-        description=(
-            "pilots/options_sor.py's simulate_legging_execution() assumed "
-            "inter-leg execution latency (seconds) between the passive leg "
-            "filling and the active leg completing — drives the Monte Carlo "
-            "spot-drift window (dt_years) underlying every hung-leg-probability "
-            "and adverse-selection-cost estimate in the legging hazard "
-            "simulator. Promoted from the function's prior hardcoded "
-            "latency_seconds=2.0 default."
-        ),
-    )
-    OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE: float = Field(
-        default=5.0,
-        description=(
-            "pilots/lob_simulator.py's DEFAULT_MARKET_ORDER_RATE — the Cont/Stoikov/"
-            "Talreja (2010) market-order Poisson arrival rate theta (orders/sec) used "
-            "as the default/fallback across calculate_cont_stoikov_fill_probability(), "
-            "evaluate_optimal_queue_level(), and simulate_queue_fill() (the live "
-            "POST /pilots/options/lob/simulate-queue resolver) whenever a caller "
-            "doesn't supply an empirically-measured rate from "
-            "compute_lob_arrival_rates(). Promoted from the module's prior "
-            "hardcoded DEFAULT_MARKET_ORDER_RATE = 5.0 default."
-        ),
-    )
-    OPTIONS_GEX_SEARCH_RANGE_PCT: float = Field(
-        default=0.20,
-        description=(
-            "pilots/options_gex.py's calculate_zero_gamma_flip() relative search "
-            "radius (+/- pct of spot) for the initial Brent's-method/bisection "
-            "bracket used to solve for the Zero-Gamma Flip Point (S*) — the spot "
-            "price where aggregate dealer Net GEX crosses zero. Directly "
-            "determines whether zero_gamma_flip/distance_to_flip_pct come back "
-            "populated or None for a given chain (a search range too narrow for "
-            "a symbol's actual OI distribution silently degrades to 'no flip "
-            "found' before the function's own secondary +/-40-60% expanded-grid "
-            "fallback ever engages). Promoted from the module's prior hardcoded "
-            "DEFAULT_SEARCH_RANGE_PCT default; pure promotion, not a behavior "
-            "change."
-        ),
     )
 
 
@@ -770,7 +614,7 @@ class Settings(BaseSettings):
             "default) is a complete no-op -- zero recording, zero overhead on "
             "the quote-fetch hot path -- matching this codebase's convention "
             "that new diagnostic instrumentation defaults off even when "
-            "read-only (e.g. ETF_HOLDINGS_ENABLED, SECTOR_HEAT_ENABLED)."
+            "read-only (e.g. SECTOR_HEAT_ENABLED)."
         ),
     )
     BROWSER_DIAGNOSTICS_ENABLED: bool = Field(
@@ -1129,27 +973,6 @@ class Settings(BaseSettings):
             "cycle total regardless of universe size. Single gate."
         ),
     )
-    FMP_OPTIONS_HEALTH_ENABLED: bool = Field(
-        default=True,
-        description=(
-            "Master switch for the FMP fundamental-health overlay bundled into "
-            "the options premium-directive matrix (reporting/options_snapshot.py"
-            "::write_options_matrix -> technical_options_engine.build_premium_"
-            "directive). Defaults True by explicit operator decision. When True, "
-            "gates Altman Z-Score + Piotroski F-Score, Net Debt/EBITDA + FCF Yield, "
-            "and 30-day realized volatility."
-        ),
-    )
-    FMP_OPTIONS_CONTEXT_ENABLED: bool = Field(
-        default=True,
-        description=(
-            "Master switch for the FMP market/qualitative-context overlay "
-            "bundled into the options premium-directive matrix (reporting/"
-            "options_snapshot.py::write_options_matrix -> technical_options_"
-            "engine.build_premium_directive). Defaults True by explicit operator "
-            "decision. Gates recent news headlines and peer-comparison ticker group."
-        ),
-    )
     FMP_PEERS_ENABLED: bool = Field(
         default=True,
         description=(
@@ -1343,7 +1166,7 @@ class Settings(BaseSettings):
         description=(
             "Wall-clock budget (seconds) for ALL FMP requests in one pipeline "
             "cycle, following the ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE "
-            "precedent. Needed because FMP_MIN_REQUEST_INTERVAL_SECONDS makes "
+            "precedent (that setting was retired with ETF holdings in 2026-09). Needed because FMP_MIN_REQUEST_INTERVAL_SECONDS makes "
             "issuance serial: ~100 requests at 0.25 s spacing is ~25 s of pure "
             "waiting, and a cold cache is several times that. Once the budget "
             "is spent, the remaining symbols degrade to NaN for that cycle "
@@ -1530,14 +1353,6 @@ class Settings(BaseSettings):
     # Override via CLI --dry-run flag or DRY_RUN=true in .env.
     DRY_RUN: bool = Field(default=False, description="Log orders but do not submit to broker.")
     
-    FIX_MOCK_VENUES_ENABLED: bool = Field(
-        default=True,
-        description="When True (default, preserves prior behavior), MultiVenueAggregator() with no explicit venues populates its 6 hardcoded simulated mock venues -- the FIX gateway is fully simulated and never touches real capital, so this is a zero-risk default. Set False to require a real settings.FIX_VENUES_CONFIG_PATH JSON file instead; a missing/malformed file then fails closed to zero venues (route_order rejects every order) rather than silently falling back to mock data."
-    )
-    FIX_VENUES_CONFIG_PATH: str = Field(
-        default="output/fix_venues.json",
-        description="Path to the FIX venues JSON config."
-    )
 
     # --- Advisory-only mode (Tier 5.1, 2026-06) ---
     # When True (the project default), the entire broker-execution surface is
@@ -1678,10 +1493,6 @@ class Settings(BaseSettings):
         ),
     )
 
-    # --- FIX 4.4 Gateway (execution/fix_gateway.py) ---
-    FIX_GATEWAY_ENABLED: bool = Field(default=True, description="Retired (2026-09, step 3e): the simulated FIX gateway routes this gated were removed with the options desk, so this switch has no effect. Kept until the settings trim in step 4.")
-    FIX_HEARTBEAT_INTERVAL_SECONDS: int = Field(default=30, description="Heartbeat interval (seconds) for FixSession -- was previously hardcoded as the class constructor default; now operator-configurable.")
-
     # --- Pre-trade risk gate (execution/risk_gate.py) ---
     MAX_CORRELATION: float = Field(
         default=0.85,
@@ -1725,36 +1536,6 @@ class Settings(BaseSettings):
     RISK_GATE_ENFORCE_MARKET_HOURS: bool = Field(
         default=True,
         description="Block orders outside NYSE RTH (09:30–16:00 ET).",
-    )
-
-    # --- Dynamic Circuit Breaker & Flash Guard (execution/dynamic_circuit_breaker.py) ---
-    CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD: float = Field(
-        default=3.5,
-        description="Volatility jump Z-score threshold to trigger SOFT_HALT (VOLATILITY_BURST_HALT).",
-    )
-    CIRCUIT_BREAKER_VPIN_THRESHOLD: float = Field(
-        default=0.40,
-        description="Volume-Synchronized Probability of Toxicity threshold to trigger FLASH_CRASH_SHIELD.",
-    )
-    CIRCUIT_BREAKER_OFI_THRESHOLD: float = Field(
-        default=1000.0,
-        description="Order Flow Imbalance threshold (selling pressure) to trigger FLASH_CRASH_SHIELD.",
-    )
-    CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS: float = Field(
-        default=30.0,
-        description="Loss velocity rolling time window in minutes relative to daily loss limit.",
-    )
-    CIRCUIT_BREAKER_ENABLED: bool = Field(
-        default=False,
-        description="Retired (2026-09): the dynamic circuit breaker is no longer wired into the risk gate or the daemon, so this flag has no effect. The kill switch (execution/kill_switch.py) remains the pre-trade halt. Field kept until the settings trim.",
-    )
-    OFI_SHIELD_ENABLED: bool = Field(
-        default=False,
-        description="Fail-closed extension to the Flash Crash (OFI + VPIN) shield: when both ofi and vpin are supplied to DynamicCircuitBreaker.update_metrics(), the real flash-crash check always runs regardless of this flag. This flag ONLY controls what happens when vpin (the signal maybe_update_circuit_breaker actually computes) is missing: True forces a fail-closed SOFT_HALT on that data gap. Deliberately does NOT fail closed on ofi's absence alone -- OFI is architecturally unwired platform-wide (no provider populates bid/ask size), so treating its routine absence as fail-closed would make this flag permanently SOFT_HALT every tick the moment it's enabled.",
-    )
-    CIRCUIT_BREAKER_REFERENCE_SYMBOL: str = Field(
-        default="SPY",
-        description="Retired (2026-09): read only by the removed daemon circuit-breaker updater; has no effect.",
     )
 
     # --- HMM regime detector (regime/hmm_regime.py, macro_engine.py) ---
@@ -1813,10 +1594,6 @@ class Settings(BaseSettings):
     KILLSWITCH_SAHM_THRESHOLD_AGREED: float = Field(
         default=0.30,
         description="Lowered Sahm rule threshold for kill switch activation when rules-based regime is RECESSION and HMM confirms risk-off.",
-    )
-    OPTIONS_VRP_THRESHOLD: float = Field(
-        default=0.02,
-        description="Minimum Volatility Risk Premium (VRP) required to authorize premium selling (e.g. credit spreads). VRP is the difference between Implied Volatility and Realized Volatility. A higher threshold (e.g. 0.03 = 3%) demands a larger premium buffer before entering trades, increasing selectivity and safety but reducing trade frequency.",
     )
 
     # --- Kill switch (execution/kill_switch.py) ---
@@ -1912,7 +1689,6 @@ class Settings(BaseSettings):
     PROGRESS_POLL_SECONDS: int = Field(
         default=5, description="Poll interval (seconds) for the Launcher pipeline-progress indicator."
     )
-    WS_RISK_STREAM_INTERVAL_SECONDS: float = Field(default=1.0, description="Retired (2026-09, step 3e): the /ws/risk/portfolio stream it paced was removed with the options desk, so this has no effect. Kept until the settings trim in step 4.")
     # ISO date string (YYYY-MM-DD) recording when paper trading began.
     # Used by scripts/preflight_check.py to verify >= 90 days of paper history.
     PAPER_TRADING_START_DATE: Optional[str] = Field(
@@ -2081,7 +1857,7 @@ class Settings(BaseSettings):
     # from the resolved tracked universe (data/portfolio_sync.py::resolve_universe,
     # main.py::_build_universe) -- stops being fetched, scored, or bought.
     # Defaults False like every other live-trading-behavior flag in this
-    # codebase (SIZING_CAP_ESCALATION_ENABLED, ETF_TRANSMISSION_SIZING_ENABLED)
+    # codebase (e.g. SIZING_CAP_ESCALATION_ENABLED)
     # so nothing changes silently on a git pull for a live capital account.
     # A currently-held position is NEVER excluded regardless of this flag --
     # see rating/symbol_rating.py::should_exclude.
@@ -2095,60 +1871,6 @@ class Settings(BaseSettings):
     SYMBOL_RATING_DROP_THRESHOLD_CYCLES: int = Field(
         default=5,
         description="Consecutive BAD-rated cycles required for an unheld symbol to be auto-dropped from tracking.",
-    )
-
-    # --- ETF volatility-transmission sizing derate (risk/etf_transmission.py) ---
-    # Ben-David, Franzoni & Moussawi (2018, JF): ETF arbitrage transmits a
-    # shock in one constituent to its healthy peers, so a heavily ETF-wrapped
-    # name carries extra non-fundamental, non-diversifiable variance that the
-    # per-name Kelly / vol-target formulas structurally cannot see. Applied as
-    # a bounded post-multiplier in sizing/position_sizer.py::size_position
-    # step 3 (NOT as vol inflation into Kelly -- see risk/etf_transmission.py's
-    # module docstring for why that lever is broken).
-    ETF_TRANSMISSION_SIZING_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Master switch for the per-name ETF-volatility-transmission "
-            "position-sizing derate. False (the default) is a complete no-op: "
-            "no multiplier is computed, ETF_Transmission_Multiplier stays NaN "
-            "in config.COLUMN_SCHEMA, and size_position() composes exactly "
-            "the pre-change weight (the derate it receives is the identity "
-            "1.0). Independent of any ETF holdings/co-movement MEASUREMENT "
-            "being available -- with coverage missing the derate is still 1.0, "
-            "never NaN, because a data outage must never relax a risk limit."
-        ),
-    )
-    ETF_TRANSMISSION_MAX_DERATE: float = Field(
-        default=0.30,
-        description=(
-            "Largest fraction of a name's composed sizing weight this overlay "
-            "may ever remove, reached only at (or past) "
-            "ETF_TRANSMISSION_OWNERSHIP_REFERENCE ETF ownership AND a "
-            "constituent-on-ETF return R-squared of 1.0. 0.30 = at most a 30% "
-            "haircut. Only consulted once ETF_TRANSMISSION_SIZING_ENABLED is "
-            "True."
-        ),
-    )
-    ETF_TRANSMISSION_OWNERSHIP_REFERENCE: float = Field(
-        default=0.20,
-        description=(
-            "ETF-ownership FRACTION of shares outstanding (0.20 = 20%) at "
-            "which the ownership factor of the derate saturates at 1.0; "
-            "ownership beyond this point does not escalate the haircut "
-            "further. Only consulted once ETF_TRANSMISSION_SIZING_ENABLED is "
-            "True."
-        ),
-    )
-    ETF_TRANSMISSION_MIN_MULTIPLIER: float = Field(
-        default=0.50,
-        description=(
-            "Hard lower bound on the transmission multiplier -- no combination "
-            "of ETF ownership, co-movement, or knob settings can shrink a "
-            "position below this fraction of its otherwise-composed weight "
-            "through this overlay (it is a risk derate, not a kill switch; "
-            "exiting a name is the signal layer's job, not this one's). Only "
-            "consulted once ETF_TRANSMISSION_SIZING_ENABLED is True."
-        ),
     )
 
     # --- Runtime / IO ---
@@ -2414,8 +2136,7 @@ class Settings(BaseSettings):
             "numbers -- flipping this on requires re-running "
             "scripts/refresh_validations.py against live data and updating that "
             "log, exactly like this codebase's other opt-in correctness levers "
-            "(e.g. FORECAST_CNN_LSTM_WALKFORWARD_SCALING above, "
-            "ETF_TRANSMISSION_SIZING_ENABLED)."
+            "(e.g. FORECAST_CNN_LSTM_WALKFORWARD_SCALING above)."
         ),
     )
 
@@ -3814,140 +3535,6 @@ class Settings(BaseSettings):
         ),
     )
 
-    # ── ETF volatility transmission (risk/etf_transmission.py) ───────────────
-    # Ben-David, Franzoni & Moussawi (2018), "Do ETFs Increase Volatility?",
-    # Journal of Finance 73(6). DIAGNOSTIC-ONLY measurement columns
-    # (ETF_Ownership_Pct / ETF_Comovement_R2 / ETF_Primary_Wrapper) -- nothing
-    # in scoring, sizing, or execution reads them yet. Same opt-in house style
-    # as SECTOR_HEAT_* / WIKIPEDIA_ATTENTION_* above: the master switch
-    # defaults False and is a complete no-op (zero network calls, all three
-    # columns NaN).
-    ETF_TRANSMISSION_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Master switch for the ETF volatility-transmission measurement "
-            "columns (risk/etf_transmission.py, wired by "
-            "pipeline/production_steps.py::_apply_etf_transmission). False "
-            "(the default) is a complete no-op: no ETF-holdings or ETF-bars "
-            "fetch is attempted and ETF_Ownership_Pct / ETF_Comovement_R2 / "
-            "ETF_Primary_Wrapper stay NaN in config.COLUMN_SCHEMA."
-        ),
-    )
-    ETF_HOLDINGS_MARKET_PROXY: str = Field(
-        default="SPY",
-        description=(
-            "Broad-market ETF used as the MARKET leg when residualizing both "
-            "the stock and its ETF-composite returns. Deliberately EXCLUDED "
-            "from the ownership-weighted return composite itself -- a naive "
-            "(non-residualized) R2 is high for every large-cap regardless of "
-            "ETF wrapping, so it would ship a market-beta derate wearing an "
-            "ETF costume. Consequence, by design: a name whose only covered "
-            "wrapper IS this proxy has an identically-zero residual and "
-            "therefore a NaN ETF_Comovement_R2, never a fabricated number."
-        ),
-    )
-    ETF_TRANSMISSION_WRAPPERS: list[str] = Field(
-        default_factory=lambda: [
-            "SPY", "QQQ", "IWM", "DIA",
-            "XLB", "XLC", "XLE", "XLF", "XLI",
-            "XLK", "XLP", "XLRE", "XLU", "XLV", "XLY",
-        ],
-        description=(
-            "Candidate wrapper ETFs whose baskets are fetched each cycle to "
-            "measure how heavily each universe name is ETF-wrapped (JSON "
-            "array in .env). Coverage is explicitly partial -- a name held "
-            "only by wrappers outside this list reads NaN rather than a "
-            "fabricated low ownership. Only consulted once "
-            "ETF_TRANSMISSION_ENABLED is True."
-        ),
-    )
-    ETF_TRANSMISSION_EXCLUDED_SYMBOLS: list[str] = Field(
-        default_factory=list,
-        description=(
-            "Extra universe symbols that are THEMSELVES funds and must never "
-            "be measured against their own basket (ownership/co-movement "
-            "against itself is 1.0/1.0 -- a maximum derate for a trivially "
-            "wrong reason). Everything in ETF_TRANSMISSION_WRAPPERS plus "
-            "ETF_HOLDINGS_MARKET_PROXY is excluded automatically; this list "
-            "covers funds an operator holds that are not themselves wrappers "
-            "(e.g. VOO, VTI, ARKK). JSON array in .env."
-        ),
-    )
-    ETF_TRANSMISSION_WINDOW_DAYS: int = Field(
-        default=60,
-        description=(
-            "Rolling window (trading days) for the market-residualized "
-            "co-movement R2. Mirrors processing_engine.calculate_rolling_beta's "
-            "default 60-day beta window. Only consulted once "
-            "ETF_TRANSMISSION_ENABLED is True."
-        ),
-    )
-    ETF_TRANSMISSION_MIN_OBS: int = Field(
-        default=60,
-        description=(
-            "Minimum aligned overlapping return observations required before "
-            "an ETF_Comovement_R2 is reported at all. Defaults to the full "
-            "window (NaN-until-full-window-coverage): a name added to a "
-            "wrapper last week has no tethered history, so a partial-window "
-            "R2 would UNDERSTATE transmission with a confident-looking "
-            "number. Missing beats understated (CONSTRAINT #4)."
-        ),
-    )
-
-    # ── ETF Transmission: Portfolio-Level Covariance (sizing/position_sizer.py) ──
-    # The mechanism raises COVARIANCE between co-held names, not any single
-    # name's own variance -- so the portfolio-wide gross-exposure cap
-    # (apply_portfolio_gross_cap's existing cov_matrix path, see
-    # sizing/vol_target.py::portfolio_vol_target) is where it genuinely
-    # belongs, not a second per-name lever alongside ETF_TRANSMISSION_SIZING_ENABLED
-    # above. False (the default) is a complete no-op: cov_matrix=None is
-    # passed to apply_portfolio_gross_cap exactly as before this feature
-    # existed, reproducing today's sum-of-|weight| fallback byte-for-byte.
-    ETF_TRANSMISSION_PORTFOLIO_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Master switch for routing the portfolio-level gross-exposure cap "
-            "through apply_portfolio_gross_cap's risk-aware cov_matrix path, "
-            "using an ETF-co-ownership-inflated covariance matrix "
-            "(risk.etf_transmission.build_transmission_adjusted_cov) instead "
-            "of the sum-of-|weight| fallback. False (the default) is a "
-            "complete no-op: cov_matrix=None every cycle, byte-identical to "
-            "pre-feature behavior. Requires ETF_HOLDINGS_ENABLED (a holdings "
-            "source) to produce anything other than the same fallback -- "
-            "with no holdings data the covariance build degrades gracefully "
-            "back to cov_matrix=None rather than fabricating overlap."
-        ),
-    )
-    ETF_TRANSMISSION_COV_INFLATION: float = Field(
-        default=0.25,
-        description=(
-            "Fractional inflation applied to the OFF-DIAGONAL covariance "
-            "entry of each symbol pair, scaled by their pairwise ETF "
-            "co-ownership overlap (cosine similarity of ETF-basket weight "
-            "vectors, in [0, 1]): cov_adj[i,j] = cov[i,j] * (1 + "
-            "ETF_TRANSMISSION_COV_INFLATION * overlap[i,j]) for i != j. The "
-            "diagonal (each name's own variance) is never touched -- this "
-            "models the paper's actual claim (arbitrage raises CO-MOVEMENT "
-            "between co-held names), not a claim about any single name's "
-            "own volatility, which risk.etf_transmission.transmission_multiplier "
-            "already handles separately via ETF_TRANSMISSION_SIZING_ENABLED. "
-            "Only consulted once ETF_TRANSMISSION_PORTFOLIO_ENABLED is True."
-        ),
-    )
-    ETF_TRANSMISSION_COV_WINDOW_DAYS: int = Field(
-        default=60,
-        description=(
-            "Trailing trading-day window of aligned daily returns used to "
-            "estimate the base covariance matrix before ETF co-ownership "
-            "inflation. Mirrors ETF_TRANSMISSION_WINDOW_DAYS's default. If "
-            "fewer than this many fully-overlapping return observations "
-            "exist across the cycle's universe, the covariance build is "
-            "skipped for that cycle (falls back to cov_matrix=None) rather "
-            "than estimating a covariance matrix off a short, noisy sample. "
-            "Only consulted once ETF_TRANSMISSION_PORTFOLIO_ENABLED is True."
-        ),
-    )
-
     # --- Forecast Ensemble Skill Weighting (Tier 2.2) ---
     # Controls the rolling-window RMSE tracker that weights ARIMA / Monte Carlo /
     # Holt-Winters / CNN-LSTM by inverse recent error rather than fixed fractions.
@@ -4054,17 +3641,6 @@ class Settings(BaseSettings):
             "Maximum number of top-scoring holdings a single Pilot surfaces "
             "(pilots/scoring.py::pilot_holdings). Positive scores only, "
             "normalized to target weights before the top-N cut."
-        ),
-    )
-    # UNUSED since Follow-a-Pilot was archived (2026-09, step 4c): nothing reads
-    # it any more. Kept only so an existing .env line doesn't trip anything
-    # before the field itself is retired (step 4f).
-    FOLLOW_MIN_AMOUNT: float = Field(
-        default=100.0,
-        description=(
-            "Unused: Follow-a-Pilot was archived (2026-09, step 4c). Formerly "
-            "the minimum USD amount accepted for a Pilot follow allocation. "
-            "Scheduled for removal."
         ),
     )
     # Master switch for the Pilots API's brokerage-credential intake endpoints
@@ -4387,22 +3963,12 @@ class Settings(BaseSettings):
         ),
     )
     # --- Pilots PWA: persisted analytics artifacts (options matrix + pairs radar) ---
-    # The options premium matrix (technical_options_engine) and pairs radar
-    # (pairs/ + signals.pairs_trading) are computed live in the Streamlit GUI but
-    # persisted nowhere, so the AST-guarded Pilots API (which must never import the
-    # heavy engines) cannot surface them. When enabled, the pipeline's
-    # StateSnapshotStep writes reporting/options_snapshot.py -> output/options_matrix.json
-    # and reporting/pairs_snapshot.py -> output/pairs.json, which the pure
-    # pilots.options / pilots.pairs readers then serve. Default OFF so fresh
-    # clones / CI are unaffected (mirrors the FORECAST_*_ENABLED opt-in convention).
-    OPTIONS_MATRIX_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "When True, the pipeline persists the per-symbol options premium "
-            "directive matrix to output/options_matrix.json for the Pilots PWA "
-            "(GET /options, GET /symbols/{ticker}/options). Default False."
-        ),
-    )
+    # The pairs radar (pairs/ + signals.pairs_trading) is persisted nowhere by
+    # default, so the AST-guarded Pilots API (which must never import the heavy
+    # engines) cannot surface it. When enabled, the pipeline's StateSnapshotStep
+    # writes reporting/pairs_snapshot.py -> output/pairs.json, which the pure
+    # pilots.pairs reader then serves. Default OFF so fresh clones / CI are
+    # unaffected (mirrors the FORECAST_*_ENABLED opt-in convention).
     PAIRS_SNAPSHOT_ENABLED: bool = Field(
         default=False,
         description=(
@@ -5073,131 +4639,6 @@ class Settings(BaseSettings):
         ),
     )
 
-    # ── ETF Holdings Ingestion (data/etf_holdings.py) ────────────────────────
-    # Feeds the planned "ETF volatility transmission" risk overlay grounded in
-    # Ben-David, Franzoni & Moussawi (2018), "Do ETFs Increase Volatility?",
-    # Journal of Finance 73(6):2471-2535.  Nothing in the platform consumes
-    # these holdings yet — this is a self-contained data-layer capability.
-    ETF_HOLDINGS_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Master switch for live ETF constituent-holdings ingestion "
-            "(SEC N-PORT primary, optional iShares CSV secondary). False "
-            "(the default) is a complete no-op: data.etf_holdings."
-            "get_etf_holdings() returns {} immediately with ZERO network "
-            "calls and zero DB reads, so a fresh clone / CI run never "
-            "touches EDGAR. Nothing in the platform consumes ETF holdings "
-            "yet — enabling this only populates the etf_holdings cache "
-            "table; it changes no score, weight, or order."
-        ),
-    )
-    ETF_HOLDINGS_TICKERS: list[str] = Field(
-        default_factory=lambda: [
-            "SPY", "IVV", "VOO", "QQQ", "DIA", "IWM",
-            "XLK", "XLF", "XLV", "XLE", "XLI",
-            "XLY", "XLP", "XLU", "XLB", "XLRE", "XLC",
-        ],
-        description=(
-            "ETF wrapper suite whose constituent holdings are ingested each "
-            "refresh — the broad-market and sector wrappers that account for "
-            "the bulk of US single-name ETF ownership. JSON-encoded list in "
-            ".env (e.g. ETF_HOLDINGS_TICKERS='[\"SPY\",\"QQQ\"]'). Only "
-            "consulted once ETF_HOLDINGS_ENABLED is True. A ticker whose "
-            "holdings cannot be resolved is simply ABSENT from the result "
-            "(never present with a fabricated empty or zero-weight holdings "
-            "list — CONSTRAINT #4)."
-        ),
-    )
-    ETF_HOLDINGS_REFRESH_DAYS: int = Field(
-        default=7,
-        description=(
-            "Age (days, measured on the cached row's fetched_at) beyond "
-            "which an ETF's cached etf_holdings rows are re-fetched from the "
-            "source. Deliberately coarse: SEC N-PORT reports three month-ends "
-            "per filing and publishes ~60 days after quarter end, so the "
-            "underlying data changes at most monthly and is 1-5 months stale "
-            "by construction — polling faster than this only burns SEC "
-            "requests for identical rows. Only consulted once "
-            "ETF_HOLDINGS_ENABLED is True."
-        ),
-    )
-    ETF_HOLDINGS_ISSUER_CSV_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Opt-in SECONDARY holdings source: the iShares issuer CSV "
-            "endpoint, consulted ONLY when SEC N-PORT produced nothing for a "
-            "symbol. False (the default) means the iShares endpoint is never "
-            "contacted — N-PORT is the sole source. Never the default "
-            "because issuer files are undocumented, unversioned, and can "
-            "change shape without notice; N-PORT is a regulatory filing with "
-            "a fixed schema. Enabling this also imports a family "
-            "constraint: iShares covers IVV plus the iShares sector suite, "
-            "and the two ETF families must never be mixed inside one "
-            "composite (see data/etf_holdings.py). Only consulted once "
-            "ETF_HOLDINGS_ENABLED is True."
-        ),
-    )
-    ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE: float = Field(
-        default=60.0,
-        description=(
-            "Hard wall-clock ceiling (seconds) for get_etf_holdings()'s "
-            "entire per-cycle loop over the ETF universe. Mirrors "
-            "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE for the identical "
-            "risk shape: a slow-but-responding EDGAR endpoint can otherwise "
-            "stack its per-request timeout across every remaining ETF with "
-            "no overall ceiling — once this budget elapses, remaining ETFs "
-            "are served from the cache only (no network) and any ETF with no "
-            "cached rows is simply absent from the result, never fabricated. "
-            "Only consulted once ETF_HOLDINGS_ENABLED is True."
-        ),
-    )
-    ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD: int = Field(
-        default=3,
-        description=(
-            "Consecutive no-holdings outcomes (exception or empty result) "
-            "within one get_etf_holdings() cycle before the live source is "
-            "skipped for the rest of that cycle's ETFs — avoids burning the "
-            "wall-clock budget on a source that is clearly failing for every "
-            "remaining symbol. Mirrors ATTENTION_CIRCUIT_BREAKER_THRESHOLD. "
-            "Only consulted once ETF_HOLDINGS_ENABLED is True."
-        ),
-    )
-    OPTIONS_TRUE_IVR_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Opt-in: wires a real, options-chain-derived True_IVR into "
-            "technical_options_engine.build_premium_directive() -- the GUI Technical "
-            "Options Matrix tab, the get_options_directive MCP tool, "
-            "api/metrics_api.py, execution/options_queue_builder.py, and every other "
-            "build_premium_directive caller -- instead of leaving true IV rank "
-            "exclusive to main_orchestrator.py's pipeline/production_steps.py::"
-            "OptionsAnalysisStep path. When True, build_premium_directive fetches a "
-            "live 30-calendar-day ATM IV via volatility.iv_engine.get_30d_atm_iv() "
-            "(a fresh, lightweight DataEngine constructed with no FRED key purely "
-            "for its fetch_options_chain() -- CompositeProvider/data/market_data.py "
-            "has no chain-shaped method to reuse, so this mirrors exactly what "
-            "OptionsAnalysisStep already does rather than inventing a second "
-            "convention) and ranks it against the SAME iv_history table "
-            "(volatility.iv_engine.IVHistoryStore) OptionsAnalysisStep writes to via "
-            "calculate_true_ivr() -- strictly prior days only, never a lookahead. "
-            "The result is surfaced as a NEW True_IVR row key alongside the "
-            "existing realized-vol-only IVR_Proxy (never replacing it -- both stay "
-            "so provenance is honest); generate_strategy_pricing_matrix's true_ivr "
-            "argument prefers True_IVR over IVR_Proxy when the flag is on and a "
-            "finite value was computed, falling back to IVR_Proxy exactly as today "
-            "otherwise. Any failure at any step -- no live chain data, an empty "
-            "iv_history table during warm-start (this repo's dev/CI sandboxes never "
-            "populate GUI/MCP-path history since only OptionsAnalysisStep's "
-            "orchestrator path writes to it), a network error, or any exception -- "
-            "degrades to float('nan') for True_IVR and never crashes or changes "
-            "IVR_Proxy/Cash-Wait fallback behavior (CONSTRAINT #4/#6). False (the "
-            "default) reproduces today's exact behavior byte-for-byte -- no new "
-            "network call, no new DB read, True_IVR always NaN. Enabling this adds "
-            "one live options-chain fetch per symbol per render (GUI)/per call "
-            "(MCP) -- a real, non-trivial network cost the realized-vol proxy never "
-            "had."
-        ),
-    )
     # Master switch for the Pilots API's dead-letter retry endpoint
     # (api/pilots_api.py POST /dead-letter/retry -- spawns a real single-symbol
     # `main.py` subprocess via shared.orchestrator_runner.launch_symbol_retry, the
@@ -5417,27 +4858,6 @@ class Settings(BaseSettings):
             "(CONSTRAINT #6)."
         ),
     )
-    FORECAST_BACKFILL_VRP_PROXY_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Gates whether the Forecast Backfill screen computes IVR_Proxy/VRP_Proxy "
-            "(OHLCV-only, no network -- realized-vol-derived stand-ins for the real "
-            "options-chain-derived True_IVR/VRP, which are structurally unavailable from "
-            "this repo's permitted FMP/Yahoo data sources -- see "
-            "docs/known_issues/vrp_premium_selling_no_historical_iv.md) and trains a "
-            "SEPARATE, quarantined model_type ('vrp_premium_selling_proxy', "
-            "ml/vrp_premium_selling_proxy_signal.py) against them. Never touches "
-            "signals/vrp_premium_selling.py or its live per-ticker behavior. The proxy "
-            "model_type is deliberately absent from "
-            "ml/forecast_backfill_registry_bridge.py::BACKFILL_ELIGIBLE_SIGNAL_IDS, so it "
-            "can never be promoted into ml.meta_labeling.global_meta_registry regardless "
-            "of settings.META_LABELING_BACKFILL_ELIGIBLE_SIGNALS -- a model trained on it "
-            "is a realized-vol-regime model, not a volatility-risk-premium model, and must "
-            "never reach live inference. Default False preserves today's exact behavior "
-            "byte-identically: no new columns, no new model_type, no proxy signal "
-            "instantiated."
-        ),
-    )
 
     @field_validator("OUTPUT_DIR")
     @classmethod
@@ -5581,15 +5001,6 @@ class Settings(BaseSettings):
         default_factory=lambda: ["SPY", "QQQ", "XLK", "XLF", "XLV", "XLE"],
         description="Candidate proxy ETFs find_correlated_proxy() screens "
         "against for a concentrated ticker's hedge leg.",
-    )
-    OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD: float = Field(
-        default=2.0,
-        description="pilots/copula_stat_arb.py's pairs-trading entry/exit "
-        "z-score band: |Z_t| >= this value triggers a LONG_SPREAD/SHORT_SPREAD "
-        "entry signal (default matches the module's prior hardcoded literal, "
-        "so this is a no-op until an operator changes it). Read by "
-        "generate_copula_stat_arb_signals' and evaluate_copula_stat_arb_pair's "
-        "z_entry/z_entry_threshold parameter defaults.",
     )
 
     # --- 26. Google Trends ASVI ---

@@ -555,7 +555,7 @@ class TestRunPipelineOutputContract:
         for col in (
             "Action Signal", "Kelly Target", "buyRange", "sellRange",
             "XSec_12_1M", "XSec_Momentum_Rank", "Multifactor_Composite",
-            "GARCH_Vol", "True_IVR",
+            "GARCH_Vol",
         ):
             assert col in final_df.columns, f"missing expected column: {col}"
 

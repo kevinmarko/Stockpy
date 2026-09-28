@@ -233,5 +233,5 @@ class TestWritesEnabledInvariants:
     def test_cache_long_short_enabled_stays_allowlisted(self):
         """The master feature switch (distinct from the writes-enabled
         guard above) is a routine GUI-writable feature flag, like
-        ORCHESTRATOR_DAEMON_ENABLED/ETF_TRANSMISSION_ENABLED."""
+        ORCHESTRATOR_DAEMON_ENABLED."""
         assert "CACHE_LONG_SHORT_ENABLED" in pilots_api.env_io.ALLOWED_KEYS

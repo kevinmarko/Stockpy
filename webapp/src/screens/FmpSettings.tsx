@@ -31,8 +31,6 @@ const FMP_LABEL_MAP: Record<string, string> = {
   FMP_NEWS_ENABLED: "Enable News Feed",
   FMP_NEWS_PAGE_LIMIT: "News Page Limit",
   FMP_NEWS_MAX_PAGES: "News Max Pages",
-  FMP_OPTIONS_HEALTH_ENABLED: "Enable Options Fundamental Health Overlay",
-  FMP_OPTIONS_CONTEXT_ENABLED: "Enable Options Market Context Overlay",
   FMP_PEERS_ENABLED: "Enable On-Demand Peer Suggestion Feed",
   FMP_PAPER_STARTING_CASH: "Paper Account Starting Cash ($)",
 };
