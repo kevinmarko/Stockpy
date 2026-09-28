@@ -124,6 +124,14 @@ horizon. It is threaded end-to-end:
   Monte Carlo to fail while Holt-Winters succeeds — a narrow, not-yet-reproduced
   edge case that deserves its own investigation rather than a speculative fix bundled
   into this change.
+  **Closed by forecasting rebuild F2 (2026-09).** F2's input-price check and clamp
+  can drop Monte Carlo, which made this combination reachable. The static chain now
+  falls back to Holt-Winters (then Prophet) before `current_price` when ARIMA and
+  Monte Carlo are both absent. It also renormalizes the CNN-LSTM branches when Monte
+  Carlo is missing, instead of leaving 60% / 50% of a price. With Monte Carlo present
+  the arithmetic is unchanged (see `docs/architecture/signal-engines.md`'s
+  forecasting_engine entry and `tests/test_forecast_rebuild_f2.py`). Also since F2,
+  `forecast_alignment` scores an `Is_Fallback` forecast 0 instead of −10.
 
 ## Tests
 

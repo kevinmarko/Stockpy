@@ -230,7 +230,8 @@ class StrategyEngine:
                           strategy_id: Optional[str] = None,
                           robinhood_position: Optional[RobinhoodPositionDTO] = None,
                           context_extras: Optional[Dict[str, Any]] = None,
-                          precomputed_signal_tuple: Optional[tuple] = None) -> Dict[str, Any]:
+                          precomputed_signal_tuple: Optional[tuple] = None,
+                          forecast_is_fallback: Optional[bool] = None) -> Dict[str, Any]:
         """
         Executes multi-phase quantitative scoring across the security.
         Synthesizes technical, fundamental, macro, and volatility factors to produce
@@ -254,6 +255,12 @@ class StrategyEngine:
             signal ``compute()`` method except
             ``signals/options_flow_sentiment.py``, which reads ``ROC_5``/
             ``ROC_20`` as a momentum-proxy fallback for its own score.
+        forecast_is_fallback : bool or None
+            Forecasting rebuild F2: True when ``forecast_price`` is the
+            engine's every-model-failed fallback (``Forecast_30_Is_Fallback``)
+            rather than a real blend. ``forecast_alignment`` scores such a
+            forecast as neutral (0) instead of bearish. None = unknown (only
+            the missing-value rule applies).
         """
         current_price = bar.close
         ticker = bar.ticker
@@ -268,6 +275,7 @@ class StrategyEngine:
         # 1. Package inputs into pd.Series and SignalContext
         row = pd.Series({
             "forecast_price": forecast_price,
+            "forecast_is_fallback": forecast_is_fallback,
             "trend_strength": trend_strength,
             "atr": atr,
             "macd_line": macd_line,

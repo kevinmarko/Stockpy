@@ -172,8 +172,10 @@ class _FakeProphetModel:
         self._last_close = float(df["y"].iloc[-1])
         return self
 
-    def make_future_dataframe(self, periods):
-        return pd.DataFrame({"ds": pd.date_range("2023-01-01", periods=periods + 1)})
+    def make_future_dataframe(self, periods, freq="D", include_history=True):
+        # Same signature as prophet.Prophet.make_future_dataframe; the engine
+        # passes freq="B" since forecasting rebuild F2 (trading-day horizon).
+        return pd.DataFrame({"ds": pd.date_range("2023-01-01", periods=periods + 1, freq=freq)})
 
     def predict(self, future):
         # Deterministic "forecast": last observed close, flat.

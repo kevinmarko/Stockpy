@@ -118,6 +118,7 @@ def _is_deployable(model_key: str, registry_data: Dict[str, Any]) -> tuple[bool,
 # a live SignalAggregator row shape against this set.
 LIVE_ROW_FEATURE_WHITELIST: frozenset[str] = frozenset([
     "forecast_price",
+    "forecast_is_fallback",
     "trend_strength",
     "atr",
     "macd_line",

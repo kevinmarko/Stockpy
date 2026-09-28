@@ -2027,6 +2027,33 @@ class Settings(BaseSettings):
             "F1's unconditional correction."
         ),
     )
+    FORECAST_CLAMP_SIGMA_K: float = Field(
+        default=4.0,
+        description=(
+            "Forecasting rebuild F2 clamp. A component model whose implied "
+            "log-return |ln(model_price / last_close)| exceeds "
+            "k * sigma_daily * sqrt(h) is dropped from that symbol/horizon's "
+            "blend for the cycle (never replaced with a made-up value; the "
+            "remaining models renormalize). sigma_daily is the same GJR-GARCH "
+            "term-structure vol the Monte Carlo model uses (annualized / "
+            "sqrt(252)); h is the horizon in trading days. When no GARCH sigma "
+            "is available for a symbol the clamp is skipped for it. The raw "
+            "model row is still recorded for scoring. <= 0 disables the clamp."
+        ),
+    )
+    FORECAST_INPUT_PRICE_TOLERANCE: float = Field(
+        default=0.05,
+        description=(
+            "Forecasting rebuild F2 input-price check. A component model whose "
+            "starting/anchor price differs from the symbol's last close (the "
+            "last Close of the price history it was given) by more than this "
+            "fraction is dropped from the blend for the cycle. Catches the "
+            "2026-08-14 class of bug (Monte Carlo seeded at ~$100 for ~$20 "
+            "symbols). In practice only Monte Carlo can trip it: its anchor is "
+            "the row's current price, while ARIMA/Holt-Winters/Prophet/CNN-LSTM "
+            "are anchored on that same history. <= 0 disables the check."
+        ),
+    )
     FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED: bool = Field(
         default=True,
         description=(

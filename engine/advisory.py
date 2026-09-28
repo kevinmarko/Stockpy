@@ -929,6 +929,8 @@ def evaluate(
             fundamentals=fund_dto,
             macro=macro_dto,
             forecast_price=forecast_price or 0.0,
+            # F2: a fallback forecast scores neutral in forecast_alignment.
+            forecast_is_fallback=forecast_is_fallback,
             # trend_strength: Aroon Oscillator serves as the best single-value
             # trend proxy; fall back to 50 (neutral) when unavailable.
             trend_strength=float(tech.get("Aroon Oscillator") or 50.0),

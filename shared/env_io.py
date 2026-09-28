@@ -284,6 +284,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # credential material.
     "FORECAST_MC_RANDOM_SEED",    # Optional[int] — run_monte_carlo RNG seed; None = non-deterministic
     "FORECAST_DRIFT_SHRINKAGE",   # float [0,1] — shrinks MC drift mu toward zero (0.0 = unshrunk, today's behavior)
+    "FORECAST_CLAMP_SIGMA_K",     # float — F2 clamp: drop a model whose |log-return| > k*sigma_GARCH*sqrt(h); <=0 disables
+    "FORECAST_INPUT_PRICE_TOLERANCE",  # float — F2: drop a model whose anchor price is > this fraction off the last close; <=0 disables
     "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED",  # bool — ForecastTracker looks up each row's own due-date close instead of today's price
     "FORECAST_SKILL_WEIGHTING_ENABLED",  # bool — opt-in inverse-RMSE skill-weighted blend
     "FORECAST_SKILL_WINDOW_DAYS", # int — rolling RMSE window (days) for skill weighting
