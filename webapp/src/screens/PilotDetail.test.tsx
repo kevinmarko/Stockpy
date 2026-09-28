@@ -81,10 +81,10 @@ describe("PilotDetail screen (real mock API)", () => {
     expect(document.querySelector(".recharts-area")).not.toBeInTheDocument();
   });
 
-  it("iron-condor (Options, followable:false) renders a disabled, explained Follow CTA -- never a silently hidden button", async () => {
-    renderDetail("iron-condor");
+  it("a followable:false pilot renders a disabled, explained Follow CTA -- never a silently hidden button", async () => {
+    renderDetail("regime-navigator");
 
-    await screen.findByRole("heading", { name: "Iron Condor" });
+    await screen.findByRole("heading", { name: "Regime Navigator" });
     const restrictedBtn = screen.getByRole("button", { name: /Follow \(Restricted\)/ });
     expect(restrictedBtn).toBeDisabled();
     // No active (non-restricted) Follow button also renders for this pilot.

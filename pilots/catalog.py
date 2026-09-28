@@ -90,6 +90,13 @@ honest caveats baked into the catalog below:
   2026-09 (step 3d') when their signal modules were retired from live scoring
   with the options desk; an existing follow of either no longer resolves to a
   Pilot.
+* The 10 ``category="Options"`` Pilots (``earnings-crush``,
+  ``dispersion-trading``, ``zero-dte-momentum-breakout``, ``copula-stat-arb``,
+  the four credit/debit spreads, ``covered-call``, ``iron-condor``) and
+  ``OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID`` were removed in 2026-09 (step 4a)
+  with the options desk. Historical paper trades under those ids still
+  attribute on the Strategy Report Card, as retired non-Pilot buckets
+  (``pilots/strategy_report_card.py::RETIRED_OPTIONS_PILOT_NAMES``).
 """
 from __future__ import annotations
 
@@ -98,7 +105,7 @@ from typing import Dict, List, Optional
 
 from settings import settings
 
-__all__ = ["Pilot", "PILOTS", "list_pilots", "get_pilot", "OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID"]
+__all__ = ["Pilot", "PILOTS", "list_pilots", "get_pilot"]
 
 
 @dataclass(frozen=True)
@@ -527,119 +534,8 @@ PILOTS: List[Pilot] = [
         # bounded 6-year feature-panel window / proxy-OHLCV caveats.
         validation_strategy_id="lgbm_ranker",
     ),
-    Pilot(
-        id="earnings-crush",
-        name="Earnings Volatility Crush",
-        category="Options",
-        description="Sells inflated premium into scheduled earnings binary events.",
-        weights={},
-        followable=False,
-        validation_strategy_id=None,
-    ),
-    Pilot(
-        id="dispersion-trading",
-        name="Dispersion Trading",
-        category="Options",
-        description="Trades index volatility against single-name volatility components.",
-        weights={},
-        followable=False,
-        validation_strategy_id=None,
-    ),
-    Pilot(
-        id="zero-dte-momentum-breakout",
-        name="0DTE Momentum Breakout",
-        category="Options",
-        description="Intraday momentum strategy using same-day expirations.",
-        weights={},
-        followable=False,
-        validation_strategy_id=None,
-    ),
-    Pilot(
-        id="copula-stat-arb",
-        name="Copula Stat Arb",
-        category="Options",
-        description="Statistical arbitrage using copula-derived joint probabilities.",
-        weights={},
-        followable=False,
-        validation_strategy_id="copula_stat_arb",
-    ),
-    Pilot(
-        id="put-credit-spread",
-        name="Put Credit Spread",
-        category="Options",
-        description="Defined-risk bullish/neutral premium selling strategy.",
-        weights={},
-        followable=False,
-        validation_strategy_id="put_credit_spread",
-    ),
-    Pilot(
-        id="call-credit-spread",
-        name="Call Credit Spread",
-        category="Options",
-        description="Defined-risk bearish/neutral premium selling strategy.",
-        weights={},
-        followable=False,
-        validation_strategy_id="call_credit_spread",
-    ),
-    Pilot(
-        id="call-debit-spread",
-        name="Call Debit Spread",
-        category="Options",
-        description="Defined-risk bullish directional strategy.",
-        weights={},
-        followable=False,
-        validation_strategy_id="call_debit_spread",
-    ),
-    Pilot(
-        id="put-debit-spread",
-        name="Put Debit Spread",
-        category="Options",
-        description="Defined-risk bearish directional strategy.",
-        weights={},
-        followable=False,
-        validation_strategy_id="put_debit_spread",
-    ),
-    Pilot(
-        id="covered-call",
-        name="Covered Call",
-        category="Options",
-        description="Yield enhancement strategy against existing long stock positions.",
-        weights={},
-        followable=False,
-        validation_strategy_id="covered_call",
-    ),
-    Pilot(
-        id="iron-condor",
-        name="Iron Condor",
-        category="Options",
-        description="Range-bound premium selling strategy combining credit spreads.",
-        weights={},
-        followable=False,
-        validation_strategy_id=None,
-    ),
 ]
 
-
-# Mapping of OptionsDirective strategy strings to catalog Pilot IDs.
-#
-# Keys MUST be the exact Title-Case strings ``technical_options_engine.py``'s
-# ``generate_strategy_pricing_matrix`` writes to ``directive["Strategy"]``
-# (see that module's ``directive["Strategy"] = "Put Credit Spread"`` etc.
-# assignments) — NOT the ``structure_type`` UPPER_SNAKE_CASE convention used
-# elsewhere (e.g. ``pilots/multi_leg_pricing.py``'s ``"IRON_CONDOR"``, a
-# different field entirely). ``execution/options_paper_executor.py`` looks up
-# a live directive's ``strategy``/``candidate["strategy"]`` value (itself
-# read straight from ``directive["Strategy"]``) against this dict verbatim —
-# an UPPER_SNAKE_CASE key here would never match a real directive and this
-# normalization would silently no-op for every live trade.
-OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID = {
-    "Put Credit Spread": "put-credit-spread",
-    "Call Credit Spread": "call-credit-spread",
-    "Iron Condor": "iron-condor",
-    "Call Debit Spread": "call-debit-spread",
-    "Put Debit Spread": "put-debit-spread",
-    "Covered Call": "covered-call",
-}
 
 # Fast id -> Pilot index (built once at import; catalog is static).
 _BY_ID: Dict[str, Pilot] = {p.id: p for p in PILOTS}

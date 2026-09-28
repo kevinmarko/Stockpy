@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "baa3250fbc075444532732c81ef178932ba16de6",
+    "git_commit": "80c32cee623c487c8c8bf4376e0aabfb6feb5b22",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3482,7 +3482,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 438,
+    "files_scanned": 439,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3511,10 +3511,10 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 778,
+      "total_reads": 777,
       "distinct_fields": 275,
       "counts": {
-        "OUTPUT_DIR": 121,
+        "OUTPUT_DIR": 120,
         "LOCAL_DATA_ROOT": 24,
         "SIGNAL_WEIGHTS": 18,
         "FRED_API_KEY": 13,
@@ -3792,15 +3792,15 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 393,
-      "distinct_fields": 232,
+      "total_reads": 390,
+      "distinct_fields": 230,
       "counts": {
         "FMP_API_KEY": 13,
         "GEMINI_API_KEY": 9,
+        "OPTIONS_RISK_FREE_RATE": 8,
         "FMP_NEWS_ENABLED": 7,
         "LLM_COMMENTARY_TIMEOUT_SECONDS": 7,
         "OPENAI_API_KEY": 7,
-        "OPTIONS_RISK_FREE_RATE": 7,
         "ADVISORY_ONLY": 6,
         "LLM_COMMENTARY_ENABLED": 6,
         "OPAL_RESEARCH_ENABLED": 5,
@@ -3813,7 +3813,6 @@
         "FMP_SCREENER_ENABLED": 4,
         "GRAVITY_AI_RUNNER_ENABLED": 4,
         "LOCAL_LLM_BASE_URL": 4,
-        "OPTIONS_0DTE_ENABLED": 4,
         "OPTIONS_0DTE_HARD_EXIT_TIME": 4,
         "OPTIONS_AUTO_EXIT_ENABLED": 4,
         "ROBINHOOD_EXECUTION_MODE": 4,
@@ -3823,6 +3822,7 @@
         "FORECAST_BACKFILL_HORIZONS": 3,
         "HISTORICAL_STORE_ENABLED": 3,
         "MCP_DATABASE_URL_RO": 3,
+        "OPTIONS_0DTE_ENABLED": 3,
         "OPTIONS_0DTE_PROFIT_TARGET_PCT": 3,
         "OPTIONS_0DTE_STOP_LOSS_PCT": 3,
         "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES": 3,
@@ -3845,7 +3845,6 @@
         "FMP_EARNINGS_ENABLED": 2,
         "FMP_FALLBACK_ENABLED": 2,
         "FMP_PROFILE_ENABLED": 2,
-        "FORECAST_BACKFILL_VRP_PROXY_ENABLED": 2,
         "FORECAST_MAX_CONCURRENCY": 2,
         "FORECAST_MODEL_PERSISTENCE_ENABLED": 2,
         "FORECAST_PROPHET_WEIGHT": 2,
@@ -3990,7 +3989,6 @@
         "META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS": 1,
         "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS": 1,
         "META_LABELING_ENABLED": 1,
-        "MULTI_BROKER_GATEWAY_ENABLED": 1,
         "NEWS_LOOKBACK_DAYS": 1,
         "OFI_SHIELD_ENABLED": 1,
         "OPAL_RESEARCH_MODEL": 1,
@@ -4034,7 +4032,7 @@
       "sites": [
         {
           "file": "Gravity AI Review Suite.py",
-          "line": 2738,
+          "line": 2674,
           "expr": "getattr(_rh_settings, _MISSING_ATTR, None)"
         },
         {
@@ -4110,7 +4108,7 @@
         "os.environ.get()": 2
       }
     },
-    "fields_reached_by_any_form": 460,
+    "fields_reached_by_any_form": 458,
     "fields_only_via_b_or_d": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -4207,7 +4205,6 @@
       "FORECAST_BACKFILL_VOL_LONG_WINDOW",
       "FORECAST_BACKFILL_VOL_RATIO_WINDOW",
       "FORECAST_BACKFILL_VOL_SHORT_WINDOW",
-      "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
       "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
       "FORECAST_DRIFT_SHRINKAGE",
       "FORECAST_MAX_CONCURRENCY",
@@ -4253,7 +4250,6 @@
       "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS",
       "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS",
       "META_LABELING_ENABLED",
-      "MULTI_BROKER_GATEWAY_ENABLED",
       "NO_VENV_REEXEC",
       "OFI_SHIELD_ENABLED",
       "OPAL_RESEARCH_MODEL",
@@ -4298,7 +4294,7 @@
       "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
       "VALIDATION_HARNESS_OOS_GATE_ENABLED"
     ],
-    "fields_only_via_b_or_d_count": 185,
+    "fields_only_via_b_or_d_count": 183,
     "fields_only_via_b": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -4395,7 +4391,6 @@
       "FORECAST_BACKFILL_VOL_LONG_WINDOW",
       "FORECAST_BACKFILL_VOL_RATIO_WINDOW",
       "FORECAST_BACKFILL_VOL_SHORT_WINDOW",
-      "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
       "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
       "FORECAST_DRIFT_SHRINKAGE",
       "FORECAST_MAX_CONCURRENCY",
@@ -4440,7 +4435,6 @@
       "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS",
       "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS",
       "META_LABELING_ENABLED",
-      "MULTI_BROKER_GATEWAY_ENABLED",
       "OFI_SHIELD_ENABLED",
       "OPAL_RESEARCH_MODEL",
       "OPAL_RESEARCH_PROVIDER",
@@ -4498,8 +4492,10 @@
       "ETF_HOLDINGS_TICKERS",
       "FIX_GATEWAY_ENABLED",
       "FMP_ECON_INDICATORS",
+      "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
       "GOOGLE_TRENDS_OVERLAP_DAYS",
       "GOOGLE_TRENDS_WINDOW_DAYS",
+      "MULTI_BROKER_GATEWAY_ENABLED",
       "OPTIONS_EARNINGS_CRUSH_ENABLED",
       "PROMPT_MAX_CHARS",
       "PROMPT_REGISTRY_REFRESH_SECONDS",
@@ -4507,7 +4503,7 @@
       "UNIVERSE_SYNC_ENABLED",
       "WS_RISK_STREAM_INTERVAL_SECONDS"
     ],
-    "fields_no_static_read_count": 17,
+    "fields_no_static_read_count": 19,
     "fields_no_static_read_detail": [
       {
         "field": "CIRCUIT_BREAKER_ENABLED",
@@ -4577,6 +4573,12 @@
         "likely_dynamic_read": true
       },
       {
+        "field": "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
         "field": "GOOGLE_TRENDS_OVERLAP_DAYS",
         "name_literal_sites": [],
         "name_literal_site_count": 0,
@@ -4587,6 +4589,14 @@
         "name_literal_sites": [],
         "name_literal_site_count": 0,
         "likely_dynamic_read": false
+      },
+      {
+        "field": "MULTI_BROKER_GATEWAY_ENABLED",
+        "name_literal_sites": [
+          "pilots/feature_flags.py:90"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
       },
       {
         "field": "OPTIONS_EARNINGS_CRUSH_ENABLED",
@@ -4603,7 +4613,7 @@
       {
         "field": "PROMPT_REGISTRY_REFRESH_SECONDS",
         "name_literal_sites": [
-          "Gravity AI Review Suite.py:11083"
+          "Gravity AI Review Suite.py:10834"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true

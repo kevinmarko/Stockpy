@@ -3,7 +3,7 @@
 ``build_export()`` writes a consolidated ``notebooklm_source.md`` (Macro
 Context, Current Portfolio, Active Pilot Follows -- unchanged from the
 original single-file export) PLUS 5 modular per-domain files under
-``notebooklm/`` (macro & regime, portfolio & Greeks, signals & picks, trade
+``notebooklm/`` (macro & regime, portfolio holdings, signals & picks, trade
 journal, options matrix). Part 1 of this suite (below) covers the original
 consolidated-only behavior:
 
@@ -791,54 +791,6 @@ def _real_state_snapshot_payload(signals: list) -> dict:
     }
 
 
-def _real_greeks_dict() -> dict:
-    """A REALISTIC, non-empty/non-zero portfolio Greeks dict matching
-    ``pilots/options_risk.py::calculate_portfolio_greeks``'s real populated
-    return shape -- every key that function actually returns, with genuine
-    non-zero values so a test can prove the generator surfaced the REAL
-    numbers rather than silently substituting a flat/empty result.
-    """
-    return {
-        "total_positions": 3,
-        "stock_positions_count": 1,
-        "option_positions_count": 2,
-        "net_delta_shares": 42.5,
-        "net_dollar_delta": 8500.25,
-        "net_gamma": 0.0231,
-        "net_theta_daily": -12.75,
-        "net_vega_1pct": 3.4,
-        "beta_weighted_delta_spy": 15.2,
-        "positions_with_missing_data": [],
-        "beta_excluded_symbols": [],
-        "symbols_with_estimated_beta": ["AAPL"],
-        "spy_spot": 550.10,
-        "spy_spot_resolved": True,
-        "positions": [{"symbol": "AAPL", "position_delta": 42.5}],
-    }
-
-
-def _empty_book_greeks_dict() -> dict:
-    """The REAL all-zero (genuinely zero, not missing) shape
-    ``calculate_portfolio_greeks`` returns for an empty book."""
-    return {
-        "total_positions": 0,
-        "stock_positions_count": 0,
-        "option_positions_count": 0,
-        "net_delta_shares": 0.0,
-        "net_dollar_delta": 0.0,
-        "net_gamma": 0.0,
-        "net_theta_daily": 0.0,
-        "net_vega_1pct": 0.0,
-        "beta_weighted_delta_spy": 0.0,
-        "positions_with_missing_data": [],
-        "beta_excluded_symbols": [],
-        "symbols_with_estimated_beta": [],
-        "spy_spot": None,
-        "spy_spot_resolved": True,
-        "positions": [],
-    }
-
-
 def _real_trade_history_unavailable_view() -> dict:
     """The real ``available: False`` cold-start/failure shape from
     ``pilots/trade_history.py::_empty_view`` -- distinct from a genuine "0
@@ -948,9 +900,6 @@ def _mock_all_modular_upstreams(monkeypatch, tmp_path: Path) -> None:
     _patch_output_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(
         notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
-    )
-    monkeypatch.setattr(
-        "pilots.paper_broker.get_portfolio_greeks", lambda: _empty_book_greeks_dict()
     )
     monkeypatch.setattr(
         "pilots.trade_history.trade_history_view",
@@ -1115,90 +1064,28 @@ class TestNaNFormattingAcrossHelpers:
 
 
 # ---------------------------------------------------------------------------
-# BUG CLASS #1: Portfolio Greeks correct delegation
+# Portfolio section: the options-Greeks half was removed (2026-09, step 4a)
 # ---------------------------------------------------------------------------
 
-class TestPortfolioGreeksDelegation:
-    def test_delegates_to_paper_broker_get_portfolio_greeks_exactly_once(
+class TestPortfolioSectionHasNoGreeks:
+    def test_portfolio_source_has_no_greeks_section_and_no_options_import(
         self, tmp_path: Path, monkeypatch
     ):
-        """REGRESSION (CRITICAL fabrication bug): the prior generator
-        reinvented Greeks wiring instead of delegating to
-        ``pilots.paper_broker.get_portfolio_greeks()`` (which itself
-        resolves a real SPY spot and never fabricates a default price).
-        Proves the generator calls THAT function specifically -- not
-        ``pilots.options_risk.calculate_portfolio_greeks`` directly -- with
-        realistic non-zero output surviving into the rendered text."""
-        call_log = []
+        """The portfolio document no longer renders a Greeks section and never
+        imports an options module -- proven by blocking pilots.options_risk
+        in sys.modules."""
+        import sys
 
-        def _fake_get_portfolio_greeks():
-            call_log.append(1)
-            return _real_greeks_dict()
-
-        monkeypatch.setattr(
-            "pilots.paper_broker.get_portfolio_greeks", _fake_get_portfolio_greeks
-        )
-
+        monkeypatch.setitem(sys.modules, "pilots.options_risk", None)
         text = notebooklm.generate_portfolio_greeks_source(store=None, output_dir=tmp_path)
+        assert "Greeks" not in text
+        assert "## Account Liquidity & Capital Summary" in text
+        assert "## Open Positions & Basis" in text
 
-        assert len(call_log) == 1, (
-            "generate_portfolio_greeks_source must call "
-            "pilots.paper_broker.get_portfolio_greeks() exactly once"
-        )
-        assert "42.5" in text  # net_delta_shares
-        assert notebooklm._fmt_money(8500.25) in text  # net_dollar_delta
-        assert "15.2" in text  # beta_weighted_delta_spy
-        assert notebooklm._fmt_money(550.10) in text  # spy_spot
-
-    def test_never_calls_calculate_portfolio_greeks_directly(self, tmp_path: Path, monkeypatch):
-        """The generator must not bypass pilots.paper_broker and call
-        pilots.options_risk.calculate_portfolio_greeks itself."""
-        direct_call_log = []
-
-        def _boom_if_called_directly(*args, **kwargs):
-            direct_call_log.append(1)
-            return _real_greeks_dict()
-
-        monkeypatch.setattr(
-            "pilots.options_risk.calculate_portfolio_greeks", _boom_if_called_directly
-        )
-        monkeypatch.setattr(
-            "pilots.paper_broker.get_portfolio_greeks", lambda: _real_greeks_dict()
-        )
-
-        notebooklm.generate_portfolio_greeks_source(store=None, output_dir=tmp_path)
-
-        assert direct_call_log == [], (
-            "generate_portfolio_greeks_source must delegate to "
-            "pilots.paper_broker.get_portfolio_greeks(), never call "
-            "pilots.options_risk.calculate_portfolio_greeks() itself"
-        )
-
-    def test_empty_book_renders_honest_zeros_not_na(self, tmp_path: Path, monkeypatch):
-        """A genuinely empty paper book must render as honest zeros, not
-        N/A -- CONSTRAINT #4 applies symmetrically to a real 0 as much as
-        it does to a fabricated one. `store=None` here is deliberate (the
-        Greeks section has no dependency on `store` at all) and legitimately
-        makes the SEPARATE portfolio-snapshot section report "unavailable"
-        (already covered by its own tests) -- this test scopes its
-        assertion to the Greeks section specifically, not the whole
-        document."""
-        monkeypatch.setattr(
-            "pilots.paper_broker.get_portfolio_greeks", lambda: _empty_book_greeks_dict()
-        )
+    def test_missing_store_degrades_honestly(self, tmp_path: Path):
         text = notebooklm.generate_portfolio_greeks_source(store=None, output_dir=tmp_path)
-        greeks_section = text.split("## Net Portfolio Greeks", 1)[1]
-        greeks_section = greeks_section.split("## Open Positions", 1)[0]
-        assert "0" in greeks_section
-        assert "unavailable" not in greeks_section.lower()
-
-    def test_upstream_failure_degrades_honestly(self, tmp_path: Path, monkeypatch):
-        def _boom():
-            raise RuntimeError("PaperAccountStore DB unavailable")
-
-        monkeypatch.setattr("pilots.paper_broker.get_portfolio_greeks", _boom)
-        text = notebooklm.generate_portfolio_greeks_source(store=None, output_dir=tmp_path)
-        assert "unavailable" in text.lower()
+        assert "Portfolio snapshot is unavailable." in text
+        assert "Position details unavailable." in text
 
 
 # ---------------------------------------------------------------------------
@@ -1374,9 +1261,6 @@ class TestPerGeneratorCrashIsolation:
         _patch_output_dir(monkeypatch, tmp_path)
         monkeypatch.setattr(
             notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
-        )
-        monkeypatch.setattr(
-            "pilots.paper_broker.get_portfolio_greeks", lambda: _real_greeks_dict()
         )
         monkeypatch.setattr(
             "pilots.trade_history.trade_history_view",

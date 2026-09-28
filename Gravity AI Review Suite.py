@@ -1665,70 +1665,6 @@ class GravityAIAuditor:
 
         self.report["step_18_hmm_regime_audit"] = hmm_report
 
-    def run_ivr_vrp_audit(self) -> None:
-        """
-        STEP 19: OPTIONS TRUE IVR AND VRP REGIME GATE AUDIT
-        """
-        ivr_report = {}
-        try:
-            from technical_options_engine import OptionsPricingRecommender
-            from dto_models import MacroEconomicDTO
-            import config as platform_config
-            
-            # Check schema columns
-            schema_keys = {c["key"] for c in platform_config.COLUMN_SCHEMA}
-            has_realized_vol_rank = "Realized_Vol_Rank" in schema_keys
-            has_true_ivr = "True_IVR" in schema_keys
-            has_vrp = "VRP" in schema_keys
-            
-            ivr_report["has_schema_columns"] = bool(has_realized_vol_rank and has_true_ivr and has_vrp)
-            
-            recommender = OptionsPricingRecommender(100.0)
-            
-            # 1. High true_ivr (>50) but gated (VRP <= 0.02) -> should return Cash/Wait
-            gated_res_vrp = recommender.generate_strategy_pricing_matrix(
-                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.01,
-                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0, vix_value=20.0)
-            )
-            gated_vrp_ok = gated_res_vrp["Strategy"] == "Cash" and gated_res_vrp["Action"] == "Wait"
-            ivr_report["gated_by_low_vrp_works"] = bool(gated_vrp_ok)
-            
-            # 2. High true_ivr (>50) but gated (VIX >= 30) -> should return Cash/Wait
-            gated_res_vix = recommender.generate_strategy_pricing_matrix(
-                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.05,
-                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0, vix_value=32.0)
-            )
-            gated_vix_ok = gated_res_vix["Strategy"] == "Cash" and gated_res_vix["Action"] == "Wait"
-            ivr_report["gated_by_high_vix_works"] = bool(gated_vix_ok)
-
-            # 3. High true_ivr (>50) but gated (CREDIT EVENT) -> should return Cash/Wait
-            # Setting high_yield_oas=7.0 naturally triggers a CREDIT EVENT regime in DTO
-            gated_res_credit = recommender.generate_strategy_pricing_matrix(
-                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.05,
-                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=7.0, inflation_rate=2.0, vix_value=20.0)
-            )
-            gated_credit_ok = gated_res_credit["Strategy"] == "Cash" and gated_res_credit["Action"] == "Wait"
-            ivr_report["gated_by_credit_event_works"] = bool(gated_credit_ok)
-            
-            # 4. High true_ivr (>50) and ungated -> should recommend Put Credit Spread for Bullish bias
-            ungated_res = recommender.generate_strategy_pricing_matrix(
-                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.05,
-                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0, vix_value=20.0)
-            )
-            ungated_ok = ungated_res["Strategy"] == "Put Credit Spread" and ungated_res["Action"] == "Sell to Open"
-            ivr_report["ungated_put_credit_spread_works"] = bool(ungated_ok)
-            
-            all_pass = all([
-                has_realized_vol_rank, has_true_ivr, has_vrp,
-                gated_vrp_ok, gated_vix_ok, gated_credit_ok, ungated_ok
-            ])
-            ivr_report["status"] = "PASSED" if all_pass else "FAILED"
-        except Exception as e:
-            ivr_report["status"] = f"Execution Error: {str(e)}"
-            ivr_report["error"] = str(e)
-            
-        self.report["step_19_ivr_vrp_audit"] = ivr_report
-
     def run_pairs_trading_audit(self) -> None:
         """
         STEP 20: ENGLE-GRANGER AND KALMAN PAIRS TRADING VALIDATION AUDIT
@@ -4569,7 +4505,6 @@ class GravityAIAuditor:
         self.run_kelly_vol_target_sizing_audit()
         self.run_multifactor_audit()
         self.run_hmm_regime_audit()
-        self.run_ivr_vrp_audit()
         self.run_pairs_trading_audit()
         self.run_stress_scenario_audit()
         self.run_broker_order_manager_audit()
@@ -4590,7 +4525,6 @@ class GravityAIAuditor:
         self.run_portfolio_sync_audit()
         self.run_risk_gates_portfolio_heat_audit()
         self.run_six_bug_regression_audit()
-        self.run_options_matrix_integrity_audit()
         self.run_brinson_fachler_attribution_audit()
         self.run_launcher_telemetry_audit()
         self.run_market_data_diagnostics_audit()
@@ -5510,189 +5444,6 @@ class GravityAIAuditor:
 
         self.report["step_37_six_bug_regression_audit"] = audit
 
-
-    def run_options_matrix_integrity_audit(self) -> None:
-        """Step 38 — Technical Options Matrix integrity audit.
-
-        Verifies the premium-selling matrix surfaced by the Command Center's
-        Technical Options Matrix tab (and used by every advisory render path)
-        upholds the four invariants demanded by the operational spec:
-
-        1. **Schema hydration** — ``build_premium_directive`` returns a row
-           containing every diagnostic + actionable column the GUI needs
-           (sigma, IVR proxy, trend bias, ATM Greeks, legs, theta, integrity).
-        2. **Strike grid** — every leg strike falls on the ``$0.50`` grid.
-        3. **Delta targets** — the resolved Black-Scholes delta of each leg is
-           within ``±0.05`` of its conventional target (short/long Put Credit
-           Spread, Iron Condor, etc.).
-        4. **Regime gate (fail-closed)** — high IVR + bullish trend during
-           ``VIX > 30`` or ``CREDIT EVENT`` regime degrades to ``Cash / Wait``
-           rather than producing a premium-selling recommendation.
-        """
-        audit = {
-            "step": "step_38_options_matrix_integrity_audit",
-            "description": "Technical Options Matrix integrity ($0.50 strike grid + delta targets + regime gate)",
-            "checks": [],
-            "overall_pass": False,
-        }
-        all_pass = True
-
-        try:
-            import numpy as np
-            import pandas as pd
-            from technical_options_engine import (
-                EXPECTED_DELTA_TARGETS,
-                OptionsPricingRecommender,
-                STRIKE_GRID_USD,
-                build_premium_directive,
-                validate_directive_integrity,
-            )
-
-            class _MacroProxy:
-                def __init__(self, vix=15.0, regime="RISK ON") -> None:
-                    self.vix = vix
-                    self.market_regime = regime
-
-            # ── Check 1: full row hydration on synthetic bars ─────────────
-            rng = np.random.default_rng(42)
-            n = 252
-            returns = rng.normal(0.0005, 0.012, size=n)
-            close = 100 * np.exp(np.cumsum(returns))
-            idx = pd.date_range("2024-01-01", periods=n, freq="B")
-            bars = pd.DataFrame(
-                {
-                    "Open": close * 0.999,
-                    "High": close * 1.005,
-                    "Low": close * 0.995,
-                    "Close": close,
-                    "Volume": rng.integers(1_000_000, 5_000_000, size=n),
-                },
-                index=idx,
-            )
-            row = build_premium_directive(
-                "GRAVITY_TEST",
-                bars,
-                spot_price=float(bars["Close"].iloc[-1]),
-                is_stale=False,
-                target_dte=30,
-                macro_dto=_MacroProxy(),
-            )
-            required = {
-                "Symbol", "Price", "Sigma_GARCH", "IVR_Proxy",
-                "Aroon_Oscillator", "Coppock_Curve", "Trend_Bias",
-                "Strategy", "Action", "Net_Premium", "Realizable_Daily_Theta",
-                "ATM_Delta", "ATM_Gamma", "ATM_Vega", "ATM_Theta_Daily",
-                "Legs", "Integrity_OK", "Integrity_Issues",
-            }
-            schema_ok = required.issubset(row.keys())
-            audit["checks"].append({
-                "check": "build_premium_directive hydrates the full column schema",
-                "passed": schema_ok,
-                "detail": f"missing={sorted(required - set(row.keys()))}",
-            })
-            all_pass = all_pass and schema_ok
-
-            # ── Check 2: high IVR + bullish → Put Credit Spread, $0.50 grid ──
-            rec = OptionsPricingRecommender(stock_price=100.0)
-            d_pcs = rec.generate_strategy_pricing_matrix(
-                true_ivr=75.0, current_iv=0.30, trend_bias="Bullish",
-                target_dte=30, vrp=None, macro_dto=_MacroProxy(),
-            )
-            grid_ok = all(
-                abs(float(l["Strike"]) / STRIKE_GRID_USD - round(float(l["Strike"]) / STRIKE_GRID_USD)) < 1e-6
-                for l in d_pcs["Legs"]
-            )
-            strategy_ok = d_pcs["Strategy"] == "Put Credit Spread"
-            audit["checks"].append({
-                "check": "high IVR + bullish → Put Credit Spread with every strike on $0.50 grid",
-                "passed": strategy_ok and grid_ok,
-                "detail": f"strategy={d_pcs['Strategy']!r}, strikes={[l['Strike'] for l in d_pcs['Legs']]}",
-            })
-            all_pass = all_pass and strategy_ok and grid_ok
-
-            # ── Check 3: short/long deltas land within ±0.05 of target ─────
-            short_leg = next(l for l in d_pcs["Legs"] if l["Side"] == "Short")
-            long_leg = next(l for l in d_pcs["Legs"] if l["Side"] == "Long")
-            tgt_s = EXPECTED_DELTA_TARGETS[("Put Credit Spread", "Short", "Put")]
-            tgt_l = EXPECTED_DELTA_TARGETS[("Put Credit Spread", "Long", "Put")]
-            delta_ok = (
-                abs(float(short_leg["Delta"]) - tgt_s) <= 0.05
-                and abs(float(long_leg["Delta"]) - tgt_l) <= 0.05
-            )
-            audit["checks"].append({
-                "check": "Put Credit Spread leg deltas within ±0.05 of (-0.30, -0.15) targets",
-                "passed": delta_ok,
-                "detail": f"short_delta={short_leg['Delta']:+.3f} target={tgt_s:+.2f}; "
-                          f"long_delta={long_leg['Delta']:+.3f} target={tgt_l:+.2f}",
-            })
-            all_pass = all_pass and delta_ok
-
-            # ── Check 4: validate_directive_integrity catches off-grid strike ──
-            bad = {
-                "Strategy": "Put Credit Spread", "Action": "Sell to Open",
-                "Legs": [
-                    {"Side": "Short", "Type": "Put", "Strike": 95.37, "Price": 1.5, "Delta": -0.30},
-                    {"Side": "Long", "Type": "Put", "Strike": 90.00, "Price": 0.5, "Delta": -0.15},
-                ],
-                "Net_Premium": 1.0, "Realizable_Daily_Theta": 0.02,
-            }
-            v_bad = validate_directive_integrity(bad)
-            v_good = validate_directive_integrity(d_pcs)
-            integrity_ok = (not v_bad["ok"]) and v_good["ok"]
-            audit["checks"].append({
-                "check": "validate_directive_integrity flags off-grid strike but accepts engine output",
-                "passed": integrity_ok,
-                "detail": f"bad.ok={v_bad['ok']}, bad.issues={v_bad['issues'][:2]}; good.ok={v_good['ok']}",
-            })
-            all_pass = all_pass and integrity_ok
-
-            # ── Check 5: regime gate fires Cash/Wait under VIX > 30 ──────────
-            d_vix = rec.generate_strategy_pricing_matrix(
-                true_ivr=80.0, current_iv=0.45, trend_bias="Bullish",
-                target_dte=30, vrp=None, macro_dto=_MacroProxy(vix=35.0),
-            )
-            gate_vix_ok = d_vix["Strategy"] == "Cash" and d_vix["Action"] == "Wait"
-            audit["checks"].append({
-                "check": "regime gate degrades high-IVR opportunity to Cash/Wait when VIX > 30",
-                "passed": gate_vix_ok,
-                "detail": f"strategy={d_vix['Strategy']!r}, action={d_vix['Action']!r}",
-            })
-            all_pass = all_pass and gate_vix_ok
-
-            # ── Check 6: regime gate fires Cash/Wait under CREDIT EVENT ─────
-            d_ce = rec.generate_strategy_pricing_matrix(
-                true_ivr=80.0, current_iv=0.45, trend_bias="Neutral",
-                target_dte=30, vrp=None, macro_dto=_MacroProxy(regime="CREDIT EVENT"),
-            )
-            gate_ce_ok = d_ce["Strategy"] == "Cash"
-            audit["checks"].append({
-                "check": "regime gate degrades high-IVR opportunity to Cash/Wait in CREDIT EVENT",
-                "passed": gate_ce_ok,
-                "detail": f"strategy={d_ce['Strategy']!r}, action={d_ce['Action']!r}",
-            })
-            all_pass = all_pass and gate_ce_ok
-
-            # ── Check 7: low IVR + bullish → Call Debit Spread (buying vol) ──
-            d_low = rec.generate_strategy_pricing_matrix(
-                true_ivr=20.0, current_iv=0.18, trend_bias="Bullish",
-                target_dte=30, vrp=None, macro_dto=_MacroProxy(),
-            )
-            low_ok = d_low["Strategy"] == "Call Debit Spread"
-            audit["checks"].append({
-                "check": "low IVR + bullish → Call Debit Spread (premium-buying, not selling)",
-                "passed": low_ok,
-                "detail": f"strategy={d_low['Strategy']!r}",
-            })
-            all_pass = all_pass and low_ok
-
-            audit["overall_pass"] = all_pass
-            audit["status"] = "PASSED" if all_pass else "FAILED"
-        except Exception as exc:
-            audit["status"] = f"Execution Error: {exc}"
-            audit["error"] = str(exc)
-            audit["overall_pass"] = False
-
-        self.report["step_38_options_matrix_integrity_audit"] = audit
 
     def run_brinson_fachler_attribution_audit(self) -> None:
         """Step 40 — Brinson-Fachler Attribution UI ↔ Engine wiring audit.

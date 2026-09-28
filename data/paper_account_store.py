@@ -130,19 +130,19 @@ def _bs_price_per_share(
     spot: float, strike: float, exp_date: date, opt_type: str, iv: float, now: datetime
 ) -> Optional[float]:
     try:
-        from pilots.options_risk import calculate_black_scholes_greeks
+        from data.option_symbols import black_scholes_price
 
         expiry_dt = datetime.combine(exp_date, datetime.min.time()).replace(
             hour=20, tzinfo=timezone.utc  # 16:00 ET close, approx.
         )
         now_utc = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
         t_years = max(0.0, (expiry_dt - now_utc).total_seconds()) / (365.0 * 86400.0)
-        bs = calculate_black_scholes_greeks(
+        price = black_scholes_price(
             spot=spot, strike=float(strike), t_years=t_years, sigma=iv,
             option_type="call" if str(opt_type).lower().startswith("c") else "put",
             r=float(getattr(settings, "OPTIONS_RISK_FREE_RATE", 0.045)),
         )
-        return _positive_finite(bs.get("price"))
+        return _positive_finite(price)
     except Exception:  # noqa: BLE001
         return None
 

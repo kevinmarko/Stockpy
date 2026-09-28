@@ -12,16 +12,16 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 371,
-    "no_op": 9,
-    "restart_required": 97,
+    "live_safe": 369,
+    "no_op": 10,
+    "restart_required": 98,
     "total": 477
   },
   "dynamic_sites": [
     {
       "expr": "getattr(_rh_settings, _MISSING_ATTR, None)",
       "file": "Gravity AI Review Suite.py",
-      "line": 2738,
+      "line": 2674,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -110,7 +110,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 438,
+  "files_scanned": 439,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -246,7 +246,6 @@
     "FORECAST_BACKFILL_DEADLINE_SECONDS",
     "FORECAST_BACKFILL_ENABLED",
     "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED",
-    "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
     "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
     "FORECAST_DRIFT_SHRINKAGE",
     "FORECAST_MAX_CONCURRENCY",
@@ -335,7 +334,6 @@
     "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS",
     "META_LABELING_ENABLED",
     "MULTIFACTOR_MICROCAP_THRESHOLD",
-    "MULTI_BROKER_GATEWAY_ENABLED",
     "NEWS_EARNINGS_DAMPEN_DAYS",
     "NEWS_EARNINGS_SUPPRESS_HOURS",
     "NEWS_HISTORY_CAPTURE_ENABLED",
@@ -489,6 +487,7 @@
     "CIRCUIT_BREAKER_ENABLED",
     "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
     "FIX_GATEWAY_ENABLED",
+    "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
     "GOOGLE_TRENDS_OVERLAP_DAYS",
     "GOOGLE_TRENDS_WINDOW_DAYS",
     "OPTIONS_EARNINGS_CRUSH_ENABLED",
@@ -498,15 +497,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 879,
+    "attr": 878,
     "factory_param": 4,
-    "getattr_const": 393,
+    "getattr_const": 390,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 278,
     "factory_param": 4,
-    "getattr_const": 232,
+    "getattr_const": 230,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -1815,7 +1814,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "scripts/export_notebooklm.py:152",
+        "site": "scripts/export_notebooklm.py:153",
         "via": []
       }
     ],
@@ -2374,7 +2373,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6878",
+        "site": "investyo_mcp_server.py:6406",
         "via": []
       }
     ],
@@ -2394,7 +2393,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6823",
+        "site": "investyo_mcp_server.py:6351",
         "via": []
       }
     ],
@@ -2434,7 +2433,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6831",
+        "site": "investyo_mcp_server.py:6359",
         "via": []
       }
     ],
@@ -2446,6 +2445,17 @@
           "init_self_assign"
         ],
         "site": "ml/forecast_backfill.py:172",
+        "via": []
+      }
+    ],
+    "MULTI_BROKER_GATEWAY_ENABLED": [
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "pilots/feature_flags.py:90",
         "via": []
       }
     ],
@@ -2511,9 +2521,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "execution/options_paper_executor.py:178",
+        "site": "execution/options_paper_executor.py:192",
         "via": [
-          200
+          214
         ]
       }
     ],
@@ -2795,7 +2805,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:11083",
+        "site": "Gravity AI Review Suite.py:10834",
         "via": []
       }
     ],
@@ -3041,7 +3051,7 @@
   "restart_required_reason_counts": {
     "cross_module_init_helper": 101,
     "default_arg": 2,
-    "dynamic_name_literal_unattributable": 8,
+    "dynamic_name_literal_unattributable": 9,
     "indirect_init_helper_d1": 14,
     "init_body": 13,
     "init_self_assign": 51,
@@ -3056,6 +3066,7 @@
     "EDGAR_FULLTEXT_FORMS",
     "ETF_HOLDINGS_TICKERS",
     "FMP_ECON_INDICATORS",
+    "MULTI_BROKER_GATEWAY_ENABLED",
     "PROMPT_REGISTRY_REFRESH_SECONDS"
   ],
   "status": "ok"

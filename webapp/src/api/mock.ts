@@ -804,53 +804,6 @@ const RAW: Array<{
       ["ADBE", 18, 0.4],
     ],
   },
-  // Two real "Options"-category catalog Pilots (mirrors pilots/catalog.py --
-  // EVERY Options Pilot there is followable=False, since these are
-  // manually-executed options structures, not a simple auto-follow blend).
-  // Exercises: (a) the "Options" PilotCategory value actually appearing in
-  // Marketplace's category filter/rail with a real member, and (b) the
-  // followable:false disabled-Follow-button branch on PilotDetail/Comparison
-  // for an Options pilot specifically (previously only "regime-navigator",
-  // a Macro pilot, exercised followable:false at all).
-  {
-    id: "iron-condor",
-    name: "Iron Condor",
-    category: "Options",
-    description:
-      "Range-bound premium selling strategy combining credit spreads. No validated backtest exists for this structure yet -- metrics shown honestly as unavailable.",
-    followable: false,
-    headline: h(null, null, null, null, false, false),
-    long_only: false,
-    aum: 31800,
-    followers: 14,
-    hasCurve: false,
-    drift: 0,
-    vol: 0,
-    syms: [["SPY", 100, 0.5]],
-  },
-  {
-    id: "copula-stat-arb",
-    name: "Copula Stat Arb",
-    category: "Options",
-    description:
-      "Statistical arbitrage using copula-derived joint probabilities (KO/PEP pair). Honest FAIL: overfitting gate not cleared -- see Strategy Report Card for the full predicted-vs-actual detail.",
-    followable: false,
-    // Real measured numbers (docs/VALIDATION_STRATEGY_FIX_LOG.md 2026-08-19):
-    // Sharpe -0.455, PBO 0.000, DSR 0.246, MaxDD 35.1% -- worst drawdown lands
-    // on 2008-10-13 (the GFC). deployable=false is a genuine, documented FAIL,
-    // never softened.
-    headline: h(-0.455, 0.246, 0.0, 0.351, false, false),
-    long_only: false,
-    aum: 9600,
-    followers: 5,
-    hasCurve: true,
-    drift: -0.02,
-    vol: 0.31,
-    syms: [
-      ["KO", 50, 0.5],
-      ["PEP", 50, 0.48],
-    ],
-  },
 ];
 
 const CATALOG: MockPilot[] = RAW.map((r) => {
@@ -5184,7 +5137,7 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     value: false,
     default: false,
     description:
-      "Enables multi-broker smart routing via MultiBrokerGateway in broker execution tools (broker_live_execution_mcp.py).",
+      "RETIRED (2026-09, step 4a): read nowhere. The MultiBrokerGateway branch was removed from broker_live_execution_mcp.py with the options desk; brokers always resolve through execution.broker_selection. The field itself is removed in step 4f.",
   },
   // -- Diagnostic & Data Features (read-only measurement/data-source
   // master switches, feed no scoring or sizing decision) --
@@ -8076,7 +8029,6 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
   // The live STRATEGY_REGISTRY from scripts/refresh_validations.py, kept in
   // sync with commandParse.ts's REGISTERED_STRATEGIES constant on purpose.
   strategy_registry: [
-    "options_flow_sentiment",
     "rsi2_mean_reversion",
     "timeseries_momentum",
     "macd_trend",
@@ -8095,38 +8047,8 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
     "signal_replay_balanced_blend",
     "sector_quality_rank",
     "lgbm_ranker",
-    "vrp_premium_selling",
-    "vol_mispricing",
-    "put_credit_spread",
-    "call_credit_spread",
-    "call_debit_spread",
-    "put_debit_spread",
-    "covered_call",
     "pairs_trading",
-    "copula_stat_arb",
     "aroon_trend",
-  ],
-  // The live STANDARD_OPTIONS_STRATEGIES from validation/options_harness.py --
-  // validation.harness's bulk (--strategies) mode only supports these.
-  options_strategy_registry: [
-    "Bear Put Spread",
-    "Bull Call Spread",
-    "Call Credit Spread",
-    "Iron Condor",
-    "Long Straddle",
-    "Put Credit Spread",
-  ],
-  // The subset of strategy_registry above that's actually production-gated
-  // (VRP/IVR/VIX/trend-bias) via validation/options_selling_backtest.py --
-  // what the Paper Broker would really trade, unlike options_strategy_registry's
-  // naive/ungated shapes above.
-  paper_broker_options_strategy_registry: [
-    "call_credit_spread",
-    "call_debit_spread",
-    "covered_call",
-    "put_credit_spread",
-    "put_debit_spread",
-    "vrp_premium_selling",
   ],
   commands: [
     {
@@ -8214,40 +8136,6 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
           arg_kind: "optional",
           metavar: null,
           takes_value: true,
-        },
-        {
-          name: "--strategies",
-          aliases: ["--strategies"],
-          description:
-            "Comma-separated OPTIONS strategy names to validate in bulk (mutually exclusive with --strategy).",
-          default: null,
-          choices: null,
-          required: false,
-          arg_kind: "optional",
-          metavar: null,
-          takes_value: true,
-        },
-        {
-          name: "--workers",
-          aliases: ["--workers", "-w"],
-          description: "Number of concurrent workers for bulk (--strategies) validation (default: 1).",
-          default: 1,
-          choices: null,
-          required: false,
-          arg_kind: "optional",
-          metavar: null,
-          takes_value: true,
-        },
-        {
-          name: "--json",
-          aliases: ["--json"],
-          description: "In bulk mode, also print one machine-readable JSON line.",
-          default: false,
-          choices: null,
-          required: false,
-          arg_kind: "optional",
-          metavar: null,
-          takes_value: false,
         },
       ],
     },
@@ -9378,58 +9266,22 @@ export const mockApi = {
         },
       },
       {
-        pilot_id: "copula-stat-arb",
-        name: "Copula Stat Arb",
-        category: "Options",
-        is_pilot: true,
-        predicted: {
-          // Real measured numbers (docs/VALIDATION_STRATEGY_FIX_LOG.md
-          // 2026-08-19): an honest, documented FAIL -- worst drawdown lands
-          // on 2008-10-13 (the GFC). `reason` is null here (not a fabricated
-          // "why" string) because the backend's `_predicted_side` only ever
-          // populates `reason` when a validated backtest is MISSING for this
-          // pilot -- when one exists (as it does here), `deployable: false`
-          // speaks for itself.
-          sharpe: -0.455,
-          max_drawdown: 0.351,
-          pbo: 0.0,
-          dsr: 0.246,
-          deployable: false,
-          reason: null,
-          n_trials: 2500,
-          is_options_selling: false,
-          stress_gate_passed: null,
-          report_date: new Date().toISOString(),
-        },
-        actual: {
-          realized_sharpe_proxy: 0.12,
-          max_cumulative_drawdown_usd: 45000,
-          trade_count: 118,
-          win_rate: 0.45,
-          avg_realized_pnl_pct: -0.01,
-          total_realized_pnl_usd: -5000,
-          first_exit_ts: "2024-01-01T00:00:00Z",
-          last_exit_ts: "2024-06-01T00:00:00Z",
-          reason: null,
-        },
-      },
-      {
         pilot_id: "iron-condor",
         name: "Iron Condor",
-        category: "Options",
-        is_pilot: true,
-        // No registry key (`validation_strategy_id=None` in
-        // pilots/catalog.py) -- the backend's `_predicted_side` returns the
-        // fully-nulled shape with this EXACT reason string; every other
-        // field (including `is_options_selling`) is null too, never a
-        // fabricated `true` while the rest of the row is honestly unknown.
+        category: "Retired",
+        is_pilot: false,
+        // A retired options Pilot (removed from pilots/catalog.py with the
+        // options desk, 2026-09 step 4a). Historical paper trades still
+        // attribute here; the backend's retired-bucket branch returns the
+        // fully-nulled predicted shape with this EXACT reason string, never
+        // a fabricated backtest.
         predicted: {
           sharpe: null,
           max_drawdown: null,
           pbo: null,
           dsr: null,
           deployable: null,
-          reason: "no validated backtest for this pilot",
+          reason: "retired options pilot (options desk removed 2026-09)",
           n_trials: null,
           is_options_selling: null,
           stress_gate_passed: null,

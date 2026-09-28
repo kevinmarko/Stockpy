@@ -6,6 +6,7 @@ from pilots.strategy_report_card import (
     strategy_report_card_rows,
     MIN_TRADES_FOR_VERDICT,
     LEGACY_STRATEGY_ID_ALIASES,
+    RETIRED_OPTIONS_PILOT_NAMES,
 )
 from pilots.catalog import Pilot, list_pilots
 
@@ -42,16 +43,22 @@ def test_all_legacy_aliases_are_present_and_correct():
     }
     assert LEGACY_STRATEGY_ID_ALIASES == expected
 
-    # Belt-and-suspenders: every alias VALUE must resolve to a real,
-    # currently-registered pilots.catalog Pilot id -- catches a future
-    # catalog rename that silently orphans this alias map too.
-    real_pilot_ids = {p.id for p in list_pilots()}
+    # Belt-and-suspenders: every alias VALUE must resolve to a known id --
+    # a live pilots.catalog Pilot, or one of the options Pilots retired with
+    # the options desk (2026-09, step 4a), which still get a named, honestly
+    # labelled retired row so historical paper trades keep attributing.
+    known_ids = {p.id for p in list_pilots()} | set(RETIRED_OPTIONS_PILOT_NAMES)
     for legacy, canonical in LEGACY_STRATEGY_ID_ALIASES.items():
-        assert canonical in real_pilot_ids, (
+        assert canonical in known_ids, (
             f"LEGACY_STRATEGY_ID_ALIASES[{legacy!r}] = {canonical!r} does not "
-            "match any real pilots.catalog Pilot id -- this would silently "
+            "match any live or retired Pilot id -- this would silently "
             "orphan historical paper-trade data into its own bucket."
         )
+
+
+def test_retired_options_pilots_are_not_live_catalog_pilots():
+    live_ids = {p.id for p in list_pilots()}
+    assert not (set(RETIRED_OPTIONS_PILOT_NAMES) & live_ids)
 
 
 @patch("pilots.strategy_report_card.ValidationHistoryStore")
@@ -85,8 +92,8 @@ def test_strategy_report_card_rows(mock_paper, mock_validation):
         for _ in range(12)
     ]
     
-    # 2. validation_strategy_id=None Pilot (e.g., "earnings-crush")
-    # Will check if "earnings-crush" is a pilot (it is, per catalog)
+    # 2. validation_strategy_id=None Pilot (any live catalog Pilot without a
+    # registered backtest)
     
     # 3. zero-paper-trade Pilot (any pilot not in trades)
     
@@ -149,8 +156,8 @@ def test_strategy_report_card_rows(mock_paper, mock_validation):
     assert tf["actual"]["total_realized_pnl_usd"] == 1400.0
 
     # 2. validation_strategy_id=None Pilot
-    assert "earnings-crush" in rows_by_id
-    ec = rows_by_id["earnings-crush"]
+    none_pilot = next(p for p in list_pilots() if p.validation_strategy_id is None)
+    ec = rows_by_id[none_pilot.id]
     assert ec["predicted"]["reason"] == "no validated backtest for this pilot"
     assert ec["predicted"]["sharpe"] is None
 
@@ -182,20 +189,28 @@ def test_strategy_report_card_rows(mock_paper, mock_validation):
     assert ofs["actual"]["reason"] is None
     assert ofs["actual"]["win_rate"] == 1.0 # 10 positive trades
 
-    # 5. legacy-string DB row ("Copula Stat Arb") resolves to "copula-stat-arb"
+    # 5. legacy-string DB row ("Copula Stat Arb") resolves to "copula-stat-arb",
+    # now a retired options Pilot: an honestly-labelled non-Pilot row with no
+    # predicted (backtest) side.
     assert "copula-stat-arb" in rows_by_id
     csa = rows_by_id["copula-stat-arb"]
+    assert csa["is_pilot"] is False
+    assert csa["category"] == "Retired"
+    assert csa["name"] == "Copula Stat Arb"
+    assert csa["predicted"]["reason"].startswith("retired options pilot")
+    assert csa["predicted"]["sharpe"] is None
     assert csa["actual"]["trade_count"] == 10
     assert csa["actual"]["total_realized_pnl_usd"] == 500.0
 
     # 8. "Dispersion Arbitrage" (legacy free-text label) must resolve to the
-    # REAL canonical "dispersion-trading" Pilot bucket -- not an orphaned
-    # "Dispersion Arbitrage"/"dispersion-arbitrage" non-Pilot row.
+    # canonical "dispersion-trading" bucket (a retired options Pilot) -- not
+    # an orphaned "Dispersion Arbitrage"/"dispersion-arbitrage" row.
     assert "Dispersion Arbitrage" not in rows_by_id
     assert "dispersion-arbitrage" not in rows_by_id
     assert "dispersion-trading" in rows_by_id
     disp = rows_by_id["dispersion-trading"]
-    assert disp["is_pilot"] is True
+    assert disp["is_pilot"] is False
+    assert disp["category"] == "Retired"
     assert disp["actual"]["trade_count"] == 10
     assert disp["actual"]["total_realized_pnl_usd"] == 250.0
 
@@ -206,6 +221,7 @@ def test_strategy_report_card_rows(mock_paper, mock_validation):
     assert "0dte-momentum-breakout" not in rows_by_id
     assert "zero-dte-momentum-breakout" in rows_by_id
     zdte = rows_by_id["zero-dte-momentum-breakout"]
-    assert zdte["is_pilot"] is True
+    assert zdte["is_pilot"] is False
+    assert zdte["name"] == "0DTE Momentum Breakout"
     assert zdte["actual"]["trade_count"] == 10
     assert zdte["actual"]["total_realized_pnl_usd"] == 150.0

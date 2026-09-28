@@ -191,11 +191,11 @@ class AgenticForecastBackfiller:
         # Tickers for which no real provider (FMP nor CompositeProvider) returned
         # data. They are dropped from the run and recorded via the 3-strike rule.
         self.dropped_tickers: List[str] = []
-        # Backfill-only "pseudo-signal" modules -- e.g.
-        # ml/vrp_premium_selling_proxy_signal.py -- deliberately never
+        # Backfill-only "pseudo-signal" modules -- deliberately never
         # registered in signals.registry.global_registry (so they can never
-        # reach live production scoring), populated in
-        # step_3_generate_primary_signals when their own opt-in flag is set.
+        # reach live production scoring). None are populated today: the one
+        # user, the quarantined VRP premium-selling proxy, was removed with
+        # the options desk (2026-09, step 4a).
         # See _get_module()'s docstring for why every other step's module
         # lookup must go through it instead of global_registry.get() directly.
         self._proxy_modules: Dict[str, Any] = {}
@@ -363,17 +363,6 @@ class AgenticForecastBackfiller:
             from data.sneqr_quality_facts import fetch_sneqr_quality_facts, load_ticker_sectors
             ticker_sectors = load_ticker_sectors()
 
-        # IVR_Proxy/VRP_Proxy -- OHLCV-only, no network -- realized-vol-derived
-        # stand-ins for the real options-chain-derived True_IVR/VRP, which are
-        # structurally unavailable from this repo's permitted data sources
-        # (see docs/known_issues/vrp_premium_selling_no_historical_iv.md).
-        # Consumed ONLY by ml/vrp_premium_selling_proxy_signal.py's
-        # quarantined vrp_premium_selling_proxy model_type -- NEVER by the
-        # real signals/vrp_premium_selling.py.
-        vrp_proxy_enabled = getattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", False)
-        IVR_PROXY_LOOKBACK_DAYS = 252  # matches calculate_true_ivr's own lookback_days=252 default
-        VRP_PROXY_RV_WINDOW_DAYS = 60  # matches validation/options_selling_backtest.py's LONG_TERM_VOL_WINDOW
-
         for ticker in self.prices.columns:
             if ticker not in self.volumes.columns:
                 continue
@@ -469,24 +458,6 @@ class AgenticForecastBackfiller:
                 # per-cycle path already uses) -- never a fabricated real
                 # sector name.
                 df["sector"] = ticker_sectors.get(ticker, "N/A")
-
-            if vrp_proxy_enabled:
-                # IVR_Proxy: trailing-lookback percentile rank of GARCH_Vol
-                # (this pipeline's own vectorized EWMA-GARCH estimate) --
-                # `.rolling(window).rank(pct=True)` ranks each date's value
-                # against its own trailing window, the exact percentile-rank
-                # semantics calculate_true_ivr computes against a real
-                # dated-IV history, just substituting GARCH_Vol for IV.
-                df["IVR_Proxy"] = (
-                    df["GARCH_Vol"].rolling(IVR_PROXY_LOOKBACK_DAYS).rank(pct=True) * 100.0
-                )
-                # VRP_Proxy: a trailing realized-vol reading in place of a
-                # real IV reading, matching volatility/iv_engine.get_vrp's
-                # exact `current_iv - garch_vol` formula and the identical
-                # proxy convention validation/options_selling_backtest.py
-                # already uses (LONG_TERM_VOL_WINDOW=60).
-                rv60 = df["Return"].rolling(VRP_PROXY_RV_WINDOW_DAYS).std() * np.sqrt(252)
-                df["VRP_Proxy"] = rv60 - df["GARCH_Vol"]
 
             df["Ticker"] = ticker
             features_list.append(df)
@@ -796,34 +767,6 @@ class AgenticForecastBackfiller:
             except Exception as e:
                 logger.warning(f"Error computing vectorized signal for {name}: {e}")
                 self._mark_eligibility(name, reason=f"compute_error:{type(e).__name__}: {e}")
-
-        # Backfill-only quarantined proxy signal(s) -- deliberately NOT part
-        # of the global_registry loop above. See
-        # ml/vrp_premium_selling_proxy_signal.py's module docstring and
-        # settings.FORECAST_BACKFILL_VRP_PROXY_ENABLED's own docstring for
-        # the full scope statement (never touches signals/vrp_premium_selling.py,
-        # never registered in signals.registry.global_registry, structurally
-        # excluded from ml/forecast_backfill_registry_bridge.py::
-        # BACKFILL_ELIGIBLE_SIGNAL_IDS so it can never reach live inference).
-        if getattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", False):
-            from ml.vrp_premium_selling_proxy_signal import VrpPremiumSellingProxySignal
-
-            proxy_module = VrpPremiumSellingProxySignal()
-            if not self.strategy_ids or proxy_module.name in self.strategy_ids:
-                self._proxy_modules[proxy_module.name] = proxy_module
-                self._mark_eligibility(proxy_module.name)
-                try:
-                    out_df = proxy_module.compute_vectorized(self.data, context)
-                    if "score" in out_df.columns:
-                        signal_col = np.sign(out_df["score"]).replace(0, np.nan)
-                        self.data[f"{proxy_module.name}_Signal"] = signal_col
-                        for feat in proxy_module.meta_label_features:
-                            if feat in out_df.columns:
-                                self.data[f"{proxy_module.name}_{feat}"] = out_df[feat]
-                        self.active_strategies.append(proxy_module.name)
-                except Exception as e:
-                    logger.warning(f"Error computing vectorized signal for {proxy_module.name}: {e}")
-                    self._mark_eligibility(proxy_module.name, reason=f"compute_error:{type(e).__name__}: {e}")
 
         logger.info(f"[+] Step 3 complete. Primary signals generated for: {self.active_strategies}")
         return self.data

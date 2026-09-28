@@ -7,8 +7,9 @@ pack for NotebookLM ingestion:
     (macro/portfolio/follows), plus a trailing note pointing at the 5
     modular files below.
   - ``output/notebooklm/01_macro_and_regime.md`` -- macro & regime detail.
-  - ``output/notebooklm/02_portfolio_and_greeks.md`` -- portfolio & options
-    Greeks detail.
+  - ``output/notebooklm/02_portfolio_and_greeks.md`` -- portfolio holdings
+    detail (the options-Greeks half was removed with the options desk in
+    2026-09, step 4a; the filename is kept for stability).
   - ``output/notebooklm/03_strategy_signals_and_picks.md`` -- strategy
     signals & picks.
   - ``output/notebooklm/04_trade_journal_and_ledger.md`` -- the trade
@@ -81,7 +82,7 @@ _MODULAR_SECTION_FILENAMES: Tuple[str, ...] = (
 # "plain" sections receive (out_dir) alone).
 _SECTION_SPECS: Tuple[Tuple[str, str, str, str], ...] = (
     ("macro", "01_macro_and_regime.md", "Macro & Regime Context", "store"),
-    ("portfolio", "02_portfolio_and_greeks.md", "Portfolio & Options Greeks", "store"),
+    ("portfolio", "02_portfolio_and_greeks.md", "Portfolio Holdings & Allocation", "store"),
     ("signals", "03_strategy_signals_and_picks.md", "Strategy Signals & Picks", "plain"),
     ("trades", "04_trade_journal_and_ledger.md", "Trade Journal & Ledger", "plain"),
     ("options", "05_options_directives_and_matrix.md", "Options Directives & Pricing Matrix", "plain"),
@@ -467,40 +468,32 @@ def generate_macro_regime_source(store, output_dir: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Generator 2: Portfolio & Greeks (02_portfolio_and_greeks.md)
+# Generator 2: Portfolio holdings (02_portfolio_and_greeks.md)
 # ---------------------------------------------------------------------------
 
 def generate_portfolio_greeks_source(store, output_dir: Path) -> str:
-    """Generate the Portfolio Holdings & Net Risk Greeks source document
-    (02_portfolio_and_greeks.md).
+    """Generate the Portfolio Holdings & Allocation source document
+    (02_portfolio_and_greeks.md -- filename kept for stability).
 
     ``store`` is an already-constructed ``HistoricalStore(readonly=True)``,
     or ``None`` if construction failed upstream. ``output_dir`` is accepted
     for signature parity with the other modular-knowledge-pack generators.
 
-    Three independent sections, each with its own try/except so a failure
+    Two independent sections, each with its own try/except so a failure
     in one can never blank another:
 
     1. Account Liquidity & Capital Summary -- reuses the existing
        ``store.latest_account_snapshot()`` -> ``serialize_portfolio()`` path.
-    2. Net Portfolio Greeks & Beta Sensitivity -- calls
-       ``pilots.paper_broker.get_portfolio_greeks()`` (lazy import, NO
-       arguments passed to it -- it resolves its own store + SPY quote
-       internally). This is the fix for a CONFIRMED bug: a now-abandoned
-       prior attempt at this feature called
-       ``pilots.options_risk.calculate_portfolio_greeks()`` directly with
-       zero arguments, which silently takes the "no positions" branch
-       (``positions`` stays ``None``) and returns an all-zero-looking result
-       with no exception and no indication anything is wrong, even against
-       a real, sizeable account (CONSTRAINT #4 violation). The correct
-       wiring already lives in ``pilots.paper_broker.get_portfolio_greeks``,
-       so it is called directly rather than reinvented here.
-    3. Open Positions & Basis -- a markdown table over the *same* portfolio
+    2. Open Positions & Basis -- a markdown table over the *same* portfolio
        payload used in section 1 (not re-fetched), so it only renders when
        section 1 actually succeeded.
+
+    The former "Net Portfolio Greeks & Beta Sensitivity" section was removed
+    with the options desk (2026-09, step 4a); nothing here imports an
+    options module.
     """
     lines: List[str] = []
-    lines.append("# Portfolio Holdings, Allocation & Net Risk Greeks")
+    lines.append("# Portfolio Holdings & Allocation")
     lines.append(f"**Generated At (UTC):** {datetime.now(timezone.utc).isoformat()}")
     lines.append("")
 
@@ -530,62 +523,17 @@ def generate_portfolio_greeks_source(store, output_dir: Path) -> str:
         if source:
             section_lines.append(f"- **Source**: {source}")
         lines.extend(section_lines)
-        # Only commit `port` (used by section 3 below) once the whole
+        # Only commit `port` (used by section 2 below) once the whole
         # section rendered successfully.
         port = port_local
     except Exception as exc:
-        logger.warning(f"Failed to fetch portfolio snapshot for Greeks export: {exc}")
+        logger.warning(f"Failed to fetch portfolio snapshot for NotebookLM export: {exc}")
         lines.append("Portfolio snapshot is unavailable.")
         port = None
     lines.append("")
 
     # ------------------------------------------------------------------
-    # 2. Net Portfolio Greeks & Beta Sensitivity
-    # ------------------------------------------------------------------
-    lines.append("## Net Portfolio Greeks & Beta Sensitivity")
-    lines.append(
-        "_Greeks are computed over the platform's paper-trading engine "
-        "positions (`PaperAccountStore`), which is a separate book from "
-        "the live brokerage account summarized above -- the two may hold "
-        "different positions._"
-    )
-    try:
-        # Lazy import matching this repo's convention for optional/heavy
-        # dependencies. Deliberately calling the ALREADY-CORRECT wiring
-        # instead of `pilots.options_risk.calculate_portfolio_greeks()`
-        # directly -- see the docstring above for why that call would
-        # silently fabricate an all-zero-looking result (CONSTRAINT #4).
-        from pilots.paper_broker import get_portfolio_greeks
-        greeks = get_portfolio_greeks()
-
-        section_lines = []
-        section_lines.append(f"- **Net Delta (Shares)**: {_fmt_num(greeks.get('net_delta_shares'))}")
-        section_lines.append(f"- **Net Dollar Delta ($)**: {_fmt_money(greeks.get('net_dollar_delta'))}")
-        section_lines.append(f"- **Net Gamma**: {_fmt_num(greeks.get('net_gamma'))}")
-        section_lines.append(f"- **Net Daily Theta ($/day)**: {_fmt_money(greeks.get('net_theta_daily'))}")
-        section_lines.append(f"- **Net Vega (1% IV Shock)**: {_fmt_money(greeks.get('net_vega_1pct'))}")
-        section_lines.append(f"- **Beta-Weighted SPY Delta**: {_fmt_num(greeks.get('beta_weighted_delta_spy'))}")
-        spy_spot = greeks.get("spy_spot")
-        if spy_spot is not None:
-            section_lines.append(f"- **Benchmark SPY Spot**: {_fmt_money(spy_spot)}")
-        missing = greeks.get("positions_with_missing_data") or []
-        if missing:
-            section_lines.append(
-                f"- **Positions with Missing Greeks Data**: {', '.join(str(m) for m in missing)}"
-            )
-        estimated_beta = greeks.get("symbols_with_estimated_beta") or []
-        if estimated_beta:
-            section_lines.append(
-                f"- **Symbols Using Estimated Beta**: {', '.join(str(s) for s in estimated_beta)}"
-            )
-        lines.extend(section_lines)
-    except Exception as exc:
-        logger.warning(f"Failed to compute portfolio Greeks for NotebookLM export: {exc}")
-        lines.append("Portfolio Greeks calculation is currently unavailable.")
-    lines.append("")
-
-    # ------------------------------------------------------------------
-    # 3. Open Positions & Basis
+    # 2. Open Positions & Basis
     # ------------------------------------------------------------------
     lines.append("## Open Positions & Basis")
     try:
@@ -1223,8 +1171,8 @@ def generate_consolidated_source(store, output_dir: Path) -> str:
     lines.append("## Modular Sources Note")
     lines.append(
         "This consolidated file summarizes core account/macro/follows "
-        "state. For deeper per-domain detail (regime diagnostics, options "
-        "Greeks, strategy signals, the trade ledger, and the options "
+        "state. For deeper per-domain detail (regime diagnostics, portfolio "
+        "holdings, strategy signals, the trade ledger, and the options "
         f"pricing matrix), see the modular files under `{output_dir / 'notebooklm'}`:"
     )
     lines.append("")

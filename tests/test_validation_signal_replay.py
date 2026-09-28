@@ -82,10 +82,12 @@ def _run_adapter(closes, sectors=None, ohlcv=None, store=None):
 # ---------------------------------------------------------------------------
 
 class TestReplayExcludedModules:
-    def test_excludes_exactly_six_modules(self) -> None:
+    def test_excludes_exactly_four_modules(self) -> None:
+        # vrp_premium_selling / options_flow_sentiment were dropped from this
+        # set in 2026-09 (step 4a): neither is registered any more (step 3d'),
+        # so excluding them was a no-op.
         assert _REPLAY_EXCLUDED_MODULES == {
             "news_catalyst", "lgbm_ranker", "forecast_alignment", "sector_quality_rank",
-            "vrp_premium_selling", "options_flow_sentiment",
         }
 
     def test_surviving_registry_has_fourteen_modules(self) -> None:

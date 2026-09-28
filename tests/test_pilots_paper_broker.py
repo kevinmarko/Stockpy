@@ -3,7 +3,7 @@ from contextlib import contextmanager, ExitStack
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
-from pilots.paper_broker import get_account, get_positions, get_orders, get_closed_trades, get_portfolio_greeks
+from pilots.paper_broker import get_account, get_positions, get_orders, get_closed_trades
 from settings import settings
 import api.pilots_api as pilots_api
 
@@ -69,33 +69,26 @@ def test_get_closed_trades(mock_store):
 # options_risk_fabricated_spy_spot.md).
 # ---------------------------------------------------------------------------
 
-@patch("pilots.paper_broker.PaperAccountStore")
-@patch("pilots.options_risk.calculate_portfolio_greeks")
-@patch("pilots.price_provider.get_current_price")
-def test_get_portfolio_greeks_threads_resolved_spy_spot(mock_get_price, mock_calc_greeks, mock_store):
-    mock_get_price.return_value = 642.17
-    mock_calc_greeks.return_value = {"beta_weighted_delta_spy": 0.0}
+def test_options_helpers_removed():
+    """The options helpers were deleted with the options desk (2026-09, step 4a);
+    pilots.paper_broker is equity-only and imports no options module."""
+    import ast
+    from pathlib import Path
 
-    get_portfolio_greeks()
+    import pilots.paper_broker as pb
 
-    mock_get_price.assert_called_once_with("SPY")
-    _, kwargs = mock_calc_greeks.call_args
-    assert kwargs.get("spy_spot") == 642.17
-
-
-@patch("pilots.paper_broker.PaperAccountStore")
-@patch("pilots.options_risk.calculate_portfolio_greeks")
-@patch("pilots.price_provider.get_current_price")
-def test_get_portfolio_greeks_passes_none_not_fabricated_price_when_spy_unresolvable(
-    mock_get_price, mock_calc_greeks, mock_store
-):
-    mock_get_price.return_value = 0.0  # get_current_price's own honest "unavailable" sentinel
-    mock_calc_greeks.return_value = {"beta_weighted_delta_spy": 0.0}
-
-    get_portfolio_greeks()
-
-    _, kwargs = mock_calc_greeks.call_args
-    assert kwargs.get("spy_spot") is None
+    for name in (
+        "get_portfolio_greeks",
+        "get_strategy_options_candidates",
+        "execute_strategy_options",
+        "manage_position_exits",
+        "execute_roll",
+        "execute_paper_order",
+    ):
+        assert not hasattr(pb, name), name
+    tree = ast.parse(Path(pb.__file__).read_text(encoding="utf-8"))
+    mods = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
+    assert not any("options" in m for m in mods), mods
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +98,6 @@ def test_get_portfolio_greeks_passes_none_not_fabricated_price_when_spy_unresolv
 _client = TestClient(pilots_api.app, client=("127.0.0.1", 54124))
 _CMD_TOKEN = "paper-broker-cmd-tok"
 _READ_TOKEN = "paper-broker-read-tok"
-
 
 
 @contextmanager
@@ -176,63 +168,6 @@ class TestPostPaperBrokerReset:
                 )
         assert resp.status_code == 200
         mock_store.reset_account.assert_called_once_with(starting_cash=None)
-
-
-# ---------------------------------------------------------------------------
-# POST /brokerage/options/order & execute_paper_order
-# ---------------------------------------------------------------------------
-
-
-class TestExecutePaperOrder:
-    def test_live_mode_returns_advisory_rejection(self):
-        from pilots.paper_broker import execute_paper_order
-        res = execute_paper_order("AAPL", is_live=True)
-        assert res["ok"] is False
-        assert "Advisory-Only" in res["message"]
-
-    @patch("pilots.paper_broker_options_order.PaperAccountStore")
-    def test_stock_order_by_dollar_amount(self, mock_store_cls):
-        from pilots.paper_broker import execute_paper_order
-        mock_store = mock_store_cls.return_value
-        mock_store.apply_fill.return_value = True
-
-        res = execute_paper_order(
-            "AGNC",
-            asset_type="stock",
-            side="buy",
-            dollar_amount=500.0,
-            limit_price=10.0,
-        )
-        assert res["ok"] is True
-        assert "50.00 shares" in res["message"]
-        mock_store.apply_fill.assert_called_once()
-        args, kwargs = mock_store.apply_fill.call_args
-        assert kwargs["symbol"] == "AGNC"
-        assert kwargs["qty"] == 50.0
-        assert kwargs["fill_price"] == 10.0
-
-    @patch("pilots.paper_broker_options_order.PaperAccountStore")
-    def test_option_order_single_leg(self, mock_store_cls):
-        from pilots.paper_broker import execute_paper_order
-        mock_store = mock_store_cls.return_value
-        mock_store.apply_fill.return_value = True
-
-        legs = [{
-            "contract": {"strike": 10.5, "ask": 0.15, "bid": 0.10, "lastPrice": 0.12},
-            "type": "put",
-            "action": "Buy"
-        }]
-
-        res = execute_paper_order(
-            "AGNC",
-            asset_type="option",
-            expiration="2026-08-14",
-            legs=legs,
-            quantity=2,
-        )
-        assert res["ok"] is True
-        assert "2 contract(s)" in res["message"]
-        mock_store.apply_fill.assert_called_once()
 
 
 class TestGetPaperBrokerClosedTradesEndpoint:

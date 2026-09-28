@@ -2,6 +2,8 @@
 
 > **2026-09 (step 3e):** the options-desk HTTP routes (`/pilots/options/*`, the options `/pilots/paper-broker/*` actions, `/pilots/ai/*`, `/pilots/portfolio/optimize/hrp-cvar`, `/pilots/execution/{optimize,fix,brokers}/*`, `/brokerage/options/order`, `/options`, `/symbols/{t}/options`, `/data/options/*`, `/metrics/options/*`, `/ws/risk/portfolio`) are removed. Mentions of them below are historical; the modules behind them move to `legacy/` in step 4. The live-trade approval routes under `/pilots/execution/` are kept.
 
+> **2026-09 (step 4a):** the MCP tools `get_options_directive`, `analyze_options_chain` and `scan_0dte_signals` are retired stubs (still registered, return a fixed retired message, never raise); `validate_order_compliance` keeps only its Kelly-cap check (the VRP regime half is gone). `broker_live_execution_mcp.py` no longer routes through `MultiBrokerGateway`, and `GET /commands` no longer returns the two options strategy registries. Entries below that describe the removed behavior are historical.
+
 > Part of the split-out `CLAUDE.md` System Architecture reference. See [../../CLAUDE.md](../../CLAUDE.md) for the index.
 
 - **observability/__init__.py** — Empty package marker.

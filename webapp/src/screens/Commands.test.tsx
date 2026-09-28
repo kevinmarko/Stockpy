@@ -600,17 +600,23 @@ describe("Commands screen — Run button", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("shows the Bulk Validate Options Strategies button when validation.harness is in the manifest, and clicking it opens Form Mode for that command", async () => {
+  it("does not render either options quick action against the default manifest (the options desk was removed in 2026-09, step 4a)", async () => {
     renderCommands();
     await screen.findByText("main.py");
 
-    const bulkButton = await screen.findByRole("button", {
-      name: /Bulk Validate Options Strategies/i,
-    });
-    fireEvent.click(bulkButton);
-
-    const modal = await screen.findByTestId("command-form-builder");
-    expect(within(modal).getByText("validation.harness")).toBeInTheDocument();
+    // The equity bulk-validate button still shows...
+    expect(
+      await screen.findByRole("button", { name: /Bulk Validate All Strategies/i })
+    ).toBeInTheDocument();
+    // ...but validation.harness has no --strategies option any more, and the
+    // manifest carries no paper_broker_options_strategy_registry, so neither
+    // options button renders.
+    expect(
+      screen.queryByRole("button", { name: /Bulk Validate Options Strategies/i })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Paper-Broker Realistic/i })
+    ).not.toBeInTheDocument();
   });
 
   it("does not render the Bulk Validate Options Strategies button when the manifest lacks validation.harness", async () => {
@@ -622,37 +628,6 @@ describe("Commands screen — Run button", () => {
     expect(
       screen.queryByRole("button", { name: /Bulk Validate Options Strategies/i })
     ).not.toBeInTheDocument();
-  });
-
-  it("shows the paper-broker-realistic Validate Options Strategies button, and clicking it opens Form Mode for refresh_validations.py pre-selected to only the paper-broker options names", async () => {
-    renderCommands();
-    await screen.findByText("main.py");
-
-    const realisticButton = await screen.findByRole("button", {
-      name: /Validate Options Strategies \(Paper-Broker Realistic\)/i,
-    });
-    fireEvent.click(realisticButton);
-
-    const modal = await screen.findByTestId("command-form-builder");
-    expect(within(modal).getByText("refresh_validations.py")).toBeInTheDocument();
-
-    const composed = within(modal).getByTestId("command-composed");
-    // The 6 real paper-broker options strategies are selected...
-    for (const name of [
-      "put_credit_spread",
-      "call_credit_spread",
-      "call_debit_spread",
-      "put_debit_spread",
-      "vrp_premium_selling",
-      "covered_call",
-    ]) {
-      expect(composed.textContent).toContain(name);
-    }
-    // ...but the rest of the full ~29-name equity/cross-sectional registry is
-    // NOT -- this is the whole point of the override (contrast with "Bulk
-    // Validate All Strategies", which pre-selects everything).
-    expect(composed.textContent).not.toContain("options_flow_sentiment");
-    expect(composed.textContent).not.toContain("rsi2_mean_reversion");
   });
 
   it("does not render the paper-broker-realistic button when the manifest's refresh_validations.py has no paper_broker_options_strategy_registry (older/degraded manifest)", async () => {

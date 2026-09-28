@@ -92,9 +92,10 @@ class FMPPaperBroker(BrokerBase):
         # 3. Multi-leg options execution branch
         if intent.legs:
             try:
-                # Lazy: equity paper trading must not depend on the options
-                # desk module (pilots/options_risk.py is slated for archive).
-                from pilots.options_risk import parse_option_symbol
+                # Self-contained parser (copied from the retired
+                # pilots/options_risk.py) so equity paper trading has no
+                # options-desk dependency.
+                from data.option_symbols import parse_option_symbol
 
                 parsed_legs = []
                 signed_prices = []

@@ -39,11 +39,8 @@ Public API (the only re-exports — keep this surface intentionally small):
 from __future__ import annotations
 
 __all__ = [
-    "ResearchCopilot",
-    "extract_strategy_metadata",
     "generate_alert_commentary",
     "generate_analyst_rationale",
-    "validate_ast_safety",
 ]
 
 def __getattr__(name):
@@ -53,7 +50,4 @@ def __getattr__(name):
     if name == "generate_alert_commentary":
         from llm.commentary import generate_alert_commentary
         return generate_alert_commentary
-    if name in ("ResearchCopilot", "validate_ast_safety", "extract_strategy_metadata"):
-        import llm.research_copilot as rc
-        return getattr(rc, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -3896,209 +3896,24 @@ def get_recommendation(symbol: str) -> str:
         return f"Failed to compute recommendation for {symbol}: {e!s}"
 
 
-class _MacroProxy:
-    """MacroEconomicDTO-shaped stub (.vix/.market_regime only). Mirrors
-    gui/panels/options_matrix.py::_MacroProxy / options_ondemand.py::_MacroProxy."""
-
-    def __init__(self, vix: float, market_regime: str):
-        self.vix = vix
-        self.market_regime = market_regime
+# The options desk was retired in 2026-09 (shrink-in-place steps 3-4). These
+# three tools stay registered so an MCP client that still calls them gets a
+# clean, explicit "retired" answer instead of an unknown-tool error. They never
+# import any options module and never raise.
+_OPTIONS_DESK_RETIRED_MESSAGE = (
+    "The options desk was retired from Stockpy in 2026-09 (shrink-in-place "
+    "steps 3-4). This tool no longer computes options analytics; the code is "
+    "archived under legacy/. No value was computed, so none is returned."
+)
 
 
 @mcp.tool()
 def get_options_directive(symbol: str) -> str:
     """
-    Runs the premium-selling directive engine (build_premium_directive) for one
-    symbol and returns the hydrated directive — Strategy/Action, Net Premium,
-    GARCH sigma, IVR proxy, trend bias, short/long strikes + deltas, ATM Greeks —
-    plus the integrity-validator verdict. If a regime gates it to Cash/Wait, that
-    is shown honestly. READ-ONLY analytics; NaN values render as N/A. No order code.
+    RETIRED (2026-09). The options premium-selling directive engine was removed
+    with the options desk. Returns a fixed retired message; never raises.
     """
-    import json
-    import math
-    import os
-
-    try:
-        from data.market_data import get_provider
-        from technical_options_engine import (
-            build_premium_directive,
-            validate_directive_integrity,
-        )
-
-        sym = symbol.upper().strip()
-        provider = get_provider()
-
-        bars = provider.get_intraday_bars(sym)
-        if bars is None or bars.empty:
-            return f"No bar data available for {sym}; cannot build options directive."
-
-        # Spot price + staleness from the latest quote, falling back to the last
-        # bar Close when the quote is unavailable (bars still let us build sigma).
-        spot_price = None
-        is_stale = True
-        try:
-            q = provider.get_latest_quote(sym)
-            if q is not None and q.price is not None and float(q.price) > 0:
-                spot_price = float(q.price)
-                is_stale = bool(getattr(q, "is_stale", True))
-        except Exception:
-            spot_price = None
-        if spot_price is None:
-            spot_price = float(bars["Close"].iloc[-1])
-            is_stale = True
-
-        # Macro proxy (vix/market_regime) so the VRP regime gate (VIX>=30 /
-        # CREDIT EVENT) fires the same way it does for every other production
-        # caller of build_premium_directive — sourced from the persisted
-        # output/state_snapshot.json, mirroring get_regime_status's own
-        # snapshot read above. Neutral defaults ("no override") when the
-        # snapshot is missing/malformed, never a fabricated stress signal.
-        _MACRO_DEFAULT_VIX = 15.0
-        _MACRO_DEFAULT_REGIME = "RISK ON"
-
-        snap = None
-        try:
-            from settings import settings as _settings
-
-            snap_path = os.path.join(str(_settings.OUTPUT_DIR), "state_snapshot.json")
-        except Exception:
-            snap_path = os.path.join("output", "state_snapshot.json")
-        if snap_path and os.path.exists(snap_path):
-            try:
-                with open(snap_path, "r", encoding="utf-8") as fh:
-                    snap = json.load(fh)
-            except Exception:
-                snap = None
-
-        vix_val = _MACRO_DEFAULT_VIX
-        regime_val = _MACRO_DEFAULT_REGIME
-        if isinstance(snap, dict):
-            raw_vix = snap.get("vix")
-            try:
-                vix_val = float(raw_vix) if raw_vix is not None else _MACRO_DEFAULT_VIX
-            except (TypeError, ValueError):
-                vix_val = _MACRO_DEFAULT_VIX
-            regime_val = str(snap.get("market_regime") or _MACRO_DEFAULT_REGIME)
-
-        macro_proxy = _MacroProxy(vix_val, regime_val)
-
-        # true_ivr_enabled is left at its default (None) — build_premium_directive
-        # reads settings.OPTIONS_TRUE_IVR_ENABLED itself, so this tool picks up
-        # the live flag with no extra plumbing here.
-        directive = build_premium_directive(
-            sym,
-            bars,
-            spot_price=spot_price,
-            is_stale=is_stale,
-            macro_dto=macro_proxy,
-            vrp=None,  # VRP requires an options chain — left None to skip that gate
-        )
-        if not isinstance(directive, dict) or not directive:
-            return f"Options directive engine returned no result for {sym}."
-
-        def _num(v):
-            try:
-                if v is None:
-                    return None
-                f = float(v)
-                return None if math.isnan(f) or math.isinf(f) else f
-            except (TypeError, ValueError):
-                return None
-
-        def _fmt(key, money=False, pct=False):
-            nv = _num(directive.get(key))
-            if nv is None:
-                # Non-numeric fields (Strategy, Action, Trend_Bias) pass through raw;
-                # a NaN float (e.g. Realizable_Daily_Theta on a non-credit strategy,
-                # honestly "not computed" per CONSTRAINT #4) must not render as "nan".
-                raw = directive.get(key)
-                if isinstance(raw, float) and math.isnan(raw):
-                    return "N/A"
-                return str(raw) if raw not in (None, "") else "N/A"
-            if money:
-                return f"${nv:,.2f}"
-            if pct:
-                return f"{nv:.4f}"
-            return f"{nv:.4f}"
-
-        lines = [f"# Options Premium Directive — {sym}\n"]
-        lines.append(f"- **Strategy**: {directive.get('Strategy', 'N/A')}")
-        lines.append(f"- **Action**: {directive.get('Action', 'N/A')}")
-        lines.append(f"- **Trend Bias**: {directive.get('Trend_Bias', 'N/A')}")
-        lines.append(f"- **Price**: {_fmt('Price', money=True)}")
-        lines.append(f"- **Stale Quote**: {directive.get('Stale', is_stale)}")
-        lines.append(f"- **Net Premium**: {_fmt('Net_Premium', money=True)}")
-        lines.append(
-            f"- **Realizable Daily Theta**: {_fmt('Realizable_Daily_Theta', money=True)}"
-        )
-        lines.append(f"- **Sigma (GJR-GARCH, annualized)**: {_fmt('Sigma_GARCH')}")
-        lines.append(f"- **IVR Proxy**: {_fmt('IVR_Proxy')}")
-        lines.append(
-            f"- **True IVR** (opt-in, real options-chain-derived; N/A unless "
-            f"OPTIONS_TRUE_IVR_ENABLED is on and history has warmed up): "
-            f"{_fmt('True_IVR')}"
-        )
-        lines.append(f"- **Aroon Oscillator**: {_fmt('Aroon_Oscillator')}")
-        lines.append(f"- **Coppock Curve**: {_fmt('Coppock_Curve')}")
-
-        lines.append("\n## Legs")
-        lines.append(
-            f"- **Short Strike / Delta**: {_fmt('Short_Strike', money=True)} / {_fmt('Short_Delta')}"
-        )
-        lines.append(
-            f"- **Long Strike / Delta**: {_fmt('Long_Strike', money=True)} / {_fmt('Long_Delta')}"
-        )
-
-        lines.append("\n## ATM Greeks")
-        lines.append(f"- **Delta**: {_fmt('ATM_Delta')}")
-        lines.append(f"- **Gamma**: {_fmt('ATM_Gamma')}")
-        lines.append(f"- **Vega**: {_fmt('ATM_Vega')}")
-        lines.append(f"- **Theta (daily)**: {_fmt('ATM_Theta_Daily')}")
-
-        # Integrity validation
-        integrity = {}
-        try:
-            integrity = validate_directive_integrity(directive) or {}
-        except Exception as ie:
-            integrity = {"ok": None, "issues": [f"validator error: {ie}"]}
-        ok = integrity.get("ok")
-        issues = integrity.get("issues", []) or []
-        lines.append("\n## Integrity")
-        lines.append(f"- **OK**: {ok}")
-        if issues:
-            for iss in issues:
-                lines.append(f"  - {iss}")
-        else:
-            lines.append("  - (no issues)")
-
-        payload = {
-            "symbol": sym,
-            "strategy": directive.get("Strategy"),
-            "action": directive.get("Action"),
-            "trend_bias": directive.get("Trend_Bias"),
-            "price": _num(directive.get("Price")),
-            "net_premium": _num(directive.get("Net_Premium")),
-            "realizable_daily_theta": _num(directive.get("Realizable_Daily_Theta")),
-            "sigma_garch": _num(directive.get("Sigma_GARCH")),
-            "ivr_proxy": _num(directive.get("IVR_Proxy")),
-            "true_ivr": _num(directive.get("True_IVR")),
-            "short_strike": _num(directive.get("Short_Strike")),
-            "short_delta": _num(directive.get("Short_Delta")),
-            "long_strike": _num(directive.get("Long_Strike")),
-            "long_delta": _num(directive.get("Long_Delta")),
-            "atm_delta": _num(directive.get("ATM_Delta")),
-            "atm_gamma": _num(directive.get("ATM_Gamma")),
-            "atm_vega": _num(directive.get("ATM_Vega")),
-            "atm_theta_daily": _num(directive.get("ATM_Theta_Daily")),
-            "integrity_ok": ok,
-            "integrity_issues": list(issues),
-        }
-        lines.append("\n```json")
-        lines.append(json.dumps(payload, indent=2))
-        lines.append("```")
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Failed to build options directive for {symbol}: {e!s}"
+    return f"get_options_directive({symbol!s}): {_OPTIONS_DESK_RETIRED_MESSAGE}"
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
@@ -4151,236 +3966,34 @@ def scan_pairs_arbitrage() -> dict:
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 def analyze_options_chain(ticker: str, target_dte: int = 30) -> dict:
     """
-    Fuses live options-chain Greeks, the volatility surface/VRP cone, and the
-    rich/cheap strike scan into one call for a single underlying — wraps
-    pilots.options_risk.calculate_position_greeks, pilots.volatility_surface
-    .calculate_volatility_surface, and pilots.vol_mispricing.evaluate_strike_mispricing.
-    Never computes a second, competing Greeks/IV implementation.
-    Reuses technical_options_engine.build_premium_directive for the strategy
-    directive shown alongside the raw analytics. Returns NaN (never a
-    fabricated number, CONSTRAINT #4) for any leg the chain fetch can't
-    price. Read-only: never constructs or submits an order.
+    RETIRED (2026-09). Options-chain Greeks, the volatility surface and the
+    mispricing scan were removed with the options desk. Returns a fixed
+    retired payload (every analytics field None, never fabricated); never raises.
     """
-    import math
-
-    from data.market_data import get_options_provider, get_provider
-
-    try:
-        sym = ticker.upper().strip()
-        provider = get_provider()
-        options_provider = get_options_provider()
-
-        # 1. Fetch chain data — fetch_options_chain(symbol) with no expiration returns
-        # a bare list of expiration-date strings, not real per-strike chain data.
-        # Mirror pilots.volatility_surface.get_volatility_surface_data's /
-        # pilots.vol_mispricing.get_volatility_mispricing_data's two-step pattern:
-        # fetch the expirations list, then fetch each expiration's real chain,
-        # building a {expiration_str: chain_object_or_dict} map. A single expiration
-        # that fails to fetch (falsy/None return) is skipped rather than aborting
-        # the whole call.
-        chain_data = None
-        try:
-            expirations = options_provider.fetch_options_chain(sym)
-            if expirations and isinstance(expirations, list):
-                chain_map = {}
-                for exp in expirations[:5]:
-                    c = options_provider.fetch_options_chain(sym, exp)
-                    if c:
-                        chain_map[str(exp)] = c
-                if chain_map:
-                    chain_data = chain_map
-        except Exception:
-            chain_data = None
-
-        if not chain_data:
-            return {
-                "error": f"No chain data available for {sym}",
-                "directive": None,
-                "surface": None,
-                "mispricing": None,
-            }
-
-        # 2. Fetch bars & spot price
-        bars = provider.get_intraday_bars(sym)
-        if bars is None or bars.empty:
-            return {
-                "error": f"No bar data available for {sym}",
-                "directive": None,
-                "surface": None,
-                "mispricing": None,
-            }
-
-        spot_price = None
-        is_stale = True
-        try:
-            q = provider.get_latest_quote(sym)
-            if q is not None and q.price is not None and float(q.price) > 0:
-                spot_price = float(q.price)
-                is_stale = bool(getattr(q, "is_stale", True))
-        except Exception:
-            spot_price = None
-
-        if spot_price is None:
-            spot_price = float(bars["Close"].iloc[-1])
-            is_stale = True
-
-        # 3. Macro proxy for build_premium_directive
-        snap = _load_state_snapshot()
-        vix_val = 15.0
-        regime_val = "RISK ON"
-        if isinstance(snap, dict):
-            raw_vix = snap.get("vix")
-            try:
-                vix_val = float(raw_vix) if raw_vix is not None else 15.0
-            except (TypeError, ValueError):
-                vix_val = 15.0
-            regime_val = str(snap.get("market_regime") or "RISK ON")
-
-        macro_proxy = _MacroProxy(vix_val, regime_val)
-
-        # 4. Directive
-        try:
-            from technical_options_engine import build_premium_directive
-
-            directive = build_premium_directive(
-                sym,
-                bars,
-                spot_price=spot_price,
-                is_stale=is_stale,
-                target_dte=target_dte,
-                macro_dto=macro_proxy,
-                vrp=None,
-            )
-        except Exception as e:
-            directive = {"error": str(e)}
-
-        # 5. Volatility Surface
-        try:
-            from pilots.volatility_surface import calculate_volatility_surface
-
-            surface = calculate_volatility_surface(
-                ticker=sym,
-                chain_data=chain_data,
-                spot_price=spot_price,
-                historical_prices=bars["Close"],
-            )
-        except Exception as e:
-            surface = {"error": str(e)}
-
-        # 6. Strike Mispricing — calculate_volatility_surface's return dict has no
-        # top-level "atm_iv"; it's nested per-expiration under smiles[exp_date]["atm_iv"].
-        # Derive a fair_iv_forecast scalar from the smile whose own "dte" is nearest to
-        # target_dte (the real, already-computed surface — never a second, competing IV
-        # source) instead of reading a key that never existed.
-        fair_iv_forecast = None
-        if isinstance(surface, dict):
-            smiles = surface.get("smiles")
-            if isinstance(smiles, dict) and smiles:
-                best_entry = None
-                best_diff = None
-                for entry in smiles.values():
-                    if not isinstance(entry, dict):
-                        continue
-                    entry_dte = entry.get("dte")
-                    entry_atm_iv = entry.get("atm_iv")
-                    if entry_dte is None or entry_atm_iv is None:
-                        continue
-                    diff = abs(float(entry_dte) - float(target_dte))
-                    if best_diff is None or diff < best_diff:
-                        best_diff = diff
-                        best_entry = entry
-                if best_entry is not None:
-                    fair_iv_forecast = best_entry.get("atm_iv")
-
-        try:
-            from pilots.vol_mispricing import (
-                MispricingAnalysis,
-                evaluate_strike_mispricing,
-            )
-
-            mispricing_result = evaluate_strike_mispricing(
-                chain_data=chain_data,
-                spot_price=spot_price,
-                fair_iv_forecast=fair_iv_forecast,
-                dte=target_dte,
-            )
-            # evaluate_strike_mispricing returns a MispricingAnalysis dataclass, not a
-            # plain dict — every real caller (e.g. get_volatility_mispricing_data)
-            # calls .to_dict() on it before returning/using it.
-            mispricing = (
-                mispricing_result.to_dict()
-                if isinstance(mispricing_result, MispricingAnalysis)
-                else mispricing_result
-            )
-        except Exception as e:
-            mispricing = {"error": str(e)}
-
-        # Sanitize NaNs — matches the ~10 other NaN-handling sites in this file, which
-        # all convert to None (JSON null), never the string "NaN".
-        def _sanitize(obj):
-            if isinstance(obj, float) and math.isnan(obj):
-                return None
-            if isinstance(obj, dict):
-                return {k: _sanitize(v) for k, v in obj.items()}
-            if isinstance(obj, list):
-                return [_sanitize(v) for v in obj]
-            return obj
-
-        return _sanitize(
-            {
-                "ticker": sym,
-                "spot_price": spot_price,
-                "directive": directive,
-                "surface": surface,
-                "mispricing": mispricing,
-            }
-        )
-    except Exception as e:
-        return {
-            "error": f"Failed to analyze options chain for {ticker}: {e!s}",
-            "directive": None,
-            "surface": None,
-            "mispricing": None,
-        }
+    return {
+        "ticker": str(ticker).upper().strip(),
+        "retired": True,
+        "error": _OPTIONS_DESK_RETIRED_MESSAGE,
+        "directive": None,
+        "surface": None,
+        "mispricing": None,
+    }
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True))
 def scan_0dte_signals(ticker: str, contracts: int = 1) -> dict:
     """
-    Scans for same-session 0DTE contract breakout signals and squeeze detection
-    using pilots.zero_dte_engine's logic — never re-derives its own breakout math.
-    This is a signal/status passthrough only (does not compute payoff or theta decay).
-    Ships in simulation-only mode: the response's `live_exit_gate_wired` field
-    reflects whether the mandatory 15:45 ET hard-exit is actually wired and enabled
-    in production. `strategy_registry_status` reports whether this pilot has cleared
-    the PBO/DSR/Sharpe/MaxDD + stress-scenario deployability gate (it has not).
-    This tool NEVER calls execute_0dte_trade or execute_0dte_exits.
+    RETIRED (2026-09). The 0DTE engine was removed with the options desk.
+    Returns a fixed retired payload; never raises and never trades.
     """
-    from pilots.zero_dte_engine import get_0dte_signals
-
-    # 0DTE exit is wired into daemon_runtime.py but gated by OPTIONS_0DTE_ENABLED.
-    live_exit_gate_wired = False
-    try:
-        from settings import settings as _s
-
-        live_exit_gate_wired = bool(getattr(_s, "OPTIONS_0DTE_ENABLED", False))
-    except ImportError:
-        pass
-
-    sym = ticker.upper().strip()
-
-    try:
-        # Wrap the real signal detection logic from zero_dte_engine
-        signals = get_0dte_signals(symbol=sym)
-    except Exception as e:
-        signals = {"error": str(e)}
-
     return {
-        "ticker": sym,
+        "ticker": str(ticker).upper().strip(),
         "contracts": contracts,
-        "signals": signals,
-        "live_exit_gate_wired": live_exit_gate_wired,
-        "strategy_registry_status": "unregistered",
+        "retired": True,
+        "error": _OPTIONS_DESK_RETIRED_MESSAGE,
+        "signals": None,
+        "live_exit_gate_wired": False,
+        "strategy_registry_status": "retired",
     }
 
 
@@ -5902,32 +5515,17 @@ def validate_order_compliance(ticker: str, side: str, size: float) -> str:
     overall verdict is only PASSED when every evaluable check actually
     passed (CONSTRAINT #4).
 
-    Reuses two gate conditions this codebase already documents/computes
-    elsewhere, rather than reimplementing risk-gate logic from scratch:
+    Reuses the Kelly sizing cap (``settings.KELLY_CAP``) this codebase
+    already computes elsewhere, rather than reimplementing risk-gate logic
+    from scratch -- read from the ticker's most recent ``DailySignals`` row
+    ("Kelly Target", "Sizing_Was_Capped", "Sizing_Binding_Constraint").
+    BUY-side only (a SELL reduces exposure, so the cap does not apply).
 
-    1. Kelly sizing cap (``settings.KELLY_CAP``) -- read from the ticker's
-       most recent ``DailySignals`` row ("Kelly Target",
-       "Sizing_Was_Capped", "Sizing_Binding_Constraint"). BUY-side only
-       (a SELL reduces exposure, so the cap does not apply).
-    2. Options-selling VRP regime gate (True_IVR > 50, VRP > 0.02, VIX < 30,
-       no CREDIT EVENT) -- per-symbol half from the same ``DailySignals``
-       row ("True_IVR", "VRP"); macro half (VIX, market regime) from the
-       persisted ``output/state_snapshot.json``. Thresholds are imported
-       from ``signals/vrp_premium_selling.py``, the module that already
-       enforces this identical rule, instead of being retyped here.
+    The options-selling VRP regime gate this tool used to evaluate was
+    removed with the options desk (2026-09, step 4a); this check no longer
+    depends on any options module.
     """
     import math
-
-    try:
-        from signals.vrp_premium_selling import (
-            IVR_SELL_THRESHOLD,
-            VIX_MAX_THRESHOLD,
-            VRP_MIN_THRESHOLD,
-        )
-    except Exception as e:
-        return (
-            f"compliance check unavailable: could not load VRP regime thresholds: {e}"
-        )
 
     def _num(v):
         try:
@@ -5963,13 +5561,6 @@ def validate_order_compliance(ticker: str, side: str, size: float) -> str:
                 "kelly_sizing_cap",
                 "UNAVAILABLE",
                 f"no DailySignals row found for {ticker_u} -- cannot evaluate Kelly cap",
-            )
-        )
-        checks.append(
-            (
-                "vrp_premium_selling_regime",
-                "UNAVAILABLE",
-                f"no DailySignals row found for {ticker_u} -- cannot evaluate VRP regime gate",
             )
         )
     else:
@@ -6013,69 +5604,6 @@ def validate_order_compliance(ticker: str, side: str, size: float) -> str:
                             f"Kelly Target {kelly:.4f} exceeds KELLY_CAP {cap:.2f}{telemetry}",
                         )
                     )
-
-        # ---- Check 2: options-selling VRP regime gate ----
-        true_ivr = _num(row_data.get("True_IVR"))
-        vrp = _num(row_data.get("VRP"))
-        if true_ivr is None or vrp is None:
-            missing = [
-                n for n, v in (("True_IVR", true_ivr), ("VRP", vrp)) if v is None
-            ]
-            checks.append(
-                (
-                    "vrp_premium_selling_regime",
-                    "UNAVAILABLE",
-                    f"no {'/'.join(missing)} score recorded for {ticker_u}",
-                )
-            )
-        else:
-            snap = _load_state_snapshot()
-            vix = _num(snap.get("vix")) if snap else None
-            regime = (snap.get("market_regime") or snap.get("regime")) if snap else None
-
-            violations = []
-            if true_ivr <= IVR_SELL_THRESHOLD:
-                violations.append(
-                    f"True_IVR {true_ivr:.1f} <= {IVR_SELL_THRESHOLD:.0f}"
-                )
-            if vrp <= VRP_MIN_THRESHOLD:
-                violations.append(f"VRP {vrp:.4f} <= {VRP_MIN_THRESHOLD:.2f}")
-            if vix is not None and vix >= VIX_MAX_THRESHOLD:
-                violations.append(f"VIX {vix:.1f} >= {VIX_MAX_THRESHOLD:.0f}")
-            if regime == "CREDIT EVENT":
-                violations.append("market regime is CREDIT EVENT")
-
-            if violations:
-                checks.append(
-                    (
-                        "vrp_premium_selling_regime",
-                        "FAIL",
-                        "; ".join(violations),
-                    )
-                )
-            elif snap is None:
-                checks.append(
-                    (
-                        "vrp_premium_selling_regime",
-                        "UNAVAILABLE",
-                        (
-                            f"True_IVR {true_ivr:.1f} and VRP {vrp:.4f} clear the per-symbol half of the "
-                            "gate, but VIX/market-regime are unavailable (no output/state_snapshot.json) "
-                            "-- cannot fully evaluate the macro half"
-                        ),
-                    )
-                )
-            else:
-                checks.append(
-                    (
-                        "vrp_premium_selling_regime",
-                        "PASS",
-                        (
-                            f"True_IVR {true_ivr:.1f} > {IVR_SELL_THRESHOLD:.0f}, VRP {vrp:.4f} > "
-                            f"{VRP_MIN_THRESHOLD:.2f}, VIX {vix} < {VIX_MAX_THRESHOLD:.0f}, regime={regime}"
-                        ),
-                    )
-                )
 
     statuses = [c[1] for c in checks]
     if "FAIL" in statuses:

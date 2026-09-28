@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `baa3250fbc075444532732c81ef178932ba16de6`
+- Measured at commit: `80c32cee623c487c8c8bf4376e0aabfb6feb5b22`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -224,7 +224,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **438** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **439** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -237,14 +237,14 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 778 | 275 |
-| (b) `getattr(settings, "KEY", default)` | 393 | 232 |
+| (a) `settings.KEY` | 777 | 275 |
+| (b) `getattr(settings, "KEY", default)` | 390 | 230 |
 | (c) `getattr(settings, <var>)` (dynamic) | 13 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
-Fields reached by at least one form: **460** of 477.
+Fields reached by at least one form: **458** of 477.
 
-### Fields with NO statically-attributable read — **17**
+### Fields with NO statically-attributable read — **19**
 
 **These are not necessarily dead.** A field whose name is passed as a *string literal* to a
 factory that then does a dynamic `getattr` is read at runtime while being invisible to every
@@ -262,16 +262,18 @@ referenced by name somewhere and is probably read dynamically.
 | `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:5009` | likely read dynamically |
 | `FIX_GATEWAY_ENABLED` | _none_ | no read and no name reference found |
 | `FMP_ECON_INDICATORS` | `api/pilots_api.py:4981` | likely read dynamically |
+| `FORECAST_BACKFILL_VRP_PROXY_ENABLED` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_OVERLAP_DAYS` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_WINDOW_DAYS` | _none_ | no read and no name reference found |
+| `MULTI_BROKER_GATEWAY_ENABLED` | `pilots/feature_flags.py:90` | likely read dynamically |
 | `OPTIONS_EARNINGS_CRUSH_ENABLED` | _none_ | no read and no name reference found |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
-| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:11083` | likely read dynamically |
+| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:10834` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1711`, `pilots/feature_flags.py:49` | likely read dynamically |
 | `WS_RISK_STREAM_INTERVAL_SECONDS` | _none_ | no read and no name reference found |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **185**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **183**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -372,7 +374,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `FORECAST_BACKFILL_VOL_LONG_WINDOW` | b | 1 | 0 |
 | `FORECAST_BACKFILL_VOL_RATIO_WINDOW` | b | 1 | 0 |
 | `FORECAST_BACKFILL_VOL_SHORT_WINDOW` | b | 1 | 0 |
-| `FORECAST_BACKFILL_VRP_PROXY_ENABLED` | b | 2 | 0 |
 | `FORECAST_CNN_LSTM_WALKFORWARD_SCALING` | b | 1 | 0 |
 | `FORECAST_DRIFT_SHRINKAGE` | b | 1 | 0 |
 | `FORECAST_MAX_CONCURRENCY` | b | 2 | 0 |
@@ -418,13 +419,12 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `META_LABELING_BACKFILL_ELIGIBLE_SIGNALS` | b | 2 | 0 |
 | `META_LABELING_BACKFILL_LIVE_HORIZON_DAYS` | b | 1 | 0 |
 | `META_LABELING_ENABLED` | b | 1 | 0 |
-| `MULTI_BROKER_GATEWAY_ENABLED` | b | 1 | 0 |
 | `NO_VENV_REEXEC` | d | 0 | 1 |
 | `OFI_SHIELD_ENABLED` | b | 1 | 0 |
 | `OPAL_RESEARCH_MODEL` | b | 1 | 0 |
 | `OPAL_RESEARCH_PROVIDER` | b | 2 | 0 |
 | `OPAL_RESEARCH_TIMEOUT_SECONDS` | b | 1 | 0 |
-| `OPTIONS_0DTE_ENABLED` | b | 4 | 0 |
+| `OPTIONS_0DTE_ENABLED` | b | 3 | 0 |
 | `OPTIONS_0DTE_HARD_EXIT_TIME` | b | 4 | 0 |
 | `OPTIONS_0DTE_PROFIT_TARGET_PCT` | b | 3 | 0 |
 | `OPTIONS_0DTE_STOP_LOSS_PCT` | b | 3 | 0 |
@@ -439,7 +439,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `OPTIONS_MATRIX_ENABLED` | b | 1 | 0 |
 | `OPTIONS_META_LABELER_ENABLED` | b | 2 | 0 |
 | `OPTIONS_PROFIT_TARGET_PCT` | b | 1 | 0 |
-| `OPTIONS_RISK_FREE_RATE` | b | 7 | 0 |
+| `OPTIONS_RISK_FREE_RATE` | b | 8 | 0 |
 | `OPTIONS_SOR_LEGGING_LATENCY_SECONDS` | b | 1 | 0 |
 | `OPTIONS_STOP_LOSS_MULTIPLE` | b | 1 | 0 |
 | `OPTIONS_VPIN_TOXICITY_THRESHOLD` | b | 3 | 0 |
@@ -469,7 +469,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 
 | Site | Expression |
 |---|---|
-| `Gravity AI Review Suite.py:2738` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
+| `Gravity AI Review Suite.py:2674` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:150` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:186` | `getattr(settings, flag_name, False)` |

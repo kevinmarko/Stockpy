@@ -1178,7 +1178,25 @@ class TestFollowAuthorized:
                 )
         assert resp.status_code == 404
 
-    def test_post_follow_non_followable_pilot_400(self, tmp_path):
+    @pytest.fixture
+    def _non_followable_pilot(self, monkeypatch):
+        """The catalog no longer ships a non-followable Pilot (the options
+        Pilots were removed in 2026-09, step 4a), so these tests register a
+        synthetic one to keep exercising the server-side followable gate."""
+        from pilots import catalog as _catalog
+
+        pilot = _catalog.Pilot(
+            id="test-non-followable",
+            name="Test Non-Followable",
+            category="Blend",
+            description="Synthetic non-followable Pilot for the gate tests.",
+            weights={},
+            followable=False,
+        )
+        monkeypatch.setitem(_catalog._BY_ID, pilot.id, pilot)
+        return pilot.id
+
+    def test_post_follow_non_followable_pilot_400(self, tmp_path, _non_followable_pilot):
         """The `followable` gate that disables the Follow button client-side
         (PilotDetail.tsx/Comparison.tsx) must also be enforced here — the
         UI disabling a button is not itself a security boundary, and a
@@ -1188,25 +1206,25 @@ class TestFollowAuthorized:
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
                 resp = client.post(
-                    "/pilots/iron-condor/follow",
+                    f"/pilots/{_non_followable_pilot}/follow",
                     json={"amount": 1000.0},
                     headers=self._auth(),
                 )
         assert resp.status_code == 400
         assert "not followable" in resp.json()["detail"]
 
-    def test_put_follows_non_followable_pilot_400(self, tmp_path):
+    def test_put_follows_non_followable_pilot_400(self, tmp_path, _non_followable_pilot):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
                 resp = client.put(
                     "/follows",
-                    json={"pilot_id": "copula-stat-arb", "amount": 500.0},
+                    json={"pilot_id": _non_followable_pilot, "amount": 500.0},
                     headers=self._auth(),
                 )
         assert resp.status_code == 400
         assert "not followable" in resp.json()["detail"]
 
-    def test_put_follows_cancel_non_followable_pilot_still_allowed(self, tmp_path):
+    def test_put_follows_cancel_non_followable_pilot_still_allowed(self, tmp_path, _non_followable_pilot):
         """`amount == 0` (cancel) must never be blocked by the followable gate
         — a pre-existing follow (e.g. one created before this fix shipped)
         must always be cancellable regardless of the Pilot's current
@@ -1215,7 +1233,7 @@ class TestFollowAuthorized:
             with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
                 resp = client.put(
                     "/follows",
-                    json={"pilot_id": "iron-condor", "amount": 0.0},
+                    json={"pilot_id": _non_followable_pilot, "amount": 0.0},
                     headers=self._auth(),
                 )
         assert resp.status_code == 200
