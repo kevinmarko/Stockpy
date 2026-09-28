@@ -31,11 +31,11 @@ from main import _build_universe, _recently_closed_universe_symbols
 
 @pytest.fixture(autouse=True)
 def _isolate_scan_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Neutralize main.discovery() -- see tests/test_run_once.py's identical
+    """Neutralize discovery() on pipeline.advisory_inputs -- see tests/test_run_once.py's identical
     fixture for the full rationale (a real ~/.stockpy_local/output/
     scan_candidates.json on the machine running the suite would otherwise
     pollute every universe-building assertion here)."""
-    monkeypatch.setattr("main.discovery", lambda *a, **kw: {"candidates": []})
+    monkeypatch.setattr("pipeline.advisory_inputs.discovery", lambda *a, **kw: {"candidates": []})
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ class TestBuildUniverseRetention:
     def test_retained_symbol_added_when_not_held(self, monkeypatch, tmp_path):
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("main._recently_closed_universe_symbols", lambda held: {"CMCL"})
+        monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: {"CMCL"})
 
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
         result = _build_universe(snap)
@@ -73,7 +73,7 @@ class TestBuildUniverseRetention:
         monkeypatch.setattr("main.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("main._recently_closed_universe_symbols", lambda held: {"CMCL"})
+        monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: {"CMCL"})
 
         # SymbolRatingStore says CMCL is excluded -- retention must win anyway.
         with patch(
@@ -92,7 +92,7 @@ class TestBuildUniverseRetention:
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("main.settings.DEFAULT_TICKERS", ["SPY"])
-        monkeypatch.setattr("main._recently_closed_universe_symbols", lambda held: {"CMCL"})
+        monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: {"CMCL"})
 
         snap = _make_snapshot(positions={})
         result = _build_universe(snap)
@@ -111,7 +111,7 @@ class TestBuildUniverseRetention:
     def test_retained_held_symbol_not_double_added(self, monkeypatch, tmp_path):
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("main._recently_closed_universe_symbols", lambda held: set())
+        monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: set())
 
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
         result = _build_universe(snap)
