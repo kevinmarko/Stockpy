@@ -349,6 +349,38 @@ def _render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rendered:
     )
 
 
+# The GJR-GARCH fit (arch's optimizer) lands ~0.2% apart across platforms
+# (macOS vs the Linux CI runner), same as tests/test_volatility_garch.py's
+# _GARCH_REL_TOL. Only the GARCH vol and the Kelly weights computed from it
+# get a tolerance; every other field (actions, conviction, sizing, rationale,
+# the pre-compute outputs) stays exact. The queue is capped at 5% per name,
+# so it does not depend on these values and is still compared byte-for-byte.
+_GARCH_DERIVED_KEYS = frozenset({
+    "garch_vol", "kelly_raw", "kelly_target_pre_regime", "kelly_target_post_regime",
+})
+_GARCH_DERIVED_REL_TOL = 1e-2
+
+
+def _assert_recommendations_match(actual: bytes, expected: bytes) -> None:
+    if actual == expected:
+        return
+    got = json.loads(actual)
+    want = json.loads(expected)
+    assert [r["symbol"] for r in got] == [r["symbol"] for r in want]
+    for g, w in zip(got, want):
+        g_ki, w_ki = g["key_indicators"], w["key_indicators"]
+        assert sorted(g_ki) == sorted(w_ki), g["symbol"]
+        for key in _GARCH_DERIVED_KEYS & set(w_ki):
+            assert g_ki[key] == pytest.approx(w_ki[key], rel=_GARCH_DERIVED_REL_TOL), (
+                g["symbol"], key)
+        exact_g = {**g, "key_indicators": {k: v for k, v in g_ki.items()
+                                           if k not in _GARCH_DERIVED_KEYS}}
+        exact_w = {**w, "key_indicators": {k: v for k, v in w_ki.items()
+                                           if k not in _GARCH_DERIVED_KEYS}}
+        assert json.dumps(exact_g, sort_keys=True) == json.dumps(exact_w, sort_keys=True), (
+            g["symbol"])
+
+
 def test_run_once_recommendations_and_queue_match_golden(tmp_path, monkeypatch):
     rendered = _render(tmp_path, monkeypatch)
     if os.environ.get("REGEN_RUN_ONCE_GOLDEN") == "1":
@@ -357,7 +389,7 @@ def test_run_once_recommendations_and_queue_match_golden(tmp_path, monkeypatch):
         _SOURCE_GOLDEN.write_bytes(rendered.advisory_source)
         _QUEUE_GOLDEN.write_bytes(rendered.execution_queue)
         pytest.skip("run_once golden regenerated")
-    assert rendered.recommendations == _REC_GOLDEN.read_bytes()
+    _assert_recommendations_match(rendered.recommendations, _REC_GOLDEN.read_bytes())
     assert rendered.advisory_source == _SOURCE_GOLDEN.read_bytes()
     assert rendered.execution_queue == _QUEUE_GOLDEN.read_bytes()
 
