@@ -92,6 +92,9 @@ _DEFAULT_SECTOR_CONFIGS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# Forecasting rebuild F3: the shadow naive-gated forecast's ledger name.
+from forecasting.forecast_tracker import MODEL_GATED_BLEND  # noqa: E402
+
 # Drop reasons reported by apply_forecast_guards (forecasting rebuild F2).
 GUARD_REASON_INPUT_PRICE = "input_price"
 GUARD_REASON_CLAMP = "clamp"
@@ -240,10 +243,89 @@ class ForecastingEngine:
         (symbol x horizon with no surviving model), ``sigma_unavailable``
         (symbols the clamp was skipped for, no GARCH sigma),
         ``no_reference_close`` (symbols with no price history to check
-        against)."""
+        against). F3 naive gate: ``gate_admitted_horizons`` /
+        ``gate_naive_horizons`` (symbol x horizon where the gate admitted a
+        model / fell back to naive; counted in shadow mode too) and
+        ``gate_stats_unavailable`` (the ledger read failed)."""
         with self._guard_lock:
             out = dict(self._guard_stats)
             self._guard_stats = {}
+        return out
+
+    @staticmethod
+    def _naive_gated_forecast(
+        gate_stats: Optional[Mapping[str, Any]],
+        horizon: int,
+        model_forecasts: Mapping[str, float],
+        current_price: float,
+        gate: Mapping[str, Any],
+    ) -> Tuple[Optional[float], Optional[Dict[str, Any]], bool]:
+        """Forecasting rebuild F3: the gated forecast for one horizon.
+
+        Returns ``(gated_price, decision, trusted)``:
+
+        * ``(None, None, False)`` when the gate was not evaluated
+          (``gate_stats is None``: no tracker attached).
+        * Otherwise ``decision`` is :func:`compute_naive_gate`'s output over
+          this cycle's GUARDED ``model_forecasts`` (so an F2-dropped model can
+          never be admitted), and ``gated_price`` is the inverse-median-log-
+          error weighted average of the admitted models, or ``current_price``
+          (naive) when nothing was admitted.
+        * ``trusted`` is False when the stats read failed (reason
+          ``"error"``); the decision is then naive (no evidence), and the
+          caller does not record a shadow row for it.
+
+        Naive is ``current_price`` -- the same value recorded as the
+        ``naive`` ledger row, so a gate fallback scores exactly like naive.
+        Never raises.
+        """
+        if gate_stats is None:
+            return None, None, False
+        from forecasting.forecast_tracker import compute_naive_gate
+
+        trusted = isinstance(gate_stats, Mapping) and gate_stats.get("reason") != "error"
+        stats_h: Mapping[str, Any] = {}
+        if trusted:
+            by_h = gate_stats.get("by_horizon")
+            if isinstance(by_h, Mapping):
+                candidate = by_h.get(horizon, {})
+                if isinstance(candidate, Mapping):
+                    stats_h = candidate
+        try:
+            decision = compute_naive_gate(
+                stats_h, model_forecasts.keys(),
+                min_improvement=float(gate["min_improvement"]),
+                min_obs=int(gate["min_obs"]),
+            )
+        except Exception as exc:  # pragma: no cover - pure function, defensive
+            logger.debug("compute_naive_gate failed for h=%d: %s", horizon, exc)
+            decision = {"weights": {}, "admitted": [], "rejected": {}, "fallback_to_naive": True}
+            trusted = False
+        weights = decision["weights"]
+        if decision["fallback_to_naive"] or not weights:
+            return float(current_price), decision, trusted
+        gated = sum(float(model_forecasts[m]) * w for m, w in weights.items())
+        return float(gated), decision, trusted
+
+    @staticmethod
+    def _read_naive_gate_settings() -> Dict[str, Any]:
+        """Forecasting rebuild F3 settings, read per call (live_safe) so a
+        runtime flip takes effect on the next forecast. ``window_days`` is
+        the live skill blend's own window (``FORECAST_SKILL_WINDOW_DAYS``),
+        so the gate and the blend it replaces judge models over the same
+        history. Never raises: a settings hiccup yields the shadow-only
+        defaults (gate OFF)."""
+        out: Dict[str, Any] = {
+            "enabled": False, "min_improvement": 0.005, "min_obs": 60, "window_days": 180,
+        }
+        try:
+            from settings import settings as _s
+            out["enabled"] = bool(getattr(_s, "FORECAST_NAIVE_GATE_ENABLED", False))
+            out["min_improvement"] = float(getattr(_s, "FORECAST_NAIVE_GATE_MIN_IMPROVEMENT", 0.005))
+            out["min_obs"] = int(getattr(_s, "FORECAST_NAIVE_GATE_MIN_OBS", 60))
+            out["window_days"] = int(getattr(_s, "FORECAST_SKILL_WINDOW_DAYS", 180))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("naive gate settings unavailable, using defaults: %s", exc)
         return out
 
     def _load_sector_configs(self) -> Dict[str, Dict[str, Any]]:
@@ -1747,6 +1829,24 @@ class ForecastingEngine:
                     except Exception as _exc:
                         logger.debug("ForecastTracker.update_actuals skipped for %s h=%d: %s", symbol, h, _exc)
 
+            # Forecasting rebuild F3: naive-gate inputs, read ONCE per symbol
+            # for all horizons. Only when a tracker (the ledger) is attached:
+            # a tracker-less engine (ad-hoc/diagnostic callers) has no scored
+            # history, so the gate is not evaluated there and nothing below
+            # changes for it. The stats only use rows whose outcome matured
+            # before today's US/Eastern trading day (no lookahead; see
+            # ForecastTracker.naive_gate_stats).
+            gate = self._read_naive_gate_settings()
+            gate_stats: Optional[Dict[str, Any]] = None
+            if self._tracker is not None:
+                try:
+                    gate_stats = self._tracker.naive_gate_stats(
+                        symbol, horizons, window_days=gate["window_days"], as_of=now_utc,
+                    )
+                except Exception as _exc:
+                    logger.debug("ForecastTracker.naive_gate_stats skipped for %s: %s", symbol, _exc)
+                    gate_stats = {"by_horizon": {}, "reason": "error"}
+
             for h in horizons:
                 a_res = 0.0
                 h_res = 0.0
@@ -1844,6 +1944,25 @@ class ForecastingEngine:
                 # Blend using skill weights (falls back to static blend when skill_weights={})
                 blended = self._blend_with_skill(model_forecasts, skill_weights, preferred_model, current_price)
 
+                # Forecasting rebuild F3: the naive-gated forecast, computed
+                # next to the live blend from the SAME guarded model outputs.
+                # gated_price stays None when the gate is not evaluated (no
+                # tracker). See _naive_gated_forecast.
+                gated_price, gate_decision, gate_trusted = self._naive_gated_forecast(
+                    gate_stats, h, model_forecasts, current_price, gate,
+                )
+                published = blended
+                gate_fell_back = False
+                if gate_decision is not None:
+                    gate_fell_back = bool(gate_decision["fallback_to_naive"])
+                    self._bump_guard_stat(
+                        "gate_naive_horizons" if gate_fell_back else "gate_admitted_horizons"
+                    )
+                    if not gate_trusted:
+                        self._bump_guard_stat("gate_stats_unavailable")
+                    if gate["enabled"]:
+                        published = gated_price
+
                 # Step 2c: persist new forecasts for future validation.
                 # A zero-cost naive (price-stays-flat) baseline rides along
                 # in the SAME recorded dict, purely for measurement -- it is
@@ -1867,11 +1986,29 @@ class ForecastingEngine:
                 # (NON_BLEND_MODEL_NAMES) so it can never become a blend input.
                 if model_forecasts and blended is not None and math.isfinite(blended) and blended > 0:
                     recordable_forecasts["blend"] = float(blended)
+                # F3 shadow row. `blend` above stays the UNGATED blend in both
+                # flag states (so the side-by-side keeps comparing the same two
+                # things after the flip); `gated_blend` is the gated forecast,
+                # recorded every cycle -- including when the gate fell back to
+                # naive (then its price IS naive's, and gate_fallback=1 says
+                # so) -- but never when the gate's stats read failed (an
+                # untrusted decision is not scored). Same COPY-only rule:
+                # gated_blend is in NON_BLEND_MODEL_NAMES and
+                # _SKILL_ARITHMETIC_EXCLUDED.
+                gate_meta = None
+                if (gate_decision is not None and gate_trusted and gated_price is not None
+                        and math.isfinite(gated_price) and gated_price > 0):
+                    recordable_forecasts[MODEL_GATED_BLEND] = float(gated_price)
+                    gate_meta = {MODEL_GATED_BLEND: (gate_fell_back, gate_decision["admitted"])}
                 if self._tracker is not None and recordable_forecasts:
                     try:
+                        record_kwargs: Dict[str, Any] = {}
+                        if gate_meta is not None:
+                            record_kwargs["gate_meta"] = gate_meta
                         self._tracker.record_forecasts(
                             symbol, h, recordable_forecasts, now_utc,
                             model_bounds={"monte_carlo": (mc_lo, mc_hi)} if "monte_carlo" in recordable_forecasts else None,
+                            **record_kwargs,
                         )
                     except Exception as _exc:
                         logger.debug("ForecastTracker.record_forecasts skipped for %s h=%d: %s", symbol, h, _exc)
@@ -1896,7 +2033,10 @@ class ForecastingEngine:
                                 "skipped for %s h=%d: %s", symbol, h, _exc,
                             )
 
-                results[f'Forecast_{h}'] = blended
+                # `published` is `blended` unless FORECAST_NAIVE_GATE_ENABLED is
+                # True AND the gate was evaluated (a tracker is attached), in
+                # which case it is the gated forecast (F3).
+                results[f'Forecast_{h}'] = published
 
                 # Disclosure flag (CONSTRAINT #4): when model_forecasts is
                 # empty, _blend_with_skill's ONLY remaining option is to hand
@@ -1917,6 +2057,17 @@ class ForecastingEngine:
                 # repo's other *_is_fallback disclosure fields (e.g.
                 # api/data_api.py's default_tickers_is_fallback).
                 results[f'Forecast_{h}_Is_Fallback'] = not bool(model_forecasts)
+                # F3, flag ON only (so flag-off output keeps exactly its
+                # pre-F3 key set): when the gate admitted nothing, the
+                # published value is naive (the price at forecast time). That
+                # is "no model view", so it is disclosed as a fallback too --
+                # which makes forecast_alignment score it 0 (neutral, F2)
+                # instead of reading "forecast == price" as bearish -- and
+                # Forecast_{h}_Gated_Naive says why.
+                if gate["enabled"] and gate_decision is not None:
+                    results[f'Forecast_{h}_Gated_Naive'] = gate_fell_back
+                    if gate_fell_back:
+                        results[f'Forecast_{h}_Is_Fallback'] = True
 
                 # Surface the per-horizon Monte-Carlo p5/p95 confidence band so
                 # downstream (the webapp forecast chart) can draw a cone that

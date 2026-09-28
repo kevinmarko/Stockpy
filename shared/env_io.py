@@ -286,6 +286,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FORECAST_DRIFT_SHRINKAGE",   # float [0,1] — shrinks MC drift mu toward zero (0.0 = unshrunk, today's behavior)
     "FORECAST_CLAMP_SIGMA_K",     # float — F2 clamp: drop a model whose |log-return| > k*sigma_GARCH*sqrt(h); <=0 disables
     "FORECAST_INPUT_PRICE_TOLERANCE",  # float — F2: drop a model whose anchor price is > this fraction off the last close; <=0 disables
+    "FORECAST_NAIVE_GATE_ENABLED",  # bool — F3: publish the naive-gated forecast (default False = shadow-record only)
+    "FORECAST_NAIVE_GATE_MIN_IMPROVEMENT",  # float — F3: required relative median |log error| improvement over naive (0.005 = 0.5%)
+    "FORECAST_NAIVE_GATE_MIN_OBS",  # int — F3: min scored daily observations per symbol x horizon before a model can be admitted
     "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED",  # bool — ForecastTracker looks up each row's own due-date close instead of today's price
     "FORECAST_SKILL_WEIGHTING_ENABLED",  # bool — opt-in inverse-RMSE skill-weighted blend
     "FORECAST_SKILL_WINDOW_DAYS", # int — rolling RMSE window (days) for skill weighting

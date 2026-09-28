@@ -581,6 +581,8 @@ class TestGetErrorByModel:
             "forecast_lower", "forecast_upper", "recorded_at",
             # forecasting rebuild F1: the US/Eastern trading-day upsert key.
             "forecast_day",
+            # forecasting rebuild F3: naive-gate metadata (gated_blend rows).
+            "gate_fallback", "gate_admitted",
         }
 
         rows = tracker.get_error_by_model("AAPL", 30, window_days=180)
@@ -783,15 +785,17 @@ class TestBlendWithSkill:
 # ---------------------------------------------------------------------------
 
 class TestModuleSurface:
-    def test_all_model_names_contains_nine_entries(self):
+    def test_all_model_names_contains_ten_entries(self):
         """Extended for the BERT-LLA ablations (lstm_baseline,
         lstm_attention, bert_lla) alongside the original four, plus the
         zero-cost naive persistence baseline (WP6 -- see
         docs/known_issues/forecast_ito_double_correction_and_horizon_units.md),
-        plus the published ``blend`` (forecasting rebuild F1)."""
-        assert len(ALL_MODEL_NAMES) == 9
+        plus the published ``blend`` (forecasting rebuild F1), plus the
+        shadow ``gated_blend`` (forecasting rebuild F3)."""
+        assert len(ALL_MODEL_NAMES) == 10
         assert MODEL_NAIVE in ALL_MODEL_NAMES
         assert MODEL_BLEND in ALL_MODEL_NAMES
+        assert "gated_blend" in ALL_MODEL_NAMES
 
     def test_model_name_constants_are_strings(self):
         for name in ALL_MODEL_NAMES:
@@ -853,7 +857,13 @@ class TestDefaultDbPathResolvesThroughDbConfig:
             "forecasting.forecast_tracker.resolve_database_url",
             lambda: "postgresql://user:pass@host/db",
         )
-        tracker = ForecastTracker()
+        # readonly=True: the fallback path IS the operator's real ledger
+        # (settings.LOCAL_DATA_ROOT / "quant_platform.db"). A write-mode
+        # tracker would run _ensure_table() -- CREATE/ALTER TABLE -- against
+        # it on every run of this test (found in forecasting rebuild F3: it
+        # applied F3's gate-column migration to the live DB). Only the
+        # resolved path is under test, so never open the file for writing.
+        tracker = ForecastTracker(readonly=True)
         from settings import settings
         assert tracker._db_path == str(settings.LOCAL_DATA_ROOT / "quant_platform.db")
 
@@ -1170,7 +1180,7 @@ class TestSchemaMigration:
         "id", "symbol", "model_name", "horizon_days", "forecast_ts",
         "forecast_price", "actual_price", "squared_error",
         "forecast_lower", "forecast_upper", "recorded_at",
-        "forecast_day",
+        "forecast_day", "gate_fallback", "gate_admitted",
     }
 
     def test_migrates_old_schema_preserving_data(self, tmp_path):

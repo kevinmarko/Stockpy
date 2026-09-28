@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 327,
+    "live_safe": 330,
     "no_op": 4,
     "restart_required": 85,
-    "total": 416
+    "total": 419
   },
   "dynamic_sites": [
     {
@@ -232,6 +232,9 @@
     "FORECAST_MC_RANDOM_SEED",
     "FORECAST_MODEL_PERSISTENCE_ENABLED",
     "FORECAST_MODEL_RETRAIN_DAYS",
+    "FORECAST_NAIVE_GATE_ENABLED",
+    "FORECAST_NAIVE_GATE_MIN_IMPROVEMENT",
+    "FORECAST_NAIVE_GATE_MIN_OBS",
     "FORECAST_PROPHET_WEIGHT",
     "FORECAST_SKILL_MIN_OBS",
     "FORECAST_SKILL_WEIGHTING_ENABLED",
@@ -449,15 +452,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 830,
+    "attr": 831,
     "factory_param": 4,
-    "getattr_const": 304,
+    "getattr_const": 313,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 263,
     "factory_param": 4,
-    "getattr_const": 184,
+    "getattr_const": 187,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -727,7 +730,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "forecasting/forecast_tracker.py:497",
+        "site": "forecasting/forecast_tracker.py:633",
         "via": []
       },
       {
@@ -1846,7 +1849,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "forecasting/forecast_tracker.py:501",
+        "site": "forecasting/forecast_tracker.py:637",
         "via": []
       },
       {
@@ -2572,9 +2575,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "forecasting_engine.py:263",
+        "site": "forecasting_engine.py:345",
         "via": [
-          215
+          218
         ]
       }
     ],
@@ -2585,9 +2588,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "forecasting_engine.py:261",
+        "site": "forecasting_engine.py:343",
         "via": [
-          215
+          218
         ]
       }
     ],
