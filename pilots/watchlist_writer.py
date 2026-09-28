@@ -15,8 +15,7 @@ that neither FMP nor the fallback provider has been able to fetch data for
 across 3 consecutive fetch cycles, tracked in a sibling
 ``watchlist_failures.json`` counter file next to ``watchlist.txt``.
 
-Design constraints (mirrors :mod:`pilots.scan_config_store` /
-:mod:`pilots.follows_store`):
+Design constraints (mirrors :mod:`pilots.scan_config_store`):
 
 * **Dependency-light** — stdlib only. Safe to import on the API path (never
   pulls in a heavy engine).

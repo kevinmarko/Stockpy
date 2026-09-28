@@ -2,14 +2,14 @@
 tests/test_pilots_api.py
 =========================
 Tests for the standalone ``api/pilots_api.py`` FastAPI service (port 8602) —
-the read/follow API backing the Autopilot "Pilots" marketplace PWA.
+the read/command API backing the Autopilot "Pilots" marketplace PWA.
 
 All read tests point the snapshot loader at the checked-in fixture snapshot
 (``tests/fixtures/state_snapshot.json``) by monkeypatching
 ``settings.OUTPUT_DIR`` (mirroring ``tests/test_state_api.py``), and the
 performance loader at ``tests/fixtures`` by monkeypatching
-``pilots_api._reports_dir``. Follow-write tests use a ``tmp_path`` OUTPUT_DIR so
-``FollowsStore`` never writes into the repo, and patch ``HistoricalStore`` /
+``pilots_api._reports_dir``. Write tests use a ``tmp_path`` OUTPUT_DIR so
+nothing is written into the repo, and patch ``HistoricalStore`` /
 ``GlobalKillSwitch`` on the module for account-snapshot / kill-switch state.
 """
 
@@ -94,8 +94,7 @@ def test_pilots_list_shape(monkeypatch):
     # cutover needs it on every list item, so it's an exact key of the response.
     assert set(tf.keys()) == {
         "id", "name", "category", "description",
-        "headline", "holdings_count", "top_holdings", "aum_proxy", "followers_proxy",
-        "long_only", "followable"
+        "headline", "holdings_count", "top_holdings", "long_only"
     }
     assert tf["long_only"] is False
     # Headline comes from tests/fixtures/timeseries_momentum_validation_summary.json.
@@ -106,8 +105,9 @@ def test_pilots_list_shape(monkeypatch):
     assert tf["holdings_count"] == 5
     assert len(tf["top_holdings"]) == 3
     assert tf["top_holdings"][0]["symbol"] == "NVDA"
-    assert tf["aum_proxy"] == 0.0
-    assert tf["followers_proxy"] == 0
+    # Follow-a-Pilot archived (2026-09, step 4c): no follow proxies.
+    for gone in ("aum_proxy", "followers_proxy", "followable"):
+        assert gone not in tf
 
 
 def test_pilots_list_headline_null_when_no_backtest(monkeypatch):
@@ -154,8 +154,8 @@ def test_pilot_detail_shape(monkeypatch):
     # long_only so the live frontend type is satisfied (Mismatch 3).
     assert body["long_only"] is False
     assert body["holdings_count"] == 5
-    assert body["aum_proxy"] == 0.0
-    assert body["followers_proxy"] == 0
+    for gone in ("aum_proxy", "followers_proxy", "followable"):
+        assert gone not in body
     assert len(body["holdings"]) == 5
     assert body["holdings"][0]["symbol"]  # each holding carries a symbol
     assert isinstance(body["sector_allocation"], list) and body["sector_allocation"]
@@ -672,7 +672,7 @@ def test_thresholds_shape_and_live_values(monkeypatch):
     assert set(body) == {
         "pbo_max", "dsr_min", "net_sharpe_min", "max_drawdown_max",
         "stress_max_drawdown", "kelly_fraction", "kelly_cap",
-        "robinhood_max_notional_per_order", "follow_min_amount",
+        "robinhood_max_notional_per_order",
         "agentic_max_candidates", "retrain_window_days",
     }
     assert body["pbo_max"] == PBO_MAX
@@ -683,7 +683,7 @@ def test_thresholds_shape_and_live_values(monkeypatch):
     assert body["kelly_fraction"] == settings.KELLY_FRACTION
     assert body["kelly_cap"] == settings.KELLY_CAP
     assert body["robinhood_max_notional_per_order"] == settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER
-    assert body["follow_min_amount"] == settings.FOLLOW_MIN_AMOUNT
+    assert "follow_min_amount" not in body  # Follow-a-Pilot archived (step 4c)
     assert body["agentic_max_candidates"] == float(settings.AGENTIC_MAX_CANDIDATES)
     assert body["retrain_window_days"] == float(MODEL_RETRAIN_WINDOW_DAYS)
 
@@ -976,268 +976,39 @@ def test_equity_curve_buying_power_missing_value_drops_only_that_point(monkeypat
 
 
 # ---------------------------------------------------------------------------
-# Follow endpoints — FAIL-CLOSED command token
+# Follow-a-Pilot endpoints — archived (2026-09, step 4c)
 # ---------------------------------------------------------------------------
 
 
-class TestFollowFailClosed:
-    """When FOLLOW_API_TOKEN is unset, every follow endpoint is 403 (disabled)."""
-
-    def test_get_follows_403_when_token_unset(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
-            resp = client.get("/follows")
-        assert resp.status_code == 403
-
-    def test_put_follows_403_when_token_unset(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
-            resp = client.put("/follows", json={"pilot_id": "trend-following", "amount": 100})
-        assert resp.status_code == 403
-
-    def test_post_follow_403_when_token_unset(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
-            resp = client.post("/pilots/trend-following/follow", json={"amount": 100})
-        assert resp.status_code == 403
-
-
-class TestFollowAuthorized:
-    """With FOLLOW_API_TOKEN set, follow endpoints require the matching token."""
+class TestFollowEndpointsRemoved:
+    """GET/PUT /follows and POST /pilots/{id}/follow were removed with
+    Follow-a-Pilot. With the command token configured and presented they must
+    not resolve to any handler (404/405), so no follow can be persisted."""
 
     def _auth(self):
         return {"Authorization": f"Bearer {_CMD_TOKEN}"}
 
-    def test_get_follows_401_wrong_token(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.get("/follows", headers={"Authorization": "Bearer WRONG"})
-        assert resp.status_code == 401
+    def test_follow_routes_not_registered(self):
+        paths = {getattr(r, "path", "") for r in pilots_api.app.routes}
+        assert "/follows" not in paths
+        assert "/pilots/{pilot_id}/follow" not in paths
 
-    def test_get_follows_ok(self, tmp_path):
+    def test_follow_calls_do_not_resolve(self, tmp_path):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.get("/follows", headers=self._auth())
-        assert resp.status_code == 200
-        assert resp.json() == []
-
-    def test_put_follows_unknown_pilot_404(self, tmp_path):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.put(
-                    "/follows",
-                    json={"pilot_id": "nope", "amount": 100},
+                r1 = client.get("/follows", headers=self._auth())
+                r2 = client.put(
+                    "/follows", json={"pilot_id": "trend-following", "amount": 250.0},
                     headers=self._auth(),
                 )
-        assert resp.status_code == 404
-
-    def test_put_follows_upsert(self, tmp_path):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.put(
-                    "/follows",
-                    json={"pilot_id": "trend-following", "amount": 250.0},
+                r3 = client.post(
+                    "/pilots/trend-following/follow", json={"amount": 1000.0},
                     headers=self._auth(),
                 )
-        assert resp.status_code == 200
-        follow = resp.json()["follow"]
-        assert follow["pilot_id"] == "trend-following"
-        assert follow["amount"] == 250.0
-        assert follow["status"] == "active"
-
-    def test_post_follow_success_preview(self, tmp_path):
-        (tmp_path / "state_snapshot.json").write_text(_SNAPSHOT_FIXTURE, encoding="utf-8")
-
-        class _FakeSnap:
-            total_equity = 100000.0
-
-        class _Store:
-            def latest_account_snapshot(self):
-                return _FakeSnap()
-
-        # This test is about proportional-split math, not Kelly sizing -- stub
-        # the Kelly ceiling generously. plan_follow first calls
-        # estimate_win_rate_and_payoff_per_strategy to decide cold-start vs.
-        # warm; a real (unmocked) TransactionsStore for a brand-new
-        # "Follow:<pilot_id>" strategy always has zero closed trades, which
-        # would report cold-start and route around kelly_sizing_for_strategy
-        # entirely -- so both must be stubbed together for this stub to have
-        # any effect.
-        #
-        # ROBINHOOD_MAX_NOTIONAL_PER_ORDER must be EXPLICITLY pinned to the
-        # "unset" default (0.0) here, not assumed ambient: execution/compose.py's
-        # per-order notional cap clamps every intent's target_notional to this
-        # value when it's a positive real number, which is exactly what a real
-        # operator .env configures for live trading -- and would otherwise
-        # silently truncate this test's $1000 proportional split down to
-        # 5 * min-per-leg-cap, breaking the total-notional assertion below on
-        # whatever machine happens to be running pytest.
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0):
-                with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                    with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
-                        with mock.patch(
-                            "sizing.kelly.estimate_win_rate_and_payoff_per_strategy",
-                            return_value=(0.6, 1.5, 999),
-                        ):
-                            with mock.patch(
-                                "sizing.kelly.kelly_sizing_for_strategy",
-                                return_value=(1.0, "test_stub_no_ceiling"),
-                            ):
-                                resp = client.post(
-                                    "/pilots/trend-following/follow",
-                                    json={"amount": 1000.0},
-                                    headers=self._auth(),
-                                )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["follow"]["pilot_id"] == "trend-following"
-        assert body["follow"]["amount"] == 1000.0
-        assert body["mode"] in ("off", "review", "live")
-        # 5 positive-blend holdings -> 5 proportional preview intents.
-        assert len(body["planned_intents"]) == 5
-        total = sum(i["target_notional"] for i in body["planned_intents"])
-        assert abs(total - 1000.0) < 1.0  # proportional split of the amount
-
-    def test_post_follow_response_matches_followresult_contract(self, tmp_path):
-        """Lock the live POST /follow response to the webapp FollowResult type
-        (webapp/src/api/types.ts) so the live and mock shapes can't silently
-        diverge again — the bug that left the live Follow modal blank."""
-        (tmp_path / "state_snapshot.json").write_text(_SNAPSHOT_FIXTURE, encoding="utf-8")
-
-        class _FakeSnap:
-            total_equity = 100000.0
-
-        class _Store:
-            def latest_account_snapshot(self):
-                return _FakeSnap()
-
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                with mock.patch.object(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 2500.0):
-                    with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
-                        resp = client.post(
-                            "/pilots/trend-following/follow",
-                            json={"amount": 1000.0},
-                            headers=self._auth(),
-                        )
-        assert resp.status_code == 200
-        body = resp.json()
-        required = {
-            "follow", "planned_intents", "mode", "queue_written",
-            "notional_cap", "min_amount", "notice",
-        }
-        assert required.issubset(body.keys()), f"missing keys: {required - set(body)}"
-        assert body["notional_cap"] == pytest.approx(2500.0)
-        assert body["min_amount"] == pytest.approx(settings.FOLLOW_MIN_AMOUNT)
-        assert isinstance(body["notice"], str) and body["notice"]
-
-    def test_post_follow_kill_switch_423(self, tmp_path):
-        class _ActiveKS:
-            def is_active(self):
-                return True
-
-            def reason(self):
-                return "test halt"
-
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_ActiveKS()):
-                    resp = client.post(
-                        "/pilots/trend-following/follow",
-                        json={"amount": 1000.0},
-                        headers=self._auth(),
-                    )
-        assert resp.status_code == 423
-
-    def test_post_follow_no_account_snapshot_preview_note(self, tmp_path):
-        (tmp_path / "state_snapshot.json").write_text(_SNAPSHOT_FIXTURE, encoding="utf-8")
-
-        class _EmptyStore:
-            def latest_account_snapshot(self):
-                return None
-
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                with mock.patch.object(pilots_api, "HistoricalStore", return_value=_EmptyStore()):
-                    resp = client.post(
-                        "/pilots/trend-following/follow",
-                        json={"amount": 1000.0},
-                        headers=self._auth(),
-                    )
-        assert resp.status_code == 200
-        body = resp.json()
-        # Follow still persisted; no equity fabricated -> empty preview + honest note.
-        assert body["follow"]["amount"] == 1000.0
-        assert body["planned_intents"] == []
-        assert "note" in body
-
-    def test_post_follow_unknown_pilot_404(self, tmp_path):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.post(
-                    "/pilots/nope/follow",
-                    json={"amount": 1000.0},
-                    headers=self._auth(),
-                )
-        assert resp.status_code == 404
-
-    @pytest.fixture
-    def _non_followable_pilot(self, monkeypatch):
-        """The catalog no longer ships a non-followable Pilot (the options
-        Pilots were removed in 2026-09, step 4a), so these tests register a
-        synthetic one to keep exercising the server-side followable gate."""
-        from pilots import catalog as _catalog
-
-        pilot = _catalog.Pilot(
-            id="test-non-followable",
-            name="Test Non-Followable",
-            category="Blend",
-            description="Synthetic non-followable Pilot for the gate tests.",
-            weights={},
-            followable=False,
-        )
-        monkeypatch.setitem(_catalog._BY_ID, pilot.id, pilot)
-        return pilot.id
-
-    def test_post_follow_non_followable_pilot_400(self, tmp_path, _non_followable_pilot):
-        """The `followable` gate that disables the Follow button client-side
-        (PilotDetail.tsx/Comparison.tsx) must also be enforced here — the
-        UI disabling a button is not itself a security boundary, and a
-        direct API call must not be able to persist a follow for a Pilot
-        that is `weights={}` by design (e.g. the options-desk specialist
-        strategies added alongside the Strategy Report Card)."""
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.post(
-                    f"/pilots/{_non_followable_pilot}/follow",
-                    json={"amount": 1000.0},
-                    headers=self._auth(),
-                )
-        assert resp.status_code == 400
-        assert "not followable" in resp.json()["detail"]
-
-    def test_put_follows_non_followable_pilot_400(self, tmp_path, _non_followable_pilot):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.put(
-                    "/follows",
-                    json={"pilot_id": _non_followable_pilot, "amount": 500.0},
-                    headers=self._auth(),
-                )
-        assert resp.status_code == 400
-        assert "not followable" in resp.json()["detail"]
-
-    def test_put_follows_cancel_non_followable_pilot_still_allowed(self, tmp_path, _non_followable_pilot):
-        """`amount == 0` (cancel) must never be blocked by the followable gate
-        — a pre-existing follow (e.g. one created before this fix shipped)
-        must always be cancellable regardless of the Pilot's current
-        followable state."""
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.put(
-                    "/follows",
-                    json={"pilot_id": _non_followable_pilot, "amount": 0.0},
-                    headers=self._auth(),
-                )
-        assert resp.status_code == 200
-        assert resp.json()["follow"]["amount"] == 0.0
+        assert r1.status_code in (404, 405)
+        assert r2.status_code in (404, 405)
+        assert r3.status_code in (404, 405)
+        assert not (tmp_path / "follows.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -2923,9 +2694,10 @@ class TestAutomationRun:
         assert resp.status_code == 401
 
     def test_run_not_gated_by_automation_writes_enabled(self):
-        """Deliberate: run sits behind require_command_token alone, matching
-        POST /pilots/{id}/follow's existing posture -- gating it more
-        strictly than the follow write-path would invert the risk ordering."""
+        """Deliberate: run sits behind require_command_token alone (the
+        posture the since-archived POST /pilots/{id}/follow order-queue write
+        had) -- gating a run trigger more strictly would invert the risk
+        ordering."""
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", False):
                 with mock.patch.object(
@@ -4909,13 +4681,13 @@ class TestAgenticStatus:
                     resp = client.get("/agentic/status")
         assert resp.status_code == 200
         body = resp.json()
-        for key in ("mode", "advisory_only", "kill_switch", "queue", "follows", "agent_loop"):
+        for key in ("mode", "advisory_only", "kill_switch", "queue", "agent_loop"):
             assert key in body
+        assert "follows" not in body  # Follow-a-Pilot archived (step 4c)
         assert body["mode"] == "review"
         assert body["kill_switch"] == {"active": False, "reason": None}
         assert body["queue"]["n_intents"] == 2
         assert body["queue"]["n_placeable"] == 1
-        assert body["follows"] == {"n_active": 0, "total_amount": 0.0}
         # No agent_state.json in tmp_path -> honest cold-start, never fabricated.
         assert body["agent_loop"]["cycle_count"] == 0
         assert body["agent_loop"]["reason"] is not None
@@ -4943,25 +4715,6 @@ class TestAgenticStatus:
         assert resp.status_code == 200
         body = resp.json()
         assert body["kill_switch"] == {"active": True, "reason": "test halt"}
-
-    def test_active_follows_counted_and_summed(self, tmp_path):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                client.put(
-                    "/follows", json={"pilot_id": "trend-following", "amount": 250.0},
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
-                client.put(
-                    "/follows", json={"pilot_id": "dip-buyer", "amount": 100.0},
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
-                with mock.patch.object(
-                    pilots_api.execution_panel, "read_execution_queue", return_value=None
-                ):
-                    with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
-                        resp = client.get("/agentic/status")
-        assert resp.status_code == 200
-        assert resp.json()["follows"] == {"n_active": 2, "total_amount": 350.0}
 
     def test_fail_open_read_with_no_token(self, tmp_path):
         with mock.patch.object(settings, "STATE_API_TOKEN", None):

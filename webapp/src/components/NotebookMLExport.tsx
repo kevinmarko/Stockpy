@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { api } from "../api/client";
-import type { Portfolio, Follow } from "../api/types";
+import type { Portfolio } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { theme } from "../theme";
 
 /**
- * NotebookMLExport — copies/downloads the current portfolio + active follows as
+ * NotebookMLExport — copies/downloads the current portfolio snapshot as
  * a JSON payload for downstream LLM ("NotebookML") analysis.
  *
  * HONESTY (CONSTRAINT #4 — never fabricate data): every money field serializes
@@ -31,7 +31,6 @@ export function NotebookMLExport({
     [portfolio]
   );
   const portData: Portfolio | null = hasProp ? portfolio ?? null : portApi.data;
-  const follows = useApi<Follow[]>(() => api.getFollows(), []);
 
   // "Ready" == we hold a resolved, non-null portfolio. Until then, no export.
   const ready = portData != null;
@@ -46,12 +45,6 @@ export function NotebookMLExport({
     } catch {
       /* corrupt/absent layout — omit rather than fabricate */
     }
-
-    const followed_pilots = (follows.data ?? []).map((f) => ({
-      pilot_id: f.pilot_id,
-      amount: f.amount,
-      status: f.status,
-    }));
 
     return {
       // `null` (never a fabricated wall-clock stamp) until the portfolio resolves.
@@ -69,10 +62,9 @@ export function NotebookMLExport({
           name: p.name ?? null,
         })),
       },
-      followed_pilots,
       dashboard_layout: layoutMetadata,
     };
-  }, [portData, follows.data, ready]);
+  }, [portData, ready]);
 
   const handleCopy = async () => {
     if (!ready) return;
@@ -125,7 +117,7 @@ export function NotebookMLExport({
   return (
     <div data-testid="notebook-export-widget" style={{ fontSize: "var(--t-body)" }}>
       <p style={{ color: theme.textSecondary, marginBottom: "var(--s-3)" }}>
-        Export current portfolio positions and active strategy follows formatted for NotebookML.
+        Export current portfolio positions formatted for NotebookML.
       </p>
 
       <div>

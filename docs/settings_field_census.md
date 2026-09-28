@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `a6052be8cbdea8aba927a7967940d3749ce43d4c`
+- Measured at commit: `8c5e73cb9a836ce92863745ec27d25f0b629aa28`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -83,14 +83,14 @@ Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_F
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
 | `ALERT_FILE_PATH` | L1839 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L5688 | yes | Path to the gcloud binary for environment integrations. NOTE: the LIVE read of this value (mcp_remote_adapter.py, a standalone stdio-proxy script) is deliberately a raw os.environ.get('GCLOUD_BIN')... |
-| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4834 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
-| `LLM_COMMENTARY_CACHE_PATH` | L4635 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
+| `GCLOUD_BIN` | L5685 | yes | Path to the gcloud binary for environment integrations. NOTE: the LIVE read of this value (mcp_remote_adapter.py, a standalone stdio-proxy script) is deliberately a raw os.environ.get('GCLOUD_BIN')... |
+| `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4831 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
+| `LLM_COMMENTARY_CACHE_PATH` | L4632 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
 | `LOCAL_DATA_ROOT` | L2155 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
 | `OUTPUT_DIR` | L2172 | yes | Directory for generated reports. Defaults to <LOCAL_DATA_ROOT>/output when unset. |
-| `PROMPT_CACHE_DIR` | L4986 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
+| `PROMPT_CACHE_DIR` | L4983 | yes | Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback. |
 | `SYNC_WATCHLIST_FILES` | L2198 | yes | Colon-separated paths (shell PATH convention) to additional plain-text watchlist files (one ticker per line, '#' = comment) consumed by data.robinhood_client.discover_universe(). Missing files are ... |
-| `WATCH_RULES_FILE` | L4520 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
+| `WATCH_RULES_FILE` | L4517 | yes | Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op). |
 
 ## 4. `SECRET_KEYS` sanity check
 
@@ -138,16 +138,16 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 | `MCP_HTTP_BEARER_TOKEN` | `settings.py:520` | no | yes | yes |
 | `MCP_OAUTH_PASSWORD` | `settings.py:568` | no | yes | yes |
 | `ORCHESTRATOR_DAEMON_TOKEN` | `settings.py:487` | no | yes | yes |
-| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4951` | no | yes | yes |
-| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4959` | no | yes | yes |
-| `PROMPT_REGISTRY_TOKEN` | `settings.py:4943` | no | yes | yes |
-| `PROMPT_REGISTRY_URL` | `settings.py:4935` | no | yes | yes |
+| `PROMPT_REGISTRY_PUBLISH_TOKEN` | `settings.py:4948` | no | yes | yes |
+| `PROMPT_REGISTRY_SIGNING_KEY` | `settings.py:4956` | no | yes | yes |
+| `PROMPT_REGISTRY_TOKEN` | `settings.py:4940` | no | yes | yes |
+| `PROMPT_REGISTRY_URL` | `settings.py:4932` | no | yes | yes |
 | `SENTRY_DSN` | `settings.py:1659` | no | yes | yes |
 | `STATE_API_TOKEN` | `settings.py:479` | no | yes | yes |
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
-- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **51**
+- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **49**
 - routes that mutate a setting: **22**
 
 Three *distinct* mutation mechanisms exist — a liveness model that only considers
@@ -169,28 +169,28 @@ module-level helper which itself calls `env_io.write_*` (or builds the response 
 
 | Route | Method | Handler | Line | `.env` | `setattr` | daemon push | `applies` claims |
 |---|---|---|---|---|---|---|---|
-| `/observability/macro-gate` | PUT | `put_macro_gate` | 1957 | yes | no | no | `next_daemon_restart` |
-| `/llm/setting` | PUT | `set_llm_setting` | 3157 | yes | no | no | `immediately`, `next_daemon_restart` |
-| `/automation/schedule/interval` | PUT | `set_automation_interval` | 3790 | yes | no | yes | `immediately`, `next_daemon_restart` |
-| `/strategy/modules` | PUT | `set_strategy_modules` | 3873 | yes | no | no | `next_daemon_restart` |
-| `/automation/execution-mode` | PUT | `update_execution_mode` | 3960 | yes | no | no | `next_daemon_restart` |
-| `/settings/tunables` | PUT | `put_settings_tunables` | 4419 | yes | no | no | _(none)_ |
-| `/settings/tunables` | PATCH | `put_settings_tunables` | 4419 | yes | no | no | _(none)_ |
-| `/settings/sentiment` | PUT | `put_settings_sentiment` | 5022 | yes | no | no | _(none)_ |
-| `/settings/sentiment` | PATCH | `put_settings_sentiment` | 5022 | yes | no | no | _(none)_ |
-| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 5047 | yes | no | no | _(none)_ |
-| `/settings/sector-selection` | PATCH | `put_settings_sector_selection` | 5047 | yes | no | no | _(none)_ |
-| `/settings/cache-long-short` | PUT | `put_settings_cache_long_short` | 5072 | yes | no | no | _(none)_ |
-| `/settings/cache-long-short` | PATCH | `put_settings_cache_long_short` | 5072 | yes | no | no | _(none)_ |
-| `/settings/paper-broker` | PUT | `put_settings_paper_broker` | 5094 | yes | no | no | _(none)_ |
-| `/settings/paper-broker` | PATCH | `put_settings_paper_broker` | 5094 | yes | no | no | _(none)_ |
-| `/settings/feature-flags` | PUT | `put_feature_flags_settings` | 5158 | yes | no | no | _(none)_ |
-| `/settings/feature-flags` | PATCH | `put_feature_flags_settings` | 5158 | yes | no | no | _(none)_ |
-| `/settings/fmp` | PUT | `put_settings_fmp` | 5187 | yes | no | no | _(none)_ |
-| `/settings/fmp` | PATCH | `put_settings_fmp` | 5187 | yes | no | no | _(none)_ |
-| `/settings/reference` | PUT | `put_settings_reference` | 5401 | yes | no | no | _(none)_ |
-| `/settings/reference` | PATCH | `put_settings_reference` | 5401 | yes | no | no | _(none)_ |
-| `/prompts/pin` | PUT | `put_prompts_pin` | 5682 | yes | no | no | `next_daemon_restart` |
+| `/observability/macro-gate` | PUT | `put_macro_gate` | 1939 | yes | no | no | `next_daemon_restart` |
+| `/llm/setting` | PUT | `set_llm_setting` | 3025 | yes | no | no | `immediately`, `next_daemon_restart` |
+| `/automation/schedule/interval` | PUT | `set_automation_interval` | 3658 | yes | no | yes | `immediately`, `next_daemon_restart` |
+| `/strategy/modules` | PUT | `set_strategy_modules` | 3741 | yes | no | no | `next_daemon_restart` |
+| `/automation/execution-mode` | PUT | `update_execution_mode` | 3828 | yes | no | no | `next_daemon_restart` |
+| `/settings/tunables` | PUT | `put_settings_tunables` | 4287 | yes | no | no | _(none)_ |
+| `/settings/tunables` | PATCH | `put_settings_tunables` | 4287 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PUT | `put_settings_sentiment` | 4890 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PATCH | `put_settings_sentiment` | 4890 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 4915 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PATCH | `put_settings_sector_selection` | 4915 | yes | no | no | _(none)_ |
+| `/settings/cache-long-short` | PUT | `put_settings_cache_long_short` | 4940 | yes | no | no | _(none)_ |
+| `/settings/cache-long-short` | PATCH | `put_settings_cache_long_short` | 4940 | yes | no | no | _(none)_ |
+| `/settings/paper-broker` | PUT | `put_settings_paper_broker` | 4962 | yes | no | no | _(none)_ |
+| `/settings/paper-broker` | PATCH | `put_settings_paper_broker` | 4962 | yes | no | no | _(none)_ |
+| `/settings/feature-flags` | PUT | `put_feature_flags_settings` | 5026 | yes | no | no | _(none)_ |
+| `/settings/feature-flags` | PATCH | `put_feature_flags_settings` | 5026 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PUT | `put_settings_fmp` | 5055 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PATCH | `put_settings_fmp` | 5055 | yes | no | no | _(none)_ |
+| `/settings/reference` | PUT | `put_settings_reference` | 5269 | yes | no | no | _(none)_ |
+| `/settings/reference` | PATCH | `put_settings_reference` | 5269 | yes | no | no | _(none)_ |
+| `/prompts/pin` | PUT | `put_prompts_pin` | 5550 | yes | no | no | `next_daemon_restart` |
 
 ### Existing in-process hot-reload beachhead — `shared/ai_control_center.py::LIVE_PATCHABLE_KEYS`
 
@@ -222,27 +222,27 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **383** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **380** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
-The singleton is bound under **22** distinct local names
+The singleton is bound under **21** distinct local names
 across the tree, which is why this is an AST pass and not a grep:
 
 ```
-_S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_local, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings, settings_module.settings
+_S.settings, _bl_settings, _dsr_settings, _gravity_settings, _mt_settings, _oos_gate_settings, _rh_settings, _s, _s2, _sett, _settings, _settings.settings, _settings93, _settings93_ro, _settings_local, _settings_mod.settings, _settings_singleton, _wf_settings, platform_settings, settings, settings_module.settings
 ```
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 745 | 262 |
-| (b) `getattr(settings, "KEY", default)` | 306 | 183 |
+| (a) `settings.KEY` | 738 | 260 |
+| (b) `getattr(settings, "KEY", default)` | 302 | 182 |
 | (c) `getattr(settings, <var>)` (dynamic) | 13 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
-Fields reached by at least one form: **404** of 477.
+Fields reached by at least one form: **403** of 477.
 
-### Fields with NO statically-attributable read — **73**
+### Fields with NO statically-attributable read — **74**
 
 **These are not necessarily dead.** A field whose name is passed as a *string literal* to a
 factory that then does a dynamic `getattr` is read at runtime while being invisible to every
@@ -257,10 +257,10 @@ referenced by name somewhere and is probably read dynamically.
 | `CIRCUIT_BREAKER_REFERENCE_SYMBOL` | _none_ | no read and no name reference found |
 | `CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD` | _none_ | no read and no name reference found |
 | `CIRCUIT_BREAKER_VPIN_THRESHOLD` | _none_ | no read and no name reference found |
-| `CORRELATION_CLUSTER_LOOKBACK_DAYS` | `api/pilots_api.py:4080` | likely read dynamically |
-| `DASHBOARD_REFRESH_SECONDS` | `api/pilots_api.py:4192`, `pilots/settings_domains.py:132` | likely read dynamically |
-| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4838` | likely read dynamically |
-| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4837` | likely read dynamically |
+| `CORRELATION_CLUSTER_LOOKBACK_DAYS` | `api/pilots_api.py:3948` | likely read dynamically |
+| `DASHBOARD_REFRESH_SECONDS` | `api/pilots_api.py:4060`, `pilots/settings_domains.py:132` | likely read dynamically |
+| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4706` | likely read dynamically |
+| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4705` | likely read dynamically |
 | `ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD` | _none_ | no read and no name reference found |
 | `ETF_HOLDINGS_ENABLED` | _none_ | no read and no name reference found |
 | `ETF_HOLDINGS_ISSUER_CSV_ENABLED` | _none_ | no read and no name reference found |
@@ -284,48 +284,49 @@ referenced by name somewhere and is probably read dynamically.
 | `FIX_HEARTBEAT_INTERVAL_SECONDS` | _none_ | no read and no name reference found |
 | `FIX_MOCK_VENUES_ENABLED` | _none_ | no read and no name reference found |
 | `FIX_VENUES_CONFIG_PATH` | _none_ | no read and no name reference found |
-| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4979` | likely read dynamically |
-| `FMP_OPTIONS_CONTEXT_ENABLED` | `api/pilots_api.py:4990` | likely read dynamically |
-| `FMP_OPTIONS_HEALTH_ENABLED` | `api/pilots_api.py:4989` | likely read dynamically |
+| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4847` | likely read dynamically |
+| `FMP_OPTIONS_CONTEXT_ENABLED` | `api/pilots_api.py:4858` | likely read dynamically |
+| `FMP_OPTIONS_HEALTH_ENABLED` | `api/pilots_api.py:4857` | likely read dynamically |
+| `FOLLOW_MIN_AMOUNT` | `pilots/settings_domains.py:70` | likely read dynamically |
 | `FORECAST_BACKFILL_VRP_PROXY_ENABLED` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_OVERLAP_DAYS` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_WINDOW_DAYS` | _none_ | no read and no name reference found |
-| `MAX_CONCURRENT_OPTION_POSITIONS` | `api/pilots_api.py:4269` | likely read dynamically |
-| `MAX_OPTION_NOTIONAL_PER_TRADE` | `api/pilots_api.py:4268` | likely read dynamically |
+| `MAX_CONCURRENT_OPTION_POSITIONS` | `api/pilots_api.py:4137` | likely read dynamically |
+| `MAX_OPTION_NOTIONAL_PER_TRADE` | `api/pilots_api.py:4136` | likely read dynamically |
 | `MULTI_BROKER_GATEWAY_ENABLED` | `pilots/feature_flags.py:90` | likely read dynamically |
 | `OFI_SHIELD_ENABLED` | `pilots/settings_domains.py:65`, `settings_keysets.py:297` | likely read dynamically |
-| `OPTIONS_0DTE_ENABLED` | `api/pilots_api.py:4264` | likely read dynamically |
-| `OPTIONS_0DTE_HARD_EXIT_TIME` | `api/pilots_api.py:4267` | likely read dynamically |
-| `OPTIONS_0DTE_PROFIT_TARGET_PCT` | `api/pilots_api.py:4265` | likely read dynamically |
-| `OPTIONS_0DTE_STOP_LOSS_PCT` | `api/pilots_api.py:4266` | likely read dynamically |
+| `OPTIONS_0DTE_ENABLED` | `api/pilots_api.py:4132` | likely read dynamically |
+| `OPTIONS_0DTE_HARD_EXIT_TIME` | `api/pilots_api.py:4135` | likely read dynamically |
+| `OPTIONS_0DTE_PROFIT_TARGET_PCT` | `api/pilots_api.py:4133` | likely read dynamically |
+| `OPTIONS_0DTE_STOP_LOSS_PCT` | `api/pilots_api.py:4134` | likely read dynamically |
 | `OPTIONS_ALERT_WEBHOOK_URL` | _none_ | no read and no name reference found |
-| `OPTIONS_AUTO_EXIT_ENABLED` | `api/pilots_api.py:4258` | likely read dynamically |
+| `OPTIONS_AUTO_EXIT_ENABLED` | `api/pilots_api.py:4126` | likely read dynamically |
 | `OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD` | _none_ | no read and no name reference found |
-| `OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES` | `api/pilots_api.py:4263` | likely read dynamically |
-| `OPTIONS_DELTA_HEDGE_ENABLED` | `api/pilots_api.py:4262` | likely read dynamically |
+| `OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES` | `api/pilots_api.py:4131` | likely read dynamically |
+| `OPTIONS_DELTA_HEDGE_ENABLED` | `api/pilots_api.py:4130` | likely read dynamically |
 | `OPTIONS_DRL_RISK_AVERSION_GAMMA` | _none_ | no read and no name reference found |
 | `OPTIONS_EARNINGS_CRUSH_ENABLED` | _none_ | no read and no name reference found |
 | `OPTIONS_EARNINGS_MIN_EDGE` | _none_ | no read and no name reference found |
 | `OPTIONS_EARNINGS_WING_MULTIPLIER` | _none_ | no read and no name reference found |
 | `OPTIONS_GEX_SEARCH_RANGE_PCT` | _none_ | no read and no name reference found |
 | `OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE` | _none_ | no read and no name reference found |
-| `OPTIONS_MANAGE_DTE_THRESHOLD` | `api/pilots_api.py:4261` | likely read dynamically |
-| `OPTIONS_MATRIX_ENABLED` | `api/pilots_api.py:4223` | likely read dynamically |
+| `OPTIONS_MANAGE_DTE_THRESHOLD` | `api/pilots_api.py:4129` | likely read dynamically |
+| `OPTIONS_MATRIX_ENABLED` | `api/pilots_api.py:4091` | likely read dynamically |
 | `OPTIONS_META_LABELER_ENABLED` | _none_ | no read and no name reference found |
-| `OPTIONS_PROFIT_TARGET_PCT` | `api/pilots_api.py:4259` | likely read dynamically |
+| `OPTIONS_PROFIT_TARGET_PCT` | `api/pilots_api.py:4127` | likely read dynamically |
 | `OPTIONS_SOR_LEGGING_LATENCY_SECONDS` | _none_ | no read and no name reference found |
-| `OPTIONS_STOP_LOSS_MULTIPLE` | `api/pilots_api.py:4260` | likely read dynamically |
-| `OPTIONS_TRUE_IVR_ENABLED` | `api/pilots_api.py:4224` | likely read dynamically |
+| `OPTIONS_STOP_LOSS_MULTIPLE` | `api/pilots_api.py:4128` | likely read dynamically |
+| `OPTIONS_TRUE_IVR_ENABLED` | `api/pilots_api.py:4092` | likely read dynamically |
 | `OPTIONS_VPIN_TOXICITY_THRESHOLD` | _none_ | no read and no name reference found |
-| `OPTIONS_VRP_THRESHOLD` | `api/pilots_api.py:4153` | likely read dynamically |
-| `PAPER_OPTIONS_AUTO_EXECUTE_ENABLED` | `api/pilots_api.py:4257`, `pilots/settings_domains.py:74` | likely read dynamically |
+| `OPTIONS_VRP_THRESHOLD` | `api/pilots_api.py:4021` | likely read dynamically |
+| `PAPER_OPTIONS_AUTO_EXECUTE_ENABLED` | `api/pilots_api.py:4125`, `pilots/settings_domains.py:74` | likely read dynamically |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:10834` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1711`, `pilots/feature_flags.py:49` | likely read dynamically |
 | `WS_RISK_STREAM_INTERVAL_SECONDS` | _none_ | no read and no name reference found |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **142**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **143**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -466,6 +467,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `RAG_PORTFOLIO_CONTEXT_ENABLED` | b | 3 | 0 |
 | `RAG_PORTFOLIO_CONTEXT_PROVIDER` | b | 1 | 0 |
 | `RAG_RETRIEVAL_TOP_K` | b | 1 | 0 |
+| `ROBINHOOD_EXECUTION_MODE` | b | 2 | 0 |
 | `ROBINHOOD_LIMIT_BUFFER_BPS` | b | 1 | 0 |
 | `SECTOR_FORECAST_CONFIGS` | b | 1 | 0 |
 | `SECTOR_FORECAST_CONFIG_PATH` | b | 1 | 0 |
@@ -484,10 +486,10 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:150` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:186` | `getattr(settings, flag_name, False)` |
-| `api/pilots_api.py:3226` | `getattr(settings, body.key)` |
-| `api/pilots_api.py:4356` | `getattr(settings, key, None)` |
-| `api/pilots_api.py:4461` | `getattr(settings, key, None)` |
-| `api/pilots_api.py:5320` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:3094` | `getattr(settings, body.key)` |
+| `api/pilots_api.py:4224` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:4329` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:5188` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:84` | `getattr(_settings, name, None)` |
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |

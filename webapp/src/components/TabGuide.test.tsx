@@ -77,7 +77,6 @@ describe("TabGuide", () => {
       kelly_fraction: 0.5,
       kelly_cap: 0.2,
       robinhood_max_notional_per_order: 2500,
-      follow_min_amount: 100,
       agentic_max_candidates: 25,
       retrain_window_days: 30,
     });

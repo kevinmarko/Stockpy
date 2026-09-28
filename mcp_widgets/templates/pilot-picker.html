@@ -109,10 +109,7 @@ const { App } = globalThis.ExtApps;
       footer.className = "pilot-card-footer";
       const holdingsEl = document.createElement("span");
       holdingsEl.textContent = `Holdings: ${row.holdings_count ?? "—"}`;
-      const aumEl = document.createElement("span");
-      aumEl.textContent = `AUM: ${formatCurrency(row.aum_proxy)}`;
       footer.appendChild(holdingsEl);
-      footer.appendChild(aumEl);
       card.appendChild(footer);
 
       const btn = document.createElement("button");
@@ -133,7 +130,6 @@ const { App } = globalThis.ExtApps;
           card.appendChild(expansion);
         }
         renderDetailPanel(expansion, detail);
-        renderFollowForm(expansion, detail, app);
       };
 
       grid.appendChild(card);

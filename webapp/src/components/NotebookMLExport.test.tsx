@@ -57,7 +57,7 @@ describe("NotebookMLExport component (R4)", () => {
     expect(parsed).toHaveProperty("timestamp");
     expect(parsed).toHaveProperty("portfolio");
     expect(parsed.portfolio).toHaveProperty("total_equity");
-    expect(parsed).toHaveProperty("followed_pilots");
+    expect(parsed).not.toHaveProperty("followed_pilots");
   });
 
   // T1.2: Clipboard Write Action

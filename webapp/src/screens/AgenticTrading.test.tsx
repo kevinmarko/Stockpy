@@ -69,7 +69,6 @@ const BASE_STATUS: AgenticStatus = {
     stale: false,
     age_seconds: 300,
   },
-  follows: { n_active: 2, total_amount: 750 },
   agent_loop: { cycle_count: 42, last_cycle_iso: new Date(Date.now() - 8 * 60_000).toISOString(), backlog_count: 1, reason: null },
 };
 
@@ -80,13 +79,14 @@ describe("Agentic Trading screen (real mock API)", () => {
     restoreClipboard();
   });
 
-  it("renders the agent status header with mode, kill switch, and follows", async () => {
+  it("renders the agent status header with mode and kill switch, and no follows summary", async () => {
     renderScreen();
     expect(await screen.findByRole("heading", { name: "Agentic Trading" })).toBeInTheDocument();
     // "mode: review" legitimately appears twice (Agent status header AND the
     // shared execution queue section both render the same live mode).
     expect((await screen.findAllByText(/mode: review/)).length).toBeGreaterThan(0);
-    expect(await screen.findByText(/active follow/)).toBeInTheDocument();
+    expect(screen.queryByText(/active follow/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Pilot follows")).not.toBeInTheDocument();
   });
 
   it("shows a scored candidate and honestly labels an unscored one, never a fabricated score", async () => {
@@ -382,11 +382,11 @@ describe("Agentic Trading screen (real mock API)", () => {
     expect(await screen.findByText("Couldn't load")).toBeInTheDocument();
   });
 
-  it("provides deep links to the execution-mode ladder and Pilot follow management, not a duplicate control", async () => {
+  it("provides a deep link to the execution-mode ladder, not a duplicate control", async () => {
     renderScreen();
     const modeLink = await screen.findByRole("link", { name: /Change execution mode/ });
     expect(within(modeLink).getByText(/Change execution mode/)).toBeInTheDocument();
-    expect(await screen.findByRole("link", { name: /Manage Pilot follows/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Manage Pilot follows/ })).not.toBeInTheDocument();
   });
 
   it("debounces the Ladder Ticker input instead of firing a lookup per keystroke", async () => {

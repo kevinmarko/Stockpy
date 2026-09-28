@@ -107,14 +107,12 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   "execution mode":
     "The Robinhood order queue's posture: 'off' builds nothing, 'review' builds a dry-run queue for you to confirm, 'live' still requires the same per-trade human confirmation before any order reaches the broker — no mode ever places an order automatically.",
   "kill switch":
-    "A global, file-based safety switch. While active, the execution queue adds no new orders and Pilot follows are paused. Pausing does not stop the pipeline schedule — cycles keep running, they just produce no actionable output.",
+    "A global, file-based safety switch. While active, the execution queue adds no new orders. Pausing does not stop the pipeline schedule — cycles keep running, they just produce no actionable output.",
   "notional cap": (t) => {
     const cap = t?.robinhood_max_notional_per_order;
     const rendered = cap != null && cap > 0 ? fmtUsd(cap) : "not configured";
     return `The hard per-order USD ceiling the execution queue enforces before an intent is marked placeable: ${rendered}. An intent above the cap is blocked, never silently resized.`;
   },
-  "follow minimum": (t) =>
-    `The smallest dollar amount the Follow modal accepts for a Pilot allocation: ${fmtUsd(t?.follow_min_amount)}. A UX floor, not a broker constraint — the gated queue itself is bounded by the per-order notional cap.`,
   "opportunity scan": (t) =>
     `A Robinhood broker scan run by the agentic-discovery skill, cross-referenced against this platform's own advisory engine — never run automatically. Results are capped at ${fmtNum(t?.agentic_max_candidates, 0)} candidates regardless of how many the scan matches; a candidate with no computed action shows '—', never a guessed one.`,
   cointegration:
@@ -254,14 +252,13 @@ export const TAB_HELP: Record<string, TabHelp> = {
   pilots: {
     title: "Pilots",
     description:
-      "Browse strategy 'Pilots' you can follow, and view curated recommendations in Today's Radar and the Weekly Digest. Each Pilot now shows its actual current BUY/SELL/HOLD call per holding, with buy and sell/stop ranges. The honesty badges (Deployable / Not deployable) and the PBO · DSR · Sharpe · Max-DD row show whether a Pilot actually cleared its backtest gates — never a marketing number.",
+      "Browse strategy 'Pilots' — the platform's own quant strategies, for research and comparison — and view curated recommendations in Today's Radar and the Weekly Digest. Each Pilot now shows its actual current BUY/SELL/HOLD call per holding, with buy and sell/stop ranges. The honesty badges (Deployable / Not deployable) and the PBO · DSR · Sharpe · Max-DD row show whether a Pilot actually cleared its backtest gates — never a marketing number.",
     keyConcepts: [
       "deployable",
       "pbo",
       "dsr",
       "sharpe ratio",
       "max drawdown",
-      "follow minimum",
       "buy range",
       "sell/stop range",
       "today's radar",
@@ -351,14 +348,13 @@ export const TAB_HELP: Record<string, TabHelp> = {
   agentic: {
     title: "Agentic Trading",
     description:
-      "The consolidated command center for the platform's Robinhood-backed loop: Pilot follows, the gated dry-run order queue, scan-based candidate discovery, and the decision journal. Every control here is advisory-only or paper-first — placing a real order always requires a separate, human-confirmed step outside this screen.",
+      "The consolidated command center for the platform's Robinhood-backed loop: the gated dry-run order queue, scan-based candidate discovery, and the decision journal. Every control here is advisory-only or paper-first — placing a real order always requires a separate, human-confirmed step outside this screen.",
     keyConcepts: [
       "advisory only",
       "execution mode",
       "kill switch",
       "notional cap",
       "opportunity scan",
-      "follow minimum",
     ],
   },
   activity: {
@@ -370,8 +366,8 @@ export const TAB_HELP: Record<string, TabHelp> = {
   compare: {
     title: "Pilot Strategy Comparison",
     description:
-      "Pick up to 5 Pilots to overlay their performance curves and compare Sharpe, PBO, DSR, and follower count side by side — the same honesty metrics as the Pilots screen, just side by side. Also surfaces the platform's current recommended-stock picks.",
-    keyConcepts: ["sharpe ratio", "pbo", "dsr", "follow minimum"],
+      "Pick up to 5 Pilots to overlay their performance curves and compare Sharpe, PBO, DSR, and max drawdown side by side — the same honesty metrics as the Pilots screen, just side by side. Also surfaces the platform's current recommended-stock picks.",
+    keyConcepts: ["sharpe ratio", "pbo", "dsr", "max drawdown"],
   },
   models: {
     title: "The models",
@@ -478,7 +474,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "settings-modules": {
     title: "Modules & Integrations",
     description:
-      "Entry points to every `.env`-write surface and sub-system: the Strategy Matrix (per-module signal weights), general runtime tunables, the scoped sentiment/sector-selection/FMP editors, the Prompt Registry, the AI Control Center, and your active Pilot follows.",
+      "Entry points to every `.env`-write surface and sub-system: the Strategy Matrix (per-module signal weights), general runtime tunables, the scoped sentiment/sector-selection/FMP editors, the Prompt Registry, and the AI Control Center.",
     keyConcepts: ["signal weight", "prompt registry"],
   },
   "settings-feature-flags": {

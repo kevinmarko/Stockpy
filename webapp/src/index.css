@@ -356,11 +356,6 @@ button {
   width: 220px;
   padding: 14px;
 }
-.popular-card {
-  display: block;
-  width: 200px;
-  padding: 14px;
-}
 
 /* ---- Chips / badges ---- */
 .chip {
@@ -779,8 +774,7 @@ button:focus-visible {
     scroll-snap-align: none;
     flex: unset;
   }
-  .pilot-card,
-  .popular-card {
+  .pilot-card {
     width: 100%;
   }
 }
@@ -1079,8 +1073,8 @@ button:focus-visible {
 }
 
 /* ---- Text input (sibling to .field, NOT a replacement) ----
-   .field is deliberately money-styled (22px/700/tabular-nums) for the Follow
-   amount input — do not touch it. .input is the normal-sized variant for
+   .field is deliberately money-styled (22px/700/tabular-nums) (originally for
+   the since-removed Follow amount input) — do not touch it. .input is the normal-sized variant for
    everything else (settings fields, etc). --t-input is a 16px hard floor;
    see the token comment above .field. */
 .input {

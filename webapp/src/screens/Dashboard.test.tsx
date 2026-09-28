@@ -132,9 +132,7 @@ function makePilot(overrides: Partial<PilotSummary> & Pick<PilotSummary, "id" | 
     headline: { sharpe: null, dsr: null, pbo: null, max_drawdown: null, deployable: null },
     holdings_count: 0,
     top_holdings: [],
-    aum_proxy: 0,
-    followers_proxy: 0,
-    long_only: true, followable: true,
+    long_only: true,
     ...overrides,
   };
 }

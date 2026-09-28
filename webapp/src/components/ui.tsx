@@ -481,7 +481,8 @@ export function ErrorState({
 /**
  * Normal-sized text/number input — a SIBLING to the `.field` class, not a
  * replacement. `.field` is deliberately money-styled (22px/700/tabular-nums)
- * for the Follow amount input; leave it alone. This is for everything else
+ * (originally for the since-removed Follow amount input; still used by
+ * money/credential inputs) -- leave it alone. This is for everything else
  * (e.g. a schedule interval, a pause reason) where 22px/700 would be wrong.
  * `--t-input` is a 16px hard floor (see the index.css token comment) — below
  * that, iOS Safari auto-zooms the page on focus.
@@ -752,7 +753,7 @@ export function Textarea({
 
 /**
  * Thin wrapper over the `.btn` class — exists so a mutation's `submitting`
- * boolean doesn't get hand-wired at every call site the way FollowModal does
+ * boolean doesn't get hand-wired at every call site the way the since-removed FollowModal did
  * (`disabled={submitting}` + a manually-inlined `<span className="spinner"/>`
  * ternary, repeated verbatim wherever a write button appears). `pending` sets
  * both `disabled` and `aria-busy` and swaps the label for the spinner.

@@ -77,18 +77,8 @@ _PILOT_DETAIL_UI = (
     if _WIDGETS_AVAILABLE
     else None
 )
-_FOLLOW_RESULT_UI = (
-    {"ui": {"resourceUri": "ui://widgets/follow-result.html"}}
-    if _WIDGETS_AVAILABLE
-    else None
-)
 _PILOT_COMPARE_UI = (
     {"ui": {"resourceUri": "ui://widgets/pilot-compare.html"}}
-    if _WIDGETS_AVAILABLE
-    else None
-)
-_PILOT_PORTFOLIO_UI = (
-    {"ui": {"resourceUri": "ui://widgets/pilot-portfolio.html"}}
     if _WIDGETS_AVAILABLE
     else None
 )
@@ -4349,17 +4339,16 @@ def get_quote(symbol: str) -> str:
 
 
 # ==========================================
-# [9] PILOTS MARKETPLACE (READ-ONLY + GATED FOLLOW)
+# [9] PILOTS MARKETPLACE (READ-ONLY)
 # ==========================================
-# Exposes pilots/ (catalog, scoring, performance, follows_store, mirror) —
-# the same read/follow surface api/pilots_api.py serves to the webapp/ PWA —
-# as MCP tools. Read tools only touch already-persisted state (output/state_
-# snapshot.json, output/history/, reports/*_validation_summary.json,
-# output/follows.json) and never import a heavy calculation engine.
-# follow_pilot is the one write action: it persists a follow and calls
-# pilots.mirror.plan_follow, which only ever produces a GATED, paper-first
-# DRY-RUN queue at output/execution_queue.json (readable via
-# get_execution_queue) — it never contacts a broker or places an order.
+# Exposes pilots/ (catalog, scoring, performance) — the same read surface
+# api/pilots_api.py serves to the webapp/ PWA — as MCP tools. They only touch
+# already-persisted state (output/state_snapshot.json, output/history/,
+# reports/*_validation_summary.json) and never import a heavy calculation
+# engine. Follow-a-Pilot (follow_pilot / unfollow_pilot / get_follows /
+# get_portfolio_by_pilot) was archived to legacy/ in 2026-09 (step 4c); those
+# four tool names remain as retired stubs further down so a client with a
+# cached tool list gets a clear message instead of an "unknown tool" error.
 
 _PILOT_RANGES = ("1W", "1M", "3M", "6M", "1Y", "2Y")
 
@@ -4377,18 +4366,15 @@ def list_pilots() -> str:
     Lists every Stockpy "Pilot" (a copyable strategy = a named blend of
     signal-module weights) with its honest PBO/DSR-gated backtest headline
     (Sharpe, DSR, PBO, MaxDD, deployable), current holdings_count from the
-    latest snapshot, and local follow proxies (aum_proxy/followers_proxy).
-    Read-only; never fabricates a metric for a Pilot with no validated
+    latest snapshot. Read-only; never fabricates a metric for a Pilot with no validated
     backtest (those show "—"). In a host that renders MCP Apps (e.g.
     Claude.ai via a custom connector), this opens an interactive
     Pilot-picker card grid instead of only returning markdown.
     """
     try:
         from pilots import catalog, performance, scoring
-        from pilots.follows_store import FollowsStore
 
         snapshot = scoring.load_snapshot()
-        store = FollowsStore()
 
         def _fmt(v):
             return f"{v:.2f}" if isinstance(v, (int, float)) else "—"
@@ -4402,7 +4388,7 @@ def list_pilots() -> str:
             )
             deployable = headline.get("deployable")
             rows.append(
-                "| `{id}` | {name} | {cat} | {dep} | {sharpe} | {dsr} | {pbo} | {holdings} | ${aum:,.0f} |".format(
+                "| `{id}` | {name} | {cat} | {dep} | {sharpe} | {dsr} | {pbo} | {holdings} |".format(
                     id=pilot.id,
                     name=pilot.name,
                     cat=pilot.category,
@@ -4411,7 +4397,6 @@ def list_pilots() -> str:
                     dsr=_fmt(headline.get("dsr")),
                     pbo=_fmt(headline.get("pbo")),
                     holdings=holdings_count,
-                    aum=store.aum_for(pilot.id),
                 )
             )
             json_rows.append(
@@ -4423,8 +4408,6 @@ def list_pilots() -> str:
                     "validation_strategy_id": pilot.validation_strategy_id,
                     "headline": headline,
                     "holdings_count": holdings_count,
-                    "aum_proxy": store.aum_for(pilot.id),
-                    "followers_proxy": store.followers_for(pilot.id),
                 }
             )
 
@@ -4434,10 +4417,10 @@ def list_pilots() -> str:
                 "_No state snapshot yet — holdings_count reads 0 for every Pilot until the pipeline runs._\n"
             )
         lines.append(
-            "| ID | Name | Category | Deployable | Sharpe | DSR | PBO | Holdings | AUM (proxy) |"
+            "| ID | Name | Category | Deployable | Sharpe | DSR | PBO | Holdings |"
         )
         lines.append(
-            "|----|------|----------|------------|--------|-----|-----|----------|-------------|"
+            "|----|------|----------|------------|--------|-----|-----|----------|"
         )
         lines.extend(rows)
         lines.append("\n```json")
@@ -4771,337 +4754,63 @@ def get_pilot_trades(pilot_id: str, limit: int = 20) -> str:
         return f"Failed to get trades for '{pilot_id}': {e!s}"
 
 
-@mcp.tool()
+_FOLLOW_RETIRED_MESSAGE = (
+    "Follow-a-Pilot has been retired (2026-09, step 4c): Pilots can no longer "
+    "be followed, so there are no follows to list, create, cancel, or "
+    "attribute portfolio P&L to. The Pilots marketplace itself is still "
+    "available read-only via list_pilots, get_pilot_detail, "
+    "get_pilot_performance, get_pilot_trades, and compare_pilots; the "
+    "advisory execution queue is still readable via get_execution_queue."
+)
+
+
+def _follow_retired(tool_name: str) -> str:
+    return f"# `{tool_name}` is retired\n\n{_FOLLOW_RETIRED_MESSAGE}"
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def get_follows() -> str:
     """
-    Lists the operator's active Pilot follows from the local, single-operator
-    JSON store (output/follows.json) with amount and status.
+    RETIRED (2026-09): Follow-a-Pilot was archived. Always returns a short
+    retired notice; reads and writes nothing.
     """
-    try:
-        from pilots.follows_store import FollowsStore
-
-        follows = FollowsStore().list_active()
-        lines = ["# Active Pilot Follows\n"]
-        if follows:
-            lines.append("| Pilot ID | Amount | Created | Updated |")
-            lines.append("|----------|--------|---------|---------|")
-            for f in follows:
-                lines.append(
-                    "| `{pid}` | ${amt:,.2f} | {created} | {updated} |".format(
-                        pid=f.get("pilot_id"),
-                        amt=f.get("amount", 0.0),
-                        created=f.get("created_at", "N/A"),
-                        updated=f.get("updated_at", "N/A"),
-                    )
-                )
-        else:
-            lines.append("_No active follows._")
-
-        lines.append("\n```json")
-        lines.append(json.dumps(follows, indent=2, default=str))
-        lines.append("```")
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Failed to list follows: {e!s}"
+    return _follow_retired("get_follows")
 
 
-@mcp.tool(meta=_FOLLOW_RESULT_UI)
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def follow_pilot(pilot_id: str, amount: float) -> str:
     """
-    Follows a Pilot with a dollar amount: persists the follow to
-    output/follows.json, then builds a GATED, paper-first DRY-RUN
-    rebalance-to-target order queue via pilots.mirror.plan_follow — this
-    NEVER places a real order. The resulting queue (output/execution_queue.json,
-    the same file get_execution_queue reads) still must be reviewed and
-    confirmed through the robinhood-execution skill before anything reaches a
-    broker.
-
-    Refuses to plan (returns a message, no queue written) when the global
-    kill switch is active. Reads the account snapshot DB-first
-    (data.historical_store.HistoricalStore.latest_account_snapshot()) and
-    never forces a live Robinhood login — with no stored snapshot the follow
-    is still persisted and a preview-only result is returned (no equity
-    fabricated).
+    RETIRED (2026-09): Follow-a-Pilot was archived. Always returns a short
+    retired notice; persists nothing and writes no execution-queue entry.
 
     Args:
-        pilot_id: A Pilot id from list_pilots (e.g. "trend-following").
-        amount: Dollar amount to allocate to this Pilot (must be > 0).
-
-    In a host that renders MCP Apps, the result renders as a confirmation
-    card instead of only returning markdown.
+        pilot_id: Ignored.
+        amount: Ignored.
     """
-    try:
-        from data.historical_store import HistoricalStore
-        from execution.kill_switch import GlobalKillSwitch
-        from pilots import catalog
-        from pilots.follows_store import FollowsStore
-        from pilots.mirror import plan_follow
-        from pilots.scoring import load_snapshot
-
-        pilot = catalog.get_pilot(pilot_id)
-        if pilot is None:
-            return _unknown_pilot_message(pilot_id)
-
-        if amount is None or amount <= 0:
-            return "amount must be > 0 to follow a pilot."
-
-        ks = GlobalKillSwitch()
-        if ks.is_active():
-            return f"🚫 Kill switch is active — following is paused. Reason: {ks.reason() or 'N/A'}"
-
-        follow = FollowsStore().upsert(pilot_id, float(amount))
-
-        snapshot = load_snapshot()
-        account_snapshot = None
-        account_note = "no account snapshot (preview only, no equity fabricated)"
-        try:
-            account_snapshot = HistoricalStore().latest_account_snapshot()
-            if account_snapshot is not None:
-                account_note = "account snapshot loaded (DB)"
-        except Exception as ae:
-            account_note = f"account snapshot unavailable ({type(ae).__name__})"
-
-        plan = plan_follow(pilot, float(amount), account_snapshot, snapshot=snapshot)
-
-        lines = [f"# Follow: {pilot.name} (`{pilot.id}`) — ${float(amount):,.2f}\n"]
-        lines.append(
-            "⚠️ This creates a GATED, paper-first order-queue preview. "
-            "**No order is placed automatically** — review it with `get_execution_queue` "
-            "and confirm through the robinhood-execution skill.\n"
-        )
-        lines.append(f"_{account_note}._")
-        lines.append(f"- **Mode**: {plan.get('mode')}")
-        lines.append(
-            f"- **Queue Written**: {'✅' if plan.get('queue_written') else '❌ (preview only)'}"
-        )
-
-        intents = plan.get("planned_intents", [])
-        if intents:
-            lines.append("\n## Planned Intents")
-            lines.append("| Symbol | Action | Target Notional | Rationale |")
-            lines.append("|--------|--------|------------------|-----------|")
-            for it in intents:
-                notional = it.get("target_notional")
-                lines.append(
-                    "| `{sym}` | {act} | {notional} | {rat} |".format(
-                        sym=it.get("symbol", "?"),
-                        act=it.get("action", "?"),
-                        notional=f"${notional:,.2f}" if notional is not None else "N/A",
-                        rat=it.get("rationale", ""),
-                    )
-                )
-        else:
-            lines.append(
-                "\n_No planned intents (Pilot has no positive-scoring holdings yet, or the follow is already balanced)._"
-            )
-
-        payload = {
-            "follow": follow,
-            "planned_intents": intents,
-            "mode": plan.get("mode"),
-            "queue_written": plan.get("queue_written", False),
-        }
-        lines.append("\n```json")
-        lines.append(json.dumps(payload, indent=2, default=str))
-        lines.append("```")
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Failed to follow pilot '{pilot_id}': {e!s}"
+    return _follow_retired("follow_pilot")
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def unfollow_pilot(pilot_id: str) -> str:
     """
-    Stops following a Pilot: cancels the follow via
-    pilots.follows_store.FollowsStore.upsert(pilot_id, 0.0) -- the SAME
-    "amount == 0 cancels it" semantics api/pilots_api.py's PUT /follows
-    already uses, deliberately NOT FollowsStore.remove(), which would delete
-    the follow's mirrored attribution entirely. This immediately excludes the
-    Pilot from get_follows()/AUM/followers proxies and stops all FUTURE
-    rebalancing for it (pilots.mirror.plan_follow is never called again for a
-    cancelled follow) -- but places NO sell order and writes NO
-    execution-queue entry. Any positions this follow previously put on remain
-    held; if the follow has a recorded mirrored set, the residual
-    symbols/values are surfaced honestly so you know what is left behind.
-
-    Never gated on the global kill switch: unfollowing only removes tracking
-    and stops future increases in exposure, so it takes on no new risk and
-    should stay available even when the kill switch is active.
-
-    Idempotent: calling this on a Pilot you are not currently following (no
-    follow row on record) returns a short message rather than erroring.
+    RETIRED (2026-09): Follow-a-Pilot was archived (every follow had already
+    been cancelled). Always returns a short retired notice; changes nothing.
 
     Args:
-        pilot_id: A Pilot id from list_pilots (e.g. "trend-following").
+        pilot_id: Ignored.
     """
-    try:
-        from pilots import catalog
-        from pilots.follows_store import STATUS_ACTIVE, FollowsStore
-
-        pilot = catalog.get_pilot(pilot_id)
-        if pilot is None:
-            return _unknown_pilot_message(pilot_id)
-
-        store = FollowsStore()
-        existing = store.get(pilot_id)
-        if existing is None:
-            return f"Not currently following `{pilot_id}` — nothing to unfollow."
-
-        was_following = existing.get("status") == STATUS_ACTIVE
-        prior_amount = existing.get("amount")
-        # Read the residual mirrored set BEFORE cancelling (upsert(0.0)
-        # preserves it, but reading pre-cancel matches follow_pilot's own
-        # convention of reporting the pre-write state).
-        residual_mirrored = store.get_mirrored(pilot_id)
-
-        store.upsert(pilot_id, 0.0)
-
-        lines = [f"# Unfollow: {pilot.name} (`{pilot.id}`)\n"]
-        if was_following:
-            lines.append(
-                f"✅ Follow cancelled (was ${float(prior_amount or 0.0):,.2f}). "
-                "No future rebalancing will occur for this Pilot."
-            )
-        else:
-            lines.append(
-                f"_Already not actively following `{pilot_id}` "
-                f"(last amount ${float(prior_amount or 0.0):,.2f})._"
-            )
-
-        if residual_mirrored:
-            lines.append("\n## Still Held (not automatically sold)")
-            lines.append(
-                "You still hold existing positions from this Pilot; they "
-                "will not be automatically sold."
-            )
-            lines.append("| Symbol | Target Notional (last attributed) |")
-            lines.append("|--------|-------------------------------------|")
-            for m in residual_mirrored:
-                notional = m.get("target_notional")
-                lines.append(
-                    "| `{sym}` | {notional} |".format(
-                        sym=m.get("symbol", "?"),
-                        notional=f"${notional:,.2f}" if notional is not None else "N/A",
-                    )
-                )
-        else:
-            lines.append("\n_No attributed positions on record for this follow._")
-
-        payload = {
-            "pilot_id": pilot_id,
-            "was_following": was_following,
-            "cancelled_amount": prior_amount,
-            "residual_mirrored": residual_mirrored,
-            "note": (
-                "Unfollowing stops future rebalancing but does not sell any "
-                "existing positions."
-            ),
-        }
-        lines.append("\n```json")
-        lines.append(json.dumps(payload, indent=2, default=str))
-        lines.append("```")
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Failed to unfollow pilot '{pilot_id}': {e!s}"
+    return _follow_retired("unfollow_pilot")
 
 
-@mcp.tool(meta=_PILOT_PORTFOLIO_UI, annotations=ToolAnnotations(readOnlyHint=True))
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 def get_portfolio_by_pilot() -> str:
     """
-    Segments the operator's REAL live account P&L by which followed Pilot a
-    position is attributed to -- an honest PROXY, not per-lot cost-basis
-    tracking (Stockpy does not record which Pilot originated a specific
-    executed broker order). Attribution is built from each follow's last
-    persisted target allocation (pilots.follows_store.FollowsStore
-    .get_mirrored), capped by currently-held market value and scaled down
-    where multiple Pilots claim the same symbol -- see
-    pilots.portfolio_attribution for the full algorithm. Includes both
-    active AND cancelled follows (an unfollowed Pilot's residual holdings
-    stay visible), plus an "Unattributed" bucket for held value no follow
-    claims. Reads the account snapshot DB-first
-    (data.historical_store.HistoricalStore.latest_account_snapshot()) and
-    never forces a live Robinhood login. READ-ONLY; never fabricates a
-    position or a claim.
+    RETIRED (2026-09): per-Pilot portfolio attribution was built from each
+    follow's persisted targets, and Follow-a-Pilot was archived. Always
+    returns a short retired notice. For the real account, use
+    get_robinhood_account_snapshot or get_portfolio_summary.
     """
-    try:
-        from data.historical_store import HistoricalStore
-        from pilots import catalog
-        from pilots.follows_store import FollowsStore
-        from pilots.portfolio_attribution import attribute_portfolio_by_pilot
-
-        account_snapshot = None
-        try:
-            account_snapshot = HistoricalStore().latest_account_snapshot()
-        except Exception:
-            # Matches follow_pilot's own convention: a snapshot-fetch failure
-            # degrades to None (honest "no account data") rather than raising.
-            account_snapshot = None
-
-        follows = FollowsStore().list_all()
-        pilot_names = {p.id: p.name for p in catalog.list_pilots()}
-
-        result = attribute_portfolio_by_pilot(
-            account_snapshot, follows, pilot_names=pilot_names
-        )
-
-        lines = ["# Portfolio by Pilot (proxy attribution)\n"]
-        lines.append(f"> {result['note']}\n")
-        if result.get("reason"):
-            lines.append(f"_{result['reason']}_")
-
-        if result["pilots"]:
-            lines.append("\n## By Pilot")
-            lines.append("| Pilot | Attributed Value | Unrealized P&L | P&L % |")
-            lines.append("|-------|-------------------|-----------------|-------|")
-            for p in result["pilots"]:
-                pct = p.get("attributed_unrealized_pl_pct")
-                lines.append(
-                    "| `{pid}`{name} | ${val:,.2f} | ${pl:,.2f} | {pct} |".format(
-                        pid=p["pilot_id"],
-                        name=f" ({p['pilot_name']})" if p.get("pilot_name") else "",
-                        val=p["attributed_market_value"],
-                        pl=p["attributed_unrealized_pl"],
-                        pct=f"{pct:+.1%}" if pct is not None else "—",
-                    )
-                )
-            for p in result["pilots"]:
-                if not p["positions"]:
-                    continue
-                lines.append(f"\n### `{p['pilot_id']}` — Attributed Positions")
-                lines.append(
-                    "| Symbol | Attributed Value | Attributed P&L | Overlap-Scaled |"
-                )
-                lines.append(
-                    "|--------|-------------------|-----------------|-----------------|"
-                )
-                for pos in p["positions"]:
-                    lines.append(
-                        "| `{sym}` | ${val:,.2f} | ${pl:,.2f} | {ov} |".format(
-                            sym=pos["symbol"],
-                            val=pos["attributed_value"],
-                            pl=pos["attributed_unrealized_pl"],
-                            ov="⚠️ yes" if pos["overlap_scaled"] else "no",
-                        )
-                    )
-
-        lines.append("\n## Unattributed (no follow claims this)")
-        if result["unattributed"]:
-            lines.append("| Symbol | Value |")
-            lines.append("|--------|-------|")
-            for u in result["unattributed"]:
-                lines.append(f"| `{u['symbol']}` | ${u['value']:,.2f} |")
-        else:
-            lines.append(
-                "_None on record — either every held position with positive "
-                "value is attributed to at least one Pilot, or nothing is held._"
-            )
-
-        lines.append("\n```json")
-        lines.append(json.dumps(result, indent=2, default=str))
-        lines.append("```")
-        return "\n".join(lines)
-    except Exception as e:
-        return f"Failed to build portfolio-by-pilot attribution: {e!s}"
+    return _follow_retired("get_portfolio_by_pilot")
 
 
 # ==============================================================================

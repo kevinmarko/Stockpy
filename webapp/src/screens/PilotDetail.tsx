@@ -7,7 +7,6 @@ import { useAutoPoll } from "../hooks/useAutoPoll";
 import { RangeToggle } from "../components/RangeToggle";
 import { PerfLine, SectorDonut } from "../components/charts";
 import { ErrorState, HonestyRow, InfoTip, Loading, StaleDataNotice } from "../components/ui";
-import { FollowModal } from "./FollowModal";
 import { fmtNum, fmtUsd, timeAgo } from "../format";
 import { theme } from "../theme";
 import { ExplainTickerButton } from "../components/ExplainTickerButton";
@@ -21,7 +20,6 @@ const SIDE_STYLE: Record<string, string> = {
 export function PilotDetail() {
   const { id = "" } = useParams();
   const [range, setRange] = useState<PerfRange>("1M");
-  const [showFollow, setShowFollow] = useState(false);
 
   const {
     data: pilot,
@@ -296,52 +294,6 @@ export function PilotDetail() {
           </div>
         )}
       </section>
-
-      {/* Sticky Follow CTA */}
-      <div
-        style={{
-          position: "sticky",
-          bottom: "calc(76px + var(--safe-bottom))",
-          marginTop: "var(--s-2)",
-        }}
-      >
-        {!pilot.followable ? (
-          // The InfoTip trigger sits BELOW the disabled button, never
-          // wrapping it -- an InfoTip whose own trigger is a real <button>
-          // must not nest a second native <button> inside it (invalid HTML,
-          // breaks keyboard/screen-reader focus).
-          <div style={{ width: "100%" }}>
-            <button
-              className="btn btn-primary btn-block"
-              style={{ minHeight: 52, fontSize: "var(--t-input)", boxShadow: "none" }}
-              disabled
-              title="This pilot is currently restricted from accepting new allocations."
-            >
-              Follow (Restricted)
-            </button>
-            <div style={{ textAlign: "center", marginTop: "var(--s-1)" }}>
-              <InfoTip
-                triggerClassName="chip"
-                content="This pilot is currently restricted from accepting new allocations."
-              >
-                Why is this restricted?
-              </InfoTip>
-            </div>
-          </div>
-        ) : (
-          <button
-            className="btn btn-primary btn-block"
-            style={{ minHeight: 52, fontSize: "var(--t-input)", boxShadow: theme.growth + "33 0 8px 24px" }}
-            onClick={() => setShowFollow(true)}
-          >
-            Follow · allocate {pilot.headline.sharpe != null ? `${fmtNum(pilot.headline.sharpe, 2)} Sharpe` : ""}
-          </button>
-        )}
-      </div>
-
-      {showFollow && (
-        <FollowModal pilot={pilot} onClose={() => setShowFollow(false)} />
-      )}
     </div>
   );
 }

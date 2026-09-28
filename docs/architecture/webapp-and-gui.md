@@ -4,6 +4,8 @@
 
 > **2026-09 (step 3f):** the options desk is gone from the webapp too. Removed: the `/options` (`OptionsMatrix.tsx`) and `/symbol/:ticker/options` (`OptionsChain.tsx`) screens and their nav/hub/palette/Marketplace links; Symbol Detail's "Trade Options" button and options-premium panel; the `optionsDirective` custom-view widget (a saved view that has it still loads, the key is dropped); every options panel on Paper Broker (desk scanners, Greeks, delta hedge, strategy auto-scan, settle-expired/manage-exits/roll, meta-labeler, backtest, scenario matrix, and the Positions Greeks/Roll columns); Symbol Screener's "Send to Strategy Scan"; the `components/{options,execution,portfolio,ai}/` folders and the 3-D vol/LOB charts; and 52 client/mock methods. Paper Broker keeps the account summary, positions, orders, closed trades and Quick Trade (`EquityOrderTicket`). Entries below that describe those screens are historical until the step-6 rewrite.
 
+> **2026-09 (step 4c):** Follow-a-Pilot is gone from the webapp: `FollowModal.tsx`, `resolveMinAmount.ts`, the Follow buttons on PilotDetail/Comparison, the Marketplace "Most Popular" rail (`PopularCard`), the Portfolio and Settings-Modules "Active follows" sections, AgenticTrading's follows chip/row, onboarding's "Set amount" step, and the `getFollows`/`follow` client+mock methods and `Follow*` types. `PilotSummary` has no `aum_proxy`/`followers_proxy`/`followable`. Entries below that describe following are historical.
+
 > Part of the split-out `CLAUDE.md` System Architecture reference. See [../../CLAUDE.md](../../CLAUDE.md) for the index.
 
 > **Frontend:** `webapp/` (the Pilots PWA) is the platform's only UI. The Streamlit

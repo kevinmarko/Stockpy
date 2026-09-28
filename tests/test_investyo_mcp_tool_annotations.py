@@ -6,15 +6,14 @@ Pilot widget tools shipped in PR #631: the two read-only Pilot tools --
 ``list_pilots`` and ``get_pilot_detail`` -- now carry
 ``annotations=ToolAnnotations(readOnlyHint=True)`` on their ``@mcp.tool()``
 decorators, so an MCP host's tool-selection reasoning can distinguish them
-from tools with side effects. ``follow_pilot`` (persists a follow, builds an
-order-queue preview) deliberately does NOT get this annotation and must never
-be given it by a future edit.
+from tools with side effects.
 
-Extended for the 3 new Pilot marketplace tools ("PR A"): ``get_quote`` and
-``get_portfolio_by_pilot`` are read-only analytics (readOnlyHint=True, same
-pattern as above); ``unfollow_pilot`` writes state (cancels a follow via
-``FollowsStore.upsert(pilot_id, 0.0)``) and must never carry the annotation,
-same as ``follow_pilot``.
+Extended for the "PR A" Pilot marketplace tools: ``get_quote`` is read-only
+analytics (readOnlyHint=True, same pattern as above). ``follow_pilot`` and
+``unfollow_pilot`` used to write state and deliberately carried no
+annotation; since Follow-a-Pilot was archived (2026-09, step 4c) they and
+``get_follows``/``get_portfolio_by_pilot`` are retired stubs that do nothing
+but return a notice, so they are now marked read-only.
 
 Verified against the real installed SDK (``mcp==1.28.1``, pinned via
 ``mcp<2.0.0`` in requirements.txt) rather than assumed:
@@ -29,8 +28,8 @@ Verified against the real installed SDK (``mcp==1.28.1``, pinned via
   ``tests/test_investyo_mcp_server.py``/``tests/test_investyo_mcp_widgets.py``
   convention of calling tools/inspecting server internals as plain Python,
   not over JSON-RPC).
-* A tool registered with no ``annotations=`` kwarg (e.g. ``follow_pilot``)
-  has ``Tool.annotations is None`` -- there is no default
+* A tool registered with no ``annotations=`` kwarg (e.g.
+  ``execute_paper_trade``) has ``Tool.annotations is None`` -- there is no default
   ``ToolAnnotations()`` instance with every hint ``None``, it's a bare
   ``None``.
 """
@@ -66,17 +65,6 @@ class TestReadOnlyPilotToolAnnotations:
         assert isinstance(tool.annotations, ToolAnnotations)
         assert tool.annotations.readOnlyHint is True
 
-    def test_follow_pilot_is_not_marked_read_only(self):
-        """follow_pilot writes state (persists a follow, builds an
-        order-queue preview) -- it must never carry readOnlyHint=True.
-        The real installed SDK leaves ``Tool.annotations`` as a bare
-        ``None`` (not a ``ToolAnnotations()`` with every field defaulted)
-        when no ``annotations=`` kwarg was passed to ``@mcp.tool()``, so
-        that is the exact condition asserted here rather than assuming a
-        vacuous default instance."""
-        tool = _get_tool("follow_pilot")
-        assert tool.annotations is None or tool.annotations.readOnlyHint is not True
-
     def test_other_write_tools_are_not_incidentally_marked_read_only(self):
         """Spot-check a couple of other clearly-not-read-only tools to
         make sure this change was scoped to exactly the two intended
@@ -91,19 +79,6 @@ class TestReadOnlyPilotToolAnnotations:
         assert isinstance(tool.annotations, ToolAnnotations)
         assert tool.annotations.readOnlyHint is True
 
-    def test_get_portfolio_by_pilot_is_marked_read_only(self):
-        tool = _get_tool("get_portfolio_by_pilot")
-        assert tool.annotations is not None
-        assert isinstance(tool.annotations, ToolAnnotations)
-        assert tool.annotations.readOnlyHint is True
-
-    def test_unfollow_pilot_is_not_marked_read_only(self):
-        """unfollow_pilot writes state (cancels a follow via
-        FollowsStore.upsert(pilot_id, 0.0)) -- it must never carry
-        readOnlyHint=True, same as follow_pilot."""
-        tool = _get_tool("unfollow_pilot")
-        assert tool.annotations is None or tool.annotations.readOnlyHint is not True
-
     def test_get_robinhood_account_snapshot_is_marked_read_only(self):
         """get_robinhood_account_snapshot exposes the real Robinhood account
         (equity, buying power, positions) but strictly read-only -- it must
@@ -115,3 +90,12 @@ class TestReadOnlyPilotToolAnnotations:
         assert tool.annotations is not None
         assert isinstance(tool.annotations, ToolAnnotations)
         assert tool.annotations.readOnlyHint is True
+
+    def test_retired_follow_stubs_are_marked_read_only(self):
+        """The Follow-a-Pilot tool names survive only as retired stubs
+        (2026-09, step 4c) that persist nothing, so readOnlyHint=True is
+        accurate for all four."""
+        for name in ("follow_pilot", "unfollow_pilot", "get_follows", "get_portfolio_by_pilot"):
+            tool = _get_tool(name)
+            assert tool.annotations is not None
+            assert tool.annotations.readOnlyHint is True
