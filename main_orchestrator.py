@@ -746,6 +746,7 @@ def _write_state_snapshot(
     macro_kill_switch: Optional[bool] = None,
     hmm_regime_state: Optional[str] = None,
     universe_funnel: Optional[dict] = None,
+    recommendations: Optional[list] = None,
 ) -> None:
     """Persist a JSON state snapshot to OUTPUT_DIR/state_snapshot.json.
 
@@ -777,8 +778,26 @@ def _write_state_snapshot(
     ``main.py``'s advisory path, which doesn't build this dict — orchestrator-
     only, matching ``tests/test_state_snapshot_parity.py``'s existing
     convention for orchestrator-only fields.
+
+    ``recommendations`` (step 5.3) is the cycle's ``engine.advisory``
+    ``Recommendation`` list, passed by ``StateSnapshotStep`` only when
+    ``DAEMON_AGENTIC_QUEUE_MODE=primary`` (main.py then no longer writes its
+    advisory snapshot). When given, every signal also carries the two fields
+    only the advisory writer (``reporting/state_snapshot.py``) had, sourced
+    the same way: ``garch_vol`` from ``key_indicators["garch_vol"]`` and
+    ``suggested_exit_pct`` from ``Recommendation.suggested_exit_pct``. Both are
+    null (never fabricated) for a symbol with no recommendation this cycle.
+    When ``None`` (off/shadow, every other caller) neither key is written, so
+    the file is unchanged.
     """
     import json
+    recs_by_symbol: Optional[dict] = None
+    if recommendations is not None:
+        recs_by_symbol = {}
+        for _rec in recommendations:
+            _rec_sym = str(getattr(_rec, "symbol", "") or "").upper().strip()
+            if _rec_sym:
+                recs_by_symbol[_rec_sym] = _rec
     try:
         signals = []
         held_symbols = set()
@@ -944,6 +963,17 @@ def _write_state_snapshot(
                     "symbol_rating_consecutive_bad_cycles": _rating_consecutive_cycles(sym),
                     "symbol_rating_excluded": _rating_is_excluded(sym, is_held=shares > 0),
                 })
+                if recs_by_symbol is not None:
+                    _rec = recs_by_symbol.get(sym)
+                    if _rec is None:
+                        signals[-1]["garch_vol"] = None
+                        signals[-1]["suggested_exit_pct"] = None
+                    else:
+                        _ki = getattr(_rec, "key_indicators", None) or {}
+                        signals[-1]["garch_vol"] = _safe_float_or_none(_ki.get("garch_vol"))
+                        signals[-1]["suggested_exit_pct"] = _safe_float_or_none(
+                            getattr(_rec, "suggested_exit_pct", None)
+                        )
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "tickers": tickers,
@@ -1249,7 +1279,18 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
         ]
 
     runner = AsyncPipelineRunner(steps)
-    await runner.run(ctx, progress)
+    try:
+        await runner.run(ctx, progress)
+    finally:
+        # Step 5.3 run ownership: a sync step that times out keeps running on
+        # its worker thread. Releasing this cycle's agentic-queue token here
+        # (on success AND on failure/timeout) means a still-running
+        # AgenticQueueStep thread can no longer commit the real queue, the
+        # advisory source or watch_state.json. No-op unless the step claimed
+        # a token (DAEMON_AGENTIC_QUEUE_MODE=primary).
+        from pipeline.agentic_queue import close_cycle_queue_writer
+
+        close_cycle_queue_writer(ctx.context_extras)
 
 
     if ctx.dashboard_df is not None:

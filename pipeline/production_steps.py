@@ -2852,14 +2852,22 @@ class AdvisoryOverlayStep(PipelineStep):
         )
 
 
-DAEMON_AGENTIC_QUEUE_MODES = ("off", "shadow", "primary")
+# The mode resolver lives in the light pipeline.agentic_queue module (main.py
+# reads it too); re-exported here under the names 5.2 introduced.
+from pipeline.agentic_queue import (  # noqa: E402
+    DAEMON_AGENTIC_QUEUE_MODES,
+    MODE_USED_KEY,
+    OWNER_TOKEN_KEY,
+    claim_queue_writer,
+    guard_for,
+    is_current_queue_writer,
+    release_queue_writer,
+    resolve_daemon_agentic_queue_mode,
+    run_watch_engine,
+    send_run_summary_push,
+)
+
 SHADOW_OUTPUT_SUBDIR = "shadow"
-
-
-def resolve_daemon_agentic_queue_mode(value: Any) -> str:
-    """Normalise a ``DAEMON_AGENTIC_QUEUE_MODE`` value; anything unknown is ``off``."""
-    mode = str(value or "").strip().lower()
-    return mode if mode in DAEMON_AGENTIC_QUEUE_MODES else "off"
 
 
 def shadow_output_dir(output_dir: Any) -> Path:
@@ -2932,7 +2940,7 @@ class AgenticQueueStep(PipelineStep):
     ``ctx.recommendations``, behind ``settings.DAEMON_AGENTIC_QUEUE_MODE``.
 
     * ``off`` (default): does nothing. main.py stays the only queue writer.
-    * ``shadow``: writes ``queue_sources/advisory.json`` and
+    * ``shadow`` (step 5.2): writes ``queue_sources/advisory.json`` and
       ``execution_queue.json`` under ``OUTPUT_DIR/shadow/`` ONLY, with the same
       ``write_advisory_source`` + ``compose_and_emit`` calls main.py's
       ``_run_cycle`` makes. ``side_effects=False`` means no push notification,
@@ -2940,20 +2948,45 @@ class AgenticQueueStep(PipelineStep):
       write if a link makes a shadow path resolve to a real queue path. A
       timestamped copy of each cycle's shadow files goes to
       ``shadow/history/`` for ``scripts/compare_shadow_queue.py``.
-    * ``primary``: not implemented until step 5.3. Behaves exactly like
-      ``shadow`` and logs a warning; it never writes the real queue here.
+    * ``primary`` (step 5.3): the daemon is the writer. In main.py's
+      ``_run_cycle`` order it (1) logs the run summary and sends main.py's
+      summary push, (2) runs the symbol watch engine (``watch_state.json`` +
+      watch alerts), and (3) writes the REAL ``queue_sources/advisory.json``
+      and ``execution_queue.json`` under ``OUTPUT_DIR`` with the same
+      ``write_advisory_source`` + ``compose_and_emit`` calls, WITH their side
+      effects (the new-intent push, risk-gate alerts and block log), exactly
+      as main.py does. main.py skips all of these in primary
+      (``pipeline.agentic_queue.daemon_owns_agentic_side_effects``).
 
-    Skips (and logs why) when the cycle stopped, the data is synthetic
-    (MockDataEngine fallback), the advisory overlay did not finish, or there
-    are no recommendations. The mode and ``ROBINHOOD_EXECUTION_MODE`` are
-    captured once at step start and passed explicitly, because the daemon can
-    hot-reload runtime flags while a cycle runs.
+    Skips (and logs why): in every mode, the whole step when the cycle
+    stopped, the data is synthetic (MockDataEngine fallback) or the advisory
+    overlay did not finish; the queue write alone when there are no
+    recommendations (primary still sends the summary push, which then reports
+    the per-symbol errors, and runs the watch engine, as main.py does).
+
+    ``compose_and_emit`` leaves the previous ``execution_queue.json`` in place
+    when nothing is composable, the source is stale/corrupt, or the account
+    has no positive equity (``execution/compose.py``). Primary keeps that
+    exactly: a cycle with no BUY/SELL clearing the 0.85 floor rewrites
+    ``advisory.json`` but leaves the old queue file. The skill's
+    ``generated_at`` freshness rule is what stops an old queue being placed.
+
+    The mode, ``ROBINHOOD_EXECUTION_MODE`` and ``OUTPUT_DIR`` are captured
+    once at step start and passed explicitly, because the daemon can
+    hot-reload runtime flags while a cycle runs. The mode actually used is
+    recorded in ``ctx.context_extras[MODE_USED_KEY]`` for ``StateSnapshotStep``.
+
+    Run ownership (primary): the step claims a token at start
+    (``pipeline.agentic_queue.claim_queue_writer``); the cycle releases it
+    when the runner returns or raises (``main_orchestrator._main_body_impl``).
+    Every real file commit goes through ``commit_guard``, so if this step
+    times out and its thread keeps running after the cycle was marked failed,
+    it cannot write the queue, the advisory source or ``watch_state.json``.
 
     A separate, short, sync step on purpose: if ``AdvisoryOverlayStep`` times
-    out, the runner raises and this step never runs for that cycle, so a
-    still-running advisory thread can't write a queue after its cycle has been
-    marked failed. Never raises (a native crash would take the daemon's APIs
-    down with it; Python errors are logged and swallowed).
+    out, the runner raises and this step never runs for that cycle. Never
+    raises (a native crash would take the daemon's APIs down with it; Python
+    errors are logged and swallowed).
     """
 
     name = "agentic_queue"
@@ -2964,29 +2997,58 @@ class AgenticQueueStep(PipelineStep):
         self._clock = clock
 
     def run(self, ctx: RunContext) -> None:
-        """Write (or skip) the shadow queue for this cycle."""
+        """Write (or skip) this cycle's daemon queue."""
+        token: Optional[int] = None
         try:
             mode = resolve_daemon_agentic_queue_mode(
                 getattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "off")
             )
             execution_mode = str(getattr(settings, "ROBINHOOD_EXECUTION_MODE", "off") or "off")
             output_dir = settings.OUTPUT_DIR
-            self.write_queue(ctx, mode=mode, execution_mode=execution_mode, output_dir=output_dir)
+            ctx.context_extras[MODE_USED_KEY] = mode
+            if mode == "primary":
+                token = claim_queue_writer(ctx.context_extras)
+                if token is None:
+                    telemetry.warning(
+                        "Agentic queue (primary): this cycle already ended (the step "
+                        "timed out before it started); nothing written."
+                    )
+                    return
+            self.write_queue(
+                ctx, mode=mode, execution_mode=execution_mode, output_dir=output_dir,
+                owner_token=token,
+            )
         except Exception as exc:  # noqa: BLE001 - must never fail the cycle
             telemetry.warning("Agentic queue step failed (non-critical): %s", exc)
+        finally:
+            # Normal return: nothing more to write this cycle. (A timed-out
+            # thread never gets here in time; the cycle's own finally in
+            # main_orchestrator._main_body_impl releases the token instead.)
+            release_queue_writer(token)
 
     @staticmethod
-    def skip_reason(ctx: RunContext) -> Optional[str]:
-        """Why this cycle must not produce a queue, or None."""
+    def cycle_skip_reason(ctx: RunContext) -> Optional[str]:
+        """Why this cycle must produce nothing at all (queue, pushes, watch), or None."""
         if ctx.stopped:
             return f"the cycle stopped ({ctx.stop_reason or 'no reason recorded'})"
         if ctx.context_extras.get("data_is_synthetic"):
             return "this cycle fell back to synthetic MockDataEngine data"
         if not ctx.context_extras.get("advisory_overlay_ok"):
             return "the advisory overlay did not complete this cycle"
+        return None
+
+    @classmethod
+    def skip_reason(cls, ctx: RunContext) -> Optional[str]:
+        """Why this cycle must not produce a queue, or None."""
+        reason = cls.cycle_skip_reason(ctx)
+        if reason is not None:
+            return reason
         if not ctx.recommendations:
             return "there are no recommendations"
         return None
+
+    def _now(self) -> datetime:
+        return self._clock() if self._clock is not None else datetime.now(timezone.utc)
 
     def write_queue(
         self,
@@ -2995,24 +3057,35 @@ class AgenticQueueStep(PipelineStep):
         mode: str,
         execution_mode: str,
         output_dir: Any,
+        owner_token: Optional[int] = None,
     ) -> Optional[Path]:
-        """Write the shadow advisory source and queue for ``mode``.
+        """Write this cycle's queue for ``mode``.
 
-        Returns the shadow ``execution_queue.json`` path, or None when nothing
-        was written (mode off, a skip reason, a refused path, or
+        Returns the written ``execution_queue.json`` path (the shadow one in
+        shadow mode, the real one in primary), or None when nothing was
+        written (mode off, a skip reason, a refused path, lost ownership, or
         ``compose_and_emit`` writing nothing, e.g. ``execution_mode=off``).
+        ``owner_token`` is the primary-mode ownership token; when None in
+        primary (a direct call, e.g. from a test) one is claimed and released
+        here.
         """
         mode = resolve_daemon_agentic_queue_mode(mode)
         if mode == "off":
             telemetry.debug("DAEMON_AGENTIC_QUEUE_MODE=off — daemon writes no execution queue.")
             return None
         if mode == "primary":
-            telemetry.warning(
-                "DAEMON_AGENTIC_QUEUE_MODE=primary is not implemented until step 5.3; "
-                "writing the SHADOW queue only. The real execution_queue.json is untouched "
-                "and main.py is still its writer."
-            )
+            own_token = owner_token is None
+            token = claim_queue_writer() if own_token else owner_token
+            try:
+                return self._write_primary(
+                    ctx, execution_mode=execution_mode, output_dir=output_dir, token=token,
+                )
+            finally:
+                if own_token:
+                    release_queue_writer(token)
+        return self._write_shadow(ctx, execution_mode=execution_mode, output_dir=output_dir)
 
+    def _write_shadow(self, ctx: RunContext, *, execution_mode: str, output_dir: Any) -> Optional[Path]:
         reason = self.skip_reason(ctx)
         if reason is not None:
             telemetry.info("Shadow agentic queue skipped: %s.", reason)
@@ -3028,7 +3101,7 @@ class AgenticQueueStep(PipelineStep):
 
         from execution.compose import compose_and_emit, write_advisory_source
 
-        now = self._clock() if self._clock is not None else datetime.now(timezone.utc)
+        now = self._now()
         source_path = write_advisory_source(ctx.recommendations, output_dir=shadow_dir, now=now)
         if source_path is None:
             telemetry.warning("Shadow agentic queue: advisory source write failed; no queue composed.")
@@ -3051,6 +3124,84 @@ class AgenticQueueStep(PipelineStep):
         else:
             telemetry.info("Shadow agentic queue written → %s", queue_path)
         archive_shadow_run(shadow_dir, now, source_path, queue_path)
+        return queue_path
+
+    def _write_primary(
+        self, ctx: RunContext, *, execution_mode: str, output_dir: Any, token: int,
+    ) -> Optional[Path]:
+        reason = self.cycle_skip_reason(ctx)
+        if reason is not None:
+            telemetry.info(
+                "Agentic queue (primary) skipped: %s. No queue write, watch alerts or "
+                "summary push this cycle; the previous queue is left in place.", reason,
+            )
+            return None
+        real_dir = Path(output_dir)
+
+        # (1) main.py's summary push.
+        try:
+            started_at = ctx.started_at
+            if started_at.tzinfo is None:
+                started_at = started_at.astimezone()  # naive local -> aware
+            send_run_summary_push(
+                ctx.recommendations, ctx.errors,
+                started_at=started_at, owner_token=token,
+            )
+        except Exception as exc:  # noqa: BLE001
+            telemetry.warning("Run-summary push failed (non-critical): %s", exc)
+
+        # (2) main.py's symbol watch engine, same inputs.
+        run_watch_engine(
+            ctx.recommendations,
+            rules_file=settings.WATCH_RULES_FILE,
+            state_path=real_dir / "watch_state.json",
+            dashboard_url=settings.NTFY_DASHBOARD_URL,
+            owner_token=token,
+        )
+
+        # (3) the real queue.
+        if not ctx.recommendations:
+            telemetry.info(
+                "Agentic queue (primary): no recommendations this cycle; queue not written "
+                "(the previous advisory.json and execution_queue.json are left in place)."
+            )
+            return None
+        if not is_current_queue_writer(token):
+            telemetry.warning(
+                "Agentic queue (primary): this cycle no longer owns the queue "
+                "(it timed out or a newer cycle started); nothing written."
+            )
+            return None
+
+        from execution.compose import compose_and_emit, write_advisory_source
+
+        guard = guard_for(token)
+        now = self._now()
+        source_path = write_advisory_source(
+            ctx.recommendations, output_dir=real_dir, now=now, commit_guard=guard,
+        )
+        if source_path is None:
+            telemetry.warning(
+                "Agentic queue (primary): advisory source not written; no queue composed."
+            )
+            return None
+        queue_path = compose_and_emit(
+            ctx.snapshot,
+            output_dir=real_dir,
+            mode=execution_mode,
+            now=now,
+            macro_dto=ctx.macro_dto,
+            commit_guard=guard,
+        )
+        if queue_path is None:
+            telemetry.info(
+                "Agentic queue (primary): advisory source written to %s; no queue composed "
+                "(ROBINHOOD_EXECUTION_MODE=%s, nothing composable, or ownership lost) -- "
+                "the previous execution_queue.json is left in place, as main.py leaves it.",
+                source_path, execution_mode,
+            )
+        else:
+            telemetry.info("Robinhood execution queue emitted → %s", queue_path)
         return queue_path
 
 
@@ -3128,12 +3279,19 @@ class StateSnapshotStep(PipelineStep):
                 except Exception as plot_err:
                     telemetry.warning(f"Failed to generate interactive Plotly chart: {plot_err}")
 
-        _write_state_snapshot(
-            ctx.macro_raw, ctx.dashboard_df, ctx.symbols,
+        snapshot_kwargs = dict(
             macro_kill_switch=getattr(ctx.macro_dto, "killSwitch", None),
             hmm_regime_state=getattr(ctx.macro_dto, "hmm_regime_state", None),
             universe_funnel=ctx.context_extras.get("universe_funnel"),
         )
+        # Step 5.3: once the daemon is the primary agentic writer, main.py
+        # stops writing its advisory snapshot, so this writer adds the two
+        # per-signal fields only that writer had (garch_vol,
+        # suggested_exit_pct). Keyed on the mode AgenticQueueStep actually
+        # used this cycle, so off/shadow snapshots stay byte-identical.
+        if ctx.context_extras.get(MODE_USED_KEY) == "primary":
+            snapshot_kwargs["recommendations"] = list(ctx.recommendations or [])
+        _write_state_snapshot(ctx.macro_raw, ctx.dashboard_df, ctx.symbols, **snapshot_kwargs)
 
         # Persist the optional Pilots-PWA pairs radar artifact. Opt-in
         # (settings.PAIRS_SNAPSHOT_ENABLED, default False) and

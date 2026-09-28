@@ -51,7 +51,7 @@ import logging
 import math
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, ContextManager, Dict, List, Optional, Tuple
 
 from execution.broker_base import (
     AccountSnapshot as BrokerAccountSnapshot,
@@ -636,6 +636,7 @@ def emit_execution_queue(
     now: Optional[datetime] = None,
     macro_dto: Optional[Any] = None,
     side_effects: bool = True,
+    commit_guard: Optional[Callable[[], ContextManager[bool]]] = None,
 ) -> Optional[Path]:
     """Build and atomically write `output/execution_queue.json`.
 
@@ -649,10 +650,30 @@ def emit_execution_queue(
     ``side_effects=False`` writes the queue file but skips the ntfy push and
     its ``execution_queue_notified.json`` sidecar, and runs the risk gate
     without alerts or block-log writes (the daemon's shadow queue, step 5.2).
+
+    ``commit_guard`` is the daemon's primary-mode run-ownership check (step
+    5.3, ``pipeline.agentic_queue``). It is checked before the build (so a
+    run that already lost ownership fires no risk-gate alert) and held around
+    the final rename; when it yields False nothing is replaced, no push is
+    sent, and ``None`` is returned. ``None`` (every other caller) changes
+    nothing.
     """
     resolved_mode = _resolve_mode(mode)
     if resolved_mode == "off":
         return None
+
+    if commit_guard is not None:
+        try:
+            with commit_guard() as _owns:
+                still_owner = bool(_owns)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("queue_builder: ownership check failed (%s); not emitting", exc)
+            return None
+        if not still_owner:
+            logger.warning(
+                "queue_builder: not emitting -- the writing run no longer owns the queue"
+            )
+            return None
 
     try:
         if side_effects:
@@ -672,7 +693,19 @@ def emit_execution_queue(
         path = output_dir / _QUEUE_FILENAME
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        if commit_guard is None:
+            tmp.replace(path)
+        else:
+            with commit_guard() as _allowed:
+                if _allowed:
+                    tmp.replace(path)
+            if not _allowed:
+                tmp.unlink(missing_ok=True)
+                logger.warning(
+                    "queue_builder: execution queue not written -- the writing run "
+                    "lost ownership during the build"
+                )
+                return None
         logger.info(
             "Execution queue written (mode=%s, intents=%d, placeable=%d) → %s",
             resolved_mode, payload["n_intents"], payload["n_placeable"], path,

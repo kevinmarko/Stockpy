@@ -668,3 +668,55 @@ class TestMacroKillSwitchPassthrough:
         snap = json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))
         assert "macro_kill_switch" in snap
         assert snap["macro_kill_switch"] is None
+
+
+# ── Step 5.3: the two advisory-only fields arrive with DAEMON_AGENTIC_QUEUE_MODE=primary ──
+
+# Only the advisory writer had these until step 5.3. Once the daemon is the
+# primary agentic writer (main.py stops writing its snapshot), the
+# orchestrator writer emits them too -- but only when StateSnapshotStep passes
+# the cycle's recommendations (primary), so off/shadow snapshots are unchanged.
+PRIMARY_MODE_SIGNAL_FIELDS = ("garch_vol", "suggested_exit_pct")
+
+
+class TestPrimaryModeAdvisoryFields:
+    def _orchestrator(self, tmp_path, monkeypatch, recommendations):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{tmp_path / 'rating_parity.db'}")
+        final_df = pd.DataFrame([
+            {"Symbol": "AAPL", "Action Signal": "BUY", "Price": 150.0, "Shares": 10.0},
+            {"Symbol": "MSFT", "Action Signal": "HOLD", "Price": 300.0, "Shares": 0.0},
+        ])
+        kwargs = {} if recommendations is None else {"recommendations": recommendations}
+        mo._write_state_snapshot({"market_regime": "RISK ON"}, final_df, ["AAPL", "MSFT"], **kwargs)
+        return json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))["signals"]
+
+    def test_advisory_writer_emits_them(self, advisory_signals):
+        for key in PRIMARY_MODE_SIGNAL_FIELDS:
+            assert key in advisory_signals[0]
+
+    def test_orchestrator_matches_the_advisory_writer_values(self, tmp_path, monkeypatch, advisory_signals):
+        rec = _recommendation("AAPL")  # garch_vol 0.2, suggested_exit_pct 0.5
+        sig = _by_symbol(self._orchestrator(tmp_path, monkeypatch, [rec]), "AAPL")
+        adv = advisory_signals[0]
+        for key in PRIMARY_MODE_SIGNAL_FIELDS:
+            assert sig[key] == pytest.approx(adv[key]), key
+        assert sig["garch_vol"] == pytest.approx(0.2)
+        assert sig["suggested_exit_pct"] == pytest.approx(0.5)
+
+    def test_symbol_without_a_recommendation_is_null_not_zero(self, tmp_path, monkeypatch):
+        sig = _by_symbol(self._orchestrator(tmp_path, monkeypatch, [_recommendation("AAPL")]), "MSFT")
+        for key in PRIMARY_MODE_SIGNAL_FIELDS:
+            assert sig[key] is None
+
+    def test_missing_garch_in_key_indicators_is_null(self, tmp_path, monkeypatch):
+        rec = _recommendation("AAPL")
+        rec.key_indicators.pop("garch_vol")
+        sig = _by_symbol(self._orchestrator(tmp_path, monkeypatch, [rec]), "AAPL")
+        assert sig["garch_vol"] is None
+
+    def test_without_recommendations_the_keys_are_absent(self, tmp_path, monkeypatch):
+        """off/shadow: the orchestrator snapshot is unchanged."""
+        for sig in self._orchestrator(tmp_path, monkeypatch, None):
+            for key in PRIMARY_MODE_SIGNAL_FIELDS:
+                assert key not in sig

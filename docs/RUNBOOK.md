@@ -823,6 +823,55 @@ Covered by `tests/test_orchestrator_daemon.py::TestShutdownBudget`,
 `tests/test_state_snapshot_advisory.py`/`tests/test_main_orchestrator.py`'s
 `TestAtomicWrite`/atomic-write regression tests.
 
+### 3.15 Cutover: make the daemon the agentic-queue writer (step 5.3)
+
+**Do this only after** reviewing at least 5 trading days of shadow comparison
+(`DAEMON_AGENTIC_QUEUE_MODE=shadow`, `python -m scripts.compare_shadow_queue`,
+exit 0 = identical). These are operator steps; nothing in the code flips them.
+
+1. **Make the daemon always-on.** Install the stack service (it also unloads
+   the old `com.investyo.daily-advisory` job):
+   ```bash
+   ./scripts/install_stack_service.command
+   launchctl list | grep com.investyo.stack        # expect a PID
+   launchctl list | grep com.investyo.daily-advisory  # expect nothing
+   ```
+   If the daily-advisory job is still listed, unload it by hand:
+   `launchctl unload ~/Library/LaunchAgents/com.investyo.daily-advisory.plist`.
+   The service `cd`s to the repo root, so `watch_rules.yaml` (a relative
+   `WATCH_RULES_FILE`) resolves exactly as it did for main.py.
+2. **Turn on the daemon's morning Robinhood login in the same change**
+   (§5.1a): `ROBINHOOD_SCHEDULED_LOGIN_ENABLED=true`. Without it no 08:40
+   approval prompt arrives once the 08:45 main.py job is gone.
+3. **Flip the writer:** `DAEMON_AGENTIC_QUEUE_MODE=primary` (Settings → Feature
+   Flags with typed confirmation, or `.env` then restart the daemon). Leave
+   `ROBINHOOD_EXECUTION_MODE` as it is.
+4. **Check `ORCHESTRATOR_DAEMON_TOKEN` is set.** The `robinhood-execution`
+   skill refreshes the queue with `POST /run` in primary; without the token
+   that call is refused (403) and the skill stops.
+5. **Verify one cycle:** trigger `POST /run` (Pipeline screen, or
+   `python -c "from shared import daemon_client as d; print(d.trigger_run())"`),
+   wait for it to finish, then check `$OUTPUT_DIR/execution_queue.json`'s
+   `generated_at` is fresh (or the log line "no queue composed" if nothing
+   cleared the 0.85 floor), `watch_state.json` was rewritten, and the log has
+   `Robinhood execution queue emitted` / `Agentic queue (primary)` lines. Run
+   `/rh-execute` in review.
+
+**What changes in primary:** the daemon writes the real
+`queue_sources/advisory.json`, `execution_queue.json` and `watch_state.json`
+and sends the summary push, watch alerts and new-intent push every cycle it
+runs (hourly with `ORCHESTRATOR_INTERVAL_SECONDS=3600`; the clean-run
+"Refresh Complete" push at most once per ET day, the error push every cycle
+with errors). `main.py` still runs if something launches it, but writes none
+of those, no `daily_report.html` and no state snapshot; it logs a WARNING
+saying so. `daily_report.html` is retired: use `daily_report_dashboard.html`
+or the webapp. A paused (kill-switch) or synthetic-data cycle writes nothing
+and pushes nothing; the previous queue stays and the skill's ~30-minute
+freshness rule keeps it from being placed.
+
+**Rollback:** set `DAEMON_AGENTIC_QUEUE_MODE=off` (or `shadow`) and reload
+`com.investyo.daily-advisory`; main.py resumes as the writer on its next run.
+
 ---
 
 ## 4. Contacts

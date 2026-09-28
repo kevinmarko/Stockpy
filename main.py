@@ -646,6 +646,24 @@ def main() -> None:
         summary = summarize_run(result)
         logger.info("\n%s", summary)
 
+        # Step 5.3: with DAEMON_AGENTIC_QUEUE_MODE=primary the orchestrator
+        # daemon (AgenticQueueStep) writes the real execution queue and sends
+        # the summary push and watch alerts. Skip ours so there are never two
+        # writers of execution_queue.json / watch_state.json and no double
+        # pushes. daily_report.html is retired (step 5 decision 5), and our
+        # advisory state_snapshot.json write would fight the daemon's.
+        from pipeline.agentic_queue import daemon_owns_agentic_side_effects  # noqa: PLC0415
+
+        if daemon_owns_agentic_side_effects(getattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "off")):
+            logger.warning(
+                "DAEMON_AGENTIC_QUEUE_MODE=primary: the orchestrator daemon owns the execution "
+                "queue, watch alerts and summary push. main.py computed %d recommendation(s) "
+                "but writes no queue, watch state, push, daily_report.html or state snapshot. "
+                "Trigger a daemon cycle (POST /run) to refresh the queue.",
+                len(result.recommendations),
+            )
+            return result
+
         if result.errors:
             # High-priority push: list failing symbols and stages.
             err_preview = ", ".join(

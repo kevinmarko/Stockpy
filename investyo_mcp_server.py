@@ -1086,6 +1086,18 @@ def generate_html_report(portfolio_id: str) -> str:
     """
     try:
         from settings import settings
+        from pipeline.agentic_queue import daemon_owns_agentic_side_effects
+
+        # Step 5.3: with the daemon as the primary agentic writer, main.py
+        # skips daily_report.html (retired, step 5 decision 5), so running it
+        # here would only re-report a stale file as fresh.
+        if daemon_owns_agentic_side_effects(getattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "off")):
+            return (
+                "DAEMON_AGENTIC_QUEUE_MODE=primary: daily_report.html is retired and main.py "
+                "no longer writes it. The orchestrator daemon writes "
+                f"{settings.OUTPUT_DIR / 'daily_report_dashboard.html'} every cycle; trigger "
+                "a cycle with POST /run on the Control API to refresh it."
+            )
 
         result = subprocess.run(
             [sys.executable, "main.py"],

@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `b7af3a9cf337462ee60467056b40eae2a40bea08`
+- Measured at commit: `49bd42de86ed8e1ee1af70e1060c3f2652983d54`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -223,7 +223,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **383** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **384** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -236,8 +236,8 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _guard_settings, _m
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 753 | 265 |
-| (b) `getattr(settings, "KEY", default)` | 315 | 188 |
+| (a) `settings.KEY` | 756 | 265 |
+| (b) `getattr(settings, "KEY", default)` | 317 | 188 |
 | (c) `getattr(settings, <var>)` (dynamic) | 13 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
@@ -287,7 +287,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `BROKER_BACKEND` | b | 2 | 0 |
 | `CLOSED_POSITION_RETENTION_DAYS` | b | 2 | 0 |
 | `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` | b | 1 | 0 |
-| `DAEMON_AGENTIC_QUEUE_MODE` | b | 1 | 0 |
+| `DAEMON_AGENTIC_QUEUE_MODE` | b | 3 | 0 |
 | `DATABASE_URL` | b | 1 | 0 |
 | `DATA_FETCH_MAX_CONCURRENCY` | b | 3 | 0 |
 | `DB_MAX_OVERFLOW` | b | 2 | 0 |

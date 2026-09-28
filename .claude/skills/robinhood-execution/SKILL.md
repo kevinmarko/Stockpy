@@ -11,7 +11,8 @@ description: >-
 # Robinhood Execution (paper-first, human-gated)
 
 This skill is the **only** actor permitted to call the Robinhood Trading MCP
-write tools. The headless Stockpy pipeline (`main.py`) cannot call MCP tools; it
+write tools. The headless Stockpy pipeline (`main.py`, or the orchestrator
+daemon when `DAEMON_AGENTIC_QUEUE_MODE=primary`) cannot call MCP tools; it
 only writes a gated, dry-run proposed-order queue to
 `$OUTPUT_DIR/execution_queue.json` (via `execution/queue_builder.py`) —
 see Prerequisites step 1 below for how to resolve `$OUTPUT_DIR`, the
@@ -69,9 +70,54 @@ not — read them a checklist only if they ask for one.
    `get_equity_quotes`, `get_equity_orders` are available). If not, tell the
    operator to run `claude mcp add robinhood-trading --transport http
    https://agent.robinhood.com/mcp/trading` and authenticate via `/mcp`. Stop.
-3. `$OUTPUT_DIR/execution_queue.json` exists. If missing, the platform is in
-   `ROBINHOOD_EXECUTION_MODE=off` (or hasn't run). Tell the operator to set the
-   mode to `review` or `live` in `.env` and run `python3 main.py`. Stop.
+3. **Find out who writes the queue, and refresh it.** Read the writer mode once:
+   ```bash
+   python3 -c "from settings import settings; print(settings.DAEMON_AGENTIC_QUEUE_MODE)"
+   ```
+   (same `.venv/bin/python3` fallback as step 1).
+   - **`primary`** — the orchestrator daemon writes the queue (step 5.3).
+     `main.py` no longer writes it, so never tell the operator to run
+     `python3 main.py` for a fresh queue. Before loading the queue, trigger a
+     daemon cycle and wait for it to finish:
+     ```bash
+     python3 - <<'EOF'
+     import time
+     from shared import daemon_client as dc
+     r = dc.trigger_run(timeout=10)
+     # 409 = a cycle is already running: wait for that one instead.
+     run_id = r.run_id if r.ok else (r.existing_run_id if r.error == "already_running" else None)
+     if run_id is None:
+         raise SystemExit(f"could not trigger a daemon cycle: {r.error}")
+     deadline = time.time() + 45 * 60
+     while time.time() < deadline:
+         s = dc.get_run_status(run_id) or {}
+         if s.get("state") in ("succeeded", "failed"):
+             print(run_id, s.get("state"), s.get("error"))
+             break
+         time.sleep(15)
+     else:
+         raise SystemExit(f"daemon cycle {run_id} still running after 45 min")
+     EOF
+     ```
+     Handle the result plainly: `kill_switch_active` (HTTP 423) → the
+     platform is paused, stop (hard stop below). `network_error` /
+     `unavailable` → the daemon isn't running; tell the operator to start it
+     (`launch_webapp.command` or the `com.investyo.stack` service) and stop.
+     `unauthorized` / `command_disabled` → `ORCHESTRATOR_DAEMON_TOKEN` is
+     missing or wrong in `.env`; tell the operator and stop. A cycle that ends
+     `failed` → say so and do not place. A cycle that ends `succeeded` does not
+     guarantee a new queue (a cycle writes nothing when the data was synthetic,
+     the advisory step failed, or no BUY/SELL cleared the conviction floor), so
+     still apply the freshness hard stop below to the queue you then read.
+   - **`off` or `shadow`** — `main.py` writes the queue (the 08:45 weekday job,
+     or `python3 main.py` by hand). If the queue is stale, offer to re-run
+     `python3 main.py` first.
+
+   Then check that `$OUTPUT_DIR/execution_queue.json` exists. If missing, the
+   platform is in `ROBINHOOD_EXECUTION_MODE=off` (or hasn't run). Tell the
+   operator to set the mode to `review` or `live` in `.env` and refresh the
+   queue as above (a daemon cycle in `primary`, `python3 main.py` otherwise).
+   Stop.
 4. `$OUTPUT_DIR/execution_placed.jsonl` is the append-only **placed-intent ledger**
    (may not exist yet — that just means nothing has been placed). Each line is
    one JSON record:
@@ -88,7 +134,10 @@ not — read them a checklist only if they ask for one.
   `python -m execution.kill_switch --deactivate` only on operator instruction.)
 - The queue's `mode` is `off` → nothing to do.
 - The queue's `generated_at` is more than ~30 minutes old → it is STALE. Refuse
-  to place; offer to re-run `python3 main.py` first.
+  to place; offer to refresh it first (Prerequisites step 3: a daemon cycle via
+  `POST /run` when `DAEMON_AGENTIC_QUEUE_MODE=primary`, otherwise re-run
+  `python3 main.py`). This rule is unchanged in `primary`: a daemon cycle that
+  succeeded but left an older queue in place does not make that queue fresh.
 - `get_accounts` does not show a dedicated **Agentic** account, or the operator
   has not confirmed which account is the agentic/execution account → refuse to
   place anything. Robinhood only allows agent orders in the separately-funded

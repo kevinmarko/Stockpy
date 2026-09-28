@@ -110,7 +110,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 383,
+  "files_scanned": 384,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -456,9 +456,9 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 845,
+    "attr": 848,
     "factory_param": 4,
-    "getattr_const": 315,
+    "getattr_const": 317,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
@@ -2154,7 +2154,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6115",
+        "site": "investyo_mcp_server.py:6127",
         "via": []
       }
     ],
@@ -2174,7 +2174,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6060",
+        "site": "investyo_mcp_server.py:6072",
         "via": []
       }
     ],
@@ -2214,7 +2214,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6068",
+        "site": "investyo_mcp_server.py:6080",
         "via": []
       }
     ],
