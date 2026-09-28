@@ -374,6 +374,7 @@ def compose_and_emit(
     now: Optional[datetime] = None,
     max_age_seconds: Optional[float] = None,
     macro_dto: Optional[Any] = None,
+    side_effects: bool = True,
 ) -> Optional[Path]:
     """Read the advisory source, compose, gate, and emit ONE
     ``execution_queue.json``. ``main.py`` calls this right after
@@ -393,6 +394,11 @@ def compose_and_emit(
     contract), the advisory source is corrupt or stale (leaves the last queue
     in place — see module docstring), nothing is composable, or the account
     snapshot has no positive equity. Never raises (CONSTRAINT #6).
+
+    ``side_effects=False`` (the daemon's shadow queue, step 5.2) writes the
+    same queue file under ``output_dir`` but sends no push notification and
+    makes the risk gate skip its alerts and block-log writes. See
+    ``queue_builder.emit_execution_queue``.
     """
     now = now or datetime.now(timezone.utc)
     if output_dir is None:
@@ -445,6 +451,12 @@ def compose_and_emit(
         # compose_targets above, so a second filter here would be a no-op.
         # Kept as a literal (it was Follow-a-Pilot's Decision-D3 floor before
         # step 4c) so the emitted queue stays byte-identical.
+        if not side_effects:
+            return emit_execution_queue(
+                run_result, mode=mode, output_dir=output_dir,
+                config={"strategy_id": "composed", "min_conviction": 0.0}, now=now,
+                macro_dto=resolved_macro, side_effects=False,
+            )
         return emit_execution_queue(
             run_result, mode=mode, output_dir=output_dir,
             config={"strategy_id": "composed", "min_conviction": 0.0}, now=now,

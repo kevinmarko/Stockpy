@@ -23,6 +23,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from typing import Any, Optional
@@ -101,6 +102,10 @@ class AsyncDataFetchStep(PipelineStep):
                 "proceeding without holdings-aware overlay."
             )
         ctx.context_extras["robinhood_positions"] = rh_positions
+        # Kept for AdvisoryOverlayStep / AgenticQueueStep (step 5.2), which
+        # used to fetch the same 20 h-cached snapshot a second time. None on
+        # failure; AdvisoryOverlayStep substitutes main.py's empty snapshot.
+        ctx.snapshot = snapshot
 
         # One universe builder for both orchestrators (step 5.1):
         # held ∪ WATCHLIST/watchlist.txt ∪ discovered, rating auto-drop,
@@ -2620,133 +2625,451 @@ class StrategyEvalStep(PipelineStep):
             telemetry.warning(f"Sizing cap-threshold alert failed (non-critical): {alert_exc}")
 
 
-class BrokerExecutionStep(PipelineStep):
-    """Executes trades with the broker."""
+# ---------------------------------------------------------------------------
+# Advisory overlay + agentic queue (step 5.2 of
+# .claude/shrink_step5_retire_main_py_implementation_plan.md)
+# ---------------------------------------------------------------------------
+
+_ADVISORY_COLUMNS = (
+    'Advisory_Action', 'Advisory_Conviction', 'Advisory_Rationale',
+    'Advisory_Position_Pct', 'Advisory_Data_Quality',
+)
+_ADVISORY_NUMERIC_COLUMNS = ('Advisory_Conviction', 'Advisory_Position_Pct')
+
+
+def _select_precomputed_for_row(row: Optional[dict], reuse_pipeline_compute: bool) -> tuple:
+    """Return ``(precomputed_garch, precomputed_forecast, precomputed_forecast_is_fallback)``
+    for one ticker's ``engine.advisory.evaluate()`` call.
+
+    ``settings.ADVISORY_REUSE_PIPELINE_COMPUTE`` off (or no dashboard row for
+    the ticker): all three are None, so evaluate() refits GARCH and the
+    forecast itself, exactly as main.py does. On: the row's own
+    ``GARCH_Vol``/``Forecast_30`` are passed through, and
+    ``Forecast_30_Is_Fallback`` only when it is an actual bool -- the cell can
+    also be NaN (the row skipped forecasting) or absent, neither of which says
+    anything about fallback status.
+    """
+    if not reuse_pipeline_compute or row is None:
+        return None, None, None
+    raw_fallback = row.get('Forecast_30_Is_Fallback')
+    return (
+        row.get('GARCH_Vol'),
+        row.get('Forecast_30'),
+        raw_fallback if isinstance(raw_fallback, bool) else None,
+    )
+
+
+def _empty_account_snapshot():
+    """The empty account main.py's AccountStep evaluates with when the
+    Robinhood snapshot is unavailable (pipeline/steps.py)."""
+    from data.robinhood_portfolio import AccountSnapshot
+
+    return AccountSnapshot(
+        positions={},
+        buying_power=0.0,
+        total_equity=0.0,
+        total_dividends=0.0,
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+
+class AdvisoryOverlayStep(PipelineStep):
+    """Runs ``engine.advisory.evaluate()`` for every universe symbol, the same
+    way main.py's run_once() does, and keeps the full ``Recommendation``
+    objects in ``ctx.recommendations``.
+
+    Split out of ``BrokerExecutionStep`` in step 5.2. It is a SYNC step so
+    ``AsyncPipelineRunner`` runs it under ``PIPELINE_STEP_TIMEOUT_SECONDS``
+    (the async broker step has no timeout). Its inputs match main.py's:
+
+    * the universe is ``ctx.symbols`` (the same ``build_universe_detailed``
+      main.py uses, since step 5.1), in the same order;
+    * the account snapshot is the one ``AsyncDataFetchStep`` already fetched
+      (``ctx.snapshot``; before 5.2 this step fetched it a second time), or
+      main.py's empty snapshot when that fetch failed;
+    * the context extras come from ``pipeline.advisory_inputs``'s
+      ``fetch_bars_for_universe`` + ``build_context_extras`` -- the same
+      functions main.py calls. Before 5.2 this step passed only the pipeline's
+      xsec ranks and multifactor scores.
+
+    ``ctx.macro_dto`` is the daemon's own (built by ``RunPipelineStep``), so a
+    difference from main.py's macro inputs still shows up here; see the plan's
+    section 1 "Macro".
+
+    It writes the same five ``Advisory_*`` dashboard columns as before.
+    ``settings.ADVISORY_REUSE_PIPELINE_COMPUTE`` is honoured exactly as the old
+    block did. Never raises: a failure is logged, the columns stay at their
+    blank defaults, and ``advisory_overlay_ok`` is not set, which makes
+    ``AgenticQueueStep`` skip the cycle.
+    """
+
+    # Same progress-stage label the advisory loop always reported under.
     name = "execution"
-    
+
+    def run(self, ctx: RunContext) -> None:
+        """Evaluate every symbol and fill ctx.recommendations + the Advisory_* columns."""
+        if ctx.dashboard_df is None or ctx.dashboard_df.empty:
+            return
+        # Captured once per step: the daemon can apply runtime_flags.json to
+        # the shared settings object between (and during) cycles.
+        reuse_pipeline_compute = bool(getattr(settings, 'ADVISORY_REUSE_PIPELINE_COMPUTE', False))
+        max_workers = int(getattr(settings, 'ADVISORY_MAX_CONCURRENCY', 8))
+        try:
+            self._evaluate(ctx, reuse_pipeline_compute, max_workers)
+        except Exception as adv_loop_err:
+            telemetry.warning(
+                "Advisory evaluation loop failed (non-critical): %s", adv_loop_err
+            )
+            return
+        ctx.context_extras["advisory_overlay_ok"] = True
+
+    def _evaluate(self, ctx: RunContext, reuse_pipeline_compute: bool, max_workers: int) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        from data.market_data import get_provider as _get_market_provider
+        from engine.advisory import evaluate as _advisory_evaluate
+        from pipeline.advisory_inputs import build_context_extras, fetch_bars_for_universe
+
+        dashboard_df = ctx.dashboard_df
+        for col in _ADVISORY_COLUMNS:
+            dashboard_df[col] = ""
+        for col in _ADVISORY_NUMERIC_COLUMNS:
+            dashboard_df[col] = 0.0
+
+        if ctx.snapshot is None:
+            telemetry.warning(
+                "Advisory: Robinhood account snapshot unavailable — evaluating "
+                "with an empty account (main.py's fallback); Kelly sizing still runs."
+            )
+            ctx.snapshot = _empty_account_snapshot()
+        snapshot = ctx.snapshot
+
+        symbols = [str(s) for s in ctx.symbols if s]
+        # Defensive: the dashboard is built from ctx.symbols, so this is
+        # normally empty. A row that isn't in ctx.symbols still gets its
+        # Advisory_* columns, as it did before step 5.2.
+        known = set(symbols)
+        dashboard_only = [
+            s for s in (str(v).upper() for v in dashboard_df['Symbol'].tolist())
+            if s and s not in known
+        ]
+        if dashboard_only:
+            telemetry.warning(
+                "Advisory: %d dashboard symbol(s) not in the cycle universe "
+                "(evaluated anyway): %s", len(dashboard_only), ", ".join(dashboard_only[:10]),
+            )
+            symbols.extend(dict.fromkeys(dashboard_only))
+
+        market = _get_market_provider()
+        bars_dict = fetch_bars_for_universe(symbols, market)
+        context_extras = build_context_extras(symbols, bars_dict, ctx.macro_dto, market)
+        ctx.bars_dict = bars_dict
+        ctx.context_extras["advisory_context_extras"] = context_extras
+
+        rows_by_symbol = {}
+        if reuse_pipeline_compute:
+            for row in dashboard_df.to_dict('records'):
+                ticker = str(row.get('Symbol', '')).upper()
+                if ticker:
+                    rows_by_symbol[ticker] = row
+
+        if ctx.progress is not None:
+            ctx.progress.start_stage("execution", symbols_total=len(symbols))
+
+        def _eval_one(symbol: str) -> tuple:
+            """('ok', Recommendation) or ('err', error_dict). Never raises."""
+            try:
+                garch, forecast, forecast_is_fallback = _select_precomputed_for_row(
+                    rows_by_symbol.get(symbol.upper()), reuse_pipeline_compute,
+                )
+                rec = _advisory_evaluate(
+                    symbol=symbol,
+                    position=snapshot.positions.get(symbol),
+                    market=market,
+                    snapshot=snapshot,
+                    macro_dto=ctx.macro_dto,
+                    context_extras=context_extras,
+                    precomputed_garch=garch,
+                    precomputed_forecast=forecast,
+                    precomputed_forecast_is_fallback=forecast_is_fallback,
+                )
+                if ctx.progress is not None:
+                    ctx.progress.advance_symbol(f"Advisory: {symbol}")
+                return "ok", rec
+            except Exception as exc:
+                if ctx.progress is not None:
+                    ctx.progress.advance_symbol(f"Advisory: {symbol} (failed)")
+                return "err", {
+                    "symbol": symbol,
+                    "stage": "advisory_evaluate",
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+
+        workers = max(1, max_workers)
+        if workers == 1 or len(symbols) <= 1:
+            results_by_symbol = {sym: _eval_one(sym) for sym in symbols}
+        else:
+            with ThreadPoolExecutor(max_workers=min(workers, len(symbols))) as pool:
+                results_by_symbol = dict(zip(symbols, pool.map(_eval_one, symbols)))
+
+        # Assemble in universe order so the recommendations (and so the queue
+        # source) are deterministic regardless of worker completion order.
+        recommendations = []
+        column_values: dict = {}
+        for symbol in symbols:
+            kind, payload = results_by_symbol[symbol]
+            if kind != "ok":
+                telemetry.warning("Advisory failed for %s: %s", symbol, payload["message"])
+                ctx.errors.append(payload)
+                continue
+            rec = payload
+            recommendations.append(rec)
+            telemetry.info(
+                "  %-6s  %-10s  conviction=%.2f  quality=%-7s  pos=%.1f%%",
+                symbol, rec.action, rec.conviction, rec.data_quality,
+                rec.suggested_position_pct * 100.0,
+            )
+            column_values[symbol.upper()] = {
+                'Advisory_Action': rec.action,
+                'Advisory_Conviction': round(rec.conviction, 4),
+                'Advisory_Rationale': rec.rationale,
+                'Advisory_Position_Pct': round(rec.suggested_position_pct, 6),
+                'Advisory_Data_Quality': rec.data_quality,
+            }
+        ctx.recommendations = recommendations
+
+        for col in _ADVISORY_COLUMNS:
+            blank = 0.0 if col in _ADVISORY_NUMERIC_COLUMNS else ""
+            dashboard_df[col] = dashboard_df['Symbol'].map(
+                lambda x, _c=col, _b=blank: column_values.get(str(x).upper(), {}).get(_c, _b)
+            )
+
+        telemetry.info(
+            "Advisory evaluation complete for %d tickers (%d recommendations).",
+            len(symbols), len(recommendations),
+        )
+
+
+DAEMON_AGENTIC_QUEUE_MODES = ("off", "shadow", "primary")
+SHADOW_OUTPUT_SUBDIR = "shadow"
+
+
+def resolve_daemon_agentic_queue_mode(value: Any) -> str:
+    """Normalise a ``DAEMON_AGENTIC_QUEUE_MODE`` value; anything unknown is ``off``."""
+    mode = str(value or "").strip().lower()
+    return mode if mode in DAEMON_AGENTIC_QUEUE_MODES else "off"
+
+
+def shadow_output_dir(output_dir: Any) -> Path:
+    """Where the shadow queue lives: ``<OUTPUT_DIR>/shadow``."""
+    return Path(output_dir) / SHADOW_OUTPUT_SUBDIR
+
+
+def shadow_collision_reason(real_dir: Any, shadow_dir: Any) -> Optional[str]:
+    """Return why a shadow write could land on a real queue file, or None.
+
+    ``shadow_dir`` is a subdirectory of ``real_dir``, so the plain paths never
+    collide. A symlink or hard link could still make them the same file (for
+    example ``OUTPUT_DIR/shadow`` pointing back at ``OUTPUT_DIR``), so every
+    path the shadow writer touches is compared with its real counterpart after
+    resolving links.
+    """
+    real_dir = Path(real_dir)
+    shadow_dir = Path(shadow_dir)
+    pairs = (
+        ("output dir", real_dir, shadow_dir),
+        ("queue_sources dir", real_dir / "queue_sources", shadow_dir / "queue_sources"),
+        ("advisory source", real_dir / "queue_sources" / "advisory.json",
+         shadow_dir / "queue_sources" / "advisory.json"),
+        ("execution queue", real_dir / "execution_queue.json",
+         shadow_dir / "execution_queue.json"),
+    )
+    for label, real_path, shadow_path in pairs:
+        try:
+            if real_path.resolve() == shadow_path.resolve():
+                return f"shadow {label} resolves to the real one ({real_path.resolve()})"
+            if real_path.exists() and shadow_path.exists() and os.path.samefile(real_path, shadow_path):
+                return f"shadow {label} is the same file as the real one ({real_path})"
+        except OSError as exc:
+            return f"could not verify the shadow {label} path ({exc})"
+    return None
+
+
+SHADOW_HISTORY_SUBDIR = "history"
+# Two files per cycle; 480 files is ~10 days of hourly cycles, enough for
+# the 5-trading-day comparison (scripts/compare_shadow_queue.py).
+SHADOW_HISTORY_MAX_FILES = 480
+
+
+def archive_shadow_run(
+    shadow_dir: Path, now: datetime, source_path: Optional[Path], queue_path: Optional[Path],
+) -> None:
+    """Keep a timestamped copy of this cycle's shadow files under
+    ``shadow/history/`` so ``scripts/compare_shadow_queue.py`` can find the
+    shadow run nearest after main.py's morning queue (the live shadow files
+    are overwritten every cycle). Only files written THIS cycle are copied: a
+    ``None`` queue path means compose wrote nothing, so the previous shadow
+    queue is not re-archived under a new timestamp. Best effort; never raises.
+    """
+    try:
+        history = Path(shadow_dir) / SHADOW_HISTORY_SUBDIR
+        history.mkdir(parents=True, exist_ok=True)
+        stamp = now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        for kind, path in (("advisory", source_path), ("execution_queue", queue_path)):
+            if path is not None and Path(path).exists():
+                (history / f"{stamp}_{kind}.json").write_bytes(Path(path).read_bytes())
+        files = sorted(p for p in history.glob("*.json") if p.is_file())
+        for old in files[:-SHADOW_HISTORY_MAX_FILES]:
+            old.unlink()
+    except Exception as exc:  # noqa: BLE001 - archive is diagnostics only
+        telemetry.warning("Shadow agentic queue: history archive failed (%s).", exc)
+
+
+class AgenticQueueStep(PipelineStep):
+    """Writes the daemon's copy of the Robinhood execution queue from
+    ``ctx.recommendations``, behind ``settings.DAEMON_AGENTIC_QUEUE_MODE``.
+
+    * ``off`` (default): does nothing. main.py stays the only queue writer.
+    * ``shadow``: writes ``queue_sources/advisory.json`` and
+      ``execution_queue.json`` under ``OUTPUT_DIR/shadow/`` ONLY, with the same
+      ``write_advisory_source`` + ``compose_and_emit`` calls main.py's
+      ``_run_cycle`` makes. ``side_effects=False`` means no push notification,
+      no risk-gate alert and no ``risk_gate_blocks.jsonl`` entry. Refuses to
+      write if a link makes a shadow path resolve to a real queue path. A
+      timestamped copy of each cycle's shadow files goes to
+      ``shadow/history/`` for ``scripts/compare_shadow_queue.py``.
+    * ``primary``: not implemented until step 5.3. Behaves exactly like
+      ``shadow`` and logs a warning; it never writes the real queue here.
+
+    Skips (and logs why) when the cycle stopped, the data is synthetic
+    (MockDataEngine fallback), the advisory overlay did not finish, or there
+    are no recommendations. The mode and ``ROBINHOOD_EXECUTION_MODE`` are
+    captured once at step start and passed explicitly, because the daemon can
+    hot-reload runtime flags while a cycle runs.
+
+    A separate, short, sync step on purpose: if ``AdvisoryOverlayStep`` times
+    out, the runner raises and this step never runs for that cycle, so a
+    still-running advisory thread can't write a queue after its cycle has been
+    marked failed. Never raises (a native crash would take the daemon's APIs
+    down with it; Python errors are logged and swallowed).
+    """
+
+    name = "agentic_queue"
+
+    def __init__(self, *, clock: Optional[Any] = None) -> None:
+        # ``clock`` (a zero-arg callable returning an aware datetime) exists
+        # for the frozen-input equivalence test; production uses UTC now.
+        self._clock = clock
+
+    def run(self, ctx: RunContext) -> None:
+        """Write (or skip) the shadow queue for this cycle."""
+        try:
+            mode = resolve_daemon_agentic_queue_mode(
+                getattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "off")
+            )
+            execution_mode = str(getattr(settings, "ROBINHOOD_EXECUTION_MODE", "off") or "off")
+            output_dir = settings.OUTPUT_DIR
+            self.write_queue(ctx, mode=mode, execution_mode=execution_mode, output_dir=output_dir)
+        except Exception as exc:  # noqa: BLE001 - must never fail the cycle
+            telemetry.warning("Agentic queue step failed (non-critical): %s", exc)
+
+    @staticmethod
+    def skip_reason(ctx: RunContext) -> Optional[str]:
+        """Why this cycle must not produce a queue, or None."""
+        if ctx.stopped:
+            return f"the cycle stopped ({ctx.stop_reason or 'no reason recorded'})"
+        if ctx.context_extras.get("data_is_synthetic"):
+            return "this cycle fell back to synthetic MockDataEngine data"
+        if not ctx.context_extras.get("advisory_overlay_ok"):
+            return "the advisory overlay did not complete this cycle"
+        if not ctx.recommendations:
+            return "there are no recommendations"
+        return None
+
+    def write_queue(
+        self,
+        ctx: RunContext,
+        *,
+        mode: str,
+        execution_mode: str,
+        output_dir: Any,
+    ) -> Optional[Path]:
+        """Write the shadow advisory source and queue for ``mode``.
+
+        Returns the shadow ``execution_queue.json`` path, or None when nothing
+        was written (mode off, a skip reason, a refused path, or
+        ``compose_and_emit`` writing nothing, e.g. ``execution_mode=off``).
+        """
+        mode = resolve_daemon_agentic_queue_mode(mode)
+        if mode == "off":
+            telemetry.debug("DAEMON_AGENTIC_QUEUE_MODE=off — daemon writes no execution queue.")
+            return None
+        if mode == "primary":
+            telemetry.warning(
+                "DAEMON_AGENTIC_QUEUE_MODE=primary is not implemented until step 5.3; "
+                "writing the SHADOW queue only. The real execution_queue.json is untouched "
+                "and main.py is still its writer."
+            )
+
+        reason = self.skip_reason(ctx)
+        if reason is not None:
+            telemetry.info("Shadow agentic queue skipped: %s.", reason)
+            return None
+
+        real_dir = Path(output_dir)
+        shadow_dir = shadow_output_dir(real_dir)
+        shadow_dir.mkdir(parents=True, exist_ok=True)
+        collision = shadow_collision_reason(real_dir, shadow_dir)
+        if collision is not None:
+            telemetry.error("Shadow agentic queue refused: %s.", collision)
+            return None
+
+        from execution.compose import compose_and_emit, write_advisory_source
+
+        now = self._clock() if self._clock is not None else datetime.now(timezone.utc)
+        source_path = write_advisory_source(ctx.recommendations, output_dir=shadow_dir, now=now)
+        if source_path is None:
+            telemetry.warning("Shadow agentic queue: advisory source write failed; no queue composed.")
+            return None
+        queue_path = compose_and_emit(
+            ctx.snapshot,
+            output_dir=shadow_dir,
+            mode=execution_mode,
+            now=now,
+            macro_dto=ctx.macro_dto,
+            side_effects=False,
+        )
+        if queue_path is None:
+            telemetry.info(
+                "Shadow agentic queue: advisory source written to %s; no queue composed "
+                "(ROBINHOOD_EXECUTION_MODE=%s, or nothing composable -- any previous shadow "
+                "queue is left in place, as main.py leaves the real one).",
+                source_path, execution_mode,
+            )
+        else:
+            telemetry.info("Shadow agentic queue written → %s", queue_path)
+        archive_shadow_run(shadow_dir, now, source_path, queue_path)
+        return queue_path
+
+
+class BrokerExecutionStep(PipelineStep):
+    """Executes gated paper/live orders with the Alpaca-API broker surface
+    (``main_orchestrator._execute_broker_orders``) from the strategy Kelly
+    targets. Separate from the Robinhood queue (``AgenticQueueStep``).
+
+    Before step 5.2 this step also ran the advisory overlay; that now lives in
+    ``AdvisoryOverlayStep``, which runs first.
+    """
+    name = "execution"
+
     async def run(self, ctx: RunContext) -> None:
         """Execute gated BUY/SELL orders through the broker (skipped without credentials)."""
         import main_orchestrator
-        from data.market_data import get_provider as _get_market_provider
-        from data.robinhood_portfolio import fetch_account_snapshot as _fetch_rh_snapshot
-        from engine.advisory import evaluate as _advisory_evaluate
-        from concurrent.futures import ThreadPoolExecutor
 
-        if ctx.dashboard_df.empty:
+        if ctx.dashboard_df is None or ctx.dashboard_df.empty:
             return
-
-        # 3b. Advisory Evaluation
-        try:
-            _market_provider = _get_market_provider()
-            shared_context = ctx.context_extras.get("shared_context")
-            _context_extras = {
-                'xsec_percentile_ranks': shared_context.xsec_percentile_ranks if shared_context else {},
-                'multifactor_scores':    shared_context.multifactor_scores if shared_context else {},
-            }
-
-            _rh_snapshot = None
-            try:
-                _rh_snapshot = _fetch_rh_snapshot(max_age_hours=20.0)
-            except Exception as _rh_exc:
-                telemetry.warning(
-                    "Advisory: Robinhood account snapshot unavailable (%s) — "
-                    "position=None for all tickers; Kelly sizing still runs.", _rh_exc
-                )
-
-            for _col in ('Advisory_Action', 'Advisory_Conviction',
-                         'Advisory_Rationale', 'Advisory_Position_Pct',
-                         'Advisory_Data_Quality'):
-                ctx.dashboard_df[_col] = ""
-            ctx.dashboard_df['Advisory_Conviction'] = 0.0
-            ctx.dashboard_df['Advisory_Position_Pct'] = 0.0
-
-            _reuse_pipeline_compute = bool(
-                getattr(settings, 'ADVISORY_REUSE_PIPELINE_COMPUTE', False)
-            )
-
-            def _eval_one(_ticker, _row):
-                try:
-                    _position = (
-                        _rh_snapshot.positions.get(_ticker)
-                        if _rh_snapshot is not None else None
-                    )
-                    _precomputed_garch = None
-                    _precomputed_forecast = None
-                    _precomputed_forecast_is_fallback = None
-                    if _reuse_pipeline_compute:
-                        _precomputed_garch = _row.get('GARCH_Vol')
-                        _precomputed_forecast = _row.get('Forecast_30')
-                        # Only trust an actual bool -- the dashboard_df cell
-                        # can also be float('nan') (row skipped forecasting
-                        # entirely this cycle) or absent, neither of which
-                        # tells us anything about fallback status.
-                        _raw_pf_fallback = _row.get('Forecast_30_Is_Fallback')
-                        _precomputed_forecast_is_fallback = (
-                            _raw_pf_fallback if isinstance(_raw_pf_fallback, bool) else None
-                        )
-                    _rec = _advisory_evaluate(
-                        symbol=_ticker,
-                        position=_position,
-                        market=_market_provider,
-                        snapshot=_rh_snapshot,
-                        macro_dto=ctx.macro_dto,
-                        context_extras=_context_extras,
-                        precomputed_garch=_precomputed_garch,
-                        precomputed_forecast=_precomputed_forecast,
-                        precomputed_forecast_is_fallback=_precomputed_forecast_is_fallback,
-                    )
-                    if ctx.progress is not None:
-                        ctx.progress.advance_symbol(f"Advisory: {_ticker}")
-                    return _ticker, {
-                        'Advisory_Action': _rec.action,
-                        'Advisory_Conviction': round(_rec.conviction, 4),
-                        'Advisory_Rationale': _rec.rationale,
-                        'Advisory_Position_Pct': round(_rec.suggested_position_pct, 6),
-                        'Advisory_Data_Quality': _rec.data_quality
-                    }
-                except Exception as _adv_exc:
-                    telemetry.warning("Advisory failed for %s: %s", _ticker, _adv_exc)
-                    if ctx.progress is not None:
-                        ctx.progress.advance_symbol(f"Advisory: {_ticker} (failed)")
-                    return _ticker, None
-
-            _adv_rows = []
-            for _row in ctx.dashboard_df.to_dict('records'):
-                _ticker = str(_row.get('Symbol', '')).upper()
-                if not _ticker:
-                    continue
-                _adv_rows.append((_ticker, _row))
-
-            if ctx.progress is not None:
-                ctx.progress.start_stage("execution", symbols_total=len(_adv_rows))
-
-            _adv_workers = min(
-                int(getattr(settings, 'ADVISORY_MAX_CONCURRENCY', 8)),
-                max(1, len(ctx.dashboard_df)),
-            )
-            if _adv_workers <= 1 or len(_adv_rows) <= 1:
-                _adv_pairs = [_eval_one(_t, _r) for _t, _r in _adv_rows]
-            else:
-                with ThreadPoolExecutor(max_workers=_adv_workers) as _adv_pool:
-                    _adv_pairs = list(_adv_pool.map(lambda _tr: _eval_one(*_tr), _adv_rows))
-
-            advisory_results = {_t: _res for _t, _res in _adv_pairs if _res is not None}
-
-            for _col in ('Advisory_Action', 'Advisory_Conviction',
-                         'Advisory_Rationale', 'Advisory_Position_Pct',
-                         'Advisory_Data_Quality'):
-                if _col in ('Advisory_Conviction', 'Advisory_Position_Pct'):
-                    ctx.dashboard_df[_col] = ctx.dashboard_df['Symbol'].map(lambda x: advisory_results.get(str(x).upper(), {}).get(_col, 0.0))
-                else:
-                    ctx.dashboard_df[_col] = ctx.dashboard_df['Symbol'].map(lambda x: advisory_results.get(str(x).upper(), {}).get(_col, ""))
-
-            telemetry.info(
-                "Advisory evaluation complete for %d tickers.", len(ctx.dashboard_df)
-            )
-        except Exception as _adv_loop_err:
-            telemetry.warning(
-                "Advisory evaluation loop failed (non-critical): %s", _adv_loop_err
-            )
 
         # 6. Broker Execution
         effective_dry_run = ctx.force_account # Or pass it in context

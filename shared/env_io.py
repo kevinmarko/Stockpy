@@ -437,6 +437,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "JULES_DISPATCH_COOLDOWN_SECONDS",    # float — min seconds between dispatch_session() calls
     # Robinhood execution bridge & portfolio controls
     "ROBINHOOD_EXECUTION_MODE",
+    # off | shadow | primary -- which process writes the Robinhood queue
+    # (step 5.2). Non-secret; a DANGEROUS_KEYS member (settings_keysets.py).
+    "DAEMON_AGENTIC_QUEUE_MODE",
     "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
     "ROBINHOOD_LIMIT_BUFFER_BPS",
     "ROBINHOOD_AUTO_REFRESH_ENABLED",

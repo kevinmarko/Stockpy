@@ -1414,12 +1414,14 @@ class TestMainBodyStepSelection(unittest.TestCase):
             ["AsyncDataFetchStep", "RunPipelineStep"],
         )
 
-    def test_full_mode_all_four_steps(self):
+    def test_full_mode_all_steps(self):
         self.assertEqual(
             self._capture_steps_for_mode("full"),
             [
                 "AsyncDataFetchStep",
                 "RunPipelineStep",
+                "AdvisoryOverlayStep",
+                "AgenticQueueStep",
                 "BrokerExecutionStep",
                 "StateSnapshotStep",
             ],

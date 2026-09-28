@@ -233,7 +233,11 @@ class _Rendered:
     execution_queue: bytes
 
 
-def _render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rendered:
+def _install_frozen_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Freeze every input source (see the module docstring) and return the
+    tmp ``OUTPUT_DIR``. Shared with
+    ``tests/test_daemon_advisory_shadow_equivalence.py`` (step 5.2 gate (i)),
+    which runs the daemon's advisory + shadow-queue steps on the same inputs."""
     import data.broker_fills_store as bfs
     import data.market_data as md
     import engine.advisory as adv
@@ -241,7 +245,6 @@ def _render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rendered:
     import main
     import ml.lgbm_ranker as lgbm
     import ml.meta_bootstrap as meta_boot
-    from execution.compose import compose_and_emit, write_advisory_source
     from settings import settings
     from transactions_store import TransactionsStore
 
@@ -297,7 +300,10 @@ def _render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rendered:
     monkeypatch.setattr("macro_engine.MacroEngine", _FakeMacroEngine)
     main._reset_macro_engine_cache()
     monkeypatch.setattr(adv, "_get_forecasting_engine", lambda: _FakeForecastingEngine())
-    store = TransactionsStore("sqlite:///:memory:")
+    # A tmp FILE database, not ``sqlite:///:memory:``: SQLAlchemy gives each
+    # thread its own connection to an in-memory SQLite DB, so a daemon step
+    # run through AsyncPipelineRunner's to_thread would see an empty store.
+    store = TransactionsStore(f"sqlite:///{tmp_path / 'golden_trades.db'}")
     # One closed MSFT round trip, so the excursion (MFE/MAE/Edge Ratio/
     # Realized Slippage) pre-compute has a real hold window to measure.
     _msft = _BARS["MSFT"]["Close"]
@@ -311,14 +317,11 @@ def _render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rendered:
 
     monkeypatch.setattr(lgbm.LGBMCrossSectionalRanker, "load_latest", staticmethod(_no_model))
     monkeypatch.setattr(meta_boot, "bootstrap_meta_registry", lambda *a, **kw: None)
+    return out
 
-    try:
-        result = main.run_once()
-    finally:
-        main._reset_macro_engine_cache()
 
-    assert not result.errors, result.errors
-    recs = [
+def _recommendation_dicts(recommendations) -> List[Dict[str, Any]]:
+    return [
         {
             "symbol": r.symbol,
             "action": r.action,
@@ -333,9 +336,27 @@ def _render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rendered:
             # directly, not only through its effect on action/conviction.
             "key_indicators": r.key_indicators,
         }
-        for r in result.recommendations
+        for r in recommendations
     ]
-    rec_bytes = (json.dumps(recs, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _recommendation_bytes(recommendations) -> bytes:
+    recs = _recommendation_dicts(recommendations)
+    return (json.dumps(recs, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rendered:
+    import main
+    from execution.compose import compose_and_emit, write_advisory_source
+
+    out = _install_frozen_inputs(tmp_path, monkeypatch)
+    try:
+        result = main.run_once()
+    finally:
+        main._reset_macro_engine_cache()
+
+    assert not result.errors, result.errors
+    rec_bytes = _recommendation_bytes(result.recommendations)
 
     # Mirrors main.py's _run_cycle queue block, with ``now``/``output_dir`` pinned.
     write_advisory_source(result.recommendations, output_dir=out, now=_NOW)

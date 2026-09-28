@@ -1180,8 +1180,10 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
     * ``"data"``    — data-fetch stage only (``AsyncDataFetchStep``);
     * ``"metrics"`` — data-fetch + indicator/forecast/signal precompute
                       (``AsyncDataFetchStep`` + ``RunPipelineStep``);
-    * ``"full"``    — the whole cycle (default, unchanged): data fetch, run
-                      pipeline, broker execution, state snapshot.
+    * ``"full"``    — the whole cycle (default): data fetch, run pipeline,
+                      advisory overlay, agentic queue (off by default, see
+                      ``settings.DAEMON_AGENTIC_QUEUE_MODE``), broker
+                      execution, state snapshot.
 
     ``force`` (default ``True``) bypasses the cross-cycle data-freshness gate.
     Only the daemon's automatic interval timer passes ``force=False``; when it
@@ -1207,6 +1209,8 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
     from pipeline.production_steps import (
         AsyncDataFetchStep,
         RunPipelineStep,
+        AdvisoryOverlayStep,
+        AgenticQueueStep,
         BrokerExecutionStep,
         StateSnapshotStep
     )
@@ -1231,10 +1235,15 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
         steps = [AsyncDataFetchStep()]
     elif mode == "metrics":
         steps = [AsyncDataFetchStep(), RunPipelineStep()]
-    else:  # "full" (default) — unchanged whole cycle
+    else:  # "full" (default) — the whole cycle
+        # AdvisoryOverlayStep and AgenticQueueStep are sync, so the runner
+        # bounds them with PIPELINE_STEP_TIMEOUT_SECONDS; AgenticQueueStep is
+        # a no-op unless DAEMON_AGENTIC_QUEUE_MODE is shadow/primary (step 5.2).
         steps = [
             AsyncDataFetchStep(),
             RunPipelineStep(),
+            AdvisoryOverlayStep(),
+            AgenticQueueStep(),
             BrokerExecutionStep(),
             StateSnapshotStep(),
         ]
