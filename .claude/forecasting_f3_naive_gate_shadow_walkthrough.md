@@ -29,6 +29,21 @@ h>=30 no matured shadow rows at all (`n=0, not yet scorable`). Flipping
 `FORECAST_NAIVE_GATE_ENABLED` then would publish naive (neutral in
 `forecast_alignment`) for every symbol and horizon. See "Open decisions".
 
+**Update (2026-09-28): the operator approved option (c), a naive backfill.**
+`scripts/backfill_naive_forecasts.py`
+(`.claude/forecast_ledger_contamination_naive_backfill_walkthrough.md`)
+inserts the missing past `naive` rows from the daily bars. Its read-only dry run
+on the live ledger (window 365d) projects when some model first reaches
+n=60 for the 32 active symbols:
+
+* h=10: earliest 2026-10-19, median 2026-10-21 (without it: 2026-12-10 / 12-11).
+* h=30: earliest 2026-11-16, median 2026-11-18 (without it: 2027-01-07 / 01-08).
+
+That is an `n` projection only: a model is still admitted only if it beats
+naive by 0.5%. The real `naive` rows start 2026-09-07; the 2026-09-06 ones
+were test contamination (AAPL/SPY at $10). The contamination is removed by
+`clean_forecast_ledger.py` category (d), which must run before the backfill.
+
 ## What changed
 
 ### 1. The gate rule (pure): `forecasting/forecast_tracker.py::compute_naive_gate`
@@ -322,7 +337,9 @@ which gives the same result.
    * (d) temporarily lower `FORECAST_NAIVE_GATE_MIN_OBS`.
 2. **Clean the AAPL/SPY test contamination** out of the live ledger. The
    operator runs the delete; category (a) of `clean_forecast_ledger.py` could
-   be extended.
+   be extended. *Done in code (2026-09-28) as category (d)*; option (c) of
+   item 1 was implemented as `scripts/backfill_naive_forecasts.py`. See the
+   update at the top of this file.
 3. The two gate columns already on the live table (leak 1) are harmless, and
    are noted here for the record.
 4. Prophet's exception fallback, which returns the last price as "prophet",

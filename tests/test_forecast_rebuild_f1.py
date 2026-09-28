@@ -568,8 +568,8 @@ class TestCleanForecastLedger:
         before = _rows(db, "SELECT COUNT(*) FROM forecast_errors")[0][0]
         real_analyze = clf.analyze
 
-        def _lying_analyze(conn, w, m, cats):
-            summary, excluded = real_analyze(conn, w, m, cats)
+        def _lying_analyze(conn, w, m, cats, **kw):
+            summary, excluded = real_analyze(conn, w, m, cats, **kw)
             summary["rows_after_cleanup"] = -1  # forces the post-delete check to fail
             return summary, excluded
 
@@ -609,7 +609,7 @@ class TestCleanForecastLedgerCategories:
         assert parse_categories(None) == ("a", "b")
         assert parse_categories("c, A,b,c") == ("a", "b", "c")
         with pytest.raises(ValueError):
-            parse_categories("a,d")
+            parse_categories("a,e")
         with pytest.raises(ValueError):
             parse_categories(" , ")
 
