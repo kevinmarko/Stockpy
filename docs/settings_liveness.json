@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 333,
+    "live_safe": 334,
     "no_op": 4,
     "restart_required": 85,
-    "total": 422
+    "total": 423
   },
   "dynamic_sites": [
     {
@@ -386,6 +386,7 @@
     "ROBINHOOD_EXECUTION_MODE",
     "ROBINHOOD_LIMIT_BUFFER_BPS",
     "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
+    "ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET",
     "ROBINHOOD_SCHEDULED_LOGIN_ENABLED",
     "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET",
     "RUNTIME_FLAGS_REFRESH_ENABLED",
@@ -455,13 +456,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 843,
+    "attr": 845,
     "factory_param": 4,
     "getattr_const": 315,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 267,
+    "attr": 268,
     "factory_param": 4,
     "getattr_const": 188,
     "os_environ": 2

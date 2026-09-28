@@ -429,6 +429,52 @@ class TestFetchAccountSnapshot:
         with pytest.raises(ConnectionError):
             fetch_account_snapshot(max_age_hours=20.0)
 
+    def test_login_running_in_another_process_falls_back_to_stale_cache(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Tier 3 with auto-refresh on while ANOTHER process holds the
+        cross-process login lock: the real _fetch_live_snapshot ->
+        login_blocking -> start_login path raises RobinhoodLoginInProgress
+        (job=None) without spawning a worker, and fetch_account_snapshot
+        treats it like any login failure -> the stale cached snapshot."""
+        import fcntl
+
+        import data.robinhood_login as robinhood_login
+
+        monkeypatch.delenv("RH_LOGIN_WORKER", raising=False)
+        cache_file = tmp_path / "account_snapshot.json"
+        monkeypatch.setattr("data.robinhood_portfolio._CACHE_PATH", cache_file)
+        old_snap = _make_snapshot(age_hours=25.0)
+        cache_file.write_text(json.dumps(old_snap.to_dict()))
+
+        class _NoSpawn:
+            def __getattr__(self, name):
+                import subprocess
+
+                return getattr(subprocess, name)
+
+            def Popen(self, *a, **k):  # noqa: N802
+                raise AssertionError("no login worker may be spawned while another process holds the lock")
+
+        monkeypatch.setattr(robinhood_login, "subprocess", _NoSpawn())
+        monkeypatch.setattr(robinhood_login, "_active_job", None)
+
+        lock_dir = robinhood_login._lock_dir()
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_dir / robinhood_login.LOCK_FILENAME), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # "another process"
+            with pytest.raises(robinhood_login.RobinhoodLoginInProgress) as exc_info:
+                robinhood_login.login_blocking("refresh")
+            assert exc_info.value.job is None
+
+            result = fetch_account_snapshot(max_age_hours=20.0, force=False)
+        finally:
+            os.close(fd)
+
+        assert result.is_stale(max_age_hours=20.0)
+        assert result.buying_power == pytest.approx(old_snap.buying_power)
+
 
 # ---------------------------------------------------------------------------
 # Dividend correlation logic

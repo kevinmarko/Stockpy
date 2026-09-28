@@ -24,6 +24,7 @@ from data.robinhood_login import (
     LoginJobState,
     RobinhoodLoginInProgress,
     cancel_login,
+    describe_owner,
     get_login_state,
     start_login,
 )
@@ -78,7 +79,15 @@ def start_refresh_job() -> LoginJobState:
 def login_in_progress_detail(exc: RobinhoodLoginInProgress) -> str:
     """Plain-string HTTP 409 detail for a refused start (a string, not a
     dict, so the webapp's generic error surfacing shows it verbatim). Never
-    includes credential values -- only the running job's id and mode."""
+    includes credential values -- only the running job's id and mode (or,
+    for a login running in ANOTHER process, the lock owner's pid/job/mode/
+    start time from its diagnostic sidecar)."""
+    if exc.job is None:
+        return (
+            f"A Robinhood login is already in progress in another process "
+            f"({describe_owner(exc.owner)}). Approve it in the Robinhood app or "
+            f"wait for it to finish before starting a new {exc.requested_mode} login."
+        )
     return (
         f"A Robinhood login is already in progress (job {exc.job.job_id}, "
         f"mode {exc.job.mode}). Approve it in the Robinhood app or cancel it "
