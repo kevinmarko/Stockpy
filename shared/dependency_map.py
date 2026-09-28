@@ -124,8 +124,11 @@ _QUOTE_CONSUMERS: tuple[Consumer, ...] = (
              "ARIMA / Monte Carlo / Holt-Winters / CNN-LSTM forecasts."),
     Consumer("processing_engine",    "engine",
              "Technical indicators (RSI, MACD, ATR, Aroon, RSI-2, SMA-5)."),
-    Consumer("technical_options_engine", "engine",
-             "GJR-GARCH σ, IVR proxy, premium-selling matrix."),
+    Consumer("volatility.garch / trend_indicators", "engine",
+             "GJR-GARCH σ / Aroon-Coppock-Chandelier indicators (moved out of "
+             "technical_options_engine.py in step 3d; that module and its "
+             "options-only IVR/premium-selling matrix were archived to "
+             "legacy/ in step 4b)."),
     Consumer("Strategy Matrix tab",  "tab",
              "Live weights/preview rely on most-recent quote data."),
     Consumer("Reports tab",          "tab",

@@ -274,26 +274,11 @@ def _isolate_validation_runs_db_in_tests(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(_vhs, "resolve_database_url", lambda: "sqlite:///:memory:")
 
 
-@pytest.fixture(autouse=True)
-def _isolate_execution_audit_db_in_tests(monkeypatch):
-    """Point the default execution-audit-records DB resolver at an in-memory
-    db for every test, unless the test passes its own explicit ``db_url``/
-    ``sqlite_path`` to ``ExecutionAuditStore``.
-
-    ``ExecutionAuditStore()`` with no explicit URL resolves to the real
-    shared DB. ``OrderManager`` used to construct one implicitly on every
-    real fill (removed 2026-09, step 3c); this guard stays until the store
-    itself moves to ``legacy/`` in step 4, so any remaining default
-    construction can never write real order-audit rows into a real operator's
-    shared ``~/.stockpy_local/quant_platform.db`` on every test run. Same
-    fixture shape as ``_isolate_validation_runs_db_in_tests`` above; a test
-    that passes ``sqlite_path=``/``db_url=`` explicitly (e.g.
-    ``tests/test_sec_rule_606_reporter.py``'s fixtures) bypasses
-    ``resolve_database_url()`` entirely and is unaffected by this patch.
-    """
-    import data.execution_audit_store as _eas
-
-    monkeypatch.setattr(_eas, "resolve_database_url", lambda: "sqlite:///:memory:")
+# _isolate_execution_audit_db_in_tests removed (step 4b, options desk
+# archive): data/execution_audit_store.py moved to
+# legacy/data/execution_audit_store.py -- no test under tests/ constructs it
+# any more, and its own dedicated test file moved to
+# legacy/tests/test_sec_rule_606_reporter.py alongside it.
 
 
 @pytest.fixture(autouse=True)

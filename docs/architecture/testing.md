@@ -1,6 +1,8 @@
 # Architecture: Test Suite Index
 
 > Part of the split-out `CLAUDE.md` System Architecture reference. See [../../CLAUDE.md](../../CLAUDE.md) for the index.
+>
+> **2026-09 (step 4b):** any options-desk module mentioned below (`technical_options_engine.py`, `volatility/iv_engine.py`, and the rest of the step-4 archive set) moved to `legacy/` — see `legacy/README.md` for the full list.
 
 - **tests/lookahead_check.py** — utility exposing `verify_no_lookahead` to detect and prevent lookahead bias in quantitative indicators.
 - **tests/test_indicators_lookahead.py** — lookahead perturbation tests for RSI, MACD, ATR, Aroon, Chandelier, and RS-MACD.

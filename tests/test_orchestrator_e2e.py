@@ -115,11 +115,11 @@ def orchestrator_run(tmp_path_factory):
     fake_market_provider.get_intraday_bars.side_effect = Exception("no network in test sandbox")
     fake_market_provider.get_fundamentals.side_effect = Exception("no network in test sandbox")
 
-    # run_pipeline()'s Technical Options step also hardcodes `IVHistoryStore()`
-    # with no injection point -- same real-on-disk-DB pitfall as
-    # TransactionsStore above (caught by a `git status` diff on
-    # quant_platform.db during development of this file; redirect the same way).
-    from volatility.iv_engine import IVHistoryStore
+    # (Step 4b, options desk archive: run_pipeline()'s Technical Options step
+    # and volatility.iv_engine.IVHistoryStore this comment used to warn about
+    # -- same real-on-disk-DB pitfall as TransactionsStore above -- were
+    # removed back in step 3d. run_pipeline() no longer touches iv_history at
+    # all, so no equivalent redirect is needed here anymore.)
 
     captured_stdout = {}
 
@@ -158,9 +158,6 @@ def orchestrator_run(tmp_path_factory):
         mock.patch.object(
             transactions_store.TransactionsStore, "__init__",
             make_memory_db_init(transactions_store.TransactionsStore.__init__),
-        ),
-        mock.patch.object(
-            IVHistoryStore, "__init__", make_memory_db_init(IVHistoryStore.__init__)
         ),
     ):
         import io

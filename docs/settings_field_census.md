@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `2f09719225faa153fcc846792f8070034a5a3c7c`
+- Measured at commit: `a6052be8cbdea8aba927a7967940d3749ce43d4c`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -222,7 +222,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **440** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **383** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -235,14 +235,14 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 762 | 269 |
-| (b) `getattr(settings, "KEY", default)` | 378 | 220 |
+| (a) `settings.KEY` | 745 | 262 |
+| (b) `getattr(settings, "KEY", default)` | 306 | 183 |
 | (c) `getattr(settings, <var>)` (dynamic) | 13 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
-Fields reached by at least one form: **445** of 477.
+Fields reached by at least one form: **404** of 477.
 
-### Fields with NO statically-attributable read — **32**
+### Fields with NO statically-attributable read — **73**
 
 **These are not necessarily dead.** A field whose name is passed as a *string literal* to a
 factory that then does a dynamic `getattr` is read at runtime while being invisible to every
@@ -252,12 +252,21 @@ referenced by name somewhere and is probably read dynamically.
 | Field | Name-literal sites | Verdict |
 |---|---|---|
 | `CIRCUIT_BREAKER_ENABLED` | _none_ | no read and no name reference found |
+| `CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS` | _none_ | no read and no name reference found |
+| `CIRCUIT_BREAKER_OFI_THRESHOLD` | _none_ | no read and no name reference found |
 | `CIRCUIT_BREAKER_REFERENCE_SYMBOL` | _none_ | no read and no name reference found |
+| `CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD` | _none_ | no read and no name reference found |
+| `CIRCUIT_BREAKER_VPIN_THRESHOLD` | _none_ | no read and no name reference found |
 | `CORRELATION_CLUSTER_LOOKBACK_DAYS` | `api/pilots_api.py:4080` | likely read dynamically |
 | `DASHBOARD_REFRESH_SECONDS` | `api/pilots_api.py:4192`, `pilots/settings_domains.py:132` | likely read dynamically |
 | `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4838` | likely read dynamically |
 | `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4837` | likely read dynamically |
+| `ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD` | _none_ | no read and no name reference found |
+| `ETF_HOLDINGS_ENABLED` | _none_ | no read and no name reference found |
+| `ETF_HOLDINGS_ISSUER_CSV_ENABLED` | _none_ | no read and no name reference found |
 | `ETF_HOLDINGS_MARKET_PROXY` | _none_ | no read and no name reference found |
+| `ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE` | _none_ | no read and no name reference found |
+| `ETF_HOLDINGS_REFRESH_DAYS` | _none_ | no read and no name reference found |
 | `ETF_HOLDINGS_TICKERS` | _none_ | no read and no name reference found |
 | `ETF_TRANSMISSION_COV_INFLATION` | _none_ | no read and no name reference found |
 | `ETF_TRANSMISSION_COV_WINDOW_DAYS` | _none_ | no read and no name reference found |
@@ -272,19 +281,51 @@ referenced by name somewhere and is probably read dynamically.
 | `ETF_TRANSMISSION_WINDOW_DAYS` | _none_ | no read and no name reference found |
 | `ETF_TRANSMISSION_WRAPPERS` | _none_ | no read and no name reference found |
 | `FIX_GATEWAY_ENABLED` | _none_ | no read and no name reference found |
+| `FIX_HEARTBEAT_INTERVAL_SECONDS` | _none_ | no read and no name reference found |
+| `FIX_MOCK_VENUES_ENABLED` | _none_ | no read and no name reference found |
+| `FIX_VENUES_CONFIG_PATH` | _none_ | no read and no name reference found |
 | `FMP_ECON_INDICATORS` | `api/pilots_api.py:4979` | likely read dynamically |
+| `FMP_OPTIONS_CONTEXT_ENABLED` | `api/pilots_api.py:4990` | likely read dynamically |
+| `FMP_OPTIONS_HEALTH_ENABLED` | `api/pilots_api.py:4989` | likely read dynamically |
 | `FORECAST_BACKFILL_VRP_PROXY_ENABLED` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_OVERLAP_DAYS` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_WINDOW_DAYS` | _none_ | no read and no name reference found |
+| `MAX_CONCURRENT_OPTION_POSITIONS` | `api/pilots_api.py:4269` | likely read dynamically |
+| `MAX_OPTION_NOTIONAL_PER_TRADE` | `api/pilots_api.py:4268` | likely read dynamically |
 | `MULTI_BROKER_GATEWAY_ENABLED` | `pilots/feature_flags.py:90` | likely read dynamically |
+| `OFI_SHIELD_ENABLED` | `pilots/settings_domains.py:65`, `settings_keysets.py:297` | likely read dynamically |
+| `OPTIONS_0DTE_ENABLED` | `api/pilots_api.py:4264` | likely read dynamically |
+| `OPTIONS_0DTE_HARD_EXIT_TIME` | `api/pilots_api.py:4267` | likely read dynamically |
+| `OPTIONS_0DTE_PROFIT_TARGET_PCT` | `api/pilots_api.py:4265` | likely read dynamically |
+| `OPTIONS_0DTE_STOP_LOSS_PCT` | `api/pilots_api.py:4266` | likely read dynamically |
+| `OPTIONS_ALERT_WEBHOOK_URL` | _none_ | no read and no name reference found |
+| `OPTIONS_AUTO_EXIT_ENABLED` | `api/pilots_api.py:4258` | likely read dynamically |
+| `OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD` | _none_ | no read and no name reference found |
+| `OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES` | `api/pilots_api.py:4263` | likely read dynamically |
+| `OPTIONS_DELTA_HEDGE_ENABLED` | `api/pilots_api.py:4262` | likely read dynamically |
+| `OPTIONS_DRL_RISK_AVERSION_GAMMA` | _none_ | no read and no name reference found |
 | `OPTIONS_EARNINGS_CRUSH_ENABLED` | _none_ | no read and no name reference found |
+| `OPTIONS_EARNINGS_MIN_EDGE` | _none_ | no read and no name reference found |
+| `OPTIONS_EARNINGS_WING_MULTIPLIER` | _none_ | no read and no name reference found |
+| `OPTIONS_GEX_SEARCH_RANGE_PCT` | _none_ | no read and no name reference found |
+| `OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE` | _none_ | no read and no name reference found |
+| `OPTIONS_MANAGE_DTE_THRESHOLD` | `api/pilots_api.py:4261` | likely read dynamically |
+| `OPTIONS_MATRIX_ENABLED` | `api/pilots_api.py:4223` | likely read dynamically |
+| `OPTIONS_META_LABELER_ENABLED` | _none_ | no read and no name reference found |
+| `OPTIONS_PROFIT_TARGET_PCT` | `api/pilots_api.py:4259` | likely read dynamically |
+| `OPTIONS_SOR_LEGGING_LATENCY_SECONDS` | _none_ | no read and no name reference found |
+| `OPTIONS_STOP_LOSS_MULTIPLE` | `api/pilots_api.py:4260` | likely read dynamically |
+| `OPTIONS_TRUE_IVR_ENABLED` | `api/pilots_api.py:4224` | likely read dynamically |
+| `OPTIONS_VPIN_TOXICITY_THRESHOLD` | _none_ | no read and no name reference found |
+| `OPTIONS_VRP_THRESHOLD` | `api/pilots_api.py:4153` | likely read dynamically |
+| `PAPER_OPTIONS_AUTO_EXECUTE_ENABLED` | `api/pilots_api.py:4257`, `pilots/settings_domains.py:74` | likely read dynamically |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:10834` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1711`, `pilots/feature_flags.py:49` | likely read dynamically |
 | `WS_RISK_STREAM_INTERVAL_SECONDS` | _none_ | no read and no name reference found |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **176**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **142**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -305,10 +346,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `BERT_LLA_MIN_SENTIMENT_COVERAGE` | b | 1 | 0 |
 | `BERT_LLA_WINDOW_SIZE` | b | 1 | 0 |
 | `BROKER_BACKEND` | b | 2 | 0 |
-| `CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS` | b | 1 | 0 |
-| `CIRCUIT_BREAKER_OFI_THRESHOLD` | b | 1 | 0 |
-| `CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD` | b | 1 | 0 |
-| `CIRCUIT_BREAKER_VPIN_THRESHOLD` | b | 1 | 0 |
 | `CLOSED_POSITION_RETENTION_DAYS` | b | 2 | 0 |
 | `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` | b | 1 | 0 |
 | `DATABASE_URL` | b | 1 | 0 |
@@ -318,10 +355,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `EDGAR_COOLDOWN_SECONDS` | b | 1 | 0 |
 | `EDGAR_COOLDOWN_THRESHOLD` | b | 1 | 0 |
 | `EDGAR_MAX_CONCURRENCY` | b | 1 | 0 |
-| `ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD` | b | 1 | 0 |
-| `ETF_HOLDINGS_ISSUER_CSV_ENABLED` | b | 1 | 0 |
-| `ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE` | b | 1 | 0 |
-| `ETF_HOLDINGS_REFRESH_DAYS` | b | 1 | 0 |
 | `EVAL_BROKER_TRADES_ENABLED` | b | 1 | 0 |
 | `EXCURSION_INTRADAY_ENABLED` | b | 1 | 0 |
 | `EXECUTION_PRIORITY_QUEUE_ENABLED` | b | 1 | 0 |
@@ -329,15 +362,13 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `FEATURE_DRIFT_PSI_ENABLED` | b | 1 | 0 |
 | `FINBERT_BATCH_SIZE` | b | 1 | 0 |
 | `FINBERT_SCORE_CACHE_ENABLED` | b | 1 | 0 |
-| `FIX_MOCK_VENUES_ENABLED` | b | 1 | 0 |
-| `FIX_VENUES_CONFIG_PATH` | b | 1 | 0 |
-| `FMP_ANALYST_ENABLED` | b | 2 | 0 |
+| `FMP_ANALYST_ENABLED` | b | 1 | 0 |
 | `FMP_ANALYST_REFRESH_HOURS` | b | 1 | 0 |
 | `FMP_BARS_ENABLED` | b | 1 | 0 |
 | `FMP_BASE_URL` | b | 1 | 0 |
 | `FMP_COOLDOWN_SECONDS` | b | 1 | 0 |
 | `FMP_COOLDOWN_THRESHOLD` | b | 1 | 0 |
-| `FMP_EARNINGS_ENABLED` | b | 2 | 0 |
+| `FMP_EARNINGS_ENABLED` | b | 1 | 0 |
 | `FMP_EARNINGS_REFRESH_HOURS` | b | 1 | 0 |
 | `FMP_ECON_CALENDAR_ENABLED` | b | 1 | 0 |
 | `FMP_FALLBACK_ENABLED` | b | 2 | 0 |
@@ -352,8 +383,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `FMP_NEWS_ENABLED` | b | 7 | 0 |
 | `FMP_NEWS_MAX_PAGES` | b | 3 | 0 |
 | `FMP_NEWS_PAGE_LIMIT` | b | 3 | 0 |
-| `FMP_OPTIONS_CONTEXT_ENABLED` | b | 1 | 0 |
-| `FMP_OPTIONS_HEALTH_ENABLED` | b | 1 | 0 |
 | `FMP_PEERS_ENABLED` | b | 1 | 0 |
 | `FMP_PROFILE_ENABLED` | b | 2 | 0 |
 | `FMP_QUOTES_ENABLED` | b | 1 | 0 |
@@ -416,40 +445,18 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `MARKET_DATA_WS_RECONNECT_MAX_SECONDS` | b | 1 | 0 |
 | `MARKET_DATA_WS_STALE_SECONDS` | b | 1 | 0 |
 | `MARKET_DATA_WS_SYMBOLS` | b | 1 | 0 |
-| `MAX_CONCURRENT_OPTION_POSITIONS` | b | 1 | 0 |
-| `MAX_OPTION_NOTIONAL_PER_TRADE` | b | 1 | 0 |
 | `META_LABELING_BACKFILL_BRIDGE_ENABLED` | b | 2 | 0 |
 | `META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS` | b | 1 | 0 |
 | `META_LABELING_BACKFILL_ELIGIBLE_SIGNALS` | b | 2 | 0 |
 | `META_LABELING_BACKFILL_LIVE_HORIZON_DAYS` | b | 1 | 0 |
 | `META_LABELING_ENABLED` | b | 1 | 0 |
 | `NO_VENV_REEXEC` | d | 0 | 1 |
-| `OFI_SHIELD_ENABLED` | b | 1 | 0 |
 | `OPAL_RESEARCH_MODEL` | b | 1 | 0 |
 | `OPAL_RESEARCH_PROVIDER` | b | 2 | 0 |
 | `OPAL_RESEARCH_TIMEOUT_SECONDS` | b | 1 | 0 |
-| `OPTIONS_0DTE_ENABLED` | b | 3 | 0 |
-| `OPTIONS_0DTE_HARD_EXIT_TIME` | b | 4 | 0 |
-| `OPTIONS_0DTE_PROFIT_TARGET_PCT` | b | 3 | 0 |
-| `OPTIONS_0DTE_STOP_LOSS_PCT` | b | 3 | 0 |
-| `OPTIONS_ALERT_WEBHOOK_URL` | b | 5 | 0 |
-| `OPTIONS_AUTO_EXIT_ENABLED` | b | 4 | 0 |
-| `OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES` | b | 3 | 0 |
-| `OPTIONS_DELTA_HEDGE_ENABLED` | b | 2 | 0 |
-| `OPTIONS_EARNINGS_MIN_EDGE` | b | 1 | 0 |
-| `OPTIONS_EARNINGS_WING_MULTIPLIER` | b | 1 | 0 |
-| `OPTIONS_GEX_SEARCH_RANGE_PCT` | b | 1 | 0 |
-| `OPTIONS_MANAGE_DTE_THRESHOLD` | b | 1 | 0 |
-| `OPTIONS_MATRIX_ENABLED` | b | 1 | 0 |
-| `OPTIONS_META_LABELER_ENABLED` | b | 2 | 0 |
-| `OPTIONS_PROFIT_TARGET_PCT` | b | 1 | 0 |
-| `OPTIONS_RISK_FREE_RATE` | b | 8 | 0 |
-| `OPTIONS_SOR_LEGGING_LATENCY_SECONDS` | b | 1 | 0 |
-| `OPTIONS_STOP_LOSS_MULTIPLE` | b | 1 | 0 |
-| `OPTIONS_VPIN_TOXICITY_THRESHOLD` | b | 3 | 0 |
+| `OPTIONS_RISK_FREE_RATE` | b | 2 | 0 |
 | `PAIRS_SNAPSHOT_ENABLED` | b | 1 | 0 |
 | `PAIRS_SNAPSHOT_MAX_PAIRS` | b | 1 | 0 |
-| `PAPER_OPTIONS_AUTO_EXECUTE_ENABLED` | b | 2 | 0 |
 | `PAPER_OPTION_MARK_CACHE_SECONDS` | b | 1 | 0 |
 | `PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES` | b | 1 | 0 |
 | `PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED` | b | 3 | 0 |

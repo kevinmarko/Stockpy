@@ -591,23 +591,6 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         allowed = allowed | {"execution"}
     if module_name == "prompt_registry":
         allowed = allowed | {"prompt_registry"}
-    if module_name == "unusual_options_flow":
-        # pilots.unusual_options_flow's get_unusual_options_activity() now does
-        # a real read-through cache: persisted records first, and on a
-        # bounded-symbol miss a lazy, function-scoped `from data.market_data
-        # import get_options_provider/get_provider` (see the module's own
-        # docstring) to fetch a real chain instead of always scanning a
-        # hardcoded empty chain_data=[] -- same lazy-import pattern already
-        # allowed for `options_gex`/`copula_stat_arb` below.
-        allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "pandas", "data", "pilots"}
-    if module_name == "options_gex":
-        allowed = allowed | {"dataclasses", "datetime", "re", "numpy", "scipy", "pandas", "data"}
-    if module_name == "lob_simulator":
-        allowed = allowed | {"dataclasses", "datetime", "enum", "numpy", "scipy"}
-    if module_name == "copula_stat_arb":
-        allowed = allowed | {"dataclasses", "datetime", "enum", "numpy", "pandas", "scipy", "data", "uuid"}
-    # --- newly auto-discovered modules (2026-08, verified via a throwaway
-    # AST-root scan over each file before adding its override block) ---
     if module_name == "cache_long_short":
         allowed = allowed | {"data"}
     if module_name == "catalog":
@@ -625,9 +608,6 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # pilots.scoring/pilots.follows_store, sizing.kelly/sizing.vol_target,
         # transactions_store.TransactionsStore, observability.alerts.send_alert.
         allowed = allowed | {"dataclasses", "execution", "observability", "pilots", "sizing", "transactions_store"}
-    if module_name == "options_alerts":
-        # lazy observability.alerts.send_alert, x4 call sites.
-        allowed = allowed | {"datetime", "observability", "urllib"}
     if module_name == "price_provider":
         allowed = allowed | {"data"}
     if module_name == "realized":
@@ -652,80 +632,17 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         allowed = allowed | {"data", "pandas"}
     if module_name == "run_status":
         allowed = allowed | {"datetime", "os", "re"}
-    if module_name == "scenario_matrix":
-        allowed = allowed | {"data", "datetime", "pilots"}
     if module_name == "scoring":
         allowed = allowed | {"datetime", "pilots", "scripts"}
     if module_name == "settings_meta":
         allowed = allowed | {"importlib", "runtime_flags", "settings_keysets", "threading"}
     if module_name == "symbols":
         allowed = allowed | {"data", "datetime", "pilots"}
-    if module_name == "multi_leg_pricing":
-        # calculate_black_scholes_leg_greeks (F4, module_efficiency_
-        # redundancy_audit.md) now delegates to pilots.options_risk's
-        # canonical pricer instead of its own near-verbatim copy -- scipy is
-        # no longer directly imported here (that math now lives solely in
-        # options_risk.py).
-        allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots"}
-    if module_name == "earnings_crush":
-        allowed = allowed | {"data", "datetime", "execution", "numpy", "pandas", "pilots", "uuid"}
-    if module_name == "har_volatility":
-        allowed = allowed | {"data", "datetime", "numpy", "pandas", "scipy"}
-    if module_name == "vol_mispricing":
-        # execute_vol_mispricing_trade (2026-08-18) added a lazy, function-scoped
-        # `from execution.options_paper_executor import OptionsPaperExecutor` --
-        # same shared multi-leg paper-broker executor already allowed for
-        # earnings_crush/dispersion_trading/zero_dte_engine above -- plus a
-        # module-top `import uuid` for the fallback order_id, matching those
-        # same three siblings' precedent exactly. `numeric_utils` (F2,
-        # docs/module_efficiency_redundancy_audit.md) is a stdlib-only leaf
-        # (math + typing) providing the shared _safe_float dedup target --
-        # dependency-light by construction, same treatment as
-        # settings_keysets/runtime_flags above for settings_meta.
-        allowed = allowed | {"data", "dataclasses", "datetime", "execution", "numeric_utils", "numpy", "pandas", "pilots", "scipy", "uuid"}
-    if module_name == "gamma_scalper":
-        allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots", "re", "scipy"}
-    if module_name == "dispersion_trading":
-        allowed = allowed | {"data", "dataclasses", "datetime", "numpy", "pandas", "pilots", "scipy", "uuid"}
-    if module_name == "zero_dte_engine":
-        allowed = allowed | {"data", "dataclasses", "datetime", "numpy", "pandas", "pilots", "re", "uuid", "zoneinfo"}
-    if module_name == "options_vpin":
-        # fetch_real_underlying_bar_trades() (2026-08-22 fix for the fabricated-live-data bug --
-        # see docs/known_issues/options_vpin_fabricated_live_data.md) added a lazy,
-        # function-scoped `from data.market_data import get_provider` to fetch real hourly bars
-        # for the live VPIN endpoint instead of always synthesizing trades -- same shared
-        # market-data import already allowed for dispersion_trading/zero_dte_engine/
-        # earnings_crush/har_volatility above.
-        allowed = allowed | {"data", "dataclasses", "datetime", "numpy", "pandas", "scipy"}
-    if module_name == "options_sor":
-        # analyze_routing_options() (audit item #6 fix, 2026-08) added a lazy, function-scoped
-        # `from execution.cost_model import TieredCostModel` to price a real per-contract-per-leg
-        # commission differential instead of comparing routing policies gross of cost --
-        # execution.cost_model.py itself is dependency-light (stdlib logging/typing + numpy,
-        # with backtrader already optional/try-except-guarded inside that module), same
-        # `execution` allowance already granted to pilots/mirror.py and pilots/earnings_crush.py
-        # for their own lazy execution.* imports.
-        allowed = allowed | {"dataclasses", "datetime", "execution", "numpy", "pilots", "re", "scipy"}
-    if module_name == "paper_broker_options_order":
-        allowed = allowed | {"data", "pilots", "uuid"}
-    if module_name == "options_risk":
-        allowed = allowed | {"data", "datetime", "numpy", "pilots", "re", "scipy"}
-    if module_name == "options_hedging":
-        allowed = allowed | {"data", "pilots", "uuid"}
-    if module_name == "volatility_surface":
-        allowed = allowed | {"data", "datetime", "numpy", "pandas", "pilots", "scipy"}
     if module_name == "performance":
         # Referenced by pilots.strategy_health's docstring as "already
         # confirmed dependency-light" but never had its own override block --
         # auto-discovery now actually checks it. datetime only.
         allowed = allowed | {"datetime"}
-    if module_name == "realtime_risk_streamer":
-        # compute_black_scholes_unit_greeks / parse_option_symbol (F3/F4,
-        # module_efficiency_redundancy_audit.md) now delegate to
-        # pilots.options_risk's canonical pricer + symbol regex instead of
-        # near-verbatim copies -- re/scipy/math/settings are no longer
-        # directly imported here.
-        allowed = allowed | {"dataclasses", "datetime", "numpy", "pilots"}
     if module_name == "strategy_report_card":
         allowed = allowed | {"pilots", "validation", "data", "datetime"}
     if module_name == "digest_models":

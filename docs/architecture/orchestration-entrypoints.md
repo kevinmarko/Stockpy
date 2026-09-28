@@ -1,6 +1,8 @@
 # Architecture: Entry Points & Orchestration
 
 > Part of the split-out `CLAUDE.md` System Architecture reference. See [../../CLAUDE.md](../../CLAUDE.md) for the index.
+>
+> **2026-09 (step 4b):** any options-desk module mentioned below (`technical_options_engine.py`, `volatility/iv_engine.py`, and the rest of the step-4 archive set) moved to `legacy/` — see `legacy/README.md` for the full list.
 
 > **Archived (2026-09, step 4e):** the Google Sheet publisher (`reporting/sheet_publisher.py`, `reporting/sheets_client.py`) moved to `legacy/reporting/` — `main.py` no longer writes to Sheets and no longer has a Sheet2-column-A universe fallback. See `legacy/README.md`.
 

@@ -8,9 +8,7 @@ the property that plan exists to confirm and freeze:
 
     A symbol reachable only through browsing (Symbol Screener / FMP search /
     Quick Trade) can never enter either orchestrator's autonomous per-cycle
-    universe, and the fully-automated (no operator override) options
-    auto-scan never silently expands beyond its actual, narrower
-    WATCHLIST-only scope.
+    universe.
 
 This file intentionally does **not** repeat the inclusion-side coverage
 `tests/test_production_steps_universe.py` already owns (watchlist/discovery/
@@ -18,16 +16,15 @@ DEFAULT_TICKERS correctly unioning IN) -- per the Wave 0 checklist's §5,
 that side was already tested and this file's job is the previously-untested
 inverse: proving exclusion.
 
-Three layers of coverage, matching the Wave 0 checklist's own findings:
+Two layers of coverage, matching the Wave 0 checklist's own findings:
 
 1. ``TestNoScreenerImportInExecutionPath`` -- a static AST guard (mirroring
    ``tests/test_broker_fills_store.py``'s ``TestSizingIsolation`` import-
    boundary convention) proving there is no possible *code path* -- not
    merely "no call site found this session" -- from
-   ``data/portfolio_sync.py``, ``pipeline/production_steps.py``,
-   ``execution/options_paper_executor.py``, or
-   ``execution/options_lifecycle.py`` into ``data/fmp_screener.py`` (the
-   Symbol Screener's backend module) via an import.
+   ``data/portfolio_sync.py`` or ``pipeline/production_steps.py`` into
+   ``data/fmp_screener.py`` (the Symbol Screener's backend module) via an
+   import.
 2. ``TestComputeTrackedUniverseIsAPureFunctionOfItsNamedArgs`` -- a runtime
    check that ``data.portfolio_sync.compute_tracked_universe()`` -- the one
    function both orchestrators (``main.py::_build_universe()`` and
@@ -35,25 +32,24 @@ Three layers of coverage, matching the Wave 0 checklist's own findings:
    resolution, per Wave 0 §1 -- returns strictly a function of its four
    named arguments (``held``, ``watchlist``, ``discovered``,
    ``default_tickers``) and nothing else.
-3. ``TestOptionsAutoScanDefaultScopeIsWatchlistOnly`` -- pins the Wave 0
-   checklist's §3 *corrected* finding (contradicting the plan's own original
-   assumption): the fully-automated daemon-cycle options-execution path
-   (``execution/options_lifecycle.py:165``'s
-   ``executor.execute_strategy_directives(macro_dto=macro_dto)`` call, with
-   no ``symbols``/``directives`` override) resolves its scan universe from
-   raw ``settings.WATCHLIST`` alone -- not held positions, not
-   ``watchlist.txt``, not ``DEFAULT_TICKERS``, not discovered scan
-   candidates, and not any Symbol Screener/FMP-search result. This is
-   *narrower* than the plan originally assumed, not identical to
-   ``compute_tracked_universe()``'s breadth -- see the Wave 0 checklist §3
-   for the full corrected trace this test pins.
+
+(Step 4b, options desk archive: a third layer used to live here,
+``TestOptionsAutoScanDefaultScopeIsWatchlistOnly``, pinning the Wave 0
+checklist's §3 finding that the fully-automated options auto-scan
+(``execution/options_lifecycle.py`` + ``execution/options_paper_executor.py``,
+both now archived to ``legacy/``) resolved its scan universe from raw
+``settings.WATCHLIST`` alone. That whole feature -- and the auto-scan
+universe-scoping property it guarded -- no longer exists in active code, so
+this class was removed rather than moved: nothing at ``legacy/tests/``
+exercises it either, since the archived module itself is what the property
+was about. The equity-only universe-boundary coverage below is unaffected.)
 
 See the bottom of this file for the mandatory break-then-revert proof
 record (plan §5 / this repo's `test_measure_settings_census.py`
-convention): a real, temporary violation was introduced into both
-`data/portfolio_sync.py` and `execution/options_paper_executor.py`, this
-suite was re-run and observed to fail with a clear message, and the
-violation was reverted -- not merely asserted in prose.
+convention): a real, temporary violation was introduced into
+`data/portfolio_sync.py`, this suite was re-run and observed to fail with a
+clear message, and the violation was reverted -- not merely asserted in
+prose.
 """
 
 from __future__ import annotations
@@ -61,25 +57,21 @@ from __future__ import annotations
 import ast
 import pathlib
 
-from data.paper_account_store import PaperAccountStore
 from data.portfolio_sync import compute_tracked_universe
-from execution.options_paper_executor import OptionsPaperExecutor
 
 # ---------------------------------------------------------------------------
 # 1. Structural AST import-boundary guard
 # ---------------------------------------------------------------------------
 
-# The four modules that, together, resolve every autonomous execution
-# surface's universe per the Wave 0 checklist: §1 (the daemon's per-cycle
-# universe, via compute_tracked_universe() and its one caller in
-# pipeline/production_steps.py) and §3 (the options auto-scan's fully-
-# automated path, execution/options_paper_executor.py + its one production
-# caller execution/options_lifecycle.py).
+# The two modules that resolve the daemon's per-cycle equity universe per
+# the Wave 0 checklist §1: compute_tracked_universe() and its one caller in
+# pipeline/production_steps.py. (Step 4b, options desk archive: this used to
+# also guard execution/options_paper_executor.py + execution/options_lifecycle.py
+# for the options auto-scan's own universe scoping, per Wave 0 §3 -- both
+# archived to legacy/; see the module docstring.)
 _GUARDED_MODULES = [
     "data/portfolio_sync.py",
     "pipeline/production_steps.py",
-    "execution/options_paper_executor.py",
-    "execution/options_lifecycle.py",
 ]
 
 _FORBIDDEN_MODULE = "data.fmp_screener"
@@ -148,22 +140,6 @@ class TestNoScreenerImportInExecutionPath:
         assert not _references_forbidden_module(path, _FORBIDDEN_MODULE), (
             f"{path} imports from {_FORBIDDEN_MODULE} -- this would give "
             "the persistent daemon's per-cycle AsyncDataFetchStep a code "
-            "path into Symbol Screener data."
-        )
-
-    def test_options_paper_executor_never_imports_fmp_screener(self):
-        path = pathlib.Path("execution/options_paper_executor.py")
-        assert not _references_forbidden_module(path, _FORBIDDEN_MODULE), (
-            f"{path} imports from {_FORBIDDEN_MODULE} -- this would give "
-            "the options auto-scan's directive-generation path a code path "
-            "into Symbol Screener data."
-        )
-
-    def test_options_lifecycle_never_imports_fmp_screener(self):
-        path = pathlib.Path("execution/options_lifecycle.py")
-        assert not _references_forbidden_module(path, _FORBIDDEN_MODULE), (
-            f"{path} imports from {_FORBIDDEN_MODULE} -- this would give "
-            "the fully-automated daemon-cycle options lifecycle a code "
             "path into Symbol Screener data."
         )
 
@@ -270,145 +246,6 @@ class TestComputeTrackedUniverseIsAPureFunctionOfItsNamedArgs:
 
 
 # ---------------------------------------------------------------------------
-# 3. Runtime test pinning the corrected options-auto-scan default-scope
-#    finding (Wave 0 checklist §3).
-# ---------------------------------------------------------------------------
-
-
-class TestOptionsAutoScanDefaultScopeIsWatchlistOnly:
-    """Pins the Wave 0 checklist's §3 corrected finding: when the fully-
-    automated daemon-cycle options lifecycle calls
-    `executor.execute_strategy_directives(macro_dto=macro_dto)` with NO
-    `symbols`/`directives` override -- the exact call shape at
-    `execution/options_lifecycle.py:165` -- the resolved scan universe is
-    sourced from raw `settings.WATCHLIST` alone, via
-    `get_actionable_directives()`'s raw-parse fallback
-    (`execution/options_paper_executor.py`). A symbol reachable only via a
-    held position, `watchlist.txt`, or a Symbol Screener/FMP-search result
-    must never appear in that scan when it is absent from `WATCHLIST`.
-    """
-
-    @staticmethod
-    def _make_executor(tmp_path) -> OptionsPaperExecutor:
-        db_url = f"sqlite:///{tmp_path}/paper_universe_boundary.db"
-        return OptionsPaperExecutor(store=PaperAccountStore(db_url=db_url))
-
-    @staticmethod
-    def _patch_directive_capture(monkeypatch):
-        captured: list = []
-
-        def _fake_directive_for_symbol(symbol, *, market, macro_dto, vrp, target_dte):
-            # Returns "Cash/Wait" (None) -- no actionable directive, so the
-            # rest of execute_strategy_directives()'s per-item loop is a
-            # true no-op and this test only measures *which symbols were
-            # scanned*, not execution mechanics (already covered
-            # elsewhere, e.g. tests/test_options_paper_executor.py).
-            captured.append(symbol)
-
-        monkeypatch.setattr(
-            "execution.options_paper_executor._directive_for_symbol",
-            _fake_directive_for_symbol,
-        )
-        # Avoid constructing a real CompositeProvider()/making any live
-        # network call -- belt-and-suspenders on top of the
-        # _directive_for_symbol patch above, which already makes the
-        # `market` object itself unused.
-        monkeypatch.setattr("data.market_data.get_provider", lambda: object(), raising=False)
-        return captured
-
-    def test_no_override_scans_exactly_the_parsed_watchlist(self, tmp_path, monkeypatch):
-        captured = self._patch_directive_capture(monkeypatch)
-        monkeypatch.setattr("settings.settings.WATCHLIST", "AAA,BBB", raising=False)
-
-        executor = self._make_executor(tmp_path)
-        # Exact call shape execution/options_lifecycle.py:165 uses -- no
-        # symbols/directives override at all.
-        result = executor.execute_strategy_directives(macro_dto=None)
-
-        assert set(captured) == {"AAA", "BBB"}
-        assert result["executed_count"] == 0
-        assert result["skipped_count"] == 0
-        assert result["failed_count"] == 0
-
-    def test_held_watchlist_file_and_screener_symbols_excluded_when_absent_from_watchlist(
-        self, tmp_path, monkeypatch
-    ):
-        """The realistic scenario the plan's §0/§3 actually worried about:
-        a symbol is currently HELD in the paper book, a second symbol sits
-        in `watchlist.txt`-shaped data, and a third symbol comes back from
-        a mocked FMP Symbol Screener query -- simultaneously with a
-        populated `WATCHLIST`. None of the first three should ever reach
-        the scan."""
-        captured = self._patch_directive_capture(monkeypatch)
-        monkeypatch.setattr("settings.settings.WATCHLIST", "AAA,BBB", raising=False)
-
-        # A watchlist.txt-shaped file. get_actionable_directives() takes no
-        # watchlist_file argument at all, so this proves the exclusion is
-        # structural (there is no parameter to wire it through), not
-        # merely "this particular file wasn't read this run."
-        wl_path = tmp_path / "watchlist.txt"
-        wl_path.write_text("CCC\n")
-
-        # A mocked FMP Symbol Screener hit. Nothing in
-        # get_actionable_directives()/execute_strategy_directives() ever
-        # calls data.fmp_screener -- this patch documents that assumption
-        # explicitly rather than leaving it implicit; test #1 above proves
-        # it structurally via the AST import guard.
-        monkeypatch.setattr(
-            "data.fmp_screener.search_symbols",
-            lambda *a, **kw: [{"symbol": "EEE"}],
-            raising=False,
-        )
-
-        executor = self._make_executor(tmp_path)
-        # A currently-held paper position in a fourth, distinct symbol.
-        filled = executor.store.apply_fill(
-            client_order_id="held-ddd-1",
-            symbol="DDD",
-            side="buy",
-            qty=10,
-            fill_price=10.0,
-        )
-        assert filled  # sanity: the held position actually got recorded
-
-        result = executor.execute_strategy_directives(macro_dto=None)
-
-        assert set(captured) == {"AAA", "BBB"}
-        for excluded_symbol in ("CCC", "DDD", "EEE"):
-            assert excluded_symbol not in captured
-        assert result["executed_count"] == 0
-
-    def test_empty_watchlist_yields_empty_scan_not_a_broader_fallback(self, tmp_path, monkeypatch):
-        """Wave 0 §3's own new finding: unlike compute_tracked_universe(),
-        this path has NO DEFAULT_TICKERS/held/discovered fallback at all --
-        an empty WATCHLIST means zero symbols scanned that cycle, full
-        stop. Pinning this (rather than only the non-empty case above)
-        guards against a future "helpful" fallback being added silently,
-        which would itself widen the auto-scan's scope beyond its
-        documented, narrower boundary."""
-        captured = self._patch_directive_capture(monkeypatch)
-        monkeypatch.setattr("settings.settings.WATCHLIST", "", raising=False)
-        monkeypatch.setattr("settings.settings.DEFAULT_TICKERS", ["DFLT"], raising=False)
-
-        executor = self._make_executor(tmp_path)
-        filled = executor.store.apply_fill(
-            client_order_id="held-held1-1",
-            symbol="HELD1",
-            side="buy",
-            qty=1,
-            fill_price=1.0,
-        )
-        assert filled
-
-        result = executor.execute_strategy_directives(macro_dto=None)
-
-        assert captured == []
-        assert result["executed_count"] == 0
-        assert result["skipped_count"] == 0
-        assert result["failed_count"] == 0
-
-
-# ---------------------------------------------------------------------------
 # Break-then-revert proof record (plan §5 / test_measure_settings_census.py
 # convention) -- performed live this session, 2026-09-11, on branch
 # `decouple-explore-execute`:
@@ -445,6 +282,11 @@ class TestOptionsAutoScanDefaultScopeIsWatchlistOnly:
 #    `git checkout -- execution/options_paper_executor.py`, and
 #    `git diff execution/options_paper_executor.py` was confirmed empty.
 #    Re-running this file afterward passed cleanly again (13 passed).
+#    (Step 4b, options desk archive: `TestOptionsAutoScanDefaultScopeIsWatchlistOnly`
+#    itself, and `execution/options_paper_executor.py`/
+#    `execution/options_lifecycle.py`, were later removed/archived to
+#    `legacy/` -- this item stays as the historical record of the proof
+#    that was actually performed against the code as it existed then.)
 #
 # Both violations were introduced, observed to fail this suite with the
 # real pytest output captured above, reverted, and re-confirmed passing --

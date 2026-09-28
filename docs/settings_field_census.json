@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "2f09719225faa153fcc846792f8070034a5a3c7c",
+    "git_commit": "a6052be8cbdea8aba927a7967940d3749ce43d4c",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3444,7 +3444,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 440,
+    "files_scanned": 383,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3473,11 +3473,11 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 762,
-      "distinct_fields": 269,
+      "total_reads": 745,
+      "distinct_fields": 262,
       "counts": {
-        "OUTPUT_DIR": 120,
-        "LOCAL_DATA_ROOT": 24,
+        "OUTPUT_DIR": 115,
+        "LOCAL_DATA_ROOT": 23,
         "SIGNAL_WEIGHTS": 18,
         "FRED_API_KEY": 13,
         "DEFAULT_TICKERS": 11,
@@ -3517,7 +3517,6 @@
         "ORCHESTRATOR_EXTENDED_HOURS_ONLY": 4,
         "PROMPT_REGISTRY_ENABLED": 4,
         "PROMPT_REGISTRY_SIGNING_KEY": 4,
-        "RISK_FREE_RATE": 4,
         "SIZING_CAP_ALERT_THRESHOLD_PCT": 4,
         "SIZING_CAP_ESCALATION_FACTOR": 4,
         "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES": 4,
@@ -3539,7 +3538,7 @@
         "MULTIFACTOR_MICROCAP_THRESHOLD": 3,
         "NEWS_EARNINGS_DAMPEN_DAYS": 3,
         "NEWS_EARNINGS_SUPPRESS_HOURS": 3,
-        "OPTIONS_VRP_THRESHOLD": 3,
+        "RISK_FREE_RATE": 3,
         "ROBINHOOD_AUTO_REFRESH_ENABLED": 3,
         "ROBINHOOD_EXECUTION_MODE": 3,
         "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 3,
@@ -3604,7 +3603,6 @@
         "NEWS_LOOKBACK_DAYS": 2,
         "NTFY_DASHBOARD_URL": 2,
         "OPAL_RESEARCH_ENABLED": 2,
-        "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD": 2,
         "ORCHESTRATOR_DAEMON_TOKEN": 2,
         "ORCHESTRATOR_INTERVAL_SECONDS": 2,
         "PILOTS_API_PORT": 2,
@@ -3650,9 +3648,7 @@
         "DAILY_LOSS_LIMIT_PCT": 1,
         "DATA_FETCH_TASK_TIMEOUT_SECONDS": 1,
         "EDGAR_FULLTEXT_ENABLED": 1,
-        "ETF_HOLDINGS_ENABLED": 1,
         "FINNHUB_API_KEY": 1,
-        "FIX_HEARTBEAT_INTERVAL_SECONDS": 1,
         "FLATTEN_ON_KILL": 1,
         "FMP_BARS_ADJUSTMENT": 1,
         "FOLLOW_API_TOKEN": 1,
@@ -3678,9 +3674,6 @@
         "MAX_ORDER_RATE_PER_MIN": 1,
         "MCP_HTTP_BEARER_TOKEN": 1,
         "OPENAI_API_KEY": 1,
-        "OPTIONS_DRL_RISK_AVERSION_GAMMA": 1,
-        "OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE": 1,
-        "OPTIONS_TRUE_IVR_ENABLED": 1,
         "ORCHESTRATOR_DAEMON_ENABLED": 1,
         "OVERNIGHT_LIQUIDITY_DEPTH_HEURISTIC": 1,
         "PAPER_BROKER_WRITES_ENABLED": 1,
@@ -3748,44 +3741,34 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 378,
-      "distinct_fields": 220,
+      "total_reads": 306,
+      "distinct_fields": 183,
       "counts": {
         "FMP_API_KEY": 13,
         "GEMINI_API_KEY": 9,
-        "OPTIONS_RISK_FREE_RATE": 8,
         "FMP_NEWS_ENABLED": 7,
         "LLM_COMMENTARY_TIMEOUT_SECONDS": 7,
         "OPENAI_API_KEY": 7,
         "ADVISORY_ONLY": 6,
         "LLM_COMMENTARY_ENABLED": 6,
         "OPAL_RESEARCH_ENABLED": 5,
-        "OPTIONS_ALERT_WEBHOOK_URL": 5,
         "PROMPT_REGISTRY_ENABLED": 5,
-        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 5,
         "ANTHROPIC_API_KEY": 4,
         "FMP_BARS_ADJUSTMENT": 4,
         "FMP_MAX_SECONDS_PER_CYCLE": 4,
         "FMP_SCREENER_ENABLED": 4,
         "GRAVITY_AI_RUNNER_ENABLED": 4,
         "LOCAL_LLM_BASE_URL": 4,
-        "OPTIONS_0DTE_HARD_EXIT_TIME": 4,
-        "OPTIONS_AUTO_EXIT_ENABLED": 4,
-        "ROBINHOOD_EXECUTION_MODE": 4,
+        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 4,
         "DATA_FETCH_MAX_CONCURRENCY": 3,
         "FMP_NEWS_MAX_PAGES": 3,
         "FMP_NEWS_PAGE_LIMIT": 3,
         "FORECAST_BACKFILL_HORIZONS": 3,
         "HISTORICAL_STORE_ENABLED": 3,
         "MCP_DATABASE_URL_RO": 3,
-        "OPTIONS_0DTE_ENABLED": 3,
-        "OPTIONS_0DTE_PROFIT_TARGET_PCT": 3,
-        "OPTIONS_0DTE_STOP_LOSS_PCT": 3,
-        "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES": 3,
-        "OPTIONS_VPIN_TOXICITY_THRESHOLD": 3,
         "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED": 3,
         "RAG_PORTFOLIO_CONTEXT_ENABLED": 3,
-        "RISK_FREE_RATE": 3,
+        "ROBINHOOD_EXECUTION_MODE": 3,
         "ADVISORY_MAX_CONCURRENCY": 2,
         "AI_CHAT_DEFAULT_PROVIDER": 2,
         "ALPACA_API_KEY": 2,
@@ -3795,8 +3778,6 @@
         "CLOSED_POSITION_RETENTION_DAYS": 2,
         "DB_MAX_OVERFLOW": 2,
         "DB_POOL_SIZE": 2,
-        "FMP_ANALYST_ENABLED": 2,
-        "FMP_EARNINGS_ENABLED": 2,
         "FMP_FALLBACK_ENABLED": 2,
         "FMP_PROFILE_ENABLED": 2,
         "FORECAST_MAX_CONCURRENCY": 2,
@@ -3812,9 +3793,7 @@
         "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS": 2,
         "META_LABEL_MIN_CONFIDENCE": 2,
         "OPAL_RESEARCH_PROVIDER": 2,
-        "OPTIONS_DELTA_HEDGE_ENABLED": 2,
-        "OPTIONS_META_LABELER_ENABLED": 2,
-        "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED": 2,
+        "OPTIONS_RISK_FREE_RATE": 2,
         "SENTIMENT_LLM_VERIFICATION_ENABLED": 2,
         "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 2,
         "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED": 2,
@@ -3833,23 +3812,14 @@
         "BERT_LLA_MIN_SENTIMENT_COVERAGE": 1,
         "BERT_LLA_WINDOW_SIZE": 1,
         "CACHE_LONG_SHORT_ENABLED": 1,
-        "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS": 1,
-        "CIRCUIT_BREAKER_OFI_THRESHOLD": 1,
-        "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD": 1,
-        "CIRCUIT_BREAKER_VPIN_THRESHOLD": 1,
         "CNN_LSTM_PROCESS_POOL_WORKERS": 1,
         "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED": 1,
         "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS": 1,
-        "DAILY_LOSS_LIMIT_PCT": 1,
         "DATABASE_URL": 1,
         "DEFAULT_TICKERS": 1,
         "EDGAR_COOLDOWN_SECONDS": 1,
         "EDGAR_COOLDOWN_THRESHOLD": 1,
         "EDGAR_MAX_CONCURRENCY": 1,
-        "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD": 1,
-        "ETF_HOLDINGS_ISSUER_CSV_ENABLED": 1,
-        "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE": 1,
-        "ETF_HOLDINGS_REFRESH_DAYS": 1,
         "EVAL_BROKER_TRADES_ENABLED": 1,
         "EXCURSION_INTRADAY_ENABLED": 1,
         "EXECUTION_PRIORITY_QUEUE_ENABLED": 1,
@@ -3857,14 +3827,14 @@
         "FEATURE_DRIFT_PSI_ENABLED": 1,
         "FINBERT_BATCH_SIZE": 1,
         "FINBERT_SCORE_CACHE_ENABLED": 1,
-        "FIX_MOCK_VENUES_ENABLED": 1,
-        "FIX_VENUES_CONFIG_PATH": 1,
         "FLATTEN_ON_KILL": 1,
+        "FMP_ANALYST_ENABLED": 1,
         "FMP_ANALYST_REFRESH_HOURS": 1,
         "FMP_BARS_ENABLED": 1,
         "FMP_BASE_URL": 1,
         "FMP_COOLDOWN_SECONDS": 1,
         "FMP_COOLDOWN_THRESHOLD": 1,
+        "FMP_EARNINGS_ENABLED": 1,
         "FMP_EARNINGS_REFRESH_HOURS": 1,
         "FMP_ECON_CALENDAR_ENABLED": 1,
         "FMP_FUNDAMENTALS_ENABLED": 1,
@@ -3874,8 +3844,6 @@
         "FMP_MACRO_ENABLED": 1,
         "FMP_MAX_RETRIES": 1,
         "FMP_MIN_REQUEST_INTERVAL_SECONDS": 1,
-        "FMP_OPTIONS_CONTEXT_ENABLED": 1,
-        "FMP_OPTIONS_HEALTH_ENABLED": 1,
         "FMP_PEERS_ENABLED": 1,
         "FMP_QUOTES_ENABLED": 1,
         "FMP_QUOTES_REALTIME": 1,
@@ -3929,24 +3897,13 @@
         "MARKET_DATA_WS_RECONNECT_MAX_SECONDS": 1,
         "MARKET_DATA_WS_STALE_SECONDS": 1,
         "MARKET_DATA_WS_SYMBOLS": 1,
-        "MAX_CONCURRENT_OPTION_POSITIONS": 1,
-        "MAX_OPTION_NOTIONAL_PER_TRADE": 1,
         "MAX_POSITION_WEIGHT": 1,
         "META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS": 1,
         "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS": 1,
         "META_LABELING_ENABLED": 1,
         "NEWS_LOOKBACK_DAYS": 1,
-        "OFI_SHIELD_ENABLED": 1,
         "OPAL_RESEARCH_MODEL": 1,
         "OPAL_RESEARCH_TIMEOUT_SECONDS": 1,
-        "OPTIONS_EARNINGS_MIN_EDGE": 1,
-        "OPTIONS_EARNINGS_WING_MULTIPLIER": 1,
-        "OPTIONS_GEX_SEARCH_RANGE_PCT": 1,
-        "OPTIONS_MANAGE_DTE_THRESHOLD": 1,
-        "OPTIONS_MATRIX_ENABLED": 1,
-        "OPTIONS_PROFIT_TARGET_PCT": 1,
-        "OPTIONS_SOR_LEGGING_LATENCY_SECONDS": 1,
-        "OPTIONS_STOP_LOSS_MULTIPLE": 1,
         "OUTPUT_DIR": 1,
         "PAIRS_SNAPSHOT_ENABLED": 1,
         "PAIRS_SNAPSHOT_MAX_PAIRS": 1,
@@ -3969,7 +3926,6 @@
         "STATE_API_TOKEN": 1,
         "SYMBOL_RATING_DROP_THRESHOLD_CYCLES": 1,
         "VALIDATION_HARNESS_OOS_GATE_ENABLED": 1,
-        "WATCHLIST": 1,
         "WATCH_RULES_FILE": 1
       }
     },
@@ -4054,7 +4010,7 @@
         "os.environ.get()": 2
       }
     },
-    "fields_reached_by_any_form": 445,
+    "fields_reached_by_any_form": 404,
     "fields_only_via_b_or_d": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -4071,10 +4027,6 @@
       "BERT_LLA_MIN_SENTIMENT_COVERAGE",
       "BERT_LLA_WINDOW_SIZE",
       "BROKER_BACKEND",
-      "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS",
-      "CIRCUIT_BREAKER_OFI_THRESHOLD",
-      "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
-      "CIRCUIT_BREAKER_VPIN_THRESHOLD",
       "CLOSED_POSITION_RETENTION_DAYS",
       "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
       "DATABASE_URL",
@@ -4084,10 +4036,6 @@
       "EDGAR_COOLDOWN_SECONDS",
       "EDGAR_COOLDOWN_THRESHOLD",
       "EDGAR_MAX_CONCURRENCY",
-      "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD",
-      "ETF_HOLDINGS_ISSUER_CSV_ENABLED",
-      "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE",
-      "ETF_HOLDINGS_REFRESH_DAYS",
       "EVAL_BROKER_TRADES_ENABLED",
       "EXCURSION_INTRADAY_ENABLED",
       "EXECUTION_PRIORITY_QUEUE_ENABLED",
@@ -4095,8 +4043,6 @@
       "FEATURE_DRIFT_PSI_ENABLED",
       "FINBERT_BATCH_SIZE",
       "FINBERT_SCORE_CACHE_ENABLED",
-      "FIX_MOCK_VENUES_ENABLED",
-      "FIX_VENUES_CONFIG_PATH",
       "FMP_ANALYST_ENABLED",
       "FMP_ANALYST_REFRESH_HOURS",
       "FMP_BARS_ENABLED",
@@ -4118,8 +4064,6 @@
       "FMP_NEWS_ENABLED",
       "FMP_NEWS_MAX_PAGES",
       "FMP_NEWS_PAGE_LIMIT",
-      "FMP_OPTIONS_CONTEXT_ENABLED",
-      "FMP_OPTIONS_HEALTH_ENABLED",
       "FMP_PEERS_ENABLED",
       "FMP_PROFILE_ENABLED",
       "FMP_QUOTES_ENABLED",
@@ -4182,40 +4126,18 @@
       "MARKET_DATA_WS_RECONNECT_MAX_SECONDS",
       "MARKET_DATA_WS_STALE_SECONDS",
       "MARKET_DATA_WS_SYMBOLS",
-      "MAX_CONCURRENT_OPTION_POSITIONS",
-      "MAX_OPTION_NOTIONAL_PER_TRADE",
       "META_LABELING_BACKFILL_BRIDGE_ENABLED",
       "META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS",
       "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS",
       "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS",
       "META_LABELING_ENABLED",
       "NO_VENV_REEXEC",
-      "OFI_SHIELD_ENABLED",
       "OPAL_RESEARCH_MODEL",
       "OPAL_RESEARCH_PROVIDER",
       "OPAL_RESEARCH_TIMEOUT_SECONDS",
-      "OPTIONS_0DTE_ENABLED",
-      "OPTIONS_0DTE_HARD_EXIT_TIME",
-      "OPTIONS_0DTE_PROFIT_TARGET_PCT",
-      "OPTIONS_0DTE_STOP_LOSS_PCT",
-      "OPTIONS_ALERT_WEBHOOK_URL",
-      "OPTIONS_AUTO_EXIT_ENABLED",
-      "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
-      "OPTIONS_DELTA_HEDGE_ENABLED",
-      "OPTIONS_EARNINGS_MIN_EDGE",
-      "OPTIONS_EARNINGS_WING_MULTIPLIER",
-      "OPTIONS_GEX_SEARCH_RANGE_PCT",
-      "OPTIONS_MANAGE_DTE_THRESHOLD",
-      "OPTIONS_MATRIX_ENABLED",
-      "OPTIONS_META_LABELER_ENABLED",
-      "OPTIONS_PROFIT_TARGET_PCT",
       "OPTIONS_RISK_FREE_RATE",
-      "OPTIONS_SOR_LEGGING_LATENCY_SECONDS",
-      "OPTIONS_STOP_LOSS_MULTIPLE",
-      "OPTIONS_VPIN_TOXICITY_THRESHOLD",
       "PAIRS_SNAPSHOT_ENABLED",
       "PAIRS_SNAPSHOT_MAX_PAIRS",
-      "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
       "PAPER_OPTION_MARK_CACHE_SECONDS",
       "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",
       "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED",
@@ -4233,7 +4155,7 @@
       "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
       "VALIDATION_HARNESS_OOS_GATE_ENABLED"
     ],
-    "fields_only_via_b_or_d_count": 176,
+    "fields_only_via_b_or_d_count": 142,
     "fields_only_via_b": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -4250,10 +4172,6 @@
       "BERT_LLA_MIN_SENTIMENT_COVERAGE",
       "BERT_LLA_WINDOW_SIZE",
       "BROKER_BACKEND",
-      "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS",
-      "CIRCUIT_BREAKER_OFI_THRESHOLD",
-      "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
-      "CIRCUIT_BREAKER_VPIN_THRESHOLD",
       "CLOSED_POSITION_RETENTION_DAYS",
       "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
       "DATABASE_URL",
@@ -4263,10 +4181,6 @@
       "EDGAR_COOLDOWN_SECONDS",
       "EDGAR_COOLDOWN_THRESHOLD",
       "EDGAR_MAX_CONCURRENCY",
-      "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD",
-      "ETF_HOLDINGS_ISSUER_CSV_ENABLED",
-      "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE",
-      "ETF_HOLDINGS_REFRESH_DAYS",
       "EVAL_BROKER_TRADES_ENABLED",
       "EXCURSION_INTRADAY_ENABLED",
       "EXECUTION_PRIORITY_QUEUE_ENABLED",
@@ -4274,8 +4188,6 @@
       "FEATURE_DRIFT_PSI_ENABLED",
       "FINBERT_BATCH_SIZE",
       "FINBERT_SCORE_CACHE_ENABLED",
-      "FIX_MOCK_VENUES_ENABLED",
-      "FIX_VENUES_CONFIG_PATH",
       "FMP_ANALYST_ENABLED",
       "FMP_ANALYST_REFRESH_HOURS",
       "FMP_BARS_ENABLED",
@@ -4297,8 +4209,6 @@
       "FMP_NEWS_ENABLED",
       "FMP_NEWS_MAX_PAGES",
       "FMP_NEWS_PAGE_LIMIT",
-      "FMP_OPTIONS_CONTEXT_ENABLED",
-      "FMP_OPTIONS_HEALTH_ENABLED",
       "FMP_PEERS_ENABLED",
       "FMP_PROFILE_ENABLED",
       "FMP_QUOTES_ENABLED",
@@ -4360,39 +4270,17 @@
       "MARKET_DATA_WS_RECONNECT_MAX_SECONDS",
       "MARKET_DATA_WS_STALE_SECONDS",
       "MARKET_DATA_WS_SYMBOLS",
-      "MAX_CONCURRENT_OPTION_POSITIONS",
-      "MAX_OPTION_NOTIONAL_PER_TRADE",
       "META_LABELING_BACKFILL_BRIDGE_ENABLED",
       "META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS",
       "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS",
       "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS",
       "META_LABELING_ENABLED",
-      "OFI_SHIELD_ENABLED",
       "OPAL_RESEARCH_MODEL",
       "OPAL_RESEARCH_PROVIDER",
       "OPAL_RESEARCH_TIMEOUT_SECONDS",
-      "OPTIONS_0DTE_ENABLED",
-      "OPTIONS_0DTE_HARD_EXIT_TIME",
-      "OPTIONS_0DTE_PROFIT_TARGET_PCT",
-      "OPTIONS_0DTE_STOP_LOSS_PCT",
-      "OPTIONS_ALERT_WEBHOOK_URL",
-      "OPTIONS_AUTO_EXIT_ENABLED",
-      "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
-      "OPTIONS_DELTA_HEDGE_ENABLED",
-      "OPTIONS_EARNINGS_MIN_EDGE",
-      "OPTIONS_EARNINGS_WING_MULTIPLIER",
-      "OPTIONS_GEX_SEARCH_RANGE_PCT",
-      "OPTIONS_MANAGE_DTE_THRESHOLD",
-      "OPTIONS_MATRIX_ENABLED",
-      "OPTIONS_META_LABELER_ENABLED",
-      "OPTIONS_PROFIT_TARGET_PCT",
       "OPTIONS_RISK_FREE_RATE",
-      "OPTIONS_SOR_LEGGING_LATENCY_SECONDS",
-      "OPTIONS_STOP_LOSS_MULTIPLE",
-      "OPTIONS_VPIN_TOXICITY_THRESHOLD",
       "PAIRS_SNAPSHOT_ENABLED",
       "PAIRS_SNAPSHOT_MAX_PAIRS",
-      "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
       "PAPER_OPTION_MARK_CACHE_SECONDS",
       "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",
       "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED",
@@ -4416,12 +4304,21 @@
     ],
     "fields_no_static_read": [
       "CIRCUIT_BREAKER_ENABLED",
+      "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS",
+      "CIRCUIT_BREAKER_OFI_THRESHOLD",
       "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
+      "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
+      "CIRCUIT_BREAKER_VPIN_THRESHOLD",
       "CORRELATION_CLUSTER_LOOKBACK_DAYS",
       "DASHBOARD_REFRESH_SECONDS",
       "EDGAR_FULLTEXT_CHUNK_TOKENS",
       "EDGAR_FULLTEXT_FORMS",
+      "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD",
+      "ETF_HOLDINGS_ENABLED",
+      "ETF_HOLDINGS_ISSUER_CSV_ENABLED",
       "ETF_HOLDINGS_MARKET_PROXY",
+      "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE",
+      "ETF_HOLDINGS_REFRESH_DAYS",
       "ETF_HOLDINGS_TICKERS",
       "ETF_TRANSMISSION_COV_INFLATION",
       "ETF_TRANSMISSION_COV_WINDOW_DAYS",
@@ -4436,19 +4333,51 @@
       "ETF_TRANSMISSION_WINDOW_DAYS",
       "ETF_TRANSMISSION_WRAPPERS",
       "FIX_GATEWAY_ENABLED",
+      "FIX_HEARTBEAT_INTERVAL_SECONDS",
+      "FIX_MOCK_VENUES_ENABLED",
+      "FIX_VENUES_CONFIG_PATH",
       "FMP_ECON_INDICATORS",
+      "FMP_OPTIONS_CONTEXT_ENABLED",
+      "FMP_OPTIONS_HEALTH_ENABLED",
       "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
       "GOOGLE_TRENDS_OVERLAP_DAYS",
       "GOOGLE_TRENDS_WINDOW_DAYS",
+      "MAX_CONCURRENT_OPTION_POSITIONS",
+      "MAX_OPTION_NOTIONAL_PER_TRADE",
       "MULTI_BROKER_GATEWAY_ENABLED",
+      "OFI_SHIELD_ENABLED",
+      "OPTIONS_0DTE_ENABLED",
+      "OPTIONS_0DTE_HARD_EXIT_TIME",
+      "OPTIONS_0DTE_PROFIT_TARGET_PCT",
+      "OPTIONS_0DTE_STOP_LOSS_PCT",
+      "OPTIONS_ALERT_WEBHOOK_URL",
+      "OPTIONS_AUTO_EXIT_ENABLED",
+      "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD",
+      "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
+      "OPTIONS_DELTA_HEDGE_ENABLED",
+      "OPTIONS_DRL_RISK_AVERSION_GAMMA",
       "OPTIONS_EARNINGS_CRUSH_ENABLED",
+      "OPTIONS_EARNINGS_MIN_EDGE",
+      "OPTIONS_EARNINGS_WING_MULTIPLIER",
+      "OPTIONS_GEX_SEARCH_RANGE_PCT",
+      "OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE",
+      "OPTIONS_MANAGE_DTE_THRESHOLD",
+      "OPTIONS_MATRIX_ENABLED",
+      "OPTIONS_META_LABELER_ENABLED",
+      "OPTIONS_PROFIT_TARGET_PCT",
+      "OPTIONS_SOR_LEGGING_LATENCY_SECONDS",
+      "OPTIONS_STOP_LOSS_MULTIPLE",
+      "OPTIONS_TRUE_IVR_ENABLED",
+      "OPTIONS_VPIN_TOXICITY_THRESHOLD",
+      "OPTIONS_VRP_THRESHOLD",
+      "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
       "PROMPT_MAX_CHARS",
       "PROMPT_REGISTRY_REFRESH_SECONDS",
       "SENTIMENT_PIT_MIN_MONTHS",
       "UNIVERSE_SYNC_ENABLED",
       "WS_RISK_STREAM_INTERVAL_SECONDS"
     ],
-    "fields_no_static_read_count": 32,
+    "fields_no_static_read_count": 73,
     "fields_no_static_read_detail": [
       {
         "field": "CIRCUIT_BREAKER_ENABLED",
@@ -4457,7 +4386,31 @@
         "likely_dynamic_read": false
       },
       {
+        "field": "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "CIRCUIT_BREAKER_OFI_THRESHOLD",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
         "field": "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "CIRCUIT_BREAKER_VPIN_THRESHOLD",
         "name_literal_sites": [],
         "name_literal_site_count": 0,
         "likely_dynamic_read": false
@@ -4496,7 +4449,37 @@
         "likely_dynamic_read": true
       },
       {
+        "field": "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "ETF_HOLDINGS_ENABLED",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "ETF_HOLDINGS_ISSUER_CSV_ENABLED",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
         "field": "ETF_HOLDINGS_MARKET_PROXY",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "ETF_HOLDINGS_REFRESH_DAYS",
         "name_literal_sites": [],
         "name_literal_site_count": 0,
         "likely_dynamic_read": false
@@ -4586,9 +4569,43 @@
         "likely_dynamic_read": false
       },
       {
+        "field": "FIX_HEARTBEAT_INTERVAL_SECONDS",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "FIX_MOCK_VENUES_ENABLED",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "FIX_VENUES_CONFIG_PATH",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
         "field": "FMP_ECON_INDICATORS",
         "name_literal_sites": [
           "api/pilots_api.py:4979"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "FMP_OPTIONS_CONTEXT_ENABLED",
+        "name_literal_sites": [
+          "api/pilots_api.py:4990"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "FMP_OPTIONS_HEALTH_ENABLED",
+        "name_literal_sites": [
+          "api/pilots_api.py:4989"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4612,6 +4629,22 @@
         "likely_dynamic_read": false
       },
       {
+        "field": "MAX_CONCURRENT_OPTION_POSITIONS",
+        "name_literal_sites": [
+          "api/pilots_api.py:4269"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "MAX_OPTION_NOTIONAL_PER_TRADE",
+        "name_literal_sites": [
+          "api/pilots_api.py:4268"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
         "field": "MULTI_BROKER_GATEWAY_ENABLED",
         "name_literal_sites": [
           "pilots/feature_flags.py:90"
@@ -4620,10 +4653,192 @@
         "likely_dynamic_read": true
       },
       {
+        "field": "OFI_SHIELD_ENABLED",
+        "name_literal_sites": [
+          "pilots/settings_domains.py:65",
+          "settings_keysets.py:297"
+        ],
+        "name_literal_site_count": 2,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_0DTE_ENABLED",
+        "name_literal_sites": [
+          "api/pilots_api.py:4264"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_0DTE_HARD_EXIT_TIME",
+        "name_literal_sites": [
+          "api/pilots_api.py:4267"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_0DTE_PROFIT_TARGET_PCT",
+        "name_literal_sites": [
+          "api/pilots_api.py:4265"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_0DTE_STOP_LOSS_PCT",
+        "name_literal_sites": [
+          "api/pilots_api.py:4266"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_ALERT_WEBHOOK_URL",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "OPTIONS_AUTO_EXIT_ENABLED",
+        "name_literal_sites": [
+          "api/pilots_api.py:4258"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
+        "name_literal_sites": [
+          "api/pilots_api.py:4263"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_DELTA_HEDGE_ENABLED",
+        "name_literal_sites": [
+          "api/pilots_api.py:4262"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_DRL_RISK_AVERSION_GAMMA",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
         "field": "OPTIONS_EARNINGS_CRUSH_ENABLED",
         "name_literal_sites": [],
         "name_literal_site_count": 0,
         "likely_dynamic_read": false
+      },
+      {
+        "field": "OPTIONS_EARNINGS_MIN_EDGE",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "OPTIONS_EARNINGS_WING_MULTIPLIER",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "OPTIONS_GEX_SEARCH_RANGE_PCT",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "OPTIONS_MANAGE_DTE_THRESHOLD",
+        "name_literal_sites": [
+          "api/pilots_api.py:4261"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_MATRIX_ENABLED",
+        "name_literal_sites": [
+          "api/pilots_api.py:4223"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_META_LABELER_ENABLED",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "OPTIONS_PROFIT_TARGET_PCT",
+        "name_literal_sites": [
+          "api/pilots_api.py:4259"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_SOR_LEGGING_LATENCY_SECONDS",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "OPTIONS_STOP_LOSS_MULTIPLE",
+        "name_literal_sites": [
+          "api/pilots_api.py:4260"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_TRUE_IVR_ENABLED",
+        "name_literal_sites": [
+          "api/pilots_api.py:4224"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "OPTIONS_VPIN_TOXICITY_THRESHOLD",
+        "name_literal_sites": [],
+        "name_literal_site_count": 0,
+        "likely_dynamic_read": false
+      },
+      {
+        "field": "OPTIONS_VRP_THRESHOLD",
+        "name_literal_sites": [
+          "api/pilots_api.py:4153"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
+        "name_literal_sites": [
+          "api/pilots_api.py:4257",
+          "pilots/settings_domains.py:74"
+        ],
+        "name_literal_site_count": 2,
+        "likely_dynamic_read": true
       },
       {
         "field": "PROMPT_MAX_CHARS",

@@ -1453,101 +1453,14 @@ class TestForecastBackfillStep7:
             )
 
 
-# ---------------------------------------------------------------------------
-# WP5: suppress options_flow_sentiment's momentum-proxy fallback on the
-# backfill path only (settings-free, unconditional bug fix -- see
-# docs/plans/FORECAST_BACKFILL_PLAN.md's WP5 section). This engine's dummy
-# SignalContext/synthetic pre_compute() never carries real UOA (unusual-
-# options-activity) flow data, so options_flow_sentiment's own legitimate
-# live-production fallback -- a price-momentum proxy keyed off ROC_5/ROC_20
-# -- would otherwise fire on every row it's asked to score here, training a
-# meta-labeler on pure price momentum mislabelled as options flow sentiment.
-# The fix lives entirely in ml/forecast_backfill.py::_run_cross_sectional_
-# module (options_flow_sentiment overrides pre_compute, so it is dispatched
-# through the per-date/per-ticker SCALAR compute() replay, not
-# compute_vectorized()) and never touches signals/options_flow_sentiment.py.
-# ---------------------------------------------------------------------------
-
-
-def _options_flow_signal_context(sentiment_dict=None):
-    """A minimal, self-contained SignalContext -- deliberately NOT importing
-    tests/test_options_flow_sentiment.py's private _dummy_signal_context, so
-    this file's proof that the live module is untouched doesn't depend on
-    another test file's fixture staying in sync."""
-    from datetime import datetime, timezone
-
-    from dto_models import FundamentalDataDTO, MacroEconomicDTO, MarketBarDTO
-    from signals.base import SignalContext
-
-    bar = MarketBarDTO(
-        date=datetime.now(timezone.utc), ticker="AAPL",
-        open_price=150.0, high_price=155.0, low_price=149.0, close_price=153.0, volume=1_000_000,
-    )
-    fund = FundamentalDataDTO(
-        ticker="AAPL", pe_ratio=25.0, pb_ratio=10.0, dividend_yield=0.005, book_value=20.0,
-        eps_trailing=8.0, dividend_growth_rate=0.05, payout_ratio=0.15, sector="Technology",
-        company_name="Apple Inc.",
-    )
-    macro = MacroEconomicDTO(
-        yield_curve_10y_2y=1.0, high_yield_oas=3.0, inflation_rate=2.5, vix_value=15.0,
-        sahm_rule_indicator=0.0,
-    )
-    ctx = SignalContext(bar=bar, fundamentals=fund, macro=macro)
-    if sentiment_dict:
-        ctx.options_flow_sentiment = dict(sentiment_dict)
-    return ctx
-
-
-def test_options_flow_sentiment_live_compute_vectorized_fallback_still_fires_unchanged():
-    """Proof #1 (vectorized path): calling
-    signals.options_flow_sentiment.OptionsFlowSentimentSignal().
-    compute_vectorized() DIRECTLY (never through ml/forecast_backfill.py) on
-    a DataFrame that has ROC_5/ROC_20 and no other flow-data columns must
-    still trigger the momentum-proxy fallback exactly as before this
-    change -- signals/options_flow_sentiment.py itself was never edited."""
-    from signals.options_flow_sentiment import OptionsFlowSentimentSignal
-
-    signal = OptionsFlowSentimentSignal()
-    ctx = _options_flow_signal_context()
-    df = pd.DataFrame({
-        "Symbol": ["AAPL", "TSLA"],
-        "ROC_5": [0.03, -0.03],
-        "ROC_20": [0.06, -0.06],
-    })
-
-    out = signal.compute_vectorized(df, ctx)
-    assert out["score"].notna().all()
-    assert (out["score"] != 0.0).all(), "the momentum-proxy fallback must still produce a real non-neutral score"
-    assert out["score"].iloc[0] > 0.50
-    assert "bullish" in out["explanation"].iloc[0]
-    assert out["score"].iloc[1] < -0.50
-    assert "bearish" in out["explanation"].iloc[1]
-
-
-def test_options_flow_sentiment_live_compute_scalar_fallback_still_fires_unchanged():
-    """Proof #1 (scalar path -- the ACTUAL method
-    ml/forecast_backfill.py::_run_cross_sectional_module dispatches to for
-    options_flow_sentiment, since it overrides pre_compute and so is routed
-    through the per-date/per-ticker replay, never compute_vectorized()):
-    calling OptionsFlowSentimentSignal().compute() DIRECTLY on a row that
-    carries ROC_5/ROC_20 and no other flow-data source must still trigger
-    the identical momentum-proxy fallback -- proving the module this
-    engine's fix routes AROUND, not INTO, is completely unchanged."""
-    from signals.options_flow_sentiment import OptionsFlowSentimentSignal
-
-    signal = OptionsFlowSentimentSignal()
-    ctx = _options_flow_signal_context()
-    row = pd.Series({"Symbol": "AAPL", "ROC_5": 0.03, "ROC_20": 0.06})
-
-    out = signal.compute(row, ctx)
-    assert out.score == pytest.approx(0.5 * min(1.0, 0.03 / 0.02) + 0.5 * min(1.0, 0.06 / 0.05), abs=1e-9)
-    assert out.score > 0.50
-    assert "bullish" in out.explanation
-
-    row_bear = pd.Series({"Symbol": "TSLA", "ROC_5": -0.03, "ROC_20": -0.06})
-    out_bear = signal.compute(row_bear, ctx)
-    assert out_bear.score < -0.50
-    assert "bearish" in out_bear.explanation
+# (Step 4b, options desk archive: this used to also carry two direct
+# 'Proof #1' tests of signals/options_flow_sentiment.py's own momentum-
+# proxy fallback (WP5) -- that coverage duplicated
+# tests/test_options_flow_sentiment.py's test_signal_module_flow_velocity_
+# proxy_fallback/test_signal_module_vectorized_scalar_parity, and the module
+# itself is archived to legacy/ with that dedicated test file. The test
+# below -- a property of the KEPT ml/forecast_backfill.py engine, not of
+# the archived signal module -- is unaffected.)
 
 
 def test_forecast_backfill_never_runs_retired_options_flow_sentiment():

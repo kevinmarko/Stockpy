@@ -120,7 +120,7 @@ def test_option_marked_from_chain_mid(store):
 
 def test_option_marked_from_live_iv_when_no_quote(store):
     _open_long_call(store)
-    from pilots.options_risk import calculate_black_scholes_greeks
+    from data.option_symbols import black_scholes_price
 
     chain = _chain(calls=[{"strike": 150.0, "bid": 0.0, "ask": 0.0, "lastPrice": 1.0, "impliedVolatility": 0.18}])
     with patch.object(pas, "_fetch_stock_prices", return_value={"AAPL": 152.0}), \
@@ -129,8 +129,8 @@ def test_option_marked_from_live_iv_when_no_quote(store):
     assert pos.mark_is_estimated is False
     # Uses the contract's own IV (0.18), not a hardcoded 0.30.
     t_years_upper = 61 / 365.0
-    hi = calculate_black_scholes_greeks(152.0, 150.0, t_years_upper, 0.18, "call")["price"] * 100
-    at_30 = calculate_black_scholes_greeks(152.0, 150.0, t_years_upper, 0.30, "call")["price"] * 100
+    hi = black_scholes_price(152.0, 150.0, t_years_upper, 0.18, "call") * 100
+    at_30 = black_scholes_price(152.0, 150.0, t_years_upper, 0.30, "call") * 100
     assert pos.market_value <= hi + 1.0
     assert pos.market_value < at_30 - 50.0
 
@@ -171,20 +171,11 @@ def test_option_chain_is_cached(monkeypatch):
     assert calls == [("AAPL", FUTURE_EXP)]
 
 
-# ---------------------------------------------------------------------------
-# Auto-exit evaluation never acts on a placeholder mark
-# ---------------------------------------------------------------------------
-
-
-def test_exit_evaluation_skips_groups_with_unpriced_legs(store):
-    from execution.options_paper_executor import OptionsPaperExecutor
-
-    _open_long_call(store, exp=(date.today() + timedelta(days=5)).isoformat())
-    executor = OptionsPaperExecutor(store=store)
-    with patch.object(pas, "_fetch_stock_prices", return_value={}), \
-         patch.object(pas, "_fetch_option_chain", return_value=None):
-        # 5 DTE would normally trip the 21-DTE management rule.
-        assert executor.evaluate_position_exits() == []
+# (Step 4b, options desk archive: test_exit_evaluation_skips_groups_with_
+# unpriced_legs, which exercised execution.options_paper_executor.py's
+# auto-exit engine, moved to tests/test_options_paper_executor.py -- that
+# whole module is archived to legacy/ with it. The marking tests above --
+# what this file is actually about -- are unaffected.)
 
 
 # ---------------------------------------------------------------------------

@@ -144,6 +144,9 @@ class TestFitPredictLstmAttention:
 
     def test_architecture_matches_shape(self):
         X_seq, Y_seq, predict_X_seq = self._seq(seq_len=15, n_features=15)
+        # Set explicitly: reset_mock() keeps return_value, so without this the
+        # test only passed when an earlier test had set predict's 2-tuple.
+        mock_model.return_value.predict.return_value = (np.zeros((5, 1)), np.ones((5, 4, 15, 15)))
         mock_model.return_value.get_weights.return_value = []
         cnn_lstm_worker.fit_predict_lstm_attention(X_seq, Y_seq, predict_X_seq, hidden_dim=12, num_heads=4)
 

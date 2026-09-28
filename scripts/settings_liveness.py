@@ -147,6 +147,9 @@ SKIP_DIRS = {
     "build",
     "dist",
     ".ipynb_checkpoints",
+    # legacy/ (step 4b, options desk archive): archived modules are
+    # dead code, excluded from every production-code scan/census/guard.
+    "legacy",
 }
 SKIP_FILE_PATTERNS = (
     re.compile(r"^test_.*\.py$"),

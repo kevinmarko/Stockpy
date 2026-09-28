@@ -1,6 +1,8 @@
 # Architecture: The Explore/Execute Boundary
 
 > Part of the split-out `CLAUDE.md` System Architecture reference. See [../../CLAUDE.md](../../CLAUDE.md) for the index.
+>
+> **2026-09 (step 4b):** any options-desk module mentioned below (`technical_options_engine.py`, `volatility/iv_engine.py`, and the rest of the step-4 archive set) moved to `legacy/` — see `legacy/README.md` for the full list.
 
 **Produced**: 2026-09-11, branch `decouple-explore-execute` (cut from `main` @
 `68fc893a`). This document is the write-up half of that plan's Work Package B
