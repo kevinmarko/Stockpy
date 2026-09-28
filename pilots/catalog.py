@@ -134,8 +134,6 @@ class Pilot:
         Join key into ``scripts.refresh_validations.STRATEGY_REGISTRY`` for the
         Pilot's honest, PBO/DSR-gated backtest, or ``None`` when no honest match
         exists.
-    followable:
-        Whether the Pilot can be followed by a user.
     """
 
     id: str
@@ -145,7 +143,6 @@ class Pilot:
     weights: Dict[str, float] = field(default_factory=dict)
     long_only: bool = False
     validation_strategy_id: Optional[str] = None
-    followable: bool = True
 
 
 def _full_blend_weights() -> Dict[str, float]:

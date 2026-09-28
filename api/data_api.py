@@ -378,13 +378,8 @@ def get_peer_group(symbol: str) -> Dict[str, Any]:
     powering the webapp's "Suggest peers for this ticker" affordance on
     ``SymbolComparison.tsx``.
 
-    Gated by ``settings.FMP_PEERS_ENABLED`` (default ``False``) — a
-    DIFFERENT gate from ``FMP_OPTIONS_CONTEXT_ENABLED``, which already
-    covers a per-cycle BATCH ``fetch_peer_group`` call across the whole
-    options-matrix universe; this is a single, per-click, operator-triggered
-    fetch with its own rate-limit/cadence shape (mirrors the
-    ``FMP_INSIDER_ENABLED``/``FMP_SECTOR_SNAPSHOT_ENABLED`` precedent of one
-    flag per call-site shape). ``fetch_peer_group`` itself already never
+    Gated by ``settings.FMP_PEERS_ENABLED`` — a single, per-click,
+    operator-triggered fetch. ``fetch_peer_group`` itself already never
     raises (CONSTRAINT #6 — it degrades to ``[]`` on any failure), so the
     flag-off path and any live fetch/parse failure both degrade to an
     honest empty list + ``reason`` string here, never a 500.

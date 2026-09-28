@@ -492,7 +492,7 @@ class ForecastingStep(PipelineStep):
                          # -- Pandera's DashboardSchema is non-strict, so an
                          # extra column here is fine, and adding it to the
                          # schema would force main.py's advisory path /
-                         # Sheets publisher / report templates to also
+                         # report templates to also
                          # populate it, which is out of scope for this change
                          # (see docs/known_issues/forecast_fallback_current_price_disclosure.md).
                          'Forecast_10_Is_Fallback', 'Forecast_30_Is_Fallback',
@@ -645,15 +645,11 @@ def _apply_forecast_columns(
         )
 
 
-# Realized_Vol_Rank / True_IVR / VRP were options-desk columns; since the
-# options desk left core (2026-09, step 3d) TrendVolatilityStep no longer
-# computes them, so they are always NaN here. They stay in COLUMN_SCHEMA (and
-# this map) until the schema trim in step 4.
+# Realized_Vol_Rank / True_IVR / VRP used to be mapped here too; they were
+# options-desk columns (always NaN since step 3d) and left COLUMN_SCHEMA in
+# the 2026-09 settings/schema trim (step 4f).
 _TREND_VOL_COLUMN_MAP = (
     ('GARCH_Vol', 'GARCH_Vol'),
-    ('Realized_Vol_Rank', 'Realized_Vol_Rank'),
-    ('True_IVR', 'True_IVR'),
-    ('VRP', 'VRP'),
     ('Aroon Oscillator', 'Aroon_Oscillator'),
     ('Coppock Curve', 'Coppock_Curve'),
     ('Chandelier Exit', 'Chandelier_Long'),
@@ -662,14 +658,13 @@ _TREND_VOL_COLUMN_MAP = (
 
 def _apply_trend_vol_columns(dashboard_df: pd.DataFrame, trend_vol_indicators: dict) -> None:
     """Map TrendVolatilityStep's per-ticker ``trend_vol_indicators`` dict onto
-    ``dashboard_df``'s GARCH/IVR/VRP/Aroon/Coppock/Chandelier columns.
+    ``dashboard_df``'s GARCH/Aroon/Coppock/Chandelier columns.
 
     NaN-fills every column first, then overlays whatever each ticker actually
     has in ``trend_vol_indicators``. A ticker absent from that dict (its
     ``TrendVolatilityStep._trend_vol_one()`` call failed or was dead-lettered
     this cycle) or missing an individual key stays NaN for that cell --
-    "uncomputable" must never read as "zero VRP" / "zero True IVR"
-    (CONSTRAINT #4); a fabricated 0.0 there is indistinguishable from a
+    "uncomputable" must never read as a computed zero (CONSTRAINT #4); a fabricated 0.0 there is indistinguishable from a
     genuinely-computed, legitimately-zero value.
 
     Deliberately a module-level function (same pattern as
@@ -748,7 +743,7 @@ def _apply_symbol_rating_columns(dashboard_df: pd.DataFrame) -> None:
     excluded).
 
     Deliberately INDEPENDENT of ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED``
-    -- these are diagnostic-only columns (Sheet/HTML report/state snapshot),
+    -- these are diagnostic-only columns (HTML report/state snapshot),
     so the operator can see which symbols WOULD be excluded before ever
     opting into the auto-drop behavior. Only ``settings.SYMBOL_RATING_ENABLED``
     (default True) gates whether there's any rating history to read at all.
@@ -974,32 +969,6 @@ def _apply_sector_selection(dashboard_df: pd.DataFrame) -> None:
         run_sector_selection(stale_targets, correlation_store=correlation_store)
     except Exception as exc:
         logger.warning("Sector Selection computation failed (non-fatal): %s", exc)
-
-
-# ETF volatility transmission was archived to legacy/ (2026-09, step 4d):
-# see legacy/risk/etf_transmission.py and legacy/data/etf_holdings.py. The
-# four columns below stay in config.COLUMN_SCHEMA until the step-4f schema
-# trim, and Pandera's DashboardSchema requires every schema column, so the
-# pipeline still writes them -- always NaN, exactly what the old code wrote
-# while every ETF flag was off (the live default). Nothing reads them for
-# scoring or sizing: size_position() keeps its own 1.0 default multiplier.
-_ETF_TRANSMISSION_COLUMNS = (
-    'ETF_Ownership_Pct',
-    'ETF_Comovement_R2',
-    'ETF_Primary_Wrapper',
-    'ETF_Transmission_Multiplier',
-)
-
-
-def _prefill_etf_transmission_columns(dashboard_df: pd.DataFrame) -> None:
-    """NaN-fill the four archived ETF-transmission schema columns.
-
-    Byte-identical to what ``_apply_etf_transmission`` +
-    ``_apply_etf_transmission_multiplier`` wrote with their flags off. Never
-    raises: an empty frame just gets four empty float columns.
-    """
-    for col in _ETF_TRANSMISSION_COLUMNS:
-        dashboard_df[col] = float('nan')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1986,11 +1955,6 @@ class StrategyEvalStep(PipelineStep):
         # that keeps this from inserting duplicate rows under --interval.
         _apply_sector_selection(ctx.dashboard_df)
 
-        # ETF volatility transmission is archived (step 4d). Its four schema
-        # columns are still required by Pandera until the 4f trim, so write
-        # them as NaN, as the flag-off path always did.
-        _prefill_etf_transmission_columns(ctx.dashboard_df)
-
         # Financial Modeling Prep diagnostic feeds -- eight columns across
         # four independently-gated feeds (analyst / earnings / insider /
         # sector snapshot). Complete no-ops (zero network calls, every column
@@ -2066,8 +2030,9 @@ class StrategyEvalStep(PipelineStep):
 
         # docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns
         # (config.COLUMN_SCHEMA's "# --- ADVISORY METADATA ---" section) are
-        # populated only by the advisory path (engine/advisory.py via
-        # reporting/sheet_publisher.py::rec_to_sheet_row); this orchestrator
+        # populated only by the advisory path (engine/advisory.py's
+        # Recommendation; the Sheet sink that mapped it was archived in step
+        # 4e); this orchestrator
         # path has no equivalent per-symbol conviction/data-quality concept,
         # so blank/NaN-fill them here — same pattern already used above for
         # "Correlation_Cluster" / "News_Sentiment" — so DashboardSchema.validate()
@@ -2082,7 +2047,7 @@ class StrategyEvalStep(PipelineStep):
         # Strategy evaluation loop
         strategy_cols = ['Action Signal', 'Advice', 'Actionable Advice Signal', 'Kelly Target',
                          'Sizing_Was_Capped', 'Sizing_Binding_Constraint',
-                         'Option Strategy', 'buyRange', 'sellRange', 'Strategy Explainer Notes',
+                         'buyRange', 'sellRange', 'Strategy Explainer Notes',
                          'Robinhood Shares', 'Robinhood Avg Cost', 'Robinhood Dividends', 'Robinhood Advice']
         for col in strategy_cols:
             ctx.dashboard_df[col] = ""
@@ -2308,12 +2273,11 @@ class StrategyEvalStep(PipelineStep):
                     'Kelly Target': float(strategy_output['Kelly Target']),
                     # Guardrail telemetry (sizing/position_sizer.py) -- schema-driven
                     # ("format": "string" in config.COLUMN_SCHEMA), so serialize the
-                    # bool/Optional[str] into the Sheet-friendly text convention
+                    # bool/Optional[str] into the plain-text convention
                     # ("Yes"/"No" + the constraint name or "") that every other
                     # string strategy_col in this loop already defaults to.
                     'Sizing_Was_Capped': "Yes" if strategy_output.get('Sizing_Was_Capped') else "No",
                     'Sizing_Binding_Constraint': strategy_output.get('Sizing_Binding_Constraint') or "",
-                    'Option Strategy': strategy_output['Option Strategy'],
                     'buyRange': strategy_output['buyRange'],
                     'sellRange': strategy_output['sellRange'],
                     'Strategy Explainer Notes': strategy_output['Strategy Explainer Notes'],
@@ -2397,7 +2361,7 @@ class StrategyEvalStep(PipelineStep):
             'Edge Ratio', 'Action Signal', 'Advice', 'Actionable Advice Signal',
             'is_dividend_sustainable', 'eps_trailing', 'book_value', 'graham_number',
             'Kelly Target', 'Sizing_Was_Capped', 'Sizing_Binding_Constraint',
-            'Option Strategy', 'buyRange', 'sellRange',
+            'buyRange', 'sellRange',
             'Strategy Explainer Notes', 'Robinhood Shares', 'Robinhood Avg Cost',
             'Robinhood Dividends', 'Robinhood Advice', 'Score_Components',
             *_SIZING_DECOMPOSITION_COLS,
@@ -2418,11 +2382,10 @@ class StrategyEvalStep(PipelineStep):
                 # Regime_Multiplier/Kelly_Target_{Pre,Post}_Regime) — deliberately
                 # NOT in config.COLUMN_SCHEMA (like Score_Components above): these
                 # are read-only diagnostic fields for the webapp's Strategy Matrix/
-                # Symbol Detail screens, not a Sheets/HTML-report column or a
+                # Symbol Detail screens, not an HTML-report column or a
                 # quant_platform.db field. Adding them to COLUMN_SCHEMA would
-                # trigger a Sheets column + a DailySignals DDL migration for no
-                # reason (config.get_headers() drives both; pandera is
-                # strict=False so a non-schema column here is already safe).
+                # trigger a DailySignals DDL migration for no reason (pandera
+                # is strict=False so a non-schema column here is already safe).
                 # Default None (-> NaN), NEVER 0.0/1.0 — a fabricated sizing
                 # value is actively misleading (CONSTRAINT #4), and 0.0 is a
                 # real, operationally significant value (a MetaLabeler hard
@@ -2602,7 +2565,7 @@ class StrategyEvalStep(PipelineStep):
             telemetry.warning(f"Symbol-rating audit write failed (non-critical): {rating_exc}")
 
         # Populate the two config.COLUMN_SCHEMA-registered rating columns on
-        # the dashboard itself (Sheet/HTML report/state snapshot) -- a
+        # the dashboard itself (HTML report/state snapshot) -- a
         # SEPARATE try/except from the write above so a read-back failure
         # can never suppress the write, and vice versa. Always runs
         # (independent of SYMBOL_RATING_AUTO_DROP_ENABLED -- see
@@ -2886,8 +2849,10 @@ class StateSnapshotStep(PipelineStep):
 
         # Export Final JSON Payload Representation
         if not ctx.dashboard_df.empty:
+            # "Option Strategy" / "True_IVR" left this payload with the 2026-09
+            # schema trim (step 4f); both were always blank/NaN by then.
             payload_cols = ["Symbol", "Price", "Action Signal", "buyRange", "sellRange",
-                            "Kelly Target", "Option Strategy", "GARCH_Vol", "True_IVR"]
+                            "Kelly Target", "GARCH_Vol"]
             for ac in ("Advisory_Action", "Advisory_Conviction",
                         "Advisory_Rationale", "Advisory_Position_Pct", "Advisory_Data_Quality"):
                 if ac in ctx.dashboard_df.columns:

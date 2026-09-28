@@ -227,16 +227,17 @@ def test_sneqr_quality_facts_enabled_unblocks_sector_quality_rank_end_to_end():
 
 # ---------------------------------------------------------------------------
 # The quarantined VRP premium-selling proxy (WP4) was removed with the options
-# desk (2026-09, step 4a). Even with its old opt-in flag set, the backfill
-# computes no IVR_Proxy/VRP_Proxy columns and trains no proxy model.
+# desk (2026-09, step 4a), and its opt-in flag (FORECAST_BACKFILL_VRP_PROXY_ENABLED)
+# was retired in step 4f. The backfill computes no IVR_Proxy/VRP_Proxy columns
+# and trains no proxy model.
 # ---------------------------------------------------------------------------
 
 
-def test_vrp_proxy_removed_even_with_legacy_flag_on(monkeypatch):
+def test_vrp_proxy_removed(monkeypatch):
     import sys
 
     monkeypatch.setitem(sys.modules, "ml.vrp_premium_selling_proxy_signal", None)
-    monkeypatch.setattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED", True, raising=False)
+    assert not hasattr(settings, "FORECAST_BACKFILL_VRP_PROXY_ENABLED")
     engine = _synthetic_engine(["AAA", "BBB", "CCC", "DDD"])
 
     engine.step_2_calculate_technical_features()

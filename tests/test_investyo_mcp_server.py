@@ -4971,13 +4971,14 @@ class TestValidateOrderCompliance:
     real-schema convention) so a genuinely-passing and a genuinely-failing
     case are driven by actual data, not a mocked risk-gate verdict."""
 
-    def _insert_signal_row(self, symbol, kelly, sizing_capped, binding_constraint, vrp, true_ivr):
+    def _insert_signal_row(self, symbol, kelly, sizing_capped, binding_constraint):
+        # "VRP"/"True_IVR" left COLUMN_SCHEMA (and so DailySignals) in step 4f.
         conn = sqlite3.connect("quant_platform.db")
         conn.execute(
             'INSERT INTO DailySignals ("Symbol", timestamp, "Kelly Target", '
-            '"Sizing_Was_Capped", "Sizing_Binding_Constraint", "VRP", "True_IVR") '
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (symbol, "2026-01-01 09:30:00", kelly, sizing_capped, binding_constraint, vrp, true_ivr),
+            '"Sizing_Was_Capped", "Sizing_Binding_Constraint") '
+            "VALUES (?, ?, ?, ?, ?)",
+            (symbol, "2026-01-01 09:30:00", kelly, sizing_capped, binding_constraint),
         )
         conn.commit()
         conn.close()
@@ -5003,7 +5004,7 @@ class TestValidateOrderCompliance:
         import database_setup
         database_setup.initialize_database("quant_platform.db")
         self._insert_signal_row("GOOD", kelly=0.10, sizing_capped="No",
-                                 binding_constraint="", vrp=0.05, true_ivr=65.0)
+                                 binding_constraint="")
         (tmp_path / "output").mkdir(exist_ok=True)
         (tmp_path / "output" / "state_snapshot.json").write_text(
             json.dumps({"vix": 14.0, "market_regime": "RISK ON"}), encoding="utf-8"
@@ -5026,7 +5027,7 @@ class TestValidateOrderCompliance:
         # Kelly Target well beyond settings.KELLY_CAP (0.20), and the
         # per-symbol VRP gate columns fail their thresholds too.
         self._insert_signal_row("BAD", kelly=0.35, sizing_capped="Yes",
-                                 binding_constraint="kelly_cap", vrp=0.001, true_ivr=20.0)
+                                 binding_constraint="kelly_cap")
         (tmp_path / "output").mkdir(exist_ok=True)
         (tmp_path / "output" / "state_snapshot.json").write_text(
             json.dumps({"vix": 14.0, "market_regime": "RISK ON"}), encoding="utf-8"
@@ -5045,7 +5046,7 @@ class TestValidateOrderCompliance:
         import database_setup
         database_setup.initialize_database("quant_platform.db")
         self._insert_signal_row("SELLME", kelly=0.35, sizing_capped="Yes",
-                                 binding_constraint="kelly_cap", vrp=None, true_ivr=None)
+                                 binding_constraint="kelly_cap")
         from investyo_mcp_server import validate_order_compliance
 
         result = validate_order_compliance("SELLME", "sell", 10.0)
@@ -5065,7 +5066,7 @@ class TestValidateOrderCompliance:
         import database_setup
         database_setup.initialize_database("quant_platform.db")
         self._insert_signal_row("PARTIAL", kelly=0.05, sizing_capped="No",
-                                 binding_constraint="", vrp=None, true_ivr=None)
+                                 binding_constraint="")
         from investyo_mcp_server import validate_order_compliance
 
         result = validate_order_compliance("PARTIAL", "buy", 10.0)

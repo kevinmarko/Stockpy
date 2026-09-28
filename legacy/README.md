@@ -160,3 +160,18 @@ stay; `FOLLOW_API_TOKEN` stays as the general command token.
 | `pilots/follows_store.py` | `output/follows.json` store. Readers were the removed `/follows` routes, the `/pilots` AUM/follower proxies, `/agentic/status`'s follows block, `execution/compose.py`'s follow enumeration, the NotebookLM export's follow sections and the retired MCP tools. |
 | `pilots/portfolio_attribution.py` | Per-Pilot P&L attribution built from follow targets; only used by the retired `get_portfolio_by_pilot` MCP tool. |
 | `tests/test_pilots_mirror.py`, `tests/test_pilots_follows.py`, `tests/test_pilots_portfolio_attribution.py` | The suites for the three modules above. |
+
+## Step 4f: settings and schema trim (2026-09)
+
+The last step-4 PR removed settings fields, `COLUMN_SCHEMA` columns and
+helpers that only archived code still used (see CLAUDE.md's step-4f bullet for
+the full list). One test file moved because every key it pinned is gone:
+
+| Moved | Why |
+|---|---|
+| `tests/test_gui_env_io_etf_transmission_keys.py` | Pinned the 19 `ETF_TRANSMISSION_*`/`ETF_HOLDINGS_*` keys as GUI-writable `shared/env_io.py` allowlist entries. Those `Settings` fields and allowlist entries were retired in 4f. |
+
+`data/historical_store.py` no longer creates or reads the `etf_holdings`
+table (its `save_etf_holdings`/`get_etf_holdings`/`latest_etf_holdings_date`
+accessors were deleted, not moved; git history has them). Nothing drops the
+table: an existing `quant_platform.db` keeps it and its rows as they were.

@@ -522,7 +522,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "settings-reference": {
     title: "Settings Reference",
     description:
-      "A complete read-only catalog of all 464 platform configuration settings across 14 functional domains. Surfaces default values, live process values (secrets masked), liveness behavior (immediately, restart required, no-op, or env-pinned), and direct links to active settings editor screens.",
+      "A complete read-only catalog of every platform configuration setting across 13 functional domains. Surfaces default values, live process values (secrets masked), liveness behavior (immediately, restart required, no-op, or env-pinned), and direct links to active settings editor screens.",
     keyConcepts: ["advisory only", "liveness", "settings reference"],
   },
   "symbol-detail": {

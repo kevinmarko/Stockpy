@@ -42,7 +42,7 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 
-from settings import settings
+from settings import Settings, settings
 from settings_keysets import DANGEROUS_KEYS
 import api.pilots_api as pilots_api
 import pilots.settings_meta as settings_meta
@@ -84,15 +84,17 @@ _EXPECTED_GROUPS = [
     "Market Data",
     "Runtime & Ops",
     "Advanced / Config",
-    "Options & Pairs Snapshots",
+    "Pairs Snapshot",
     "ML, Data Capture & Audit",
     "Validation Gates",
     "RLHF Calibration",
-    "Options Desk Automation",
 ]
 _VALID_TYPES = {"number", "boolean", "enum", "string"}
 
-_NEW_OPTIONS_DESK_KEYS = {
+# The "Options Desk Automation" group and these 13 fields were retired in the
+# 2026-09 settings/schema trim (step 4f) -- every one was read by archived
+# options-desk code only.
+_RETIRED_OPTIONS_DESK_KEYS = {
     "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
     "OPTIONS_AUTO_EXIT_ENABLED",
     "OPTIONS_PROFIT_TARGET_PCT",
@@ -143,7 +145,8 @@ _JSON_KIND_KEYS = {"SECTOR_FORECAST_CONFIGS", "CORS_ALLOWED_ORIGINS"}
 
 # 32 additional flags/tunables surfaced from settings.py across the existing
 # "Position Sizing"/"Risk Gate"/"Forecasting"/"Market Data"/"Runtime & Ops"
-# groups plus the three brand-new groups above ("Options & Pairs Snapshots",
+# groups plus the three brand-new groups above ("Pairs Snapshot" -- was
+# "Options & Pairs Snapshots" until step 4f --
 # "ML, Data Capture & Audit", "Validation Gates") -- GRAVITY_REQUIRE_NATIVE
 # itself is already covered by _NEW_ADVANCED_KEYS above, so it is not
 # repeated here.
@@ -158,7 +161,7 @@ _NEW_MISC_TUNABLE_KEYS = {
     "MARKET_DATA_WS_ENABLED", "HISTORICAL_STORE_ENABLED",
     "ROBINHOOD_AUTO_REFRESH_ENABLED", "RUNTIME_FLAGS_REFRESH_ENABLED",
     "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS",
-    "OPTIONS_MATRIX_ENABLED", "OPTIONS_TRUE_IVR_ENABLED", "PAIRS_SNAPSHOT_ENABLED",
+    "PAIRS_SNAPSHOT_ENABLED",
     "META_LABELING_ENABLED", "NEWS_HISTORY_CAPTURE_ENABLED", "PIT_CAPTURE_ENABLED",
     "SENTIMENT_AUDIT_ENABLED", "SENTIMENT_DESENTENCIZE_ENABLED", "EXCURSION_INTRADAY_ENABLED",
     "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED", "VALIDATION_HARNESS_OOS_GATE_ENABLED",
@@ -173,14 +176,13 @@ _NEW_RLHF_KEYS = {
     "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
 }
 
-# New "Regime Model" group (settings.py's HMM_N_STATES/HMM_RETRAIN_FREQ_DAYS/
-# OPTIONS_VRP_THRESHOLD) -- HMM_RISK_OFF_BLOCK_THRESHOLD moved into this group
+# New "Regime Model" group (settings.py's HMM_N_STATES/HMM_RETRAIN_FREQ_DAYS;
+# OPTIONS_VRP_THRESHOLD was retired in step 4f) -- HMM_RISK_OFF_BLOCK_THRESHOLD moved into this group
 # from "Risk Gate" but isn't new to the editor, so it stays in the inline
 # baseline set below rather than here.
 _NEW_REGIME_KEYS = {
     "HMM_N_STATES",
     "HMM_RETRAIN_FREQ_DAYS",
-    "OPTIONS_VRP_THRESHOLD",
 }
 
 
@@ -432,7 +434,6 @@ class TestTunablesScopeInvariants:
             | _NEW_RLHF_KEYS
             | _NEW_REGIME_KEYS
             | _NEW_MISC_TUNABLE_KEYS
-            | _NEW_OPTIONS_DESK_KEYS
             | _NEW_PROMOTED_KEYS
         )
         assert set(pilots_api._TUNABLE_INDEX) == expected
@@ -453,15 +454,16 @@ class TestTunablesScopeInvariants:
         advanced_group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Advanced / Config")
         assert {k for k, _kind, _extras in advanced_group[1]} == _NEW_ADVANCED_KEYS
 
-    def test_options_desk_automation_group_has_exactly_the_intended_fields(self):
-        """Per-group membership, not just flat-index presence -- the flat
-        _TUNABLE_INDEX/group-name-list checks elsewhere would NOT catch a
-        field placed in the wrong group (e.g. a Circuit Breaker field
-        accidentally landing in Options Desk Automation)."""
-        group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Options Desk Automation")
-        assert {k for k, _kind, _extras in group[1]} == _NEW_OPTIONS_DESK_KEYS
-        # The one field this promotion deliberately excludes, and why.
-        assert "OPTIONS_EARNINGS_CRUSH_ENABLED" not in _NEW_OPTIONS_DESK_KEYS
+    def test_retired_options_desk_keys_are_gone(self):
+        """Step 4f retired the "Options Desk Automation" group and its fields
+        (plus the options-matrix/True-IVR/VRP tunables): none may be offered
+        as a tunable, and none is a Settings field any more."""
+        assert not any(g[0] == "Options Desk Automation" for g in pilots_api._TUNABLE_GROUPS)
+        retired = _RETIRED_OPTIONS_DESK_KEYS | {
+            "OPTIONS_MATRIX_ENABLED", "OPTIONS_TRUE_IVR_ENABLED", "OPTIONS_VRP_THRESHOLD",
+        }
+        assert not (retired & set(pilots_api._TUNABLE_INDEX))
+        assert not (retired & set(Settings.model_fields))
 
     def test_retired_circuit_breaker_keys_are_not_tunables(self):
         assert not any(g[0] == "Circuit Breaker" for g in pilots_api._TUNABLE_GROUPS)

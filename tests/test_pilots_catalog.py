@@ -37,8 +37,6 @@ def test_pilot_ids_kebab_case():
 def test_weights_keys_are_real_signal_modules():
     valid = set(settings.SIGNAL_WEIGHTS)
     for p in list_pilots():
-        if not p.followable:
-            continue
         assert p.weights, f"{p.id!r} has empty weights"
         unknown = set(p.weights) - valid
         assert not unknown, f"{p.id!r} references unknown signal modules: {unknown}"
@@ -97,11 +95,12 @@ def test_at_least_one_validated_pilot():
     assert any(p.validation_strategy_id is not None for p in list_pilots())
 
 
-def test_non_followable_pilots():
+def test_followable_field_removed():
+    """``Pilot.followable`` was retired in the 2026-09 settings/schema trim
+    (step 4f): Follow-a-Pilot was archived in step 4c and every remaining
+    Pilot had the default ``True``."""
     for p in list_pilots():
-        if not p.followable:
-            assert p.weights == {}, f"{p.id!r} has weights but is not followable"
-            assert len(p.description.strip()) > 0, f"{p.id!r} needs a description"
+        assert not hasattr(p, "followable")
 
 
 def test_options_pilots_removed():
