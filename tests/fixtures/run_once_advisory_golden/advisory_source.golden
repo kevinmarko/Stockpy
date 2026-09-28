@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "source_id": "advisory",
+  "generated_at": "2026-07-17T15:00:00+00:00",
+  "targets": [
+    {
+      "symbol": "AAPL",
+      "action": "BUY",
+      "conviction": 0.85,
+      "suggested_position_pct": 0.05,
+      "strategy": "high-conviction multi-signal composite [RISK ON]",
+      "rationale": "AAPL: Accumulate a new position. The multi-signal composite score is 75/100 (strongly bullish; regime: RISK ON); the 30-day blended forecast implies 6.0% upside (target $157.67 vs current $148.75); existing position shows a 25.0% unrealised gain on a dividend-adjusted cost basis ($0 cumulative dividends received). (Raw strategy signal: STRONG BUY.)"
+    },
+    {
+      "symbol": "INTC",
+      "action": "SELL",
+      "conviction": 0.65,
+      "suggested_position_pct": 0.0,
+      "strategy": "risk-reduction signal [RISK ON]",
+      "rationale": "INTC: Exit or reduce the position. The multi-signal composite score is 5/100 (bearish; regime: RISK ON); the 30-day blended forecast implies 5.0% downside (target $11.49 vs current $12.10); Aroon oscillator (-48) indicates a choppy/neutral trend. (Raw strategy signal: RISK REDUCE.)"
+    },
+    {
+      "symbol": "JNJ",
+      "action": "BUY",
+      "conviction": 0.7,
+      "suggested_position_pct": 0.05,
+      "strategy": "multi-signal composite [RISK ON]",
+      "rationale": "JNJ: Accumulate a new position. The multi-signal composite score is 60/100 (moderately bullish; regime: RISK ON); the 30-day blended forecast implies 1.0% upside (target $146.05 vs current $144.61); Aroon oscillator (-40) indicates a choppy/neutral trend. (Raw strategy signal: BUY.)"
+    },
+    {
+      "symbol": "KO",
+      "action": "SELL",
+      "conviction": 0.8,
+      "suggested_position_pct": 0.0,
+      "strategy": "risk-reduction signal [RISK ON]",
+      "rationale": "KO: Exit or reduce the position. The multi-signal composite score is 50/100 (neutral; regime: RISK ON); the 30-day blended forecast implies 7.0% downside (target $46.04 vs current $49.51); Position is -13.0% below the dividend-adjusted cost basis and the 30-day forecast implies further downside. Cutting losses is warranted. (Raw strategy signal: HOLD.)"
+    },
+    {
+      "symbol": "MSFT",
+      "action": "BUY",
+      "conviction": 0.7,
+      "suggested_position_pct": 0.05,
+      "strategy": "multi-signal composite [RISK ON]",
+      "rationale": "MSFT: Accumulate a new position. The multi-signal composite score is 55/100 (moderately bullish; regime: RISK ON); the 30-day blended forecast implies 0.0% upside (target $321.53 vs current $321.53); existing position shows a 7.0% unrealised gain on a dividend-adjusted cost basis ($40 cumulative dividends received). (Raw strategy signal: BUY.)"
+    },
+    {
+      "symbol": "NVDA",
+      "action": "BUY",
+      "conviction": 0.85,
+      "suggested_position_pct": 0.05,
+      "strategy": "multi-signal composite [RISK ON]",
+      "rationale": "NVDA: Accumulate a new position. The multi-signal composite score is 55/100 (moderately bullish; regime: RISK ON); the 30-day blended forecast implies 8.0% upside (target $360.28 vs current $333.59); Aroon oscillator (-48) indicates a choppy/neutral trend. (Raw strategy signal: BUY.)"
+    },
+    {
+      "symbol": "XOM",
+      "action": "BUY",
+      "conviction": 0.85,
+      "suggested_position_pct": 0.05,
+      "strategy": "high-conviction multi-signal composite [RISK ON]",
+      "rationale": "XOM: Accumulate a new position. The multi-signal composite score is 100/100 (strongly bullish; regime: RISK ON); the 30-day blended forecast implies 5.0% upside (target $212.46 vs current $202.34); Aroon oscillator (100) indicates a strong uptrend. (Raw strategy signal: STRONG BUY.)"
+    }
+  ]
+}

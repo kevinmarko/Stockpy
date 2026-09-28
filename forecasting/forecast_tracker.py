@@ -1760,6 +1760,7 @@ class ForecastTracker:
                 result["reason"] = "no as_of day"
                 return result
             since_iso = (as_of_ts - pd.Timedelta(days=int(window_days))).isoformat()
+            # Only "?" placeholders are interpolated into the SQL below.
             placeholders = ",".join("?" for _ in horizons)
             with self._lock:
                 conn = self._get_conn()
@@ -1771,7 +1772,7 @@ class ForecastTracker:
                           AND actual_price IS NOT NULL
                           AND forecast_ts  >= ?
                           AND forecast_ts  <= ?
-                          AND horizon_days IN ({placeholders})""",
+                          AND horizon_days IN ({placeholders})""",  # nosec B608
                     [symbol.upper(), since_iso, as_of_ts.isoformat(), *horizons],
                 ).fetchall()
             if not rows:
