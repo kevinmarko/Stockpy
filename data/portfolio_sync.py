@@ -691,10 +691,10 @@ def compute_tracked_universe(
     optionally rating-excluded, falling back to ``default_tickers`` only when
     that whole union is empty.
 
-    This is the shared core of ``main.py::_build_universe()`` — callers there
-    still layer their own Robinhood-snapshot ``held`` set, their own
-    ``pilots.discovery.discovery()`` call, and (main.py only) a Google-Sheet
-    fallback tier on top of this function's result. It intentionally does
+    This is the shared core of ``pipeline.advisory_inputs.build_universe_detailed()``
+    (used by main.py and, since step 5.1, the daemon), which layers its own
+    Robinhood-snapshot ``held`` set, ``pilots.discovery.discovery()`` call and
+    closed-position retention on top of this function's result. It intentionally does
     **not** attempt to also cover ``resolve_universe()``'s CLI/MCP semantics
     above, whose ``DEFAULT_TICKERS`` handling is unconditional-union rather
     than fallback-only by design (see that function's own docstring) — the

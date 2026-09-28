@@ -1,6 +1,9 @@
 # Known issue (2026-08-24): the persistent daemon's per-cycle universe never read `WATCHLIST`/`watchlist.txt`, and silently dropped `DEFAULT_TICKERS` whenever scan-discovery had any candidate
 
 **Status: fixed and verified.** Branch `fix-daemon-universe-divergence`.
+The two remaining differences (held symbols left out of the fallback
+decision, and no closed-position retention in the daemon) were closed in
+step 5.1 (2026-09); see "Resolution: one universe builder" at the end.
 
 ## What was found
 
@@ -152,3 +155,74 @@ for `main.py`: `tests/test_run_once.py`, `tests/test_main.py`,
 - `main_orchestrator.py`'s two dead `build_universe_fn=lambda *a: ...` stubs
   on `RunContext(...)` were left in place (harmless, unused) rather than
   wired up or removed, to keep this diff minimal and reviewable.
+
+## Resolution: one universe builder (step 5.1, 2026-09)
+
+The fix above shared the union math but left two differences between the
+daemon and `main.py`:
+
+1. **Held symbols and the fallback.** The daemon called
+   `compute_tracked_universe()` without `held` and appended held symbols
+   afterwards. So when the watchlist and discovery were both empty, the
+   daemon pulled in all of `DEFAULT_TICKERS` even while positions were held.
+   `main.py` passes `held` in, so there the fallback only fires when held,
+   watchlist and discovered are all empty.
+2. **Closed-position retention.** `main.py` keeps a fully-sold symbol for
+   `CLOSED_POSITION_RETENTION_DAYS` after its last Robinhood SELL fill. The
+   daemon had no retention, so those symbols dropped out of its universe.
+
+Step 5.1 of `.claude/shrink_step5_retire_main_py_implementation_plan.md`
+makes both orchestrators use one builder:
+`pipeline/advisory_inputs.py::build_universe_detailed(snapshot, *,
+watchlist_file=None)`. `main.py::_build_universe` wraps it via
+`build_universe(snapshot)`. `AsyncDataFetchStep` now fetches the account
+snapshot first (the same `main_orchestrator.fetch_account_snapshot()` call
+as before, only moved up; no new login path) and passes it with
+`ctx.watchlist_file`. The builder reads WATCHLIST/watchlist.txt, discovery,
+the rating auto-drop and `DEFAULT_TICKERS` through
+`compute_tracked_universe(held=...)`, then unions retention last.
+
+What did not change:
+
+- `RunContext.build_universe_fn` is still an unused stub in the daemon. The
+  builder needs the watchlist file and returns per-source sets for the
+  funnel, which that seam can't carry.
+- MockDataEngine cycles (no live data configured) still use `AAPL` plus
+  held.
+- `ctx.symbols` is now sorted (held symbols used to be appended at the end).
+
+`universe_funnel` keys are unchanged, plus `recently_closed_added`.
+`default_tickers_is_fallback` now also counts held symbols.
+`tracked_universe_before_held` now counts the universe symbols that are
+neither held nor retained, since held symbols are no longer appended as a
+separate stage.
+
+**Measured on the operator's live inputs (2026-09-28, read-only).** Account
+snapshot served from cache (fetched 2026-09-22 12:45 UTC, 25 positions),
+real `watchlist.txt` (6 tickers; AQN is excluded by the rating auto-drop),
+`WATCHLIST` in `.env` (the inline-comment artifact, rejected), 3 discovered
+candidates (IBN, SKHY, T), 27 `DEFAULT_TICKERS`, retention 180 days / 25
+symbols. The old daemon universe had 28 symbols. The new one has 30 and
+equals `main.py`'s:
+
+| Symbol | Change | Reason |
+|---|---|---|
+| CMCL | added | closed-position retention (recent SELL fill) |
+| PBF | added | closed-position retention (recent SELL fill) |
+
+No symbol was removed. The fallback rule did not change anything today,
+because the watchlist and discovery are not empty.
+
+The larger cross-section moves every symbol's 12-1m momentum percentile
+rank. Recomputed from the stored bars (skip 22, lookback 252, over the
+universe plus SPY as the daemon's `tech_raw` does), 27 of 28 existing
+symbols moved, by at most 0.033 (KRO 1.000 to 0.967; PBF takes the top
+rank). The `cross_sectional_momentum` score is `2 * (rank - 0.5)`, so its
+raw score moves by at most 0.067 before weighting. Multifactor z-scores
+also shift because their cross-sectional mean and standard deviation now
+include two more names; that was not recomputed.
+
+Tests: `tests/test_production_steps_universe.py` (`TestDaemonHeldInFallbackRule`,
+`TestDaemonClosedPositionRetention`, and `TestDaemonMatchesMainUniverse`,
+which checks the daemon and `main._build_universe()` give the same universe
+for 8 input scenarios).

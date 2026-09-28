@@ -31,8 +31,9 @@ is unchanged (``pipeline/steps.py`` uses the same logger for the same reason).
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional
 
 import pandas as pd
 
@@ -46,10 +47,12 @@ from signals.base import SignalContext
 
 __all__ = [
     "WATCHLIST_FILE",
+    "UniverseBuild",
     "build_context_extras",
     "build_macro_dto",
     "build_realized_vol_60d_map",
     "build_universe",
+    "build_universe_detailed",
     "fetch_bars_for_universe",
     "fetch_fundamentals_for_universe",
     "get_macro_engine",
@@ -113,7 +116,7 @@ def reset_macro_engine_cache() -> None:
 # Universe helpers
 # ---------------------------------------------------------------------------
 
-def load_watchlist() -> List[str]:
+def load_watchlist(watchlist_file: Optional[str] = None) -> List[str]:
     """Return the union of uppercase tickers from WATCHLIST env var and watchlist.txt.
 
     Both sources are read (when present) and merged/deduped -- neither one
@@ -129,10 +132,14 @@ def load_watchlist() -> List[str]:
     ``WATCHLIST_FILE`` stays a module attribute (read here, not baked into a
     default argument) so a test can redirect it with
     ``monkeypatch.setattr(pipeline.advisory_inputs, "WATCHLIST_FILE", ...)``.
+
+    ``watchlist_file`` overrides that module attribute for one call. The
+    daemon's ``AsyncDataFetchStep`` passes its ``RunContext.watchlist_file``
+    here (step 5.1); ``main.py`` passes nothing and reads ``WATCHLIST_FILE``.
     """
     from data.portfolio_sync import load_env_watchlist
 
-    return load_env_watchlist(WATCHLIST_FILE)
+    return load_env_watchlist(WATCHLIST_FILE if watchlist_file is None else watchlist_file)
 
 
 def recently_closed_universe_symbols(held: set) -> set:
@@ -165,8 +172,53 @@ def recently_closed_universe_symbols(held: set) -> set:
         return set()
 
 
+@dataclass(frozen=True)
+class UniverseBuild:
+    """One cycle's resolved universe plus the per-source sets behind it.
+
+    ``symbols`` is exactly what :func:`build_universe` returns. The other
+    fields are the inputs, kept so the daemon's ``universe_funnel``
+    diagnostic can report per-source counts without re-reading any source.
+    """
+
+    symbols: List[str]
+    held: FrozenSet[str]
+    watchlist: FrozenSet[str]
+    discovered: FrozenSet[str]
+    recently_closed: FrozenSet[str]
+
+    @property
+    def default_tickers_is_fallback(self) -> bool:
+        """True when held ∪ watchlist ∪ discovered was empty, i.e. the
+        ``DEFAULT_TICKERS`` fallback was eligible to fire this cycle (the
+        same presence test the daemon's funnel used before step 5.1, now
+        including ``held``). It ignores the rating-exclusion subtraction."""
+        return not (self.held or self.watchlist or self.discovered)
+
+
 def build_universe(snapshot: AccountSnapshot) -> List[str]:
+    """Return the evaluation universe (``main.py``'s entry point).
+
+    Thin wrapper around :func:`build_universe_detailed`, which holds the
+    logic and is documented there. Since step 5.1 the daemon's
+    ``AsyncDataFetchStep`` calls ``build_universe_detailed`` too, so the two
+    orchestrators resolve their universe through one function.
+    """
+    return build_universe_detailed(snapshot).symbols
+
+
+def build_universe_detailed(
+    snapshot: Optional[AccountSnapshot],
+    *,
+    watchlist_file: Optional[str] = None,
+) -> UniverseBuild:
     """Return the evaluation universe: held symbols ∪ watchlist, deduped, sorted.
+
+    Shared by ``main.py`` (via :func:`build_universe`) and the persistent
+    daemon's ``pipeline/production_steps.py::AsyncDataFetchStep`` (step 5.1).
+    ``watchlist_file`` defaults to the module's ``WATCHLIST_FILE``; the
+    daemon passes its ``RunContext.watchlist_file``. A ``None`` snapshot (or
+    one without positions) is treated as an account with no holdings.
 
     priority order when building the universe:
       1. Robinhood held positions (always included when available).
@@ -204,8 +256,12 @@ def build_universe(snapshot: AccountSnapshot) -> List[str]:
     """
     from data.portfolio_sync import compute_tracked_universe
 
-    held = set(snapshot.positions.keys())
-    watchlist = set(load_watchlist())
+    positions = getattr(snapshot, "positions", None) or {}
+    held = set(positions.keys())
+    # Call load_watchlist() with no argument on main.py's path so a test
+    # that patches pipeline.advisory_inputs.load_watchlist with a zero-arg
+    # stub keeps working.
+    watchlist = set(load_watchlist() if watchlist_file is None else load_watchlist(watchlist_file))
 
     # 3. Discovered candidates
     discovered = set()
@@ -252,7 +308,13 @@ def build_universe(snapshot: AccountSnapshot) -> List[str]:
         len(discovered - held),
         len(recently_closed),
     )
-    return universe
+    return UniverseBuild(
+        symbols=universe,
+        held=frozenset(held),
+        watchlist=frozenset(watchlist),
+        discovered=frozenset(discovered),
+        recently_closed=frozenset(recently_closed),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -695,9 +757,9 @@ def build_context_extras(
         # by construction on a fresh install, lighting up as record_trade()/
         # Robinhood reconstruction accrue history).
         try:
+            from data.market_data import get_provider
             from engine.advisory import _get_transactions_store
             from evaluation_engine import EvaluationEngine
-            from data.market_data import get_provider
 
             _store = _get_transactions_store()
             _ee = EvaluationEngine()
