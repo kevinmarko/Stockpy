@@ -497,6 +497,12 @@ class ForecastingStep(PipelineStep):
                          # (see docs/known_issues/forecast_fallback_current_price_disclosure.md).
                          'Forecast_10_Is_Fallback', 'Forecast_30_Is_Fallback',
                          'Forecast_60_Is_Fallback', 'Forecast_90_Is_Fallback']
+        # Forecasting rebuild F3: the gate's "published naive" disclosure
+        # columns exist only when the gate drives the published forecast, so
+        # the flag-off dashboard keeps exactly its pre-F3 columns.
+        if bool(getattr(settings, "FORECAST_NAIVE_GATE_ENABLED", False)):
+            forecast_cols += ['Forecast_10_Gated_Naive', 'Forecast_30_Gated_Naive',
+                              'Forecast_60_Gated_Naive', 'Forecast_90_Gated_Naive']
 
         def _forecast_one(row) -> tuple[str, dict | None]:
             ticker = row['Symbol']
@@ -581,7 +587,7 @@ class ForecastingStep(PipelineStep):
         if callable(_pop_guard_stats):
             try:
                 _guard_stats = _pop_guard_stats()
-                if _guard_stats:
+                if any(not k.startswith("gate_") and v for k, v in _guard_stats.items()):
                     telemetry.info(
                         "Forecast guards this cycle: %d clamped, %d input-price drops, "
                         "%d symbol-horizons with every model dropped, %d symbols with no "
@@ -592,6 +598,18 @@ class ForecastingStep(PipelineStep):
                         _guard_stats.get("all_dropped_horizons", 0),
                         _guard_stats.get("sigma_unavailable", 0),
                         _guard_stats.get("no_reference_close", 0),
+                    )
+                _gate_total = (_guard_stats.get("gate_naive_horizons", 0)
+                               + _guard_stats.get("gate_admitted_horizons", 0))
+                if _gate_total:
+                    telemetry.info(
+                        "Forecast naive gate this cycle (%s): %d symbol-horizons admitted "
+                        "at least one model, %d fell back to naive, %d with no usable "
+                        "ledger stats.",
+                        "LIVE" if getattr(settings, "FORECAST_NAIVE_GATE_ENABLED", False) else "shadow",
+                        _guard_stats.get("gate_admitted_horizons", 0),
+                        _guard_stats.get("gate_naive_horizons", 0),
+                        _guard_stats.get("gate_stats_unavailable", 0),
                     )
             except Exception as _guard_exc:  # noqa: BLE001 - logging only
                 telemetry.debug("Forecast guard stats unavailable: %s", _guard_exc)

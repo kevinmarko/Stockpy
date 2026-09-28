@@ -60,6 +60,10 @@ forecast scored **-10 (bearish)** in two ways:
 * The engine's fallback: when every model fails (or, since F2, every model is dropped by
   the safety guards), `Forecast_30` is today's price with `Forecast_30_Is_Fallback=True`.
   `forecast_price == current_price` also landed in the bearish branch.
+* Forecasting rebuild F3: with `FORECAST_NAIVE_GATE_ENABLED=True`, a horizon where the
+  naive gate admits no model publishes naive (today's price) and sets
+  `Forecast_30_Is_Fallback=True` (plus `Forecast_30_Gated_Naive=True`), so it takes this
+  same neutral branch. With the flag off (the default) nothing here changes.
 
 Neither is evidence of price erosion, so both now score 0. The fallback flag reaches the
 signal as the optional `forecast_is_fallback` feature (`StrategyEngine.evaluate_security

@@ -159,6 +159,16 @@ def orchestrator_run(tmp_path_factory):
             transactions_store.TransactionsStore, "__init__",
             make_memory_db_init(transactions_store.TransactionsStore.__init__),
         ),
+        # This fixture is MODULE-scoped, so it runs before conftest's
+        # function-scoped _isolate_forecast_tracker_db_in_tests is active.
+        # Without this, the run's bare ForecastTracker() wrote AAPL/SPY
+        # forecast rows (MockDataEngine prices, ~$10) into the operator's
+        # real LOCAL_DATA_ROOT ledger on every suite run (found in
+        # forecasting rebuild F3).
+        mock.patch(
+            "forecasting.forecast_tracker.resolve_database_url",
+            return_value=f"sqlite:///{tmp_output_dir / 'forecast_tracker.db'}",
+        ),
     ):
         import io
         import contextlib

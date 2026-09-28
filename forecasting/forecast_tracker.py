@@ -91,7 +91,7 @@ import sqlite3
 import statistics
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -136,10 +136,18 @@ MODEL_NAIVE = "naive"
 # produced output), never for the current-price fallback. Measurement only:
 # never blend-eligible.
 MODEL_BLEND = "blend"
+# The NAIVE-GATED blend (forecasting rebuild F3): only the models that beat
+# naive on rolling median |log error| (see ``compute_naive_gate``), weighted
+# by inverse median |log error|, or naive itself when the gate admits
+# nothing. Recorded every cycle next to ``blend`` as a SHADOW (it drives
+# nothing while ``FORECAST_NAIVE_GATE_ENABLED`` is False). Its row also
+# carries ``gate_fallback`` / ``gate_admitted``. Measurement only: never
+# blend-eligible and never in the skill-weight arithmetic.
+MODEL_GATED_BLEND = "gated_blend"
 ALL_MODEL_NAMES = (
     MODEL_ARIMA, MODEL_MONTE_CARLO, MODEL_HOLT_WINTERS, MODEL_CNN_LSTM,
     MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION, MODEL_BERT_LLA, MODEL_NAIVE,
-    MODEL_BLEND,
+    MODEL_BLEND, MODEL_GATED_BLEND,
 )
 
 # Names that are recorded to ``forecast_errors`` for measurement but can
@@ -153,7 +161,8 @@ ALL_MODEL_NAMES = (
 # blend. (Zero (symbol, horizon) pairs were in that state on the live ledger
 # on 2026-09-27, so closing it changed no published value.)
 NON_BLEND_MODEL_NAMES = frozenset({
-    MODEL_NAIVE, MODEL_BLEND, MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION,
+    MODEL_NAIVE, MODEL_BLEND, MODEL_GATED_BLEND,
+    MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION,
 })
 
 # The subset dropped from the skill-weight ARITHMETIC altogether. ``naive``
@@ -164,7 +173,7 @@ NON_BLEND_MODEL_NAMES = frozenset({
 # kept exactly; ``blend`` (new in F1) and the never-run BERT-LLA ablations
 # (no rows exist) are dropped, which leaves every pre-F1 result unchanged.
 _SKILL_ARITHMETIC_EXCLUDED = frozenset({
-    MODEL_BLEND, MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION,
+    MODEL_BLEND, MODEL_GATED_BLEND, MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION,
 })
 
 # US/Eastern calendar date is the "trading day" key for the one-row-per-day
@@ -412,6 +421,131 @@ def compute_skill_vs_naive(
     return out
 
 
+# Floor on a median |log error| before inverting it into a gate weight, so a
+# (vanishingly unlikely) exact-zero median can't divide by zero.
+_MIN_LOG_ERROR = 1e-6
+
+# Gate rejection reasons (compute_naive_gate), surfaced for logging/tests.
+GATE_REASON_NO_STATS = "no scored pairs"
+GATE_REASON_TOO_FEW = "too few scored pairs"
+GATE_REASON_NOT_BETTER = "does not beat naive by the required margin"
+GATE_REASON_NOT_PRODUCED = "admitted but produced no forecast this cycle"
+
+
+def compute_naive_gate(
+    skill_stats: Mapping[str, Mapping[str, object]],
+    candidates: Iterable[str],
+    min_improvement: float,
+    min_obs: int,
+) -> Dict[str, object]:
+    """Pure function: the forecasting rebuild F3 naive gate for one
+    (symbol, horizon).
+
+    ``skill_stats`` is :func:`compute_skill_vs_naive`'s output for that
+    (symbol, horizon): each model's median ``|ln(forecast / actual)|`` and
+    naive's median on exactly the same (symbol, US/Eastern day) pairs, plus
+    ``n``. The caller restricts it to rows whose outcome had matured before
+    the forecast being gated (see ``ForecastTracker.naive_gate_stats``).
+    ``candidates`` are the models that actually produced a (guard-surviving)
+    forecast this cycle.
+
+    A model is ADMITTED when all of these hold:
+
+    * it is blend-eligible (not in ``NON_BLEND_MODEL_NAMES``);
+    * ``n >= min_obs`` scored daily pairs;
+    * ``median_model <= median_naive * (1 - min_improvement)``.
+
+    Weights over the admitted models that are also in ``candidates`` are
+    ``1 / median_model``, normalized to sum to 1. An admitted model that did
+    not produce a forecast this cycle is left out and the rest renormalize
+    (graduated degrade). When nothing is left, ``fallback_to_naive`` is True
+    and ``weights`` is empty: the caller publishes naive (the price at
+    forecast time), never a blend of models that failed the gate.
+
+    Returns ``{"weights": {model: w}, "admitted": [...sorted],
+    "rejected": {model: reason}, "fallback_to_naive": bool}``. ``admitted``
+    lists only the models that carry weight. Never raises on well-formed
+    input.
+    """
+    cand = {c for c in candidates if c not in NON_BLEND_MODEL_NAMES}
+    rejected: Dict[str, str] = {}
+    inv: Dict[str, float] = {}
+    for name in sorted(cand | {m for m in skill_stats if m not in NON_BLEND_MODEL_NAMES}):
+        stats = skill_stats.get(name)
+        if not stats:
+            rejected[name] = GATE_REASON_NO_STATS
+            continue
+        try:
+            n = int(stats.get("n", 0))
+            med = float(stats["median_abs_log_error"])
+            naive_med = float(stats["naive_median_abs_log_error"])
+        except (KeyError, TypeError, ValueError):
+            rejected[name] = GATE_REASON_NO_STATS
+            continue
+        if n < int(min_obs):
+            rejected[name] = GATE_REASON_TOO_FEW
+            continue
+        if not (math.isfinite(med) and math.isfinite(naive_med)
+                and med <= naive_med * (1.0 - float(min_improvement))):
+            rejected[name] = GATE_REASON_NOT_BETTER
+            continue
+        if name not in cand:
+            rejected[name] = GATE_REASON_NOT_PRODUCED
+            continue
+        inv[name] = 1.0 / max(med, _MIN_LOG_ERROR)
+
+    total = sum(inv.values())
+    weights = {name: v / total for name, v in inv.items()} if total > 0 else {}
+    return {
+        "weights": weights,
+        "admitted": sorted(weights),
+        "rejected": rejected,
+        "fallback_to_naive": not weights,
+    }
+
+
+def _latest_row_per_day(df: "pd.DataFrame") -> "pd.DataFrame":
+    """Collapse a ``forecast_errors`` frame to the LAST row per
+    ``(symbol, model_name, [horizon_days,] day)``.
+
+    Day key: ``forecast_day`` when present; for legacy rows (``NULL``) the
+    US/Eastern date of ``forecast_ts``. Adds ``day`` and ``_ts`` columns and
+    drops rows whose timestamp can't be parsed. Shared by ``skill_vs_naive``
+    and ``naive_gate_stats`` so both score the same one-row-per-day ledger.
+    """
+    ts = pd.to_datetime(df["forecast_ts"], utc=True, format="ISO8601", errors="coerce")
+    legacy_day = ts.dt.tz_convert(_EASTERN_TZ_NAME).dt.strftime("%Y-%m-%d")
+    df = df.copy()
+    df["day"] = df["forecast_day"].where(df["forecast_day"].notna(), legacy_day)
+    df["_ts"] = ts
+    df = df.dropna(subset=["day", "_ts"])
+    keys = ["symbol", "model_name", "day"]
+    if "horizon_days" in df.columns:
+        keys.insert(2, "horizon_days")
+    return df.sort_values(["_ts", "id"]).drop_duplicates(subset=keys, keep="last")
+
+
+def _pairs_with_naive(df: "pd.DataFrame") -> list:
+    """``(model, forecast, actual, naive_price, naive_actual)`` tuples for
+    :func:`compute_skill_vs_naive`: every non-naive row joined to the naive
+    row of the same ``(symbol, day)``. ``df`` must already be ONE horizon,
+    collapsed by :func:`_latest_row_per_day`. Empty when there is no naive
+    row to pair with.
+    """
+    naive = df[df["model_name"] == MODEL_NAIVE][
+        ["symbol", "day", "forecast_price", "actual_price"]
+    ].rename(columns={"forecast_price": "naive_price", "actual_price": "naive_actual"})
+    if naive.empty:
+        return []
+    models = df[df["model_name"] != MODEL_NAIVE]
+    merged = models.merge(naive, on=["symbol", "day"], how="inner")
+    return list(zip(
+        merged["model_name"], merged["forecast_price"], merged["actual_price"],
+        merged["naive_price"], merged["naive_actual"],
+        strict=True,
+    ))
+
+
 class ForecastTracker:
     """Per-model RMSE-based forecast skill tracker backed by SQLite.
 
@@ -464,7 +598,9 @@ class ForecastTracker:
         forecast_lower REAL,
         forecast_upper REAL,
         recorded_at    TEXT    NOT NULL,
-        forecast_day   TEXT
+        forecast_day   TEXT,
+        gate_fallback  INTEGER,
+        gate_admitted  TEXT
     )
     """
 
@@ -625,6 +761,15 @@ class ForecastTracker:
         # Nullable; pre-existing rows keep NULL and are never rewritten.
         if "forecast_day" not in cols:
             conn.execute("ALTER TABLE forecast_errors ADD COLUMN forecast_day TEXT")
+        # forecasting rebuild F3: naive-gate metadata, set ONLY on
+        # gated_blend rows (NULL on every other model and on older rows).
+        # gate_fallback: 1 = the gate admitted no model and the row is naive,
+        # 0 = a real gated blend. gate_admitted: comma-separated names of the
+        # models that carried weight ('' on a fallback).
+        if "gate_fallback" not in cols:
+            conn.execute("ALTER TABLE forecast_errors ADD COLUMN gate_fallback INTEGER")
+        if "gate_admitted" not in cols:
+            conn.execute("ALTER TABLE forecast_errors ADD COLUMN gate_admitted TEXT")
 
     # -------------------------------------------------------------------------
     # Public API
@@ -636,6 +781,7 @@ class ForecastTracker:
         model_prices: Dict[str, float],
         forecast_ts: datetime,
         model_bounds: Optional[Dict[str, Tuple[float, float]]] = None,
+        gate_meta: Optional[Dict[str, Tuple[bool, Sequence[str]]]] = None,
     ) -> None:
         """Record per-model forecast prices for future validation.
 
@@ -676,8 +822,16 @@ class ForecastTracker:
             is missing/non-finite, gets ``NULL``/``NULL`` -- never a
             fabricated interval (CONSTRAINT #4). Backs
             ``coverage_report()``/``interval_score_stats()`` below.
+        gate_meta : dict[str, tuple[bool, Sequence[str]]], optional
+            Forecasting rebuild F3: model name -> ``(fell_back_to_naive,
+            admitted_models)``, written to ``gate_fallback`` /
+            ``gate_admitted`` on that model's row (in practice only
+            ``gated_blend``). Every other row gets ``NULL``/``NULL``. The
+            upsert overwrites both along with the price, so a day's row
+            always carries the gate decision that produced its price.
         """
         model_bounds = model_bounds or {}
+        gate_meta = gate_meta or {}
         try:
             now_iso = datetime.now(timezone.utc).isoformat()
             ts_iso = forecast_ts.isoformat() if isinstance(forecast_ts, datetime) else str(forecast_ts)
@@ -696,12 +850,20 @@ class ForecastTracker:
                             lower, upper = float(lo), float(hi)
                     except (TypeError, ValueError):
                         pass
-                rows.append((symbol.upper(), name, horizon_days, ts_iso, price, lower, upper, now_iso))
+                g_fallback: Optional[int] = None
+                g_admitted: Optional[str] = None
+                meta = gate_meta.get(name)
+                if meta is not None:
+                    fell_back, admitted = meta
+                    g_fallback = 1 if fell_back else 0
+                    g_admitted = ",".join(sorted(str(m) for m in (admitted or ())))
+                rows.append((symbol.upper(), name, horizon_days, ts_iso, price, lower, upper,
+                             now_iso, g_fallback, g_admitted))
             if not rows:
                 return
             with self._lock:
                 conn = self._get_conn()
-                for sym, name, h, ts, price, lower, upper, rec in rows:
+                for sym, name, h, ts, price, lower, upper, rec, g_fb, g_adm in rows:
                     updated = 0
                     if day is not None:
                         cur = conn.execute(
@@ -710,13 +872,15 @@ class ForecastTracker:
                                    forecast_lower = ?,
                                    forecast_upper = ?,
                                    forecast_ts    = ?,
-                                   recorded_at    = ?
+                                   recorded_at    = ?,
+                                   gate_fallback  = ?,
+                                   gate_admitted  = ?
                                WHERE symbol       = ?
                                  AND model_name   = ?
                                  AND horizon_days = ?
                                  AND forecast_day = ?
                                  AND actual_price IS NULL""",
-                            (price, lower, upper, ts, rec, sym, name, h, day),
+                            (price, lower, upper, ts, rec, g_fb, g_adm, sym, name, h, day),
                         )
                         updated = cur.rowcount or 0
                     if updated == 0:
@@ -724,9 +888,9 @@ class ForecastTracker:
                             """INSERT INTO forecast_errors
                                (symbol, model_name, horizon_days, forecast_ts,
                                 forecast_price, forecast_lower, forecast_upper,
-                                recorded_at, forecast_day)
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                            (sym, name, h, ts, price, lower, upper, rec, day),
+                                recorded_at, forecast_day, gate_fallback, gate_admitted)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (sym, name, h, ts, price, lower, upper, rec, day, g_fb, g_adm),
                         )
                 conn.commit()
         except Exception as exc:
@@ -1540,29 +1704,13 @@ class ForecastTracker:
                 columns=["id", "symbol", "model_name", "forecast_ts", "forecast_day",
                          "forecast_price", "actual_price"],
             )
-            ts = pd.to_datetime(df["forecast_ts"], utc=True, format="ISO8601", errors="coerce")
-            legacy_day = ts.dt.tz_convert(_EASTERN_TZ_NAME).dt.strftime("%Y-%m-%d")
-            df["day"] = df["forecast_day"].where(df["forecast_day"].notna(), legacy_day)
-            df["_ts"] = ts
-            df = df.dropna(subset=["day", "_ts"])
-            df = df.sort_values(["_ts", "id"]).drop_duplicates(
-                subset=["symbol", "model_name", "day"], keep="last"
-            )
+            df = _latest_row_per_day(df)
 
-            naive = df[df["model_name"] == MODEL_NAIVE][
-                ["symbol", "day", "forecast_price", "actual_price"]
-            ].rename(columns={"forecast_price": "naive_price", "actual_price": "naive_actual"})
-            if naive.empty:
+            if not (df["model_name"] == MODEL_NAIVE).any():
                 result["reason"] = "no completed naive rows to pair with"
                 return result
 
-            models = df[df["model_name"] != MODEL_NAIVE]
-            merged = models.merge(naive, on=["symbol", "day"], how="inner")
-            pairs = list(zip(
-                merged["model_name"], merged["forecast_price"], merged["actual_price"],
-                merged["naive_price"], merged["naive_actual"],
-                strict=True,
-            ))
+            pairs = _pairs_with_naive(df)
             result["models"] = compute_skill_vs_naive(pairs, min_price=min_price)
             if not result["models"]:
                 result["reason"] = "no scorable model/naive pairs (price filter or no overlap)"
@@ -1572,5 +1720,207 @@ class ForecastTracker:
             logger.warning(
                 "ForecastTracker.skill_vs_naive(h=%s) failed: %s", horizon_days, exc
             )
+            result["reason"] = "error"
+            return result
+
+    def naive_gate_stats(
+        self,
+        symbol: str,
+        horizons: Sequence[int],
+        window_days: int,
+        as_of: datetime,
+        min_price: float = 1.0,
+    ) -> Dict[str, object]:
+        """Per-horizon skill-vs-naive stats for ONE symbol, as the F3 naive
+        gate (:func:`compute_naive_gate`) sees them at ``as_of``.
+
+        Same scoring as :meth:`skill_vs_naive` (one row per symbol x model x
+        US/Eastern day, log error, paired with naive on the same day, sub-$1
+        excluded), plus a **no-lookahead cutoff**: a row counts only if its
+        outcome had matured strictly BEFORE ``as_of``'s US/Eastern trading
+        day, i.e. ``day + BDay(h) < eastern_day(as_of)``. A row due today is
+        excluded even if ``update_actuals`` already stamped it, because
+        today's close is not final until the session ends. The window is
+        ``forecast_ts >= as_of - window_days`` (the live skill blend's
+        window, anchored at ``as_of``).
+
+        Returns ``{"by_horizon": {h: {model: stats}}, "reason": None | str}``.
+        A horizon with nothing scorable maps to ``{}`` (the gate then admits
+        nothing). ``reason == "error"`` means the read failed and the stats
+        must not be trusted. Never raises (CONSTRAINT #6).
+        """
+        horizons = [int(h) for h in horizons]
+        result: Dict[str, object] = {"by_horizon": {h: {} for h in horizons}, "reason": None}
+        try:
+            as_of_ts = pd.Timestamp(as_of)
+            if as_of_ts.tzinfo is None:
+                as_of_ts = as_of_ts.tz_localize("UTC")
+            as_of_day = eastern_trading_day(as_of_ts)
+            if as_of_day is None or not horizons:
+                result["reason"] = "no as_of day"
+                return result
+            since_iso = (as_of_ts - pd.Timedelta(days=int(window_days))).isoformat()
+            placeholders = ",".join("?" for _ in horizons)
+            with self._lock:
+                conn = self._get_conn()
+                rows = conn.execute(
+                    f"""SELECT id, symbol, model_name, horizon_days, forecast_ts,
+                               forecast_day, forecast_price, actual_price
+                        FROM forecast_errors
+                        WHERE symbol       = ?
+                          AND actual_price IS NOT NULL
+                          AND forecast_ts  >= ?
+                          AND forecast_ts  <= ?
+                          AND horizon_days IN ({placeholders})""",
+                    [symbol.upper(), since_iso, as_of_ts.isoformat(), *horizons],
+                ).fetchall()
+            if not rows:
+                result["reason"] = "no completed forecasts in window"
+                return result
+
+            df = pd.DataFrame(
+                rows,
+                columns=["id", "symbol", "model_name", "horizon_days", "forecast_ts",
+                         "forecast_day", "forecast_price", "actual_price"],
+            )
+            df = _latest_row_per_day(df)
+            cutoff = pd.Timestamp(as_of_day)
+            by_h = result["by_horizon"]
+            for h in horizons:
+                sub = df[df["horizon_days"] == h]
+                if sub.empty:
+                    continue
+                due = pd.to_datetime(sub["day"], errors="coerce") + pd.offsets.BDay(h)
+                sub = sub[due < cutoff]
+                if sub.empty:
+                    continue
+                by_h[h] = compute_skill_vs_naive(_pairs_with_naive(sub), min_price=min_price)
+            return result
+        except Exception as exc:
+            logger.warning("ForecastTracker.naive_gate_stats(%s) failed: %s", symbol, exc)
+            result["by_horizon"] = {h: {} for h in horizons}
+            result["reason"] = "error"
+            return result
+
+    def gate_side_by_side(
+        self,
+        horizon_days: int,
+        window_days: int,
+        min_price: float = 1.0,
+    ) -> Dict[str, object]:
+        """Forecasting rebuild F3 review: ``blend`` vs ``gated_blend`` vs
+        ``naive`` at one horizon, for the operator's shadow-period review.
+
+        * ``models``: :func:`compute_skill_vs_naive` stats for ``blend`` and
+          ``gated_blend``, scored ONLY on the (symbol, US/Eastern day) pairs
+          where all three of blend, gated_blend and naive were recorded and
+          have matured, so the two blends are judged on identical days
+          (``naive_median_abs_log_error`` is naive's median on those days).
+        * ``head_to_head``: gated_blend scored against blend on those same
+          days (``pct_beating_naive`` there reads "% of days gated_blend
+          beat blend"; its direction fields are not meaningful and dropped).
+        * ``activity``: every gated_blend day in the window, matured or not:
+          ``days``, ``matured_days``, ``fallback_days`` (gate fell back to
+          naive), ``admitted_counts`` ({model: days it carried weight}) and
+          ``first_pending_due`` (US/Eastern date the earliest still-pending
+          gated_blend row matures, or None).
+
+        ``reason`` explains an empty result (never a fabricated number).
+        Never raises (CONSTRAINT #6).
+        """
+        result: Dict[str, object] = {
+            "horizon_days": int(horizon_days),
+            "window_days": int(window_days),
+            "min_price": float(min_price),
+            "models": {},
+            "n_common_days": 0,
+            "head_to_head": None,
+            "activity": {"days": 0, "matured_days": 0, "fallback_days": 0,
+                         "admitted_counts": {}, "first_pending_due": None},
+            "reason": None,
+        }
+        try:
+            since_iso = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+            with self._lock:
+                conn = self._get_conn()
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(forecast_errors)").fetchall()}
+                if "gate_fallback" not in cols:
+                    result["reason"] = "ledger predates F3 (no gated_blend rows yet)"
+                    return result
+                rows = conn.execute(
+                    """SELECT id, symbol, model_name, forecast_ts, forecast_day,
+                              forecast_price, actual_price, gate_fallback, gate_admitted
+                       FROM forecast_errors
+                       WHERE horizon_days = ?
+                         AND forecast_ts  >= ?
+                         AND model_name IN (?, ?, ?)""",
+                    (int(horizon_days), since_iso, MODEL_NAIVE, MODEL_BLEND, MODEL_GATED_BLEND),
+                ).fetchall()
+            df = pd.DataFrame(
+                rows,
+                columns=["id", "symbol", "model_name", "forecast_ts", "forecast_day",
+                         "forecast_price", "actual_price", "gate_fallback", "gate_admitted"],
+            )
+            if df.empty:
+                result["reason"] = "no gated_blend rows in window"
+                return result
+            df = _latest_row_per_day(df)
+
+            gated = df[df["model_name"] == MODEL_GATED_BLEND]
+            activity = result["activity"]
+            activity["days"] = int(len(gated))
+            activity["matured_days"] = int(gated["actual_price"].notna().sum())
+            activity["fallback_days"] = int((gated["gate_fallback"] == 1).sum())
+            counts: Dict[str, int] = {}
+            for adm in gated["gate_admitted"].dropna():
+                for name in str(adm).split(","):
+                    if name:
+                        counts[name] = counts.get(name, 0) + 1
+            activity["admitted_counts"] = dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+            pending = gated[gated["actual_price"].isna()]
+            if not pending.empty:
+                first_day = pd.to_datetime(pending["day"], errors="coerce").min()
+                if pd.notna(first_day):
+                    activity["first_pending_due"] = (
+                        first_day + pd.offsets.BDay(int(horizon_days))
+                    ).strftime("%Y-%m-%d")
+            if gated.empty:
+                result["reason"] = "no gated_blend rows in window"
+                return result
+
+            done = df[df["actual_price"].notna()]
+            per_day = done.groupby(["symbol", "day"])["model_name"].agg(set)
+            need = {MODEL_NAIVE, MODEL_BLEND, MODEL_GATED_BLEND}
+            common = per_day[per_day.apply(lambda s: need <= s)].index
+            result["n_common_days"] = int(len(common))
+            if len(common) == 0:
+                result["reason"] = "n=0, not yet scorable (no matured day has blend, gated_blend and naive)"
+                return result
+            done = done.set_index(["symbol", "day"]).loc[common].reset_index()
+            result["models"] = compute_skill_vs_naive(_pairs_with_naive(done), min_price=min_price)
+
+            blend = done[done["model_name"] == MODEL_BLEND][
+                ["symbol", "day", "forecast_price", "actual_price"]
+            ].rename(columns={"forecast_price": "b_price", "actual_price": "b_actual"})
+            naive_p0 = done[done["model_name"] == MODEL_NAIVE][["symbol", "day", "forecast_price"]].rename(
+                columns={"forecast_price": "p0"})
+            g = done[done["model_name"] == MODEL_GATED_BLEND].merge(blend, on=["symbol", "day"]).merge(
+                naive_p0, on=["symbol", "day"])
+            g = g[g["p0"] >= min_price]
+            h2h = compute_skill_vs_naive(list(zip(
+                g["model_name"], g["forecast_price"], g["actual_price"], g["b_price"], g["b_actual"],
+                strict=True,
+            )), min_price=0.0)
+            stats = h2h.get(MODEL_GATED_BLEND)
+            if stats:
+                result["head_to_head"] = {
+                    k: stats[k] for k in ("n", "median_abs_log_error", "naive_median_abs_log_error",
+                                          "pct_beating_naive", "wins", "losses", "ties", "sign_test_p")
+                }
+            if not result["models"]:
+                result["reason"] = "n=0, not yet scorable (price filter removed every pair)"
+            return result
+        except Exception as exc:
+            logger.warning("ForecastTracker.gate_side_by_side(h=%s) failed: %s", horizon_days, exc)
             result["reason"] = "error"
             return result

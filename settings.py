@@ -2054,6 +2054,44 @@ class Settings(BaseSettings):
             "are anchored on that same history. <= 0 disables the check."
         ),
     )
+    FORECAST_NAIVE_GATE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Forecasting rebuild F3. When True, each published Forecast_{h} "
+            "is the NAIVE-GATED blend: only component models that beat the "
+            "naive (price-stays-flat) forecast on rolling median |log error| by "
+            "at least FORECAST_NAIVE_GATE_MIN_IMPROVEMENT, with at least "
+            "FORECAST_NAIVE_GATE_MIN_OBS scored daily observations for that "
+            "symbol and horizon (over FORECAST_SKILL_WINDOW_DAYS, using only "
+            "outcomes that matured before the forecast), weighted by inverse "
+            "median |log error|. If no model qualifies, the published value is "
+            "naive (the current price) and Forecast_{h}_Is_Fallback / "
+            "Forecast_{h}_Gated_Naive are True, so forecast_alignment scores it "
+            "neutral. Only applies where a ForecastTracker is attached (the "
+            "daemon pipeline and the advisory path). When False (the default) "
+            "the gated forecast is computed and recorded to forecast_errors as "
+            "the shadow model 'gated_blend' only; the published forecast and "
+            "every decision are unchanged. Compare with "
+            "`python scripts/forecast_skill_report.py --gate` before enabling."
+        ),
+    )
+    FORECAST_NAIVE_GATE_MIN_IMPROVEMENT: float = Field(
+        default=0.005,
+        description=(
+            "Forecasting rebuild F3 naive gate: a model is admitted only if its "
+            "median |log error| is <= naive's median * (1 - this) on the same "
+            "scored days (0.005 = at least 0.5% relative improvement)."
+        ),
+    )
+    FORECAST_NAIVE_GATE_MIN_OBS: int = Field(
+        default=60,
+        description=(
+            "Forecasting rebuild F3 naive gate: minimum scored daily "
+            "observations (one per US/Eastern trading day after the F1 upsert, "
+            "paired with naive) a model needs for a symbol and horizon before "
+            "it can be admitted."
+        ),
+    )
     FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED: bool = Field(
         default=True,
         description=(
