@@ -2120,16 +2120,15 @@ const MOCK_DEMO_ONLY_STATES: Record<string, "env_pinned" | "no_effect"> = {
   LOG_LEVEL: "env_pinned",
   REQUIRED_RETURN_RATE: "no_effect",
   // Unlike the two above, this ONE entry does describe real platform
-  // behaviour: OPTIONS_EARNINGS_CRUSH_ENABLED is a genuine no_op per
+  // behaviour: PROMPT_MAX_CHARS is a genuine no_op per
   // docs/settings_liveness.json (read nowhere in production code). Without
   // this override it falls through to the generic live_safe/restart_required
-  // mock classification below, which -- caught live in the Settings
-  // Reference screen -- rendered it as "Applies now" with an interactive
-  // Toggle, exactly the misleading "control that does nothing" trap
-  // `writable`'s no_op exclusion (mockSettingsReference()) exists to prevent.
-  OPTIONS_EARNINGS_CRUSH_ENABLED: "no_effect",
-  // Same: read nowhere since the dynamic circuit breaker was unwired (2026-09).
-  CIRCUIT_BREAKER_ENABLED: "no_effect",
+  // mock classification below, which would render it as "Applies now" --
+  // the misleading "control that does nothing" trap `writable`'s no_op
+  // exclusion (mockSettingsReference()) exists to prevent. (The boolean
+  // no_op examples used here before -- OPTIONS_EARNINGS_CRUSH_ENABLED,
+  // CIRCUIT_BREAKER_ENABLED -- were retired in 2026-09, step 4f.)
+  PROMPT_MAX_CHARS: "no_effect",
 };
 
 function mockLiveness(key: string): TunableLiveness {
@@ -2525,18 +2524,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     step: 1,
     description:
       "Minimum days between HMM refits; fit() calls within this window of the last real fit are no-ops. A lower number means the model adapts faster to sudden market shifts (like flash crashes), but increases computational overhead and may cause temporary over-sensitivity to noise.",
-  },
-  {
-    group: "Regime Model",
-    key: "OPTIONS_VRP_THRESHOLD",
-    type: "number",
-    value: 0.02,
-    default: 0.02,
-    min: 0,
-    max: 1,
-    step: 0.01,
-    description:
-      "Minimum Volatility Risk Premium (VRP) required to authorize premium selling (e.g. credit spreads). VRP is the difference between Implied Volatility and Realized Volatility. A higher threshold (e.g. 0.03 = 3%) demands a larger premium buffer before entering trades, increasing selectivity and safety but reducing trade frequency.",
   },
   {
     group: "Risk Gate",
@@ -3118,24 +3105,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     group: "Advanced / Config",
   },
   {
-    key: "OPTIONS_MATRIX_ENABLED",
-    value: true,
-    default: true,
-    type: "boolean",
-    description:
-      "When True, the pipeline persists the per-symbol options premium directive matrix to output/options_matrix.json for the Pilots PWA (GET /options, GET /symbols/{ticker}/options). Default False.",
-    group: "Advanced / Config",
-  },
-  {
-    key: "OPTIONS_TRUE_IVR_ENABLED",
-    value: true,
-    default: true,
-    type: "boolean",
-    description:
-      "Opt-in: wires a real, options-chain-derived True_IVR into technical_options_engine.build_premium_directive() -- the GUI Technical Options Matrix tab, the get_options_directive MCP tool, api/metrics_api.py, execution/options_queue_builder.py, and every other build_premium_directive caller -- instead of leaving true IV rank exclusive to main_orchestrator.py's pipeline/production_steps.py::OptionsAnalysisStep path. When True, build_premium_directive fetches a live 30-calendar-day ATM IV via volatility.iv_engine.get_30d_atm_iv() (a fresh, lightweight DataEngine constructed with no FRED key purely for its fetch_options_chain() -- CompositeProvider/data/market_data.py has no chain-shaped method to reuse, so this mirrors exactly what OptionsAnalysisStep already does rather than inventing a second convention) and ranks it against the SAME iv_history table (volatility.iv_engine.IVHistoryStore) OptionsAnalysisStep writes to via calculate_true_ivr() -- strictly prior days only, never a lookahead. The result is surfaced as a NEW True_IVR row key alongside the existing realized-vol-only IVR_Proxy (never replacing it -- both stay so provenance is honest); generate_strategy_pricing_matrix's true_ivr argument prefers True_IVR over IVR_Proxy when the flag is on and a finite value was computed, falling back to IVR_Proxy exactly as today otherwise. Any failure at any step -- no live chain data, an empty iv_history table during warm-start (this repo's dev/CI sandboxes never populate GUI/MCP-path history since only OptionsAnalysisStep's orchestrator path writes to it), a network error, or any exception -- degrades to float('nan') for True_IVR and never crashes or changes IVR_Proxy/Cash-Wait fallback behavior (CONSTRAINT #4/#6). False (the default) reproduces today's exact behavior byte-for-byte -- no new network call, no new DB read, True_IVR always NaN. Enabling this adds one live options-chain fetch per symbol per render (GUI)/per call (MCP) -- a real, non-trivial network cost the realized-vol proxy never had.",
-    group: "Advanced / Config",
-  },
-  {
     key: "PAIRS_SNAPSHOT_ENABLED",
     value: true,
     default: true,
@@ -3213,7 +3182,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     default: false,
     type: "boolean",
     description:
-      "Opt-in fix for StrategyValidationHarness's deployability gate. Two related integrity gaps: (1) report.sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover were computed from self.strategy_fn(X, y, X, y) -- a 'test' set IDENTICAL to the training set, i.e. an IN-SAMPLE number feeding the 'net-of-cost Sharpe > 0.5' / 'MaxDD < 30%' deployability criteria -- while only PBO/DSR were genuinely out-of-sample (via CombinatorialPurgedCV). (2) CombinatorialPurgedCV's own DSR/PBO Sharpes were computed on GROSS (cost-free) returns even though the in-sample Sharpe/MaxDD leg applied _apply_cost_model's turnover-scaled cost -- an inconsistent cost basis between the two gate legs. When True, run_cpcv_evaluation applies the same turnover-scaled cost model to every CPCV path's train/test returns before any Sharpe/PBO/DSR/drawdown statistic is computed from them, and the harness's reported sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover become the MEAN of each metric computed independently on every CPCV path's own genuinely held-out (purged+embargoed) OOS returns for the DSR-selected strategy, instead of the full-sample in-sample fit -- see run_cpcv_evaluation's docstring for why this is a per-path mean rather than one concatenated equity curve (CPCV's combinatorial test blocks are deliberately reused across paths). equity_curve/benchmark_curve/macro_benchmark_curve are UNCHANGED either way (still the full-sample series) -- a single non-overlapping OOS equity curve needs the AFML CPCV backtest-path-recombination algorithm, not implemented here (a real, separate follow-up, not silently faked). False (the default) reproduces pre-existing behavior exactly: every currently-recorded docs/VALIDATION_STRATEGY_FIX_LOG.md PBO/DSR/Sharpe/MaxDD baseline for the registered STRATEGY_REGISTRY fleet was measured with this flag off, and this sandboxed dev/CI environment has no live-market network access to re-verify the fleet against the corrected numbers -- flipping this on requires re-running scripts/refresh_validations.py against live data and updating that log, exactly like this codebase's other opt-in correctness levers (e.g. FORECAST_CNN_LSTM_WALKFORWARD_SCALING above, ETF_TRANSMISSION_SIZING_ENABLED).",
+      "Opt-in fix for StrategyValidationHarness's deployability gate. Two related integrity gaps: (1) report.sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover were computed from self.strategy_fn(X, y, X, y) -- a 'test' set IDENTICAL to the training set, i.e. an IN-SAMPLE number feeding the 'net-of-cost Sharpe > 0.5' / 'MaxDD < 30%' deployability criteria -- while only PBO/DSR were genuinely out-of-sample (via CombinatorialPurgedCV). (2) CombinatorialPurgedCV's own DSR/PBO Sharpes were computed on GROSS (cost-free) returns even though the in-sample Sharpe/MaxDD leg applied _apply_cost_model's turnover-scaled cost -- an inconsistent cost basis between the two gate legs. When True, run_cpcv_evaluation applies the same turnover-scaled cost model to every CPCV path's train/test returns before any Sharpe/PBO/DSR/drawdown statistic is computed from them, and the harness's reported sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover become the MEAN of each metric computed independently on every CPCV path's own genuinely held-out (purged+embargoed) OOS returns for the DSR-selected strategy, instead of the full-sample in-sample fit -- see run_cpcv_evaluation's docstring for why this is a per-path mean rather than one concatenated equity curve (CPCV's combinatorial test blocks are deliberately reused across paths). equity_curve/benchmark_curve/macro_benchmark_curve are UNCHANGED either way (still the full-sample series) -- a single non-overlapping OOS equity curve needs the AFML CPCV backtest-path-recombination algorithm, not implemented here (a real, separate follow-up, not silently faked). False (the default) reproduces pre-existing behavior exactly: every currently-recorded docs/VALIDATION_STRATEGY_FIX_LOG.md PBO/DSR/Sharpe/MaxDD baseline for the registered STRATEGY_REGISTRY fleet was measured with this flag off, and this sandboxed dev/CI environment has no live-market network access to re-verify the fleet against the corrected numbers -- flipping this on requires re-running scripts/refresh_validations.py against live data and updating that log, exactly like this codebase's other opt-in correctness levers (e.g. FORECAST_CNN_LSTM_WALKFORWARD_SCALING above).",
     group: "Advanced / Config",
   },
   {
@@ -3221,19 +3190,9 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     value: false, default: false,
     description: "Require native implementation for Gravity Review Suite.",
   },
-  // ---- Options & Pairs Snapshots ----
+  // ---- Pairs Snapshot ----
   {
-    group: "Options & Pairs Snapshots", key: "OPTIONS_MATRIX_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "When True, the pipeline persists the per-symbol options premium directive matrix to output/options_matrix.json for the Pilots PWA (GET /options, GET /symbols/{ticker}/options). Default False.",
-  },
-  {
-    group: "Options & Pairs Snapshots", key: "OPTIONS_TRUE_IVR_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Opt-in: wires a real, options-chain-derived True_IVR into technical_options_engine.build_premium_directive() -- the GUI Technical Options Matrix tab, the get_options_directive MCP tool, api/metrics_api.py, execution/options_queue_builder.py, and every other build_premium_directive caller -- instead of leaving true IV rank exclusive to main_orchestrator.py's pipeline path. When True, build_premium_directive fetches a live 30-calendar-day ATM IV and ranks it against the iv_history table, strictly prior days only, never a lookahead. Surfaced as a new True_IVR row key alongside the existing realized-vol-only IVR_Proxy (never replacing it). Any failure degrades to float('nan') for True_IVR and never crashes or changes IVR_Proxy/Cash-Wait fallback behavior (CONSTRAINT #4/#6). False (the default) reproduces today's exact behavior byte-for-byte -- no new network call, no new DB read, True_IVR always NaN.",
-  },
-  {
-    group: "Options & Pairs Snapshots", key: "PAIRS_SNAPSHOT_ENABLED", type: "boolean",
+    group: "Pairs Snapshot", key: "PAIRS_SNAPSHOT_ENABLED", type: "boolean",
     value: false, default: false,
     description: "When True, the pipeline persists the cointegrated pairs radar (ranking + current spread state) to output/pairs.json for the Pilots PWA (GET /pairs). Expensive O(n^2) scan; default False.",
   },
@@ -3294,135 +3253,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     group: "RLHF Calibration", key: "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", type: "boolean",
     value: false, default: false,
     description: "When True, a proposal that receives a 5-star human_rating is automatically appended to the SFT JSONL export the moment the review is submitted, instead of requiring a separate POST /rlhf/export-sft call. Default False (opt-in).",
-  },
-  // ---- Options Desk Automation ----
-  {
-    group: "Options Desk Automation",
-    key: "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Automatically execute valid options strategy directives into the paper broker every cycle.",
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_AUTO_EXIT_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Automatically manage and exit option positions on profit target, stop loss, or DTE threshold.",
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_PROFIT_TARGET_PCT",
-    type: "number",
-    value: 0.5,
-    default: 0.5,
-    description: "Profit target percentage threshold to trigger automated exit (e.g. 0.50 for 50% max profit).",
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_STOP_LOSS_MULTIPLE",
-    type: "number",
-    value: 2.0,
-    default: 2.0,
-    description: "Stop loss multiple of max credit/debit to trigger automated exit (e.g. 2.0 for 200% loss).",
-    min: 0.5,
-    max: 10.0,
-    step: 0.1,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_MANAGE_DTE_THRESHOLD",
-    type: "number",
-    value: 21,
-    default: 21,
-    description: "DTE threshold at or below which options positions are proactively closed/rolled (e.g. 21 days).",
-    min: 0,
-    max: 60,
-    step: 1,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_DELTA_HEDGE_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Enable automatic dynamic SPY delta hedging for options paper portfolio.",
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
-    type: "number",
-    value: 25.0,
-    default: 25.0,
-    description: "Deadband threshold in SPY delta shares before triggering a dynamic delta hedge order.",
-    min: 1,
-    max: 500,
-    step: 5,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_0DTE_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Enable automated 0DTE options momentum breakout trading and lifecycle management.",
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_0DTE_PROFIT_TARGET_PCT",
-    type: "number",
-    value: 0.75,
-    default: 0.75,
-    description: "Profit target percentage threshold to trigger 0DTE exit (e.g. 0.75 for +75% gain in premium).",
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_0DTE_STOP_LOSS_PCT",
-    type: "number",
-    value: 0.3,
-    default: 0.3,
-    description: "Stop loss percentage threshold to trigger 0DTE exit (e.g. 0.30 for -30% loss).",
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_0DTE_HARD_EXIT_TIME",
-    type: "string",
-    value: "15:45",
-    default: "15:45",
-    description: "Mandatory hard exit time (ET, HH:MM) to close all open 0DTE positions and avoid pin/settlement risk.",
-  },
-  {
-    group: "Options Desk Automation",
-    key: "MAX_OPTION_NOTIONAL_PER_TRADE",
-    type: "number",
-    value: 2500.0,
-    default: 2500.0,
-    description: "Max risk notional collateral per automated options paper trade.",
-    min: 100.0,
-    max: 100000.0,
-    step: 500.0,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "MAX_CONCURRENT_OPTION_POSITIONS",
-    type: "number",
-    value: 10,
-    default: 10,
-    description: "Max total concurrent open option positions in the paper broker.",
-    min: 1,
-    max: 100,
-    step: 1,
   },
 ];
 
@@ -4435,19 +4265,9 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
     description: "Hard ceiling on pages fetched per symbol per call into data.fmp_client.stock_news, bounding a wide backfill window (e.g. scripts/backfill_news_history.py --months 6) so a dense news day/symbol cannot loop indefinitely. Once the ceiling is reached the remaining (older) articles in the window are simply not fetched -- callers that need full coverage should narrow --months or accept the honest gap (CONSTRAINT #4: never a fabricated substitute for the missing pages, just fewer real rows). Only consulted when FMP_NEWS_ENABLED is True.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_OPTIONS_HEALTH_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for the FMP fundamental-health overlay bundled into the options premium-directive matrix (reporting/options_snapshot.py::write_options_matrix → technical_options_engine.build_premium_directive). False (the default) is a complete no-op reproducing today's exact behavior: Altman_Z_Score, Piotroski_F_Score, Net_Debt_EBITDA, FCF_Yield, and Realized_Vol_30D all stay None and zero additional FMP requests are attempted. When True, gates three endpoints for every symbol in the options matrix: Altman Z-Score + Piotroski F-Score (/financial-scores), Net Debt/EBITDA + FCF Yield (/ratios-ttm), and 30-day realized volatility (/standard-deviation). Does NOT gate Days_To_Earnings/Earnings_Risk — those reuse the existing FMP_EARNINGS_ENABLED earnings-calendar gate.",
-  },
-  {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_OPTIONS_CONTEXT_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for the FMP market/qualitative-context overlay bundled into the options premium-directive matrix (reporting/options_snapshot.py::write_options_matrix → technical_options_engine.build_premium_directive). False (the default) is a complete no-op reproducing today's exact behavior: News_Snippets stays [], Peers stays [], and zero additional FMP requests are attempted. When True, gates two endpoints for every symbol in the options matrix: recent news headlines, capped at 3 per symbol (/news/stock), and the peer-comparison ticker group (/peers). Kept separate from FMP_OPTIONS_HEALTH_ENABLED because it is a different overlay concept — market/qualitative context rather than balance-sheet health.",
-  },
-  {
     group: "Diagnostic & Supplement Feeds", key: "FMP_PEERS_ENABLED", type: "boolean",
     value: false, default: false,
-    description: "Master switch for the on-demand GET /data/peers/{symbol} endpoint (api/data_api.py) — a single, per-click, operator-triggered FMP peer-group lookup (/peers) for the webapp's 'Suggest peers for this ticker' affordance on SymbolComparison. False (the default) is a complete no-op: the endpoint returns an empty peer list + an honest reason, with ZERO network calls. Deliberately kept SEPARATE from FMP_OPTIONS_CONTEXT_ENABLED, which already gates a DIFFERENT call site of the same fetch_peer_group function: a per-cycle BATCH fetch across the whole options-matrix universe. A single user-triggered click and a per-cycle loop over an entire universe have completely different cost/cadence profiles and must be independently controllable.",
+    description: "Master switch for the on-demand GET /data/peers/{symbol} endpoint (api/data_api.py) — a single, per-click, operator-triggered FMP peer-group lookup (/peers) for the webapp's 'Suggest peers for this ticker' affordance on SymbolComparison. False (the default) is a complete no-op: the endpoint returns an empty peer list + an honest reason, with ZERO network calls.",
   },
   {
     group: "Diagnostic & Supplement Feeds", key: "FMP_UNIVERSE_ENABLED", type: "boolean",
@@ -4512,7 +4332,7 @@ const CACHE_LONG_SHORT_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     // JSON-array field -- kept as a "string" type like every other JSON-blob
-    // tunable (ETF_HOLDINGS_TICKERS, SECTOR_FORECAST_CONFIGS, etc.); the
+    // tunable (SECTOR_FORECAST_CONFIGS, etc.); the
     // frontend's TunableFieldType has no separate "json" member.
     group: "Cache Long/Short Overlay",
     key: "CACHE_LONG_SHORT_PROXY_CANDIDATES",
@@ -4763,15 +4583,6 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Write & Execution Gates",
-    key: "OFI_SHIELD_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Fail-closed extension to the Flash Crash (OFI+VPIN) circuit-breaker shield (execution/dynamic_circuit_breaker.py).",
-  },
-  {
-    group: "Write & Execution Gates",
     key: "MCP_OAUTH_MULTI_USER_ENABLED",
     type: "boolean",
     value: false,
@@ -4862,15 +4673,6 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     description:
       "Gates POST /pilots/paper-broker/reset on the Pilots API -- wipes the local FMP paper account's positions/orders and reseeds cash.",
   },
-  {
-    group: "Write & Execution Gates",
-    key: "MULTI_BROKER_GATEWAY_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "RETIRED (2026-09, step 4a): read nowhere. The MultiBrokerGateway branch was removed from broker_live_execution_mcp.py with the options desk; brokers always resolve through execution.broker_selection. The field itself is removed in step 4f.",
-  },
   // -- Diagnostic & Data Features (read-only measurement/data-source
   // master switches, feed no scoring or sizing decision) --
   // NOTE: all 7 of these default to False in settings.py (each is a data
@@ -4931,7 +4733,7 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
 ];
 
 // Representative multi-domain sample for Settings Reference offline mock.
-// Covers all 14 domains with diverse types, secret masking, and liveness states.
+// Covers all 13 domains with diverse types, secret masking, and liveness states.
 // Overrides key for `PUT /settings/reference` boolean toggles — a dedicated
 // storage bucket, distinct from the per-editor override keys above, since
 // this screen can write a field regardless of which (if any) dedicated
@@ -4947,7 +4749,6 @@ function mockSettingsReference(): SettingsReferenceResponse {
     "Market Data/DB",
     "Universe/Watchlist",
     "Forecasting/ML",
-    "ETF Transmission",
     "Sentiment/News/Attention",
     "AI/LLM/RAG",
     "Orchestrator/Daemon/Jobs",
@@ -5007,27 +4808,27 @@ function mockSettingsReference(): SettingsReferenceResponse {
       editable_at: "/settings/paper-broker",
     },
     {
-      key: "OPTIONS_0DTE_ENABLED",
+      key: "OPTIONS_RISK_FREE_RATE",
       category: "allowed",
-      value: false,
-      default: false,
-      type: "boolean",
-      description: "Enable automated 0DTE options momentum breakout trading and lifecycle management.",
+      value: 0.045,
+      default: 0.045,
+      type: "number",
+      description: "Annualized risk-free interest rate for options pricing and Greeks calculation.",
       domain: "Options Desk",
       dangerous: false,
-      liveness: mockLiveness("OPTIONS_0DTE_ENABLED"),
-      editable_at: "/settings/tunables",
+      liveness: mockLiveness("OPTIONS_RISK_FREE_RATE"),
+      editable_at: null,
     },
     {
-      key: "OPTIONS_EARNINGS_CRUSH_ENABLED",
+      key: "PROMPT_MAX_CHARS",
       category: "allowed",
-      value: false,
-      default: false,
-      type: "boolean",
-      description: "Enable earnings crush options strategy module.",
-      domain: "Options Desk",
+      value: 50000,
+      default: 50000,
+      type: "number",
+      description: "Hard upper bound on prompt body size enforced by guardrails.validate_prompt(). Bodies exceeding this are rejected as a denial-of-service mitigation.",
+      domain: "AI/LLM/RAG",
       dangerous: false,
-      liveness: mockLiveness("OPTIONS_EARNINGS_CRUSH_ENABLED"),
+      liveness: mockLiveness("PROMPT_MAX_CHARS"),
       editable_at: null,
     },
     {
@@ -5065,19 +4866,6 @@ function mockSettingsReference(): SettingsReferenceResponse {
       dangerous: false,
       liveness: mockLiveness("FORECAST_USE_GARCH_SIGMA"),
       editable_at: "/settings/tunables",
-    },
-    {
-      key: "ETF_HOLDINGS_ENABLED",
-      category: "allowed",
-      value: false,
-      default: false,
-      type: "boolean",
-      description: "Enables fetching ETF constituent baskets for exposure analysis.",
-      domain: "ETF Transmission",
-      dangerous: false,
-      liveness: mockLiveness("ETF_HOLDINGS_ENABLED"),
-      // Archived (2026-09, step 4d): no editor serves it any more.
-      editable_at: null,
     },
     {
       key: "SENTIMENT_INGESTION_ENABLED",
@@ -5128,16 +4916,16 @@ function mockSettingsReference(): SettingsReferenceResponse {
       editable_at: null,
     },
     {
-      key: "CIRCUIT_BREAKER_ENABLED",
+      key: "HMM_N_STATES",
       category: "allowed",
-      value: false,
-      default: false,
-      type: "boolean",
-      description: "Retired (2026-09): the dynamic circuit breaker is no longer wired in, so this flag has no effect.",
+      value: 3,
+      default: 3,
+      type: "number",
+      description: "Number of hidden states for the Gaussian HMM regime detector (bull/sideways/bear).",
       domain: "Strategy Overlays",
       dangerous: false,
-      liveness: mockLiveness("CIRCUIT_BREAKER_ENABLED"),
-      editable_at: null,
+      liveness: mockLiveness("HMM_N_STATES"),
+      editable_at: "/settings/tunables",
     },
     {
       key: "LOCAL_DATA_ROOT",
@@ -5173,7 +4961,7 @@ function mockSettingsReference(): SettingsReferenceResponse {
     ...f,
     value: f.key in overrides ? overrides[f.key] : f.value,
     // Mirrors the real backend's exclusion exactly: a no_op field (e.g.
-    // OPTIONS_EARNINGS_CRUSH_ENABLED, read nowhere in production) never gets
+    // PROMPT_MAX_CHARS, read nowhere in production) never gets
     // a live-looking Toggle -- that would imply the control does something
     // when it provably doesn't. `mockLiveness(key).applies === "no_effect"`
     // is this mock's equivalent of the real backend's `no_op` bucket check.

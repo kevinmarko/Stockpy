@@ -54,7 +54,6 @@ def test_volatility_target_weight_properties(realized_vol, target_vol, max_lever
     pre_regime_weight=st.floats(min_value=0.0, max_value=1.0),
     regime_multiplier=st.floats(min_value=0.0, max_value=2.0),
     meta_label_composite=st.floats(min_value=0.0, max_value=2.0),
-    etf_transmission_multiplier=st.floats(min_value=0.0, max_value=2.0) | st.none() | st.just(float('nan')),
     max_position_weight=st.floats(min_value=0.01, max_value=1.0),
     consecutive_capped_cycles=st.integers(min_value=0, max_value=10),
     escalation_threshold=st.integers(min_value=1, max_value=5),
@@ -73,12 +72,11 @@ def test_volatility_target_weight_properties(realized_vol, target_vol, max_lever
 )
 def test_size_position_properties(
     pre_regime_weight, regime_multiplier, meta_label_composite,
-    etf_transmission_multiplier, max_position_weight,
+    max_position_weight,
     consecutive_capped_cycles, escalation_threshold, escalation_factor,
 ):
     """Invariant: size_position's final_weight never exceeds
-    max_position_weight -- regardless of regime/meta-label/ETF-transmission
-    multipliers, AND regardless of the cap-aware escalation inputs
+    max_position_weight -- regardless of regime/meta-label multipliers, AND regardless of the cap-aware escalation inputs
     (including an out-of-spec escalation_factor > 1.0, which must never
     increase the weight past the ceiling)."""
     pre_regime_weight = min(pre_regime_weight, max_position_weight)
@@ -87,7 +85,6 @@ def test_size_position_properties(
         pre_regime_weight=pre_regime_weight,
         regime_multiplier=regime_multiplier,
         meta_label_composite=meta_label_composite,
-        etf_transmission_multiplier=etf_transmission_multiplier,
         max_position_weight=max_position_weight,
         path_tag="test",
         raw_weight=pre_regime_weight,
@@ -104,9 +101,7 @@ def test_size_position_properties(
     # pre_regime_weight, never above it. This no-growth invariant therefore
     # holds unconditionally on escalation_factor's value (including > 1.0,
     # the adversarial case), not just when escalation happens to be absent.
-    if (regime_multiplier <= 1.0 and
-        meta_label_composite <= 1.0 and
-        (etf_transmission_multiplier is None or etf_transmission_multiplier <= 1.0 or (isinstance(etf_transmission_multiplier, float) and math.isnan(etf_transmission_multiplier)))):
+    if regime_multiplier <= 1.0 and meta_label_composite <= 1.0:
         assert res.final_weight <= pre_regime_weight + 1e-7
 
 @given(

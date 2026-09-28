@@ -1787,7 +1787,7 @@ class TestAnalystHistory:
         assert store.get_analyst_snapshot("AAPL")["target_consensus"] is None
 
     def test_as_of_cutoff_excludes_later_rows(self, tmp_path):
-        """Storage-layer causality, same contract as get_etf_holdings."""
+        """Storage-layer causality: rows dated after the cutoff are excluded."""
         store = HistoricalStore(db_path=str(tmp_path / "t.db"))
         store.upsert_analyst_snapshot("AAPL", "2026-06-01", target_consensus=200.0)
         store.upsert_analyst_snapshot("AAPL", "2026-07-30", target_consensus=250.0)
@@ -2128,3 +2128,36 @@ class TestSourceNamePrefersEmbeddedSource:
             pass
 
         assert _source_name(FakeProvider()) == "fakeprovider"
+
+
+class TestEtfHoldingsTableRetired:
+    """Step 4f: HistoricalStore stopped creating/reading ``etf_holdings`` (its
+    only writer, data/etf_holdings.py, was archived in 4d). It must NOT drop
+    the table from an existing operator DB."""
+
+    def test_fresh_db_has_no_etf_holdings_table(self, tmp_path):
+        db = tmp_path / "fresh.db"
+        HistoricalStore(db_path=str(db))
+        with sqlite3.connect(db) as conn:
+            names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "etf_holdings" not in names
+        assert not hasattr(HistoricalStore, "get_etf_holdings")
+        assert not hasattr(HistoricalStore, "save_etf_holdings")
+        assert not hasattr(HistoricalStore, "latest_etf_holdings_date")
+
+    def test_existing_etf_holdings_table_and_rows_are_left_alone(self, tmp_path):
+        db = tmp_path / "old.db"
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "CREATE TABLE etf_holdings (etf_symbol TEXT NOT NULL, holding_symbol TEXT NOT NULL, "
+                "as_of_date TEXT NOT NULL, weight REAL, shares_held REAL, source TEXT, "
+                "fetched_at TEXT NOT NULL, PRIMARY KEY (etf_symbol, holding_symbol, as_of_date))"
+            )
+            conn.execute(
+                "INSERT INTO etf_holdings VALUES "
+                "('SPY', 'AAPL', '2026-06-30', 0.07, 1.0, 'sec_nport', '2026-08-01')"
+            )
+        HistoricalStore(db_path=str(db))
+        with sqlite3.connect(db) as conn:
+            rows = conn.execute("SELECT etf_symbol, holding_symbol, weight FROM etf_holdings").fetchall()
+        assert rows == [("SPY", "AAPL", 0.07)]

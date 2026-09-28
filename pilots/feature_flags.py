@@ -87,12 +87,6 @@ WRITE_GATE_REASONS: dict[str, str] = {
         "settings_keysets.DANGEROUS_KEYS) which decides whether an order is "
         "real."
     ),
-    "MULTI_BROKER_GATEWAY_ENABLED": (
-        "RETIRED (2026-09, step 4a): read nowhere. The MultiBrokerGateway "
-        "branch was removed from broker_live_execution_mcp.py with the "
-        "options desk; brokers always resolve through "
-        "execution.broker_selection. The field itself is removed in step 4f."
-    ),
 }
 
 # -- Read-only diagnostic/data features (2026-08-07, opt-in by operator -----

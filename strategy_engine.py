@@ -228,14 +228,13 @@ class StrategyEngine:
                           roc_5: float = 0.0,
                           roc_20: float = 0.0,
                           strategy_id: Optional[str] = None,
-                          etf_transmission_multiplier: Optional[float] = None,
                           robinhood_position: Optional[RobinhoodPositionDTO] = None,
                           context_extras: Optional[Dict[str, Any]] = None,
                           precomputed_signal_tuple: Optional[tuple] = None) -> Dict[str, Any]:
         """
         Executes multi-phase quantitative scoring across the security.
         Synthesizes technical, fundamental, macro, and volatility factors to produce
-        high-precision signals, custom action ranges, options hedging, and explainability notes.
+        high-precision signals, custom action ranges, and explainability notes.
 
         Parameters
         ----------
@@ -246,15 +245,6 @@ class StrategyEngine:
             used as the sizing weight instead of the global aggregate point
             estimate. Pass None (default) to use the existing global pool path
             (backward-compatible).
-        etf_transmission_multiplier : float or None
-            Per-name ETF-arbitrage volatility-transmission derate
-            (``risk/etf_transmission.py``), read by the orchestrator from the
-            ``ETF_Transmission_Multiplier`` dashboard column and composed in
-            ``size_position()``'s step 3 alongside the HMM regime multiplier.
-            None (the default) / NaN -- the state when
-            ``settings.ETF_TRANSMISSION_SIZING_ENABLED`` is False or this
-            name has no ETF coverage -- is the exact no-op 1.0, NEVER a NaN
-            that would poison the weight (see that module's docstring).
         roc_6m, vol_20, vol_50, vol_ratio, roc_5, roc_20 : float or None
             Additive feature-widening params feeding the Forecast Backfill
             Meta-Labeler Bridge's live row (see
@@ -428,11 +418,9 @@ class StrategyEngine:
         # ---------------------------------------------------------------------
         # PHASE 7 & 8: SIZING
         # ---------------------------------------------------------------------
-        # The text-only "OPTIONS HEDGE" overlay (covered call / cash-secured put
-        # / collar suggestions) left core with the options desk (2026-09, step
-        # 3d); "Option Strategy" stays in the output as an empty string until
-        # the COLUMN_SCHEMA trim in step 4.
-        option_strategy = ""
+        # The text-only "OPTIONS HEDGE" overlay left core with the options desk
+        # (2026-09, step 3d), and its always-empty "Option Strategy" output key
+        # left with the COLUMN_SCHEMA trim (step 4f).
         raw_weight, kelly_fraction_pre_regime, sizing_path_tag = self._calculate_kelly_sizing_detailed(
             garch_vol, strategy_id=strategy_id
         )
@@ -473,16 +461,10 @@ class StrategyEngine:
         # before this. The portfolio-level gross cap is a separate, cycle-wide
         # post-pass applied by the orchestrator (pipeline/production_steps.py),
         # not here (this call only ever sees one symbol at a time).
-        # ETF volatility-transmission derate (risk/etf_transmission.py),
-        # supplied by the orchestrator from the ETF_Transmission_Multiplier
-        # dashboard column. size_position() sanitizes None/NaN to the exact
-        # no-op 1.0 itself -- passed through verbatim here so there is exactly
-        # ONE place that decides what "missing" means (CONSTRAINT #7).
         sizing_decision = size_position(
             kelly_fraction_pre_regime,
             regime_multiplier=regime_multiplier,
             meta_label_composite=meta_label_composite,
-            etf_transmission_multiplier=etf_transmission_multiplier,
             max_position_weight=settings.MAX_POSITION_WEIGHT,
             path_tag=sizing_path_tag,
             raw_weight=raw_weight,
@@ -537,17 +519,7 @@ class StrategyEngine:
             # sizing/position_sizer.py's module docstring for why.
             "Sizing_Was_Capped": bool(sizing_decision.was_capped),
             "Sizing_Binding_Constraint": sizing_decision.binding_constraint,
-            # The ETF-transmission derate ACTUALLY APPLIED to this weight
-            # (already sanitized to 1.0 for a missing/NaN input). Surfaced
-            # like Regime_Multiplier -- its own field, never folded into the
-            # was_capped guardrail telemetry above. Note this is the APPLIED
-            # value, so it reads 1.0 where the ETF_Transmission_Multiplier
-            # dashboard column honestly reads NaN ("never computed").
-            "ETF_Transmission_Multiplier_Applied": float(
-                sizing_decision.etf_transmission_multiplier
-            ),
             "GARCH_Vol": float(garch_vol) if garch_vol is not None else float("nan"),
-            "Option Strategy": option_strategy,
             "buyRange": tactical_range,
             # NEW: first-class sell-side range surfaced alongside buyRange.
             # See ``apply_sell_side_range`` docstring for construction details.

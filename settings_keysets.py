@@ -59,11 +59,11 @@ classifications. Nothing here changes any current runtime behavior.
     that module's own comment) and now carry no marker here at all — see
     ``HAND_SET_ONLY_KEYS`` below for where they live now.
 
-``api/pilots_api.py``'s five scoped editors
-    ``_TUNABLE_INDEX`` (46) / ``_SENTIMENT_INDEX`` (33) /
-    ``_SECTOR_SELECTION_INDEX`` (11) / ``_FMP_INDEX`` (24) /
-    ``_ETF_TRANSMISSION_INDEX`` (19) = 133 keys, each already shipped with its
-    own ``GET``/``PUT`` pair and write-permission gate.
+``api/pilots_api.py``'s scoped editors
+    ``_TUNABLE_INDEX`` / ``_SENTIMENT_INDEX`` / ``_SECTOR_SELECTION_INDEX`` /
+    ``_FMP_INDEX``, each already shipped with its own ``GET``/``PUT`` pair and
+    write-permission gate. (An ``_ETF_TRANSMISSION_INDEX`` editor existed until
+    the ETF feature was archived in 2026-09.)
 
 ``docs/settings_liveness.json``
     Per-field ``live_safe`` / ``restart_required`` / ``no_op``. Necessary
@@ -293,15 +293,6 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "entirely — and scripts/preflight_check.py treats gate-off as a "
         "BLOCKING pre-live failure when ALPACA_PAPER=False, which is the "
         "repo's own statement that this is not a routine toggle."
-    ),
-    "OFI_SHIELD_ENABLED": (
-        "Fail-closed extension to the Flash Crash (OFI+VPIN) circuit-breaker "
-        "shield (execution/dynamic_circuit_breaker.py) — when True, a "
-        "missing VPIN reading forces an unconditional SOFT_HALT that blocks "
-        "all risk-increasing BUY orders platform-wide via the same "
-        "GlobalKillSwitch surface MACRO_REGIME_GATE_ENABLED gates. A silent "
-        "flip via a settings-editor write changes live order-blocking "
-        "behavior the same way that flag does."
     ),
     "BROKER_BACKEND": (
         "Selects which broker actually receives orders: 'alpaca' (real "

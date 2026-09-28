@@ -128,14 +128,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "HMM_RISK_OFF_BLOCK_THRESHOLD",
     "RISK_GATE_ENFORCE_MARKET_HOURS",
     "MACRO_REGIME_GATE_ENABLED",
-    # Dynamic Circuit Breaker & Flash Guard (execution/dynamic_circuit_breaker.py)
-    "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
-    "CIRCUIT_BREAKER_VPIN_THRESHOLD",
-    "CIRCUIT_BREAKER_OFI_THRESHOLD",
-    "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS",
-    "CIRCUIT_BREAKER_ENABLED",
-    "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
-    "OFI_SHIELD_ENABLED",
     # Meta-labeling
     "META_LABEL_MIN_CONFIDENCE",
     # Input-feature (PSI) drift detection (validation/covariate_drift.py,
@@ -160,10 +152,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # gross_profitability/sector) inside step 2 -- no credential, no
     # dangerous write; a GUI bug here can only make a training run slower.
     "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED",
-    # Opt-in gate for the quarantined vrp_premium_selling_proxy backfill-only
-    # signal -- OHLCV-derived, no credential, no live-inference reach
-    # (structurally excluded from BACKFILL_ELIGIBLE_SIGNAL_IDS).
-    "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
     # Wall-clock deadline for the async forecast-backfill job's worker
     # subprocess (ml/forecast_backfill_job.py) -- a timeout tunable, same
     # treatment as RH_LOGIN_DEADLINE_SECONDS below.
@@ -261,10 +249,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # (SECRET_KEYS above). MCP_OAUTH_ENABLED itself stays out of ALLOWED_KEYS
     # -- see EXCLUDED_FROM_GUI below.
     "MCP_OAUTH_ISSUER_URL",
-    # Persisted Pilots-PWA analytics artifacts (options premium matrix + pairs
-    # radar). When on, the pipeline writes output/options_matrix.json /
+    # Persisted Pilots-PWA pairs radar. When on, the pipeline writes
     # output/pairs.json for the AST-guarded Pilots API to read. Non-secret.
-    "OPTIONS_MATRIX_ENABLED",
     "PAIRS_SNAPSHOT_ENABLED",
     "PAIRS_SNAPSHOT_MAX_PAIRS",
     # Execution mode toggle — paper sandbox vs. live endpoint. Writeable from
@@ -394,34 +380,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "RAG_INDEX_MAX_DOCUMENTS",            # int — FAISS index FIFO eviction cap
     "RAG_RETRIEVAL_TOP_K",                # int — nearest-neighbor count per query
     "RAG_INDEX_LOOKBACK_DAYS",            # int — indexing scan window (days)
-    # ETF volatility-transmission risk overlay (Ben-David, Franzoni & Moussawi
-    # 2018, Journal of Finance 73(6)) — holdings ingestion (legacy/data/etf_holdings.py),
-    # market-residualized measurement columns + portfolio covariance inflation
-    # (legacy/risk/etf_transmission.py), and the per-name sizing derate
-    # (sizing/position_sizer.py). All 19 keys below are non-secret: SEC N-PORT
-    # and the optional iShares CSV endpoint are both unauthenticated, so there
-    # is no credential material anywhere in this family. Every default
-    # reproduces today's exact no-op behavior (master switches default False;
-    # numeric knobs are only ever consulted once their master switch is True).
-    "ETF_HOLDINGS_ENABLED",
-    "ETF_HOLDINGS_TICKERS",
-    "ETF_HOLDINGS_REFRESH_DAYS",
-    "ETF_HOLDINGS_ISSUER_CSV_ENABLED",
-    "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE",
-    "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD",
-    "ETF_TRANSMISSION_ENABLED",
-    "ETF_HOLDINGS_MARKET_PROXY",
-    "ETF_TRANSMISSION_WRAPPERS",
-    "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
-    "ETF_TRANSMISSION_WINDOW_DAYS",
-    "ETF_TRANSMISSION_MIN_OBS",
-    "ETF_TRANSMISSION_SIZING_ENABLED",
-    "ETF_TRANSMISSION_MAX_DERATE",
-    "ETF_TRANSMISSION_OWNERSHIP_REFERENCE",
-    "ETF_TRANSMISSION_MIN_MULTIPLIER",
-    "ETF_TRANSMISSION_PORTFOLIO_ENABLED",
-    "ETF_TRANSMISSION_COV_INFLATION",
-    "ETF_TRANSMISSION_COV_WINDOW_DAYS",
     # FRED (data_engine.py). Non-secret timeout tunable -- FRED_API_KEY itself
     # is in SECRET_KEYS. fredapi has no timeout of its own; this is scoped via
     # socket.setdefaulttimeout() around each call (see _bounded_fred_timeout).
@@ -451,8 +409,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_ECON_CALENDAR_ENABLED",           # bool — economics calendar diagnostic feed
     "FMP_INSIDER_ENABLED",                # bool — per-symbol insider statistics
     "FMP_SECTOR_SNAPSHOT_ENABLED",        # bool — 2 dated sector snapshots per cycle
-    "FMP_OPTIONS_HEALTH_ENABLED",         # bool — Altman Z/Piotroski F/ratios/realized-vol for options matrix
-    "FMP_OPTIONS_CONTEXT_ENABLED",        # bool — news headlines + peer tickers on the options matrix
     "FMP_PEERS_ENABLED",                  # bool — on-demand GET /data/peers/{symbol} lookup
     "FMP_UNIVERSE_ENABLED",               # bool — S&P 500 historical constituent-changes primary source (universe_engine.py)
     "FMP_SCREENER_ENABLED",               # bool — symbol search + sector/industry screener (GET /data/symbol-search, /data/screener, /data/screener/filters)
@@ -629,7 +585,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "CORRELATION_CLUSTER_LOOKBACK_DAYS",
     "CORRELATION_CLUSTER_THRESHOLD",
     "DATA_FRESHNESS_TTL_SECONDS",
-    "FOLLOW_MIN_AMOUNT",
     "FORECAST_SKILL_MIN_OBS",
     "FUNDAMENTALS_CACHE_TTL_SECONDS",
     "FUNDAMENTALS_NEG_CACHE_TTL_SECONDS",
@@ -647,14 +602,12 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "HMM_N_INITS",
     "KILLSWITCH_VIX_THRESHOLD_AGREED",
     "KILLSWITCH_SAHM_THRESHOLD_AGREED",
-    "OPTIONS_VRP_THRESHOLD",
     "LLM_COMMENTARY_TIMEOUT_SECONDS",
     "MARKET_DATA_WS_RECONNECT_BASE_SECONDS",
     "MARKET_DATA_WS_RECONNECT_MAX_SECONDS",
     "META_LABELING_ENABLED",
     "MULTIFACTOR_MICROCAP_THRESHOLD",
     "OPAL_RESEARCH_TIMEOUT_SECONDS",
-    "OPTIONS_TRUE_IVR_ENABLED",
     "ORCHESTRATOR_API_PORT",
     "PILOTS_TOP_N",
     "PROMPT_CACHE_KEEP_VERSIONS",
@@ -679,7 +632,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
     "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
     "BROKER_BACKEND",
-    "MULTI_BROKER_GATEWAY_ENABLED",
     "LIVE_TRADE_EXECUTION_ENABLED",
     "LIVE_TRADE_APPROVAL_ENABLED",
     "CACHE_LONG_SHORT_ENABLED",
@@ -739,51 +691,14 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "PROMPT_REGISTRY_WRITES_ENABLED",
     "RAG_QUERY_API_ENABLED",
     "STRATEGY_WRITES_ENABLED",
-    # --- Options Desk (PR #744) -- all non-secret thresholds/toggles for the -----
-    # multi-leg options paper-trading engine and its diagnostic desks (auto-exit,
-    # delta hedging, earnings crush, 0DTE, VPIN toxicity, SOR legging, GEX, LOB
-    # queue simulator, copula stat-arb, DRL market maker). None holds credential
-    # material; OPTIONS_ALERT_WEBHOOK_URL is the one exception and lives in
-    # SECRET_KEYS below (it's a webhook URL, treated like DISCORD_WEBHOOK_URL/
-    # SLACK_WEBHOOK_URL/ALERT_WEBHOOK_URL).
-    "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
+    # --- Paper broker (data/paper_account_store.py) -- non-secret tunables. ---
+    # The options-desk keys that used to sit here were retired with the desk
+    # (2026-09, step 4f); OPTIONS_RISK_FREE_RATE and PAPER_OPTION_MARK_CACHE_SECONDS
+    # stay because paper option marking still reads them.
     "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED",
     "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",
     "PAPER_OPTION_MARK_CACHE_SECONDS",
-    "MAX_OPTION_NOTIONAL_PER_TRADE",
-    "MAX_CONCURRENT_OPTION_POSITIONS",
-    "OPTIONS_META_LABELER_ENABLED",
     "OPTIONS_RISK_FREE_RATE",
-    "OPTIONS_AUTO_EXIT_ENABLED",
-    "OPTIONS_PROFIT_TARGET_PCT",
-    "OPTIONS_STOP_LOSS_MULTIPLE",
-    "OPTIONS_MANAGE_DTE_THRESHOLD",
-    "OPTIONS_DELTA_HEDGE_ENABLED",
-    "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
-    "OPTIONS_EARNINGS_CRUSH_ENABLED",
-    "OPTIONS_EARNINGS_MIN_EDGE",
-    "OPTIONS_EARNINGS_WING_MULTIPLIER",
-    "OPTIONS_0DTE_ENABLED",
-    "OPTIONS_0DTE_PROFIT_TARGET_PCT",
-    "OPTIONS_0DTE_STOP_LOSS_PCT",
-    "OPTIONS_0DTE_HARD_EXIT_TIME",
-    "OPTIONS_DRL_RISK_AVERSION_GAMMA",
-    "OPTIONS_VPIN_TOXICITY_THRESHOLD",
-    "OPTIONS_SOR_LEGGING_LATENCY_SECONDS",
-    "OPTIONS_GEX_SEARCH_RANGE_PCT",
-    "OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE",
-    "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD",
-    # FIX 4.4 Gateway (execution/fix_gateway.py) + WS risk stream (api/ws_api.py).
-    # All three are non-secret tunables — no credential material. The FIX
-    # gateway is fully simulated (never touches real capital or a real venue
-    # connection), so a GUI bug here can only make the simulated route/session
-    # endpoints reachable/unreachable or change a heartbeat cadence, not enable
-    # anything dangerous.
-    "FIX_GATEWAY_ENABLED",
-    "FIX_HEARTBEAT_INTERVAL_SECONDS",
-    "FIX_MOCK_VENUES_ENABLED",
-    "FIX_VENUES_CONFIG_PATH",
-    "WS_RISK_STREAM_INTERVAL_SECONDS",
     # --- Sentry error-tracking instrumentation (observability/sentry_integration.py) ---
     # Non-secret tunables only -- SENTRY_DSN is the one credential-shaped field
     # here and lives in SECRET_KEYS below (masked, never GUI-writable), same
@@ -845,9 +760,9 @@ SECRET_KEYS: tuple[str, ...] = (
     "MCP_OAUTH_PASSWORD",
     "DISCORD_WEBHOOK_URL",
     "SLACK_WEBHOOK_URL",
-    # Dedicated webhook URL for real-time options alerts (UOA whale sweeps,
-    # earnings crush, delta hedging -- pilots/options_alerts.py). Same secret
-    # treatment as DISCORD_WEBHOOK_URL/SLACK_WEBHOOK_URL/ALERT_WEBHOOK_URL.
+    # Webhook URL for the archived options alerts (legacy/pilots/options_alerts.py).
+    # The Settings field was retired in 2026-09 (step 4f), but it stays here so
+    # a value still set in an operator's .env keeps being masked by read_settings().
     "OPTIONS_ALERT_WEBHOOK_URL",
     # ntfy.sh push topic (alerting.notify(), also used by the Tier 8 Robinhood
     # execution-queue notifier in execution/queue_builder.py). Functions like a
@@ -971,10 +886,6 @@ _JSON_KEYS: frozenset[str] = frozenset(
         "SECTOR_FORECAST_CONFIGS",  # dict[str, dict] per-sector forecast overrides
         "CORS_ALLOWED_ORIGINS",  # list[str] of allowed browser origins
         "PROMPT_REGISTRY_PINS",  # dict[str, str] {"prompt_id": "version"}
-        # ETF volatility-transmission overlay: three ticker/symbol lists.
-        "ETF_HOLDINGS_TICKERS",
-        "ETF_TRANSMISSION_WRAPPERS",
-        "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
         # Multi-horizon forecast backfill list
         "FORECAST_BACKFILL_HORIZONS",
         "DUAL_MOMENTUM_RISKY_ASSETS",

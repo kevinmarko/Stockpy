@@ -58,7 +58,7 @@ class TestColumnSchemaIntegrity:
     COLUMN_SCHEMA, that's exactly the drift this test exists to catch."""
 
     # Update deliberately, in the same commit as any COLUMN_SCHEMA change.
-    EXPECTED_COLUMN_COUNT = 116
+    EXPECTED_COLUMN_COUNT = 108  # 116 -> 108: step 4f trimmed 8 dead options/ETF columns
 
     def test_exact_column_count(self) -> None:
         assert len(config.COLUMN_SCHEMA) == self.EXPECTED_COLUMN_COUNT, (
@@ -104,15 +104,23 @@ class TestColumnSchemaIntegrity:
             assert isinstance(col["header"], str) and col["header"].strip()
             assert isinstance(col["key"], str) and col["key"].strip()
 
-    def test_get_headers_get_internal_keys_get_rename_mapping_are_consistent(self) -> None:
-        headers = config.get_headers()
+    def test_get_internal_keys_is_consistent(self) -> None:
         keys = config.get_internal_keys()
-        rename = config.get_rename_mapping()
-        assert len(headers) == len(config.COLUMN_SCHEMA)
-        assert len(keys) == len(config.COLUMN_SCHEMA)
-        assert len(rename) == len(config.COLUMN_SCHEMA)
-        for col in config.COLUMN_SCHEMA:
-            assert rename[col["key"]] == col["header"]
+        assert keys == [col["key"] for col in config.COLUMN_SCHEMA]
+        # get_headers()/get_rename_mapping() fed only the archived Google
+        # Sheet sink and were removed in the 2026-09 schema trim (step 4f).
+        assert not hasattr(config, "get_headers")
+        assert not hasattr(config, "get_rename_mapping")
+
+    def test_dead_options_and_etf_columns_are_trimmed(self) -> None:
+        """Step 4f removed the eight always-NaN/blank columns."""
+        keys = set(config.get_internal_keys())
+        for gone in (
+            "True_IVR", "VRP", "Realized_Vol_Rank", "Option Strategy",
+            "ETF_Ownership_Pct", "ETF_Comovement_R2", "ETF_Primary_Wrapper",
+            "ETF_Transmission_Multiplier",
+        ):
+            assert gone not in keys
 
     def test_dashboard_schema_dynamically_covers_every_column_schema_key(self) -> None:
         """config.DashboardSchema is built dynamically from COLUMN_SCHEMA at

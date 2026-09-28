@@ -16,9 +16,9 @@ This file proves the cap no longer depends on the ETF code:
 * ``TestRunCallSite`` is an AST guard on ``StrategyEvalStep.run()``: the
   helper is called from a ``try`` that contains nothing else, and ``run()``
   references none of the archived ETF names.
-* ``TestEtfColumnPrefill`` shows the four ETF schema columns (kept until
-  the step-4f schema trim) are still written as NaN, so Pandera's
-  ``DashboardSchema`` keeps validating.
+* ``TestEtfColumnsTrimmedFromSchema`` shows the four ETF schema columns and
+  their NaN pre-fill are gone (step 4f) and ``DashboardSchema`` still
+  validates a dashboard that never had them.
 
 ``StrategyEvalStep.run()`` itself isn't invoked end to end (it imports
 ``main_orchestrator`` and its whole engine chain), matching the other
@@ -34,7 +34,6 @@ import textwrap
 from unittest.mock import MagicMock
 
 import pandas as pd
-import pandera as pa
 import pytest
 
 import pipeline.production_steps as ps_mod
@@ -172,13 +171,16 @@ class TestRunCallSite:
         assert "etf" not in src.lower().split('"""')[-1]  # code body, not the docstring
 
 
-class TestEtfColumnPrefill:
-    def _full_dashboard_without_etf(self):
+class TestEtfColumnsTrimmedFromSchema:
+    """Step 4f removed the four ETF columns from ``config.COLUMN_SCHEMA`` and
+    the NaN pre-fill that kept Pandera happy. Both halves must go together:
+    a dashboard built from the trimmed schema (no ETF columns at all) must
+    validate, and the pipeline must no longer write them."""
+
+    def _full_dashboard(self):
         row = {}
         for col in COLUMN_SCHEMA:
             key = col["key"]
-            if key in _ETF_COLUMNS:
-                continue
             if key == "Symbol":
                 row[key] = "AAA"
             elif col["format"] in ("currency", "currency_large", "percent", "number"):
@@ -187,21 +189,15 @@ class TestEtfColumnPrefill:
                 row[key] = None
         return pd.DataFrame([row])
 
-    def test_all_four_columns_are_nan(self):
-        df = pd.DataFrame({"Symbol": ["AAA", "BBB"]})
-        ps_mod._prefill_etf_transmission_columns(df)
-        for col in _ETF_COLUMNS:
-            assert col in df.columns
-            assert df[col].isna().all()
+    def test_schema_has_no_etf_columns(self):
+        keys = {col["key"] for col in COLUMN_SCHEMA}
+        assert not keys & set(_ETF_COLUMNS)
 
-    def test_empty_frame_does_not_raise(self):
-        df = pd.DataFrame({"Symbol": pd.Series([], dtype=str)})
-        ps_mod._prefill_etf_transmission_columns(df)
-        assert set(_ETF_COLUMNS) <= set(df.columns)
-
-    def test_dashboard_schema_needs_the_prefill(self):
-        df = self._full_dashboard_without_etf()
-        with pytest.raises((pa.errors.SchemaError, pa.errors.SchemaErrors)):
-            DashboardSchema.validate(df)
-        ps_mod._prefill_etf_transmission_columns(df)
+    def test_dashboard_without_etf_columns_validates(self):
+        df = self._full_dashboard()
+        assert not set(_ETF_COLUMNS) & set(df.columns)
         DashboardSchema.validate(df)
+
+    def test_prefill_helper_is_gone(self):
+        assert not hasattr(ps_mod, "_prefill_etf_transmission_columns")
+        assert not hasattr(ps_mod, "_ETF_TRANSMISSION_COLUMNS")

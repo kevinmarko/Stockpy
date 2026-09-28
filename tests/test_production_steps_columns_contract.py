@@ -27,11 +27,9 @@ Forecast_30/Forecast_60/Forecast_90/Forecast_30_Prophet_Lower/
 Forecast_30_Prophet_Upper -- source keys equal column names.
 
 ``_apply_trend_vol_columns`` maps TrendVolatilityStep's per-ticker
-trend_vol_indicators dict onto GARCH_Vol/Realized_Vol_Rank/True_IVR/VRP/
-Aroon Oscillator/Coppock Curve/Chandelier Exit (Realized_Vol_Rank/True_IVR/
-VRP are no longer produced since the options desk left core in 2026-09, so
-they stay NaN in production; the mapping itself is still pinned here until
-those columns are trimmed from COLUMN_SCHEMA in step 4) -- three source keys
+trend_vol_indicators dict onto GARCH_Vol/Aroon Oscillator/Coppock Curve/
+Chandelier Exit (Realized_Vol_Rank/True_IVR/VRP were dropped from the map and
+from COLUMN_SCHEMA in the 2026-09 schema trim, step 4f) -- three source keys
 (Aroon_Oscillator, Coppock_Curve, Chandelier_Long) are deliberately renamed
 onto differently-spelled/named dashboard columns, preserved exactly in the
 ``full_expected``/``partial_expected_present`` mappings below.
@@ -56,8 +54,9 @@ FORECAST_COLS = [
     'Forecast_10', 'Forecast_30', 'Forecast_60', 'Forecast_90',
     'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper',
 ]
+# Realized_Vol_Rank / True_IVR / VRP left this map with the step-4f schema trim.
 OPTIONS_COLUMNS = (
-    "GARCH_Vol", "Realized_Vol_Rank", "True_IVR", "VRP",
+    "GARCH_Vol",
     "Aroon Oscillator", "Coppock Curve", "Chandelier Exit",
 )
 
@@ -130,30 +129,27 @@ CASES = [
         columns=OPTIONS_COLUMNS,
         full_source_symbol="AAPL",
         full_source={"AAPL": {
-            "GARCH_Vol": 0.25, "Realized_Vol_Rank": 60.0, "True_IVR": 55.0,
-            "VRP": 0.03, "Aroon_Oscillator": 40.0, "Coppock_Curve": 12.0,
+            "GARCH_Vol": 0.25, "Aroon_Oscillator": 40.0, "Coppock_Curve": 12.0,
             "Chandelier_Long": 180.5,
         }},
         full_expected={
-            "GARCH_Vol": 0.25, "Realized_Vol_Rank": 60.0, "True_IVR": 55.0,
-            "VRP": 0.03, "Aroon Oscillator": 40.0, "Coppock Curve": 12.0,
+            "GARCH_Vol": 0.25, "Aroon Oscillator": 40.0, "Coppock Curve": 12.0,
             "Chandelier Exit": 180.5,
         },
         partial_source_symbol="PARTIAL",
-        partial_source={"PARTIAL": {"GARCH_Vol": 0.30, "True_IVR": 45.0}},
-        partial_expected_present={"GARCH_Vol": 0.30, "True_IVR": 45.0},
+        partial_source={"PARTIAL": {"GARCH_Vol": 0.30, "Aroon_Oscillator": 45.0}},
+        partial_expected_present={"GARCH_Vol": 0.30, "Aroon Oscillator": 45.0},
         partial_expected_nan=(
-            "Realized_Vol_Rank", "VRP", "Aroon Oscillator", "Coppock Curve", "Chandelier Exit",
+            "Coppock Curve", "Chandelier Exit",
         ),
         mixed_healthy_symbol="OK",
         mixed_dead_symbol="FAILED",
         mixed_healthy_source={"OK": {
-            "GARCH_Vol": 0.20, "Realized_Vol_Rank": 70.0, "True_IVR": 65.0,
-            "VRP": 0.05, "Aroon_Oscillator": 20.0, "Coppock_Curve": 8.0,
+            "GARCH_Vol": 0.20, "Aroon_Oscillator": 20.0, "Coppock_Curve": 8.0,
             "Chandelier_Long": 99.0,
         }},
-        mixed_healthy_expected_col='VRP',
-        mixed_healthy_expected_value=0.05,
+        mixed_healthy_expected_col='Coppock Curve',
+        mixed_healthy_expected_value=8.0,
     ),
 ]
 

@@ -36,12 +36,15 @@ const mockResponse: SettingsReferenceResponse = {
       editable_at: "/settings/feature-flags",
     },
     {
-      key: "OPTIONS_EARNINGS_CRUSH_ENABLED",
+      // Synthetic key: no real boolean no_op field is left after the
+      // 2026-09 settings trim (step 4f), so this inline fixture uses a
+      // made-up name to keep exercising the "no_op boolean -> no Toggle" path.
+      key: "EXAMPLE_NO_OP_ENABLED",
       category: "allowed",
       value: false,
       default: false,
       type: "boolean",
-      description: "Enable earnings crush options strategy module.",
+      description: "Example options flag that is read nowhere in production.",
       domain: "Options Desk",
       dangerous: false,
       // no_op (applies: "no_effect" below) -> never writable, even though
@@ -174,9 +177,9 @@ describe("SettingsReference", () => {
     });
 
     const searchInput = screen.getByTestId("settings-reference-search");
-    await user.type(searchInput, "crush");
+    await user.type(searchInput, "no_op");
 
-    expect(screen.getByText("OPTIONS_EARNINGS_CRUSH_ENABLED")).toBeInTheDocument();
+    expect(screen.getByText("EXAMPLE_NO_OP_ENABLED")).toBeInTheDocument();
     expect(screen.queryByText("ADVISORY_ONLY")).not.toBeInTheDocument();
     expect(screen.queryByText("FRED_API_KEY")).not.toBeInTheDocument();
   });
@@ -196,7 +199,7 @@ describe("SettingsReference", () => {
     const domainSelect = screen.getByTestId("settings-reference-domain-filter");
     await user.selectOptions(domainSelect, "Options Desk");
 
-    expect(screen.getByText("OPTIONS_EARNINGS_CRUSH_ENABLED")).toBeInTheDocument();
+    expect(screen.getByText("EXAMPLE_NO_OP_ENABLED")).toBeInTheDocument();
     expect(screen.queryByText("ADVISORY_ONLY")).not.toBeInTheDocument();
     expect(screen.queryByText("FRED_API_KEY")).not.toBeInTheDocument();
   });
@@ -216,7 +219,7 @@ describe("SettingsReference", () => {
     expect(screen.getByTestId("toggle-ADVISORY_ONLY")).toBeInTheDocument();
     expect(screen.getByTestId("toggle-ORCHESTRATOR_DAEMON_ENABLED")).toBeInTheDocument();
     // writable: false fields (no_op boolean, secret string, ordinary number) do not.
-    expect(screen.queryByTestId("toggle-OPTIONS_EARNINGS_CRUSH_ENABLED")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("toggle-EXAMPLE_NO_OP_ENABLED")).not.toBeInTheDocument();
     expect(screen.queryByTestId("toggle-FRED_API_KEY")).not.toBeInTheDocument();
     expect(screen.queryByTestId("toggle-KELLY_FRACTION")).not.toBeInTheDocument();
   });
@@ -312,8 +315,9 @@ describe("SettingsReference", () => {
     // test exercises the REAL `mockApi.getSettingsReference()` implementation
     // instead, the same one `VITE_USE_MOCK=true` wires up for local dev.
     //
-    // The bug this guards against: OPTIONS_EARNINGS_CRUSH_ENABLED is a real
-    // no_op (docs/settings_liveness.json), and mockSettingsReference()'s
+    // The bug this guards against: OPTIONS_EARNINGS_CRUSH_ENABLED (retired in
+    // 2026-09, step 4f; PROMPT_MAX_CHARS is the real no_op example now) was a
+    // real no_op (docs/settings_liveness.json), and mockSettingsReference()'s
     // `writable` derivation correctly excludes no_op fields -- but it reads
     // that from `mockLiveness(key).applies`, which (before this fix) had no
     // override for this specific key and fell through to the generic
@@ -332,10 +336,14 @@ describe("SettingsReference", () => {
     // by this test's own first draft.
     vi.restoreAllMocks();
     const real = await mockApi.getSettingsReference();
-    const field = real.fields.find((f) => f.key === "OPTIONS_EARNINGS_CRUSH_ENABLED");
+    const field = real.fields.find((f) => f.key === "PROMPT_MAX_CHARS");
     expect(field).toBeDefined();
     expect(field!.liveness.applies).toBe("no_effect");
     expect(field!.writable).toBe(false);
+    // And no field the real mock labels no_effect is ever writable.
+    for (const f of real.fields.filter((x) => x.liveness.applies === "no_effect")) {
+      expect(f.writable).toBe(false);
+    }
   });
 
   it("cancelling the dangerous confirmation never writes anything", async () => {
