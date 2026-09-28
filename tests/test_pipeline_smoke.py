@@ -179,19 +179,21 @@ class TestRunOncePipeline:
 
     @pytest.fixture(autouse=True)
     def _isolate_watchlist_file(self, monkeypatch, tmp_path):
-        """Point main.WATCHLIST_FILE at a nonexistent tmp path so these
+        """Point WATCHLIST_FILE at a nonexistent tmp path so these
         tests' universe-building assertions are deterministic regardless of
         whether a real watchlist.txt happens to exist in the repo root (e.g.
         one written by the Live Inventory "Sync Now" feature) -- these tests
         intend to exercise only the mocked positions / WATCHLIST env var,
         never whatever real watchlist.txt file a given checkout has on disk.
+        Patched on pipeline.advisory_inputs (where load_watchlist() reads it
+        since step 5.0), not on main's re-export, which would not reach it.
         """
-        import main as m
-        monkeypatch.setattr(m, "WATCHLIST_FILE", str(tmp_path / "nonexistent_watchlist.txt"))
+        import pipeline.advisory_inputs as ai
+        monkeypatch.setattr(ai, "WATCHLIST_FILE", str(tmp_path / "nonexistent_watchlist.txt"))
 
     @pytest.fixture(autouse=True)
     def _isolate_scan_discovery(self, monkeypatch):
-        """Neutralize main.discovery() for the same reason as
+        """Neutralize discovery() for the same reason as
         _isolate_watchlist_file above: _build_universe() unconditionally
         unions discovery()'s scan candidates into the universe, and
         pilots.discovery.discovery() reads settings.OUTPUT_DIR -- a
@@ -199,8 +201,8 @@ class TestRunOncePipeline:
         so a real ~/.stockpy_local/output/scan_candidates.json (e.g. from a
         real agentic-discovery skill run) would otherwise leak extra
         symbols into these tests' universe-size assertions."""
-        import main as m
-        monkeypatch.setattr(m, "discovery", lambda *a, **kw: {"candidates": []})
+        import pipeline.advisory_inputs as ai
+        monkeypatch.setattr(ai, "discovery", lambda *a, **kw: {"candidates": []})
 
     def _neutral_macro(self) -> MagicMock:
         m = MagicMock()

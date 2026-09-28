@@ -107,15 +107,18 @@ class TestRunOnceProgressEmission:
 
     @pytest.fixture(autouse=True)
     def _isolate_watchlist_file(self, monkeypatch, tmp_path):
-        """Point main.WATCHLIST_FILE at a nonexistent tmp path so this
+        """Point WATCHLIST_FILE at a nonexistent tmp path so this
         class's universe-size assertions (``_N_TICKERS``) are deterministic
         regardless of whether a real watchlist.txt happens to exist in the
         repo root -- mirrors tests/test_pipeline_smoke.py's identical
         ``_isolate_watchlist_file`` fixture. These tests intend to exercise
         only the mocked snapshot positions / WATCHLIST env var, never
         whatever real watchlist.txt file a given checkout has on disk.
+        Patched on pipeline.advisory_inputs (where load_watchlist() reads it
+        since step 5.0), not on main's re-export, which would not reach it.
         """
-        monkeypatch.setattr(m, "WATCHLIST_FILE", str(tmp_path / "nonexistent_watchlist.txt"))
+        import pipeline.advisory_inputs as ai
+        monkeypatch.setattr(ai, "WATCHLIST_FILE", str(tmp_path / "nonexistent_watchlist.txt"))
 
     @patch(_PATCH_CTX, return_value={})
     @patch(_PATCH_BARS, return_value={})

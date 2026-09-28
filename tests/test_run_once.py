@@ -68,7 +68,8 @@ def _make_position(symbol: str, qty: float = 10.0, avg_cost: float = 100.0) -> M
 
 @pytest.fixture(autouse=True)
 def _isolate_scan_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Neutralize main.discovery() so every test's universe-building
+    """Neutralize discovery() (patched on pipeline.advisory_inputs, where
+    build_universe() calls it since step 5.0) so every test's universe-building
     assertions are deterministic regardless of whether a real
     ~/.stockpy_local/output/scan_candidates.json happens to exist on the
     machine running the suite (e.g. from a real agentic-discovery skill
@@ -79,7 +80,7 @@ def _isolate_scan_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     one, so neither monkeypatch.chdir(tmp_path) nor a fresh checkout
     isolates it. A test that wants to exercise the merge itself should
     override this fixture's patch with its own monkeypatch.setattr call."""
-    monkeypatch.setattr("main.discovery", lambda *a, **kw: {"candidates": []})
+    monkeypatch.setattr("pipeline.advisory_inputs.discovery", lambda *a, **kw: {"candidates": []})
 
 
 def _make_recommendation(symbol: str, action: str = "HOLD") -> Recommendation:
@@ -773,7 +774,7 @@ class TestBuildMacroDtoHistoricalStoreRouting:
         with patch("data_engine.DataEngine") as MockDE, \
              patch("macro_engine.MacroEngine") as MockME, \
              patch("data.historical_store.HistoricalStore") as MockHS, \
-             patch("main.get_provider") as mock_get_provider:
+             patch("pipeline.advisory_inputs.get_provider") as mock_get_provider:
             fake_de = MagicMock()
             fake_de.fetch_macro_raw.return_value = {}
             MockDE.return_value = fake_de
@@ -1005,7 +1006,7 @@ class TestBuildMacroDtoDataUnavailable:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(m.settings, "FRED_API_KEY", "dummy_key_for_test")
-        with patch("main._get_macro_engine", side_effect=RuntimeError("boom")):
+        with patch("pipeline.advisory_inputs.get_macro_engine", side_effect=RuntimeError("boom")):
             dto = m._build_macro_dto()
         assert dto.data_unavailable is True
         assert dto.killSwitch is True
