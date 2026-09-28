@@ -2024,3 +2024,379 @@ class TestWeeklyDigestSchedulingUnderOnDemandOnly:
         )
 
 
+# ---------------------------------------------------------------------------
+# Scheduled daily Robinhood device-approval login (shrink step 5, decision 6)
+# ---------------------------------------------------------------------------
+
+# 2026-09-28 is a Monday. 08:40 EDT == 12:40 UTC.
+_MON_0839_ET = datetime(2026, 9, 28, 12, 39, tzinfo=timezone.utc)
+_MON_0840_ET = datetime(2026, 9, 28, 12, 40, tzinfo=timezone.utc)
+_MON_1500_ET = datetime(2026, 9, 28, 19, 0, tzinfo=timezone.utc)
+_TUE_0845_ET = datetime(2026, 9, 29, 12, 45, tzinfo=timezone.utc)
+_FRI_0900_ET = datetime(2026, 10, 2, 13, 0, tzinfo=timezone.utc)
+_SAT_0900_ET = datetime(2026, 10, 3, 13, 0, tzinfo=timezone.utc)
+_SUN_0900_ET = datetime(2026, 10, 4, 13, 0, tzinfo=timezone.utc)
+_NEXT_MON_0840_ET = datetime(2026, 10, 5, 12, 40, tzinfo=timezone.utc)
+# Winter (EST, UTC-5): 2026-12-07 is a Monday; 08:40 EST == 13:40 UTC.
+_WINTER_MON_0839_ET = datetime(2026, 12, 7, 13, 39, tzinfo=timezone.utc)
+_WINTER_MON_0840_ET = datetime(2026, 12, 7, 13, 40, tzinfo=timezone.utc)
+
+
+class TestScheduledRobinhoodLogin:
+    """desktop/daemon_runtime.py::maybe_run_scheduled_robinhood_login and its
+    timer-loop wiring. Time is always passed in explicitly (frozen); no real
+    Robinhood login, worker process or network call ever happens here --
+    data.robinhood_login.start_login is replaced by a recorder."""
+
+    @pytest.fixture(autouse=True)
+    def _env(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_ENABLED", True)
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET", "08:40")
+        monkeypatch.setattr(
+            "data.brokerage_credentials.rh_credentials_present", lambda: True
+        )
+        monkeypatch.setattr(daemon_runtime, "_latest_account_snapshot_fetched_at", lambda: None)
+        self.alerts = mock.MagicMock()
+        monkeypatch.setattr("observability.alerts.send_alert", self.alerts)
+        # The outcome watcher thread must not sit on a fake job.
+        monkeypatch.setattr(daemon_runtime, "_SCHEDULED_LOGIN_WATCH_POLL_SECONDS", 0.02)
+
+        from data.robinhood_login import LoginJobState
+
+        self.calls: list = []
+        self.jobs: dict = {}
+
+        def fake_start_login(mode, **kwargs):
+            self.calls.append(mode)
+            job = LoginJobState(job_id=f"rhlogin-fake{len(self.calls)}", mode=mode)
+            self.jobs[job.job_id] = job
+            return job
+
+        monkeypatch.setattr("data.robinhood_login.start_login", fake_start_login)
+        monkeypatch.setattr("data.robinhood_login.get_login_state", lambda jid: self.jobs.get(jid))
+        self.tmp_path = tmp_path
+        yield
+        # Let any watcher thread see a terminal state and exit.
+        for job in self.jobs.values():
+            with job._lock:
+                if job.state == "running":
+                    job.state = "cancelled"
+
+    def _state(self) -> dict:
+        path = self.tmp_path / daemon_runtime._SCHEDULED_LOGIN_STATE_FILENAME
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    # -- gating -------------------------------------------------------------
+
+    def test_disabled_does_nothing_and_writes_nothing(self, monkeypatch):
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_ENABLED", False)
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+        assert self.calls == []
+        assert not (self.tmp_path / daemon_runtime._SCHEDULED_LOGIN_STATE_FILENAME).exists()
+        assert d.seconds_until_scheduled_login(now_utc=_MON_1500_ET) is None
+
+    def test_disabled_by_default(self):
+        from settings import Settings
+
+        assert Settings.model_fields["ROBINHOOD_SCHEDULED_LOGIN_ENABLED"].default is False
+        assert Settings.model_fields["ROBINHOOD_SCHEDULED_LOGIN_TIME_ET"].default == "08:40"
+
+    def test_not_before_the_scheduled_time(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0839_ET) is None
+        assert self.calls == []
+
+    def test_fires_at_the_scheduled_time_on_a_weekday(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+        assert self.calls == ["refresh"]
+        state = self._state()
+        assert state["last_attempted_et_date"] == "2026-09-28"
+        assert state["job_id"] == "rhlogin-fake1"
+
+    def test_fires_later_the_same_day_if_the_time_was_missed(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) == "started"
+        assert self.calls == ["refresh"]
+
+    @pytest.mark.parametrize("now", [_SAT_0900_ET, _SUN_0900_ET])
+    def test_not_on_weekends(self, now):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=now) is None
+        assert self.calls == []
+
+    def test_uses_eastern_time_across_dst(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_WINTER_MON_0839_ET) is None
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_WINTER_MON_0840_ET) == "started"
+
+    # -- once per ET day ----------------------------------------------------
+
+    def test_once_per_day_then_again_next_weekday(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+        assert self.calls == ["refresh"]
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_TUE_0845_ET) == "started"
+        assert self.calls == ["refresh", "refresh"]
+
+    def test_restart_same_day_does_not_prompt_again(self):
+        first = OrchestratorDaemon()
+        assert first.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+        restarted = OrchestratorDaemon()  # fresh process state, same OUTPUT_DIR
+        assert restarted.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+        assert self.calls == ["refresh"]
+
+    def test_in_process_claim_holds_even_if_the_state_write_fails(self, monkeypatch):
+        monkeypatch.setattr(
+            daemon_runtime, "atomic_write_json",
+            mock.MagicMock(side_effect=OSError("disk full")),
+        )
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+        assert self.calls == ["refresh"]
+
+    # -- freshness / credentials / single-flight ---------------------------
+
+    def test_skips_when_snapshot_is_newer_than_todays_scheduled_time(self, monkeypatch):
+        monkeypatch.setattr(
+            daemon_runtime, "_latest_account_snapshot_fetched_at",
+            lambda: _MON_0840_ET + timedelta(minutes=5),
+        )
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) == "skipped_fresh"
+        assert self.calls == []
+        assert self._state()["last_outcome"] == "skipped_fresh"
+        # Claimed for the day: not re-checked on later wakes.
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+
+    def test_prompts_when_snapshot_is_older_than_todays_scheduled_time(self, monkeypatch):
+        monkeypatch.setattr(
+            daemon_runtime, "_latest_account_snapshot_fetched_at",
+            lambda: _MON_0840_ET - timedelta(hours=1),
+        )
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+
+    def test_prompts_when_there_is_no_snapshot_at_all(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+
+    def test_skips_without_credentials(self, monkeypatch):
+        monkeypatch.setattr("data.brokerage_credentials.rh_credentials_present", lambda: False)
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "skipped_no_credentials"
+        assert self.calls == []
+
+    def test_running_connect_login_is_left_alone(self, monkeypatch):
+        from data.robinhood_login import LoginJobState, RobinhoodLoginInProgress
+
+        running = LoginJobState(job_id="rhlogin-connect", mode="connect")
+
+        def refuse(mode, **kwargs):
+            raise RobinhoodLoginInProgress(running, mode)
+
+        monkeypatch.setattr("data.robinhood_login.start_login", refuse)
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "skipped_login_in_progress"
+        assert self._state()["job_id"] == "rhlogin-connect"
+
+    # -- never raises -------------------------------------------------------
+
+    def test_start_failure_is_contained_alerted_and_not_retried_today(self, monkeypatch):
+        def boom(mode, **kwargs):
+            raise OSError("fork failed")
+
+        monkeypatch.setattr("data.robinhood_login.start_login", boom)
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "start_failed"
+        assert self._state()["last_outcome"] == "start_failed"
+        assert any(c.args[0] == "WARNING" for c in self.alerts.call_args_list)
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+
+    def test_unexpected_exception_never_propagates(self, monkeypatch):
+        def explode():
+            raise RuntimeError("unexpected")
+
+        monkeypatch.setattr("data.brokerage_credentials.rh_credentials_present", explode)
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) is None
+        assert self.calls == []
+
+    def test_corrupt_state_file_is_treated_as_not_attempted(self):
+        (self.tmp_path / daemon_runtime._SCHEDULED_LOGIN_STATE_FILENAME).write_text("{not json")
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+
+    def test_invalid_time_disables_with_one_warning(self, monkeypatch, caplog):
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET", "8:40pm")
+        d = OrchestratorDaemon()
+        with caplog.at_level("WARNING", logger="OrchestratorDaemon"):
+            assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+            assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+            assert d.seconds_until_scheduled_login(now_utc=_MON_1500_ET) is None
+        assert self.calls == []
+        assert sum("ROBINHOOD_SCHEDULED_LOGIN_TIME_ET" in r.getMessage() for r in caplog.records) == 1
+
+    # -- outcome watcher ----------------------------------------------------
+
+    def test_watcher_records_and_alerts_the_outcome(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+        job = self.jobs["rhlogin-fake1"]
+        with job._lock:
+            job.state = "timeout"
+            job.error_code = "timeout"
+        assert _poll_until(lambda: self._state().get("last_outcome") == "timeout", timeout=3.0)
+        assert self._state()["last_error_code"] == "timeout"
+        assert _poll_until(
+            lambda: any(c.args[0] == "WARNING" for c in self.alerts.call_args_list), timeout=3.0
+        )
+
+    # -- wake scheduling ----------------------------------------------------
+
+    def test_seconds_until_before_the_time_today(self):
+        d = OrchestratorDaemon()
+        assert d.seconds_until_scheduled_login(now_utc=_MON_0839_ET) == pytest.approx(60.0)
+
+    def test_seconds_until_is_zero_when_due_and_not_attempted(self):
+        d = OrchestratorDaemon()
+        assert d.seconds_until_scheduled_login(now_utc=_MON_1500_ET) == 0.0
+
+    def test_seconds_until_skips_the_weekend_after_fridays_attempt(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_FRI_0900_ET) == "started"
+        assert d.seconds_until_scheduled_login(now_utc=_FRI_0900_ET) == pytest.approx(
+            (_NEXT_MON_0840_ET - _FRI_0900_ET).total_seconds()
+        )
+        assert d.seconds_until_scheduled_login(now_utc=_SAT_0900_ET) == pytest.approx(
+            (_NEXT_MON_0840_ET - _SAT_0900_ET).total_seconds()
+        )
+
+    def test_bounded_wait_timeout_is_unchanged_when_disabled(self, monkeypatch):
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_ENABLED", False)
+        d = OrchestratorDaemon()
+        assert d._bounded_wait_timeout(3600.0) == 3600.0
+
+    def test_bounded_wait_timeout_wakes_just_after_the_target(self, monkeypatch):
+        d = OrchestratorDaemon()
+        monkeypatch.setattr(d, "seconds_until_scheduled_login", lambda now_utc=None: 120.0)
+        assert d._bounded_wait_timeout(3600.0) == pytest.approx(
+            120.0 + daemon_runtime._SCHEDULED_LOGIN_WAKE_SLACK_SECONDS
+        )
+        monkeypatch.setattr(d, "seconds_until_scheduled_login", lambda now_utc=None: 0.0)
+        assert d._bounded_wait_timeout(3600.0) == daemon_runtime._SCHEDULED_LOGIN_MIN_WAIT_SECONDS
+        monkeypatch.setattr(d, "seconds_until_scheduled_login", lambda now_utc=None: 10_000.0)
+        assert d._bounded_wait_timeout(3600.0) == 3600.0
+
+    def test_start_creates_timer_thread_when_only_this_flag_is_on(self, monkeypatch):
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", False)
+        monkeypatch.setattr(settings, "GOOGLE_TRENDS_ENABLED", False)
+        d = OrchestratorDaemon()  # interval 0
+        monkeypatch.setattr(d, "maybe_run_scheduled_robinhood_login", lambda now_utc=None: None)
+        d.start()
+        try:
+            assert d._timer_thread is not None
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_long_interval_wait_is_cut_short_for_the_scheduled_login(self, monkeypatch):
+        """ORCHESTRATOR_INTERVAL_SECONDS=3600 live: the loop must not park the
+        whole hour past 08:40. Its interval wait is shortened to just after
+        the target."""
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(
+            "desktop.daemon_runtime.is_automatic_run_gated",
+            lambda now_utc, extended_hours_only: True,
+        )
+        d = OrchestratorDaemon(interval_seconds=3600)
+        monkeypatch.setattr(d, "seconds_until_scheduled_login", lambda now_utc=None: 120.0)
+        monkeypatch.setattr(d, "maybe_run_scheduled_robinhood_login", lambda now_utc=None: None)
+        timeouts: list = []
+        original_wait = d._wake_event.wait
+
+        def _wait(timeout=None):
+            timeouts.append(timeout)
+            return original_wait(0.01)
+
+        monkeypatch.setattr(d._wake_event, "wait", _wait)
+        d.start()
+        try:
+            assert _poll_until(lambda: len(timeouts) >= 1, timeout=2.0)
+            assert timeouts[0] == pytest.approx(121.0)
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_wait_out_interval_runs_the_hook_and_keeps_the_same_deadline(self, monkeypatch):
+        d = OrchestratorDaemon()
+        monkeypatch.setattr(d, "_bounded_wait_timeout", lambda base: min(base, 0.05))
+        hook = mock.MagicMock(return_value=None)
+        monkeypatch.setattr(d, "maybe_run_scheduled_robinhood_login", hook)
+        t0 = time.monotonic()
+        woke = d._wait_out_interval(0.3)
+        elapsed = time.monotonic() - t0
+        assert woke is False
+        assert hook.call_count >= 2
+        assert 0.28 <= elapsed < 1.5
+
+    def test_wait_out_interval_returns_true_on_wake_event(self):
+        d = OrchestratorDaemon()
+        d._wake_event.set()
+        assert d._wait_out_interval(100.0) is True
+
+
+class TestLatestAccountSnapshotFetchedAt:
+    """The read-only freshness probe behind the scheduled login: newest
+    fetched_at across the DB and JSON-cache tiers; never logs in, never
+    raises."""
+
+    def _fake_store(self, snap):
+        class _Store:
+            def __init__(self, *a, **k):
+                pass
+
+            def latest_account_snapshot(self):
+                if isinstance(snap, Exception):
+                    raise snap
+                return snap
+
+        return _Store
+
+    def test_returns_the_newer_of_the_two_tiers(self, monkeypatch):
+        older = datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc)
+        newer = datetime(2026, 9, 28, 13, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(
+            "data.historical_store.HistoricalStore",
+            self._fake_store(mock.Mock(fetched_at=older)),
+        )
+        monkeypatch.setattr(
+            "data.robinhood_portfolio._read_cache", lambda: mock.Mock(fetched_at=newer)
+        )
+        assert daemon_runtime._latest_account_snapshot_fetched_at() == newer
+
+    def test_naive_timestamp_is_treated_as_utc(self, monkeypatch):
+        naive = datetime(2026, 9, 28, 13, 0)
+        monkeypatch.setattr("data.historical_store.HistoricalStore", self._fake_store(None))
+        monkeypatch.setattr(
+            "data.robinhood_portfolio._read_cache", lambda: mock.Mock(fetched_at=naive)
+        )
+        assert daemon_runtime._latest_account_snapshot_fetched_at() == naive.replace(
+            tzinfo=timezone.utc
+        )
+
+    def test_none_when_both_tiers_fail_or_are_empty(self, monkeypatch):
+        monkeypatch.setattr(
+            "data.historical_store.HistoricalStore", self._fake_store(RuntimeError("db"))
+        )
+
+        def boom():
+            raise OSError("cache")
+
+        monkeypatch.setattr("data.robinhood_portfolio._read_cache", boom)
+        assert daemon_runtime._latest_account_snapshot_fetched_at() is None
+
+

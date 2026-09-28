@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 331,
+    "live_safe": 333,
     "no_op": 4,
     "restart_required": 85,
-    "total": 420
+    "total": 422
   },
   "dynamic_sites": [
     {
@@ -49,28 +49,28 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3094,
+      "line": 3095,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4203,
+      "line": 4216,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4308,
+      "line": 4321,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5165,
+      "line": 5178,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -386,6 +386,8 @@
     "ROBINHOOD_EXECUTION_MODE",
     "ROBINHOOD_LIMIT_BUFFER_BPS",
     "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
+    "ROBINHOOD_SCHEDULED_LOGIN_ENABLED",
+    "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET",
     "RUNTIME_FLAGS_REFRESH_ENABLED",
     "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS",
     "SECTOR_HEAT_ENABLED",
@@ -453,13 +455,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 837,
+    "attr": 843,
     "factory_param": 4,
     "getattr_const": 315,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 265,
+    "attr": 267,
     "factory_param": 4,
     "getattr_const": 188,
     "os_environ": 2
@@ -561,7 +563,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:3948",
+        "site": "api/pilots_api.py:3961",
         "via": []
       }
     ],
@@ -599,7 +601,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:341",
+        "site": "api/pilots_api.py:342",
         "via": []
       },
       {
@@ -630,7 +632,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4059",
+        "site": "api/pilots_api.py:4072",
         "via": []
       },
       {
@@ -1333,7 +1335,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4685",
+        "site": "api/pilots_api.py:4698",
         "via": []
       }
     ],
@@ -1344,7 +1346,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4684",
+        "site": "api/pilots_api.py:4697",
         "via": []
       }
     ],
@@ -1410,7 +1412,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4826",
+        "site": "api/pilots_api.py:4839",
         "via": []
       }
     ],
@@ -1445,7 +1447,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:651",
+        "site": "api/pilots_api.py:652",
         "via": []
       }
     ],
@@ -2657,7 +2659,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:646",
+        "site": "api/pilots_api.py:647",
         "via": []
       },
       {

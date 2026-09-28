@@ -268,6 +268,7 @@ import data.brokerage_credentials as brokerage_credentials
 # AST-guard deny-list. Imported at module top so tests can
 # `mock.patch.object(pilots_api, "rh_login", ...)`.
 import api._rh_login as rh_login
+from data.robinhood_login import RobinhoodLoginInProgress
 
 # Forecast-backfill job primitive (start/poll/cancel a killable, isolated
 # training-worker subprocess) — see ml/forecast_backfill_job.py and
@@ -3171,8 +3172,14 @@ def connect_brokerage(body: BrokerageConnectRequest) -> Dict[str, Any]:
     if — the job's state becomes ``"succeeded"``; never before, never on
     failure/timeout/cancellation, and never inside this handler itself.
     Credential values are never logged, cached, or echoed back in any
-    response (CONSTRAINT #3)."""
-    job = rh_login.start_connect_job(body.username, body.password)
+    response (CONSTRAINT #3).
+
+    409 if another login job is already running (single-flight -- one
+    device-approval prompt at a time; see ``data.robinhood_login``)."""
+    try:
+        job = rh_login.start_connect_job(body.username, body.password)
+    except RobinhoodLoginInProgress as exc:
+        raise HTTPException(status_code=409, detail=rh_login.login_in_progress_detail(exc)) from exc
     return rh_login.serialize_job(job)
 
 
@@ -3233,9 +3240,15 @@ def refresh_brokerage() -> Dict[str, Any]:
     ``subprocess.Popen``, which can in principle raise ``OSError`` if process
     creation itself fails (e.g. resource exhaustion) — the try/except below
     exists solely to translate that unlikely case to a clean 502 rather than a
-    raw 500, matching this endpoint's pre-existing error-translation posture."""
+    raw 500, matching this endpoint's pre-existing error-translation posture.
+
+    Single-flight: if a refresh job is already running (e.g. the daemon's
+    scheduled login), that job is returned instead of starting a second one
+    -- poll its ``job_id``. 409 if a connect job is running."""
     try:
         job = rh_login.start_refresh_job()
+    except RobinhoodLoginInProgress as exc:
+        raise HTTPException(status_code=409, detail=rh_login.login_in_progress_detail(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - OSError etc. from subprocess.Popen -> clean 502
         logger.error("pilots_api: brokerage refresh job could not be started: %s", exc)
         raise HTTPException(

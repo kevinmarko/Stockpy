@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -122,6 +123,21 @@ def validate_daemon_shutdown_timeout(v: float) -> float:
             f"[{DAEMON_SHUTDOWN_TIMEOUT_MIN_SECONDS}, {DAEMON_SHUTDOWN_TIMEOUT_MAX_SECONDS}], got {v}"
         )
     return v
+
+
+def parse_scheduled_login_time(value: object) -> Optional[tuple[int, int]]:
+    """Parse ``settings.ROBINHOOD_SCHEDULED_LOGIN_TIME_ET`` ("HH:MM", 24-hour,
+    US/Eastern) into ``(hour, minute)``, or ``None`` when it isn't a valid
+    time. Never raises -- an invalid value means "scheduled login disabled"
+    (the daemon hook logs a warning), never a crash at settings load."""
+    text = str(value or "").strip()
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
+    if match is None:
+        return None
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour, minute
 
 
 class Settings(BaseSettings):
@@ -1220,6 +1236,36 @@ class Settings(BaseSettings):
             "happens when explicitly forced (--refresh-account, or the webapp's "
             "Connect/Refresh flows); all other callers get the cached snapshot "
             "regardless of staleness."
+        ),
+    )
+    # Daemon-scheduled daily Robinhood device-approval login (shrink step 5,
+    # operator decision 6): main.py's 08:45 ET launchd run used to be what
+    # triggered the day's login prompt; with main.py retired the daemon runs
+    # it itself at a fixed weekday time so the approval push arrives when the
+    # operator can tap it. Off by default -- zero behaviour change until
+    # enabled. See desktop/daemon_runtime.py::maybe_run_scheduled_robinhood_login.
+    ROBINHOOD_SCHEDULED_LOGIN_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When True, the orchestrator daemon starts ONE Robinhood 'refresh' "
+            "device-approval login per US/Eastern weekday at/after "
+            "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET, if the cached account snapshot "
+            "is older than today's scheduled time (or missing). Sends a real "
+            "approval push to the operator's phone. Non-blocking; single-flight "
+            "with the webapp's Refresh button; deduped per ET day across daemon "
+            "restarts. No holiday calendar. Runs on the daemon's timer thread: "
+            "turning it on takes effect live when that thread already exists "
+            "(ORCHESTRATOR_INTERVAL_SECONDS > 0), otherwise at the next daemon "
+            "restart."
+        ),
+    )
+    ROBINHOOD_SCHEDULED_LOGIN_TIME_ET: str = Field(
+        default="08:40",
+        description=(
+            "US/Eastern wall-clock time (\"HH:MM\", 24-hour) of the daemon's "
+            "daily scheduled Robinhood login (see "
+            "ROBINHOOD_SCHEDULED_LOGIN_ENABLED). An invalid value disables the "
+            "scheduled login with a warning; it never crashes settings load."
         ),
     )
     # data/robinhood_login.py's killable-subprocess login worker. All three
@@ -4996,6 +5042,23 @@ class Settings(BaseSettings):
         """
         v = str(value or "").strip().lower()
         return v if v in {"off", "shadow", "primary"} else "off"
+
+    @field_validator("ROBINHOOD_SCHEDULED_LOGIN_TIME_ET")
+    @classmethod
+    def _normalize_scheduled_login_time(cls, value: str) -> str:
+        """Normalize a valid time to zero-padded "HH:MM". An invalid value is
+        kept verbatim (so the operator sees what they typed) and logged; the
+        daemon hook treats it as "scheduled login disabled". Never raises --
+        a bad .env value must not take down settings load."""
+        parsed = parse_scheduled_login_time(value)
+        if parsed is None:
+            logger.warning(
+                "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET=%r is not a valid HH:MM "
+                "time; the daemon's scheduled Robinhood login is disabled.",
+                value,
+            )
+            return str(value or "")
+        return f"{parsed[0]:02d}:{parsed[1]:02d}"
 
     @field_validator("SECTOR_FORECAST_CONFIGS")
     @classmethod

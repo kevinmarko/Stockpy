@@ -634,6 +634,52 @@ class TestBrokerageRefreshHappyPath:
         assert "password" not in detail
         assert "xyz" not in detail
 
+    def test_refresh_returns_409_when_a_connect_login_is_running(self, monkeypatch):
+        """Single-flight (data.robinhood_login): a refresh can't join a
+        running connect job, so the endpoint refuses with 409 and a plain
+        string detail naming the running job -- never a second approval
+        prompt."""
+        from data.robinhood_login import LoginJobState, RobinhoodLoginInProgress
+
+        running = LoginJobState(job_id="rhlogin-running1", mode="connect")
+
+        def refuse():
+            raise RobinhoodLoginInProgress(running, "refresh")
+
+        monkeypatch.setattr(pilots_api.rh_login, "start_refresh_job", refuse)
+        with mock.patch.object(settings, "BROKERAGE_REFRESH_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = loopback_client.post("/brokerage/refresh", headers=_auth())
+
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert isinstance(detail, str)
+        assert "rhlogin-running1" in detail
+
+    def test_connect_returns_409_when_a_login_is_running(self, monkeypatch):
+        from data.robinhood_login import LoginJobState, RobinhoodLoginInProgress
+
+        running = LoginJobState(job_id="rhlogin-running2", mode="refresh")
+
+        def refuse(username, password):
+            raise RobinhoodLoginInProgress(running, "connect")
+
+        monkeypatch.setattr(pilots_api.rh_login, "start_connect_job", refuse)
+        with mock.patch.object(settings, "BROKERAGE_CONNECT_ENABLED", True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = loopback_client.post(
+                    "/brokerage/connect",
+                    json={"username": "user@example.com", "password": "hunter2"},
+                    headers=_auth(),
+                )
+
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert isinstance(detail, str)
+        assert "rhlogin-running2" in detail
+        assert "hunter2" not in detail
+        assert "user@example.com" not in detail
+
     def test_refresh_never_logs_token(self, monkeypatch, caplog):
         monkeypatch.setattr(pilots_api.rh_login, "start_refresh_job", lambda: "job")
         monkeypatch.setattr(
