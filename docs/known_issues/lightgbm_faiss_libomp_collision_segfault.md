@@ -465,6 +465,77 @@ versus an indefinite hang before the fix.
   script level and the real-production-code-path level; always clean with
   the fix, always deadlocked without it.
 
+## Round 3: xdist "node down" (2026-09-28)
+
+### Symptom
+
+Under `pytest -n auto --dist loadgroup` a worker occasionally crashed
+("node down") and blocked an unrelated PR. It depended on how xdist spread
+the files: it only happened when a real-faiss test and a real lightgbm train
+landed on the same worker.
+
+### Reproduction (on origin/main before this fix)
+
+```bash
+NO_VENV_REEXEC=1 .venv/bin/python -m pytest tests/test_rag_index.py \
+  tests/test_train_meta_labelers.py -q -p no:randomly -p no:xdist
+# ...............Fatal Python error: Segmentation fault
+#   File ".../lightgbm/basic.py", line 2319 in __init_from_np2d
+```
+
+Same three-libomp collision as Round 1, the other way round: Round 1's
+crash needed faiss loaded at collection time before a lightgbm unpickle.
+Here `TestRealFaissRoundTrip` / `TestFaissThreadCapRegression` load real
+faiss lazily, at test time, and a later real lightgbm TRAIN in the same
+process (`tests/test_train_meta_labelers.py`) segfaults. Round 1's
+"import lazily" fix does not help, because the tests themselves are what
+load faiss. Round 2's thread cap does not help either: it prevents faiss's
+own deadlock, not lightgbm's crash once faiss's libomp is loaded.
+
+### The fix (Round 3, test-only)
+
+No production code changed. Real faiss no longer loads in any pytest worker:
+
+- Root `conftest.py::_block_real_faiss_in_pytest_process` (autouse) puts
+  `None` in `sys.modules["faiss"]` for every test, so `import faiss` raises
+  ImportError everywhere, directly or through `data.rag_index`. If faiss is
+  already loaded when a test starts, it fails the test loudly instead.
+- The real-faiss classes in `tests/test_rag_index.py` are skipped in the
+  normal process and run unchanged in ONE fresh child pytest process
+  (`subprocess.run([sys.executable, "-m", "pytest", ...], timeout=600)`,
+  env `STOCKPY_REAL_FAISS_SUBPROCESS=1`, which turns the block off).
+  `test_real_faiss_in_subprocess[<Class::test>]` fails unless that test
+  PASSED in the child (JUnit XML), and
+  `test_real_faiss_subprocess_ran_exactly_the_expected_tests` fails unless
+  the child ran exactly those tests and exited 0. Same bodies, same
+  assertions; still skipped when `find_spec("faiss")` is None.
+- Guards: `test_real_faiss_is_blocked_in_this_process` (the block is
+  active) and `test_no_test_module_imports_faiss_outside_the_subprocess_classes`
+  (AST scan of `tests/`: faiss may only be imported inside those classes).
+- `pytest.ini` now registers the `xdist_group` marker, so `-p no:xdist`
+  runs (including the child) still collect under `--strict-markers`.
+
+The block is hand-set rather than done with `monkeypatch`: requesting
+`monkeypatch` from an early autouse fixture changes fixture teardown order
+and broke `tests/test_quantitative_models.py::test_garch_and_edge_scoring`
+(its `DummyMetaRegistry` monkeypatch was still active when
+`_clean_meta_registry_between_tests` tore down).
+
+### Verification (Round 3)
+
+- The repro above: 3/3 passes (`47 passed, 9 skipped`).
+- `tests/test_rag_index.py` alone: `18 passed, 9 skipped` (the 9 skips are
+  the in-process copies of the real-faiss tests, which ran and passed in
+  the child).
+- The child really uses faiss and really gates: breaking one assertion in
+  `TestRealFaissRoundTrip` made the wrapper test fail with the child's
+  traceback.
+- Full offline suite (`-m "not network and not slow" -n auto --dist
+  loadgroup -p no:randomly`, scratch `LOCAL_DATA_ROOT`): 3 consecutive runs,
+  `11689 passed, 27 skipped`, no "node down". (An earlier run had one
+  failure in `tests/test_daemon_runtime.py::TestScheduledRobinhoodLogin::test_watcher_records_and_alerts_the_outcome`,
+  a 3-second poll timing test unrelated to faiss.)
+
 ## Related
 
 - [`cnn_lstm_tf_deadlock.md`](cnn_lstm_tf_deadlock.md) — the sibling

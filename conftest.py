@@ -525,6 +525,55 @@ def _isolate_symbol_view_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     monkeypatch.setattr(_svs, "resolve_database_url", lambda: f"sqlite:///{fake_db}")
 
 
+# Set to "1" ONLY in the dedicated child process that
+# tests/test_rag_index.py::test_real_faiss_in_subprocess spawns to run the
+# real-faiss tests. See _block_real_faiss_in_pytest_process below.
+REAL_FAISS_SUBPROCESS_ENV = "STOCKPY_REAL_FAISS_SUBPROCESS"
+
+
+@pytest.fixture(autouse=True)
+def _block_real_faiss_in_pytest_process() -> Any:
+    """Never let real ``faiss`` load into a pytest worker process.
+
+    faiss wheels bundle their own libomp.dylib. Once that copy is loaded, a
+    later real lightgbm train in the SAME process segfaults (macOS arm64,
+    three independent libomp copies -- see
+    docs/known_issues/lightgbm_faiss_libomp_collision_segfault.md, Round 3).
+    Under ``pytest -n auto`` that only happened when xdist put a real-faiss
+    test and a lightgbm test on the same worker, so it surfaced as a random
+    "node down" whenever test distribution shifted.
+
+    The real-faiss tests now run in their own fresh subprocess (see
+    tests/test_rag_index.py). Here every other test sees ``faiss`` as
+    not installed (a ``None`` entry in ``sys.modules`` makes ``import faiss``
+    raise ImportError), so no test can load faiss in-process, directly or
+    through production code such as ``data.rag_index``. The one exception
+    is that child process, which sets ``REAL_FAISS_SUBPROCESS_ENV=1`` and
+    runs nothing but the real-faiss tests.
+
+    If faiss is somehow already loaded (for example a module-level
+    ``import faiss`` during collection), fail loudly rather than hide it:
+    the dylib is already in the process and the crash risk is back.
+    """
+    if os.environ.get(REAL_FAISS_SUBPROCESS_ENV) == "1":
+        yield
+        return
+    if sys.modules.get("faiss") is not None:
+        pytest.fail(
+            "real faiss is loaded in this pytest worker process; it must only "
+            "load in the isolated subprocess (tests/test_rag_index.py). See "
+            "docs/known_issues/lightgbm_faiss_libomp_collision_segfault.md."
+        )
+    # Set and cleared by hand, not via the ``monkeypatch`` fixture: requesting
+    # monkeypatch here would instantiate it before the other autouse fixtures
+    # below, which changes teardown order and breaks fixtures that expect a
+    # test's own monkeypatch to be undone after they tear down.
+    sys.modules["faiss"] = None
+    yield
+    if "faiss" in sys.modules and sys.modules["faiss"] is None:
+        del sys.modules["faiss"]
+
+
 @pytest.fixture(autouse=True)
 def _clean_meta_registry_between_tests() -> Any:
     """Reset global_meta_registry state so tests that register temporary
