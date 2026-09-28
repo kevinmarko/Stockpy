@@ -10,6 +10,7 @@
 
 import logging
 import math
+import threading
 import warnings
 from datetime import datetime, timezone
 
@@ -46,7 +47,7 @@ import pandas as pd
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.preprocessing import MinMaxScaler
-from typing import Dict, Any, Mapping, Optional, Tuple, Union
+from typing import Dict, Any, List, Mapping, Optional, Tuple, Union
 
 # Suppress harmless warnings from statsmodels optimization
 warnings.filterwarnings("ignore")
@@ -89,6 +90,76 @@ _DEFAULT_SECTOR_CONFIGS: Dict[str, Dict[str, Any]] = {
     "Consumer Defensive": {"days": 90, "model": "ARIMA"},
     "Basic Materials": {"days": 60, "model": "ARIMA"}
 }
+
+
+# Drop reasons reported by apply_forecast_guards (forecasting rebuild F2).
+GUARD_REASON_INPUT_PRICE = "input_price"
+GUARD_REASON_CLAMP = "clamp"
+
+
+def apply_forecast_guards(
+    model_forecasts: Mapping[str, float],
+    anchors: Mapping[str, Optional[float]],
+    last_close: Optional[float],
+    daily_sigma: Optional[float],
+    horizon_days: int,
+    clamp_k: float,
+    input_tolerance: float,
+) -> Tuple[Dict[str, float], List[Tuple[str, str, float]]]:
+    """Forecasting rebuild F2 safety guards, applied where model outputs enter
+    the blend. Pure function (no I/O, no settings reads) so it is directly
+    testable.
+
+    Two checks, in order, per model:
+
+    1. **Input-price check.** If the model's anchor (starting) price differs
+       from ``last_close`` by more than ``input_tolerance`` (a fraction), the
+       model is dropped. Skipped when ``input_tolerance <= 0``, when
+       ``last_close`` is missing, or when the model has no known anchor.
+    2. **Clamp.** If ``|ln(price / last_close)| > clamp_k * daily_sigma *
+       sqrt(horizon_days)``, the model is dropped. ``daily_sigma`` is a DAILY
+       log-return vol (the caller converts the annualized GARCH vol with
+       ``/ sqrt(252)``), so ``daily_sigma * sqrt(h)`` is the h-trading-day
+       log-return standard deviation. Skipped when ``clamp_k <= 0`` or when
+       ``daily_sigma`` / ``last_close`` is missing; the caller passes
+       ``daily_sigma=None`` when no GARCH sigma exists, so a sigma is never
+       invented here.
+
+    A dropped model is removed, never replaced with a made-up value. The
+    blend then renormalizes over the survivors (graduated degrade). An empty
+    return means no model survived; the caller's existing "no model output"
+    path handles that.
+
+    Returns ``(kept, drops)`` where ``drops`` is a list of
+    ``(model_name, reason, measured_value)``: the relative anchor gap for
+    ``input_price``, the |log-return| in units of ``daily_sigma * sqrt(h)``
+    for ``clamp``.
+    """
+    kept: Dict[str, float] = {}
+    drops: List[Tuple[str, str, float]] = []
+    ref = float(last_close) if last_close is not None else float("nan")
+    ref_ok = math.isfinite(ref) and ref > 0
+
+    band = float("nan")
+    if (clamp_k is not None and clamp_k > 0 and daily_sigma is not None
+            and math.isfinite(daily_sigma) and daily_sigma > 0 and horizon_days > 0):
+        band = float(daily_sigma) * math.sqrt(float(horizon_days))
+
+    for name, price in model_forecasts.items():
+        if input_tolerance is not None and input_tolerance > 0 and ref_ok:
+            anchor = anchors.get(name)
+            if anchor is not None and math.isfinite(anchor) and anchor > 0:
+                gap = abs(float(anchor) / ref - 1.0)
+                if gap > input_tolerance:
+                    drops.append((name, GUARD_REASON_INPUT_PRICE, gap))
+                    continue
+        if ref_ok and math.isfinite(band) and price is not None and price > 0:
+            z = abs(math.log(float(price) / ref)) / band
+            if z > clamp_k:
+                drops.append((name, GUARD_REASON_CLAMP, z))
+                continue
+        kept[name] = price
+    return kept, drops
 
 
 class ForecastingEngine:
@@ -150,6 +221,30 @@ class ForecastingEngine:
         # generate_forecast() itself, to keep that dict's shape strictly
         # config.COLUMN_SCHEMA-driven.
         self.last_bert_lla_attention: Optional[Dict[str, Any]] = None
+
+        # Forecasting rebuild F2: per-engine guard counters. generate_forecast
+        # runs inside ForecastingStep's ThreadPoolExecutor with ONE shared
+        # engine, so every update goes through this lock. ForecastingStep pops
+        # them once per cycle (pop_guard_stats) for one aggregated log line.
+        self._guard_lock = threading.Lock()
+        self._guard_stats: Dict[str, int] = {}
+
+    def _bump_guard_stat(self, key: str, n: int = 1) -> None:
+        with self._guard_lock:
+            self._guard_stats[key] = self._guard_stats.get(key, 0) + n
+
+    def pop_guard_stats(self) -> Dict[str, int]:
+        """Return and reset the F2 guard counters accumulated since the last
+        pop. Keys: ``dropped_clamp``, ``dropped_input_price`` (model drops,
+        counted per symbol x horizon x model), ``all_dropped_horizons``
+        (symbol x horizon with no surviving model), ``sigma_unavailable``
+        (symbols the clamp was skipped for, no GARCH sigma),
+        ``no_reference_close`` (symbols with no price history to check
+        against)."""
+        with self._guard_lock:
+            out = dict(self._guard_stats)
+            self._guard_stats = {}
+        return out
 
     def _load_sector_configs(self) -> Dict[str, Dict[str, Any]]:
         """Load per-sector forecast config: hardcoded default <- committed
@@ -439,7 +534,14 @@ class ForecastingEngine:
                     except Exception as exc:  # noqa: BLE001 - persistence is best-effort
                         logger.debug("Prophet cache save failed for %s: %s", ticker, exc)
 
-            future = model.make_future_dataframe(periods=days_forward)
+            # Forecasting rebuild F2: `days_forward` is in TRADING days like
+            # every other model here (h=30 means 30 bars). Prophet's default
+            # freq="D" counted calendar days, so its "30-day" forecast was
+            # really ~21 trading days out yet was blended and scored as 30.
+            # freq="B" makes the last future row the h-th business day after
+            # the last history date. (US market holidays are not excluded;
+            # "B" is Mon-Fri, off by at most a day or two over 30 bars.)
+            future = model.make_future_dataframe(periods=days_forward, freq="B")
             forecast = model.predict(future)
 
             latest = forecast.iloc[-1]
@@ -1253,14 +1355,35 @@ class ForecastingEngine:
             base = arima_price
         # General static blend (mirrors original hardcoded weights)
         elif lstm_price > 0.0:
+            # Forecasting rebuild F2: Monte Carlo can now be missing here (the
+            # input-price check or clamp dropped it). The fixed weights below
+            # assumed it was always present, so a missing MC used to leave the
+            # blend at 60% / 50% of a price. Renormalize over the survivors in
+            # that case only; with MC present the arithmetic is unchanged
+            # (byte-identical to pre-F2).
             if arima_price > 0:
-                base = lstm_price * 0.4 + arima_price * 0.2 + mc_price * 0.4
+                if mc_price > 0:
+                    base = lstm_price * 0.4 + arima_price * 0.2 + mc_price * 0.4
+                else:
+                    base = (lstm_price * 0.4 + arima_price * 0.2) / 0.6
             else:
-                base = lstm_price * 0.5 + mc_price * 0.5
+                if mc_price > 0:
+                    base = lstm_price * 0.5 + mc_price * 0.5
+                else:
+                    base = lstm_price
         elif arima_price > 0 and mc_price > 0:
             base = arima_price * 0.4 + mc_price * 0.6
+        elif arima_price > 0 or mc_price > 0:
+            base = arima_price if arima_price > 0 else mc_price
+        elif hw_price > 0:
+            # F2: ARIMA and MC both dropped; Holt-Winters is the survivor.
+            # Pre-F2 this branch was unreachable (MC always produced output).
+            base = hw_price
+        elif model_forecasts.get("prophet", 0.0) > 0:
+            # F2: only Prophet survived; the overlay below then returns it.
+            base = model_forecasts["prophet"]
         else:
-            base = arima_price if arima_price > 0 else (mc_price if mc_price > 0 else current_price)
+            base = current_price
 
         # Prophet overlay: fold the Prophet 30-day forecast into the static blend.
         # When prophet is absent (0/missing), `base` is byte-identical to the
@@ -1317,8 +1440,9 @@ class ForecastingEngine:
             return fallback_daily_sigma
 
     def _estimate_daily_sigma_multi_horizon(self, history_df, fallback_daily_sigma: float,
-                                             horizons, precomputed_garch_term_structure: Optional[Dict[int, float]] = None
-                                             ) -> Dict[int, float]:
+                                             horizons, precomputed_garch_term_structure: Optional[Dict[int, float]] = None,
+                                             return_source: bool = False,
+                                             ) -> Union[Dict[int, float], Tuple[Dict[int, float], bool]]:
         """Per-horizon counterpart to _estimate_daily_sigma: returns a DAILY
         volatility for Monte Carlo for EACH requested horizon, sourced from
         the GJR-GARCH(1,1) term structure (volatility/garch.py's
@@ -1345,13 +1469,25 @@ class ForecastingEngine:
         raises) when the GARCH flag is off, history_df is None/insufficient,
         or the estimator fails -- same dead-letter contract as
         _estimate_daily_sigma.
+
+        ``return_source=True`` (forecasting rebuild F2) returns
+        ``(sigmas, from_garch)`` instead, where ``from_garch`` is False when
+        the flat historical-stdev fallback was used. The F2 clamp needs to
+        know this so it never treats the fallback as a GARCH sigma. Note the
+        GARCH estimator itself degrades to a 20-day realized vol when arch
+        fails (see volatility/garch.py); that still counts as ``True`` here,
+        since it is the engine's own term-structure source.
         """
         horizons = sorted({int(h) for h in horizons})
+
+        def _out(sigmas: Dict[int, float], from_garch: bool):
+            return (sigmas, from_garch) if return_source else sigmas
+
         from settings import settings as _settings
         if not _settings.FORECAST_USE_GARCH_SIGMA:
-            return {h: fallback_daily_sigma for h in horizons}
+            return _out({h: fallback_daily_sigma for h in horizons}, False)
         if history_df is None or len(history_df) < 22:
-            return {h: fallback_daily_sigma for h in horizons}
+            return _out({h: fallback_daily_sigma for h in horizons}, False)
 
         def _annual_to_daily(annual_vol) -> Optional[float]:
             if annual_vol is None or not np.isfinite(annual_vol) or annual_vol <= 0:
@@ -1367,7 +1503,7 @@ class ForecastingEngine:
         if precomputed_garch_term_structure:
             daily_by_horizon = {h: _annual_to_daily(precomputed_garch_term_structure.get(h)) for h in horizons}
             if all(v is not None for v in daily_by_horizon.values()):
-                return daily_by_horizon
+                return _out(daily_by_horizon, True)
 
         try:
             from volatility.garch import GarchVolatilityEstimator
@@ -1383,11 +1519,11 @@ class ForecastingEngine:
                 raise ValueError("GARCH term structure unavailable (insufficient history)")
             daily_by_horizon = {h: _annual_to_daily(term_structure.get(h)) for h in horizons}
             if all(v is not None for v in daily_by_horizon.values()):
-                return daily_by_horizon
+                return _out(daily_by_horizon, True)
         except Exception as _exc:
             logger.debug("GJR-GARCH term-structure sigma estimation failed; using historical stdev: %s", _exc)
 
-        return {h: fallback_daily_sigma for h in horizons}
+        return _out({h: fallback_daily_sigma for h in horizons}, False)
 
     # =========================================================================
     # ORCHESTRATOR
@@ -1478,9 +1614,47 @@ class ForecastingEngine:
             # (when supplied by a caller that already fit GJR-GARCH on this same
             # DataFrame) avoids a redundant refit inside the engine.
             needed_horizons = sorted(set(horizons) | {target_days})
-            mc_sigma_by_horizon = self._estimate_daily_sigma_multi_horizon(
-                history_df, sigma, needed_horizons, precomputed_garch_term_structure
+            mc_sigma_by_horizon, sigma_from_garch = self._estimate_daily_sigma_multi_horizon(
+                history_df, sigma, needed_horizons, precomputed_garch_term_structure,
+                return_source=True,
             )
+
+            # Forecasting rebuild F2 guard inputs (see apply_forecast_guards).
+            # last_close: the last Close of the price history the models were
+            # fit on. Anchors: the price each model starts from. ARIMA, Holt-
+            # Winters and Prophet are fit on history_series and CNN-LSTM /
+            # BERT-LLA on history_df['Close'], so their anchor IS last_close
+            # (the input-price check cannot fire for them). Monte Carlo starts
+            # from current_price (the row's price), which is the one anchor
+            # that can disagree with the history -- the 2026-08-14 class of
+            # bug. The clamp's sigma is the GARCH daily sigma for the horizon,
+            # or None (clamp skipped) when only the historical-stdev fallback
+            # exists.
+            last_close: Optional[float] = None
+            if len(close_prices) > 0:
+                last_close = float(close_prices[-1])
+            elif history_df is not None and 'Close' in history_df and len(history_df) > 0:
+                last_close = float(history_df['Close'].iloc[-1])
+            if last_close is not None and not (math.isfinite(last_close) and last_close > 0):
+                last_close = None
+            df_close: Optional[float] = None
+            if history_df is not None and 'Close' in history_df and len(history_df) > 0:
+                df_close = float(history_df['Close'].iloc[-1])
+            guard_anchors: Dict[str, Optional[float]] = {
+                "arima": last_close,
+                "holt_winters": last_close,
+                "prophet": last_close,
+                "cnn_lstm": df_close,
+                "bert_lla": df_close,
+                "monte_carlo": float(current_price),
+            }
+            from settings import settings as _guard_settings
+            clamp_k = float(getattr(_guard_settings, "FORECAST_CLAMP_SIGMA_K", 4.0) or 0.0)
+            input_tol = float(getattr(_guard_settings, "FORECAST_INPUT_PRICE_TOLERANCE", 0.05) or 0.0)
+            if clamp_k > 0 and not sigma_from_garch:
+                self._bump_guard_stat("sigma_unavailable")
+            if input_tol > 0 and last_close is None:
+                self._bump_guard_stat("no_reference_close")
 
             # Fit ARIMA and Holt-Winters ONCE (both fits are horizon-independent) and
             # reuse them across the target-days forecast and every horizon below,
@@ -1609,6 +1783,37 @@ class ForecastingEngine:
                 if bert_lla_res > 0 and bert_lla_blend_enabled:
                     model_forecasts["bert_lla"] = bert_lla_res
 
+                # Forecasting rebuild F2: drop any model that fails the input-
+                # price check or the k*sigma*sqrt(h) clamp BEFORE it reaches the
+                # blend. Only the blend, the `blend` row and Is_Fallback below
+                # see the guarded dict. Recording (`recordable_forecasts`):
+                # a CLAMPED model's raw row is still recorded, because it is a
+                # real forecast from real inputs and scoring it is how the
+                # ledger measures how often models blow up. An INPUT-PRICE drop
+                # is NOT recorded: that output was computed from the wrong
+                # starting price, so its error would measure the input bug,
+                # not the model -- exactly the 2026-08-14 rows F1's
+                # scripts/clean_forecast_ledger.py has to delete (category b).
+                raw_model_forecasts = model_forecasts
+                model_forecasts, guard_drops = apply_forecast_guards(
+                    raw_model_forecasts,
+                    guard_anchors,
+                    last_close,
+                    mc_sigma_by_horizon[h] if sigma_from_garch else None,
+                    h,
+                    clamp_k,
+                    input_tol,
+                )
+                for _name, _reason, _val in guard_drops:
+                    self._bump_guard_stat(f"dropped_{_reason}")
+                    logger.debug(
+                        "Forecast guard dropped %s for %s h=%d (%s, measured=%.4g)",
+                        _name, symbol, h, _reason, _val,
+                    )
+                if raw_model_forecasts and not model_forecasts:
+                    self._bump_guard_stat("all_dropped_horizons")
+                bad_input_models = {n for n, r, _ in guard_drops if r == GUARD_REASON_INPUT_PRICE}
+
                 # Step 2b: retrieve skill weights for this horizon (empty dict = cold start).
                 #
                 # Gated on settings.FORECAST_SKILL_WEIGHTING_ENABLED -- this is the
@@ -1647,7 +1852,9 @@ class ForecastingEngine:
                 # "does any model beat a naive random walk?" comparison the
                 # audit found nothing in this codebase could answer (see
                 # docs/known_issues/forecast_ito_double_correction_and_horizon_units.md).
-                recordable_forecasts = dict(model_forecasts)
+                recordable_forecasts = {
+                    n: v for n, v in raw_model_forecasts.items() if n not in bad_input_models
+                }
                 if current_price and current_price > 0:
                     recordable_forecasts["naive"] = current_price
                 # The PUBLISHED blend (Forecast_{h}) rides along the same way
@@ -1664,7 +1871,7 @@ class ForecastingEngine:
                     try:
                         self._tracker.record_forecasts(
                             symbol, h, recordable_forecasts, now_utc,
-                            model_bounds={"monte_carlo": (mc_lo, mc_hi)} if m_res > 0 else None,
+                            model_bounds={"monte_carlo": (mc_lo, mc_hi)} if "monte_carlo" in recordable_forecasts else None,
                         )
                     except Exception as _exc:
                         logger.debug("ForecastTracker.record_forecasts skipped for %s h=%d: %s", symbol, h, _exc)
@@ -1678,7 +1885,7 @@ class ForecastingEngine:
                     ablation_recordable = {
                         name: per_h.get(h, 0.0)
                         for name, per_h in bert_lla_multi.items()
-                        if per_h.get(h, 0.0) > 0 and name not in model_forecasts
+                        if per_h.get(h, 0.0) > 0 and name not in raw_model_forecasts
                     }
                     if ablation_recordable:
                         try:
@@ -1718,9 +1925,13 @@ class ForecastingEngine:
                 # guard (CONSTRAINT #4): only write a band key when the bound is
                 # valid/positive -- a missing/invalid band leaves the key UNSET
                 # (JSON null downstream), never a fabricated 0.0.
-                if mc_lo > 0:
+                # F2: when a guard dropped Monte Carlo (wrong anchor price or a
+                # clamped path), its band is as wrong as its mean, so the band
+                # keys stay unset too rather than publishing it.
+                mc_band_ok = "monte_carlo" in model_forecasts or "monte_carlo" not in raw_model_forecasts
+                if mc_lo > 0 and mc_band_ok:
                     results[f'Forecast_{h}_Lower'] = mc_lo
-                if mc_hi > 0:
+                if mc_hi > 0 and mc_band_ok:
                     results[f'Forecast_{h}_Upper'] = mc_hi
 
             # Surface the Facebook Prophet 30-day baseline forecasts (already computed

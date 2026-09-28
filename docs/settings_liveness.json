@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 325,
+    "live_safe": 327,
     "no_op": 46,
     "restart_required": 106,
-    "total": 477
+    "total": 479
   },
   "dynamic_sites": [
     {
@@ -224,8 +224,10 @@
     "FORECAST_BACKFILL_DEADLINE_SECONDS",
     "FORECAST_BACKFILL_ENABLED",
     "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED",
+    "FORECAST_CLAMP_SIGMA_K",
     "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
     "FORECAST_DRIFT_SHRINKAGE",
+    "FORECAST_INPUT_PRICE_TOLERANCE",
     "FORECAST_MAX_CONCURRENCY",
     "FORECAST_MC_RANDOM_SEED",
     "FORECAST_MODEL_PERSISTENCE_ENABLED",
@@ -491,13 +493,13 @@
   "read_forms": {
     "attr": 830,
     "factory_param": 4,
-    "getattr_const": 302,
+    "getattr_const": 304,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 263,
     "factory_param": 4,
-    "getattr_const": 182,
+    "getattr_const": 184,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -2861,9 +2863,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "forecasting_engine.py:168",
+        "site": "forecasting_engine.py:263",
         "via": [
-          144
+          215
         ]
       }
     ],
@@ -2874,9 +2876,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "forecasting_engine.py:166",
+        "site": "forecasting_engine.py:261",
         "via": [
-          144
+          215
         ]
       }
     ],

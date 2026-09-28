@@ -575,6 +575,27 @@ class ForecastingStep(PipelineStep):
                 pairs = list(pool.map(_forecast_one, rows))
         forecast_results = {tk: fc for tk, fc in pairs if fc is not None}
 
+        # Forecasting rebuild F2: one aggregated line per cycle for the safety
+        # guards (per-drop detail is at DEBUG inside the engine).
+        _pop_guard_stats = getattr(fe, "pop_guard_stats", None)
+        if callable(_pop_guard_stats):
+            try:
+                _guard_stats = _pop_guard_stats()
+                if _guard_stats:
+                    telemetry.info(
+                        "Forecast guards this cycle: %d clamped, %d input-price drops, "
+                        "%d symbol-horizons with every model dropped, %d symbols with no "
+                        "GARCH sigma (clamp skipped), %d symbols with no price history "
+                        "(input check skipped).",
+                        _guard_stats.get("dropped_clamp", 0),
+                        _guard_stats.get("dropped_input_price", 0),
+                        _guard_stats.get("all_dropped_horizons", 0),
+                        _guard_stats.get("sigma_unavailable", 0),
+                        _guard_stats.get("no_reference_close", 0),
+                    )
+            except Exception as _guard_exc:  # noqa: BLE001 - logging only
+                telemetry.debug("Forecast guard stats unavailable: %s", _guard_exc)
+
         # Universe-funnel diagnostic, final stage (see AsyncDataFetchStep /
         # ProcessingStep above and
         # docs/known_issues/universe_count_reporting_mismatch.md).
@@ -2080,6 +2101,12 @@ class StrategyEvalStep(PipelineStep):
         # -- Vectorized Signal Aggregation --
         vec_df = pd.DataFrame(index=ctx.dashboard_df['Symbol'].values)
         vec_df['forecast_price'] = ctx.dashboard_df.get('Forecast_30', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
+        # Forecasting rebuild F2: forecast_alignment scores a fallback forecast
+        # as neutral, so it needs the engine's disclosure flag. Only a real
+        # bool counts; NaN (row skipped forecasting) stays "unknown" (False).
+        vec_df['forecast_is_fallback'] = ctx.dashboard_df.get(
+            'Forecast_30_Is_Fallback', pd.Series(False, index=ctx.dashboard_df.index)
+        ).map(lambda v: v is True or (isinstance(v, (bool, np.bool_)) and bool(v))).values
         vec_df['trend_strength'] = ctx.dashboard_df.get('Aroon Up', pd.Series(50.0, index=ctx.dashboard_df.index)).fillna(50.0).values
         vec_df['atr'] = ctx.dashboard_df.get('ATR', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
         vec_df['macd_line'] = ctx.dashboard_df.get('MACD_Line', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
@@ -2225,6 +2252,10 @@ class StrategyEvalStep(PipelineStep):
                     fundamentals=fund_dto,
                     macro=ctx.macro_dto,
                     forecast_price=row.get('Forecast_30', 0.0),
+                    forecast_is_fallback=(
+                        bool(row.get('Forecast_30_Is_Fallback'))
+                        if isinstance(row.get('Forecast_30_Is_Fallback'), (bool, np.bool_)) else None
+                    ),
                     trend_strength=aroon_val,
                     atr=atr_val,
                     macd_line=macd_line_val,
