@@ -438,3 +438,213 @@ class TestSingleFlight:
         with pytest.raises(robinhood_login.RobinhoodLoginInProgress):
             robinhood_login.login_blocking("refresh", poll_interval=0.05)
         assert _stub_worker.popen_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Cross-process single-flight (fcntl.flock on <OUTPUT_DIR>/robinhood_login.lock)
+# ---------------------------------------------------------------------------
+
+_HOLDER_PATH = Path(__file__).parent / "fixtures" / "robinhood_login_lock_holder.py"
+
+
+def _flock_from_another_description(lock_dir: Path, owner: dict):
+    """Hold the lock on a SEPARATE open file description -- to flock that is
+    indistinguishable from another process -- and write an owner sidecar."""
+    import fcntl
+    import os
+
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_dir / robinhood_login.LOCK_FILENAME), os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    (lock_dir / robinhood_login.OWNER_FILENAME).write_text(json.dumps(owner), encoding="utf-8")
+    return fd
+
+
+def _start_holder(lock_dir: Path, action: str, behavior: str):
+    """Start tests/fixtures/robinhood_login_lock_holder.py as a real second
+    process; returns (Popen, first-line info)."""
+    import os
+    import sys
+
+    env = dict(os.environ, STUB_LOGIN_BEHAVIOR=behavior)
+    proc = subprocess.Popen(
+        [sys.executable, str(_HOLDER_PATH), str(lock_dir), action],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+    )
+    line = proc.stdout.readline()
+    if not line:
+        proc.kill()
+        _, err = proc.communicate(timeout=10)
+        pytest.fail(f"lock-holder helper failed to start: {err[-2000:]}")
+    return proc, json.loads(line)
+
+
+def _kill_pgid(pid: int) -> None:
+    import os
+    import signal
+
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _close_holder(holder, info) -> None:
+    if holder.poll() is None:
+        holder.kill()
+        holder.wait(timeout=10)
+    _kill_pgid(info["worker_pid"])
+    for stream in (holder.stdout, holder.stderr):
+        stream.close()
+
+
+class TestCrossProcessLock:
+    @pytest.fixture(autouse=True)
+    def _long_deadline(self, monkeypatch):
+        monkeypatch.setattr("settings.settings.RH_LOGIN_DEADLINE_SECONDS", 30.0)
+        monkeypatch.setattr("settings.settings.RH_LOGIN_STARTUP_SECONDS", 10.0)
+
+    def test_lock_file_lives_in_output_dir_by_default(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(robinhood_login, "_lock_dir_override", None)
+        monkeypatch.setattr("settings.settings.OUTPUT_DIR", tmp_path)
+        assert robinhood_login._lock_dir() == tmp_path
+
+    def test_lock_held_elsewhere_refuses_any_mode_with_owner_and_no_worker(
+        self, monkeypatch, _stub_worker
+    ) -> None:
+        import os
+
+        lock_dir = robinhood_login._lock_dir()
+        owner = {"pid": 424242, "job_id": "rhlogin-other", "mode": "refresh",
+                 "started_at": "2026-09-28T12:40:00+00:00", "extra": "not-a-diagnostic-field"}
+        fd = _flock_from_another_description(lock_dir, owner)
+        try:
+            for mode, kwargs in (
+                ("refresh", {}),
+                ("connect", {"username": "u@example.com", "password": "s3cret"}),
+            ):
+                with pytest.raises(robinhood_login.RobinhoodLoginInProgress) as exc_info:
+                    robinhood_login.start_login(mode, **kwargs)
+                exc = exc_info.value
+                assert exc.job is None
+                assert exc.requested_mode == mode
+                assert exc.owner == {k: owner[k] for k in ("pid", "job_id", "mode", "started_at")}
+                message = str(exc)
+                assert "424242" in message and "rhlogin-other" in message
+                assert "another process" in message
+                for secret in ("not-a-diagnostic-field", "u@example.com", "s3cret"):
+                    assert secret not in message
+            assert getattr(_stub_worker, "popen_calls", 0) == 0
+            assert robinhood_login._active_job is None
+        finally:
+            os.close(fd)
+
+    def test_owner_sidecar_written_while_held_and_removed_on_release(
+        self, monkeypatch, _stub_worker
+    ) -> None:
+        import os
+
+        _set_behavior(monkeypatch, "hang_after_started")
+        job = robinhood_login.start_login("refresh")
+        owner = robinhood_login.read_lock_owner()
+        assert owner["pid"] == os.getpid()
+        assert owner["job_id"] == job.job_id
+        assert owner["mode"] == "refresh"
+        assert owner["started_at"]
+        assert job._xlock_fd is not None
+
+        robinhood_login.cancel_login(job.job_id)
+        deadline = time.time() + 5
+        while job._xlock_fd is not None and time.time() < deadline:
+            time.sleep(0.05)
+        assert job._xlock_fd is None, "the deadline thread must release the lock once terminal"
+        assert not (robinhood_login._lock_dir() / robinhood_login.OWNER_FILENAME).exists()
+
+    def test_launch_failure_releases_the_lock(self, monkeypatch) -> None:
+        import fcntl
+        import os
+
+        class _Boom:
+            def __getattr__(self, name):
+                return getattr(subprocess, name)
+
+            def Popen(self, *a, **k):  # noqa: N802
+                raise OSError("spawn failed")
+
+        monkeypatch.setattr(robinhood_login, "subprocess", _Boom())
+        with pytest.raises(OSError):
+            robinhood_login.start_login("refresh")
+        # Nothing holds the lock now: a fresh open file description can take it.
+        fd = os.open(str(robinhood_login._lock_dir() / robinhood_login.LOCK_FILENAME), os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+
+    def test_no_fcntl_falls_back_to_per_process_with_one_warning(
+        self, monkeypatch, _stub_worker, caplog
+    ) -> None:
+        monkeypatch.setattr(robinhood_login, "_fcntl", None)
+        monkeypatch.setattr(robinhood_login, "_warned_no_xlock", False)
+        _set_behavior(monkeypatch, "success")
+        caplog.set_level("WARNING", logger="data.robinhood_login")
+
+        first = robinhood_login.start_login("refresh")
+        _wait_until_terminal(first)
+        second = robinhood_login.start_login("refresh")
+        _wait_until_terminal(second)
+
+        assert first.state == second.state == "succeeded"
+        assert sum(
+            "cross-process login lock unavailable" in r.getMessage() for r in caplog.records
+        ) == 1
+
+    def test_second_real_process_is_refused_until_the_first_is_killed(
+        self, monkeypatch, _stub_worker
+    ) -> None:
+        import signal
+
+        lock_dir = robinhood_login._lock_dir()
+        holder, info = _start_holder(lock_dir, "hold", "hang_after_started")
+        try:
+            assert info["pid"] == holder.pid
+            for mode in ("refresh", "connect"):
+                with pytest.raises(robinhood_login.RobinhoodLoginInProgress) as exc_info:
+                    robinhood_login.start_login(mode, username="u@example.com", password="pw")
+                assert exc_info.value.job is None
+                assert exc_info.value.owner["pid"] == holder.pid
+                assert exc_info.value.owner["job_id"] == info["job_id"]
+            assert getattr(_stub_worker, "popen_calls", 0) == 0
+
+            holder.send_signal(signal.SIGKILL)
+            holder.wait(timeout=10)
+
+            # The kernel dropped the lock with the dead process, even though
+            # its orphaned stub worker is still alive (the worker does not
+            # inherit the lock fd). A stale sidecar is left behind and is
+            # simply overwritten by the next holder.
+            _set_behavior(monkeypatch, "success")
+            job = robinhood_login.start_login("refresh")
+            assert _stub_worker.popen_calls == 1
+            assert robinhood_login.read_lock_owner()["job_id"] == job.job_id
+            _wait_until_terminal(job)
+            assert job.state == "succeeded"
+        finally:
+            _close_holder(holder, info)
+
+    def test_lock_frees_when_the_first_process_finishes_its_job_and_exits(
+        self, monkeypatch, _stub_worker
+    ) -> None:
+        lock_dir = robinhood_login._lock_dir()
+        holder, info = _start_holder(lock_dir, "finish", "success")
+        try:
+            assert holder.stdout.readline().strip() == "released"
+            assert holder.wait(timeout=15) == 0
+            assert not (lock_dir / robinhood_login.OWNER_FILENAME).exists()
+
+            _set_behavior(monkeypatch, "success")
+            job = robinhood_login.start_login("refresh")
+            _wait_until_terminal(job)
+            assert job.state == "succeeded"
+        finally:
+            _close_holder(holder, info)

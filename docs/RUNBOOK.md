@@ -899,6 +899,7 @@ will arrive:
 # .env (or Settings → Feature Flags; ENABLED needs typed confirmation)
 ROBINHOOD_SCHEDULED_LOGIN_ENABLED=true
 ROBINHOOD_SCHEDULED_LOGIN_TIME_ET=08:40   # HH:MM, US/Eastern, weekdays only
+ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET=18:00 # no login is STARTED at/after this (default)
 ```
 
 Then restart the daemon (required if `ORCHESTRATOR_INTERVAL_SECONDS=0`;
@@ -915,14 +916,29 @@ harmless otherwise).
 - **Once per day, restart-safe:** the attempted date is stored in
   `~/.stockpy_local/output/robinhood_scheduled_login_state.json` (`last_attempted_et_date`,
   `last_outcome`, `job_id`, `last_error_code`). Restarting the daemon the same
-  day does not prompt again. A daemon started after 08:40 on a weekday that
-  has not been attempted yet prompts immediately.
+  day does not prompt again. A daemon started after 08:40 (and before the
+  cut-off) on a weekday that has not been attempted yet prompts immediately.
+- **Evening cut-off (18:00 ET by default):** the daemon only STARTS the
+  scheduled login between 08:40 and `ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET`.
+  A daemon (re)started at, say, 19:00 does nothing that evening, does not
+  mark the day attempted, and prompts at 08:40 the next weekday. A cut-off
+  at or before the start time (or an invalid value) disables the scheduled
+  login with a warning.
 - **If you missed the push** (`last_outcome` = `timeout`): press Refresh on
   the webapp's brokerage card. Only one login can run at a time. A Refresh
   while the scheduled login is still waiting joins it (same job) instead of
   sending a second push; a Connect while any login runs returns 409.
-- **Invalid time** (e.g. `8:40pm`): the scheduled login is disabled and the
-  daemon logs a warning.
+- **One login across ALL processes:** the process that starts a login holds
+  an OS lock on `~/.stockpy_local/output/robinhood_login.lock` until the
+  login finishes. Any other process (the daemon, the standalone Data/Metrics
+  APIs, the MCP server, `main.py`) that tries to start one meanwhile is
+  refused: the webapp gets a 409 naming the other process, and a background
+  auto-refresh just uses the cached snapshot. To see who holds it, read
+  `~/.stockpy_local/output/robinhood_login_owner.json` (pid, job_id, mode,
+  started_at). The lock is released automatically if that process exits or
+  is killed, so there is nothing to clean up by hand.
+- **Invalid time or cut-off** (e.g. `8:40pm`): the scheduled login is
+  disabled and the daemon logs a warning.
 - **Turn off:** `ROBINHOOD_SCHEDULED_LOGIN_ENABLED=false`.
 
 ### 5.2 Track-record status report

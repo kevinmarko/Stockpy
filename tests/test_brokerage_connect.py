@@ -680,6 +680,38 @@ class TestBrokerageRefreshHappyPath:
         assert "hunter2" not in detail
         assert "user@example.com" not in detail
 
+    @pytest.mark.parametrize("endpoint", ["refresh", "connect"])
+    def test_409_when_a_login_is_running_in_another_process(self, monkeypatch, endpoint):
+        """Cross-process lock: the running login belongs to another process,
+        so there is no in-process job (``exc.job is None``). The 409 detail
+        names the owner from the diagnostic sidecar and never echoes
+        credentials."""
+        from data.robinhood_login import RobinhoodLoginInProgress
+
+        owner = {"pid": 4242, "job_id": "rhlogin-elsewhere", "mode": "refresh",
+                 "started_at": "2026-09-28T12:40:00+00:00"}
+
+        def refuse(*_args, **_kwargs):
+            raise RobinhoodLoginInProgress(None, endpoint, owner=owner)
+
+        if endpoint == "refresh":
+            monkeypatch.setattr(pilots_api.rh_login, "start_refresh_job", refuse)
+            flag, kwargs = "BROKERAGE_REFRESH_ENABLED", {}
+        else:
+            monkeypatch.setattr(pilots_api.rh_login, "start_connect_job", refuse)
+            flag = "BROKERAGE_CONNECT_ENABLED"
+            kwargs = {"json": {"username": "user@example.com", "password": "hunter2"}}
+        with mock.patch.object(settings, flag, True):
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                resp = loopback_client.post(f"/brokerage/{endpoint}", headers=_auth(), **kwargs)
+
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert isinstance(detail, str)
+        assert "another process" in detail
+        assert "rhlogin-elsewhere" in detail and "4242" in detail
+        assert "hunter2" not in detail and "user@example.com" not in detail
+
     def test_refresh_never_logs_token(self, monkeypatch, caplog):
         monkeypatch.setattr(pilots_api.rh_login, "start_refresh_job", lambda: "job")
         monkeypatch.setattr(

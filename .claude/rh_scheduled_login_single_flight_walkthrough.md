@@ -167,3 +167,88 @@ See `docs/RUNBOOK.md` §5.1a. Do it in the same change that unloads the
 - `AsyncDataFetchStep` can still block a cycle up to 180 s on a live login
   when `ROBINHOOD_AUTO_REFRESH_ENABLED=true` (separate plan trap, not touched
   here: `pipeline/production_steps.py` was off-limits).
+
+## Follow-up (branch `rh-login-evening-cutoff-cross-process`)
+
+Closes the first two "Open / uncertain" items above.
+
+### A. Evening cut-off for the scheduled login
+
+- New setting `ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET` (str, default `"18:00"`),
+  same HH:MM validator/normalizer as `ROBINHOOD_SCHEDULED_LOGIN_TIME_ET` (one
+  validator covers both; the warning names the field). `ALLOWED_KEYS`,
+  `.env.example`, census + liveness regenerated (classifies `live_safe`).
+  Not a `DANGEROUS_KEYS` member: it can only narrow when a prompt is sent.
+- `desktop/daemon_runtime.py`: `_scheduled_login_window()` returns
+  `(start, cutoff)` or `None` (disabled, invalid time, invalid cut-off, or
+  cut-off <= start; each warns once per value pair). A login is only STARTED
+  in `[start, cutoff)` ET on a weekday.
+- At/after the cut-off, `maybe_run_scheduled_robinhood_login` returns `None`
+  BEFORE the claim: no in-process claim, no state-file write. So a daemon
+  first woken at 19:00 does nothing that day and fires the next weekday at
+  the target. One INFO line per ET day per process.
+- `seconds_until_scheduled_login` skips today once past the cut-off, so the
+  next target is the next weekday's start: `_bounded_wait_timeout` stops
+  shortening waits in the evening (no wake every 5 s until midnight).
+- The in-progress skip handles a login in ANOTHER process (`exc.job is
+  None`): logs the owner, stores the owner's `job_id` if present.
+- Tests (`TestScheduledRobinhoodLogin`, frozen times): 17:59 fires; 18:00,
+  18:01, 19:00 don't and leave no state file / claim; a daemon at 19:00
+  waits for Tuesday 08:40 and fires then; `seconds_until` rolls over at
+  18:00; Friday evening → Monday; bounded wait not shortened after the
+  cut-off; DST (winter EST, and the first weekday after DST ends); custom
+  cut-off; invalid / non-increasing cut-off disables with one warning;
+  default + normalization; another process's login is left alone.
+
+### B. Cross-process single-flight in `data/robinhood_login.py`
+
+- Inside `_start_lock`, after the in-process check, `start_login` takes
+  `fcntl.flock(LOCK_EX | LOCK_NB)` on `<OUTPUT_DIR>/robinhood_login.lock`
+  and writes `<OUTPUT_DIR>/robinhood_login_owner.json` (pid, job_id, mode,
+  started_at; temp + `os.replace`). The fd lives on the job (`_xlock_fd`);
+  `_xlock_holder` tracks which job in this process holds it.
+- Release (idempotent, `_release_cross_process_lock`): in `_enforce_deadline`'s
+  `finally` -- that thread runs until the job is terminal no matter who made
+  it terminal (event drain, `cancel_login`, deadline) -- and immediately if
+  `Popen` fails. Because a second `flock` from the SAME process on a new fd
+  conflicts, `start_login` releases a terminal holder's lock itself before
+  re-acquiring (the deadline thread polls every 0.5 s). Sidecar deleted (if
+  still ours) before unlocking.
+- Held by another process → `RobinhoodLoginInProgress(None, mode, owner=...)`
+  for any mode; `.owner` keeps only the four diagnostic fields; message
+  never includes credentials. Same-process behaviour from #1082 unchanged.
+- Callers: `api/_rh_login.py::login_in_progress_detail` handles `job=None`
+  (409 detail: "in another process (pid …, job_id …)"); `fetch_account_snapshot`
+  tier 3 already catches any exception and falls back to DB/JSON cache (now
+  tested end to end with a real held lock); the daemon hook (see A).
+- No stale locks: kernel drops an `flock` with the process. The worker does
+  not inherit the fd, so an orphaned worker does not hold it.
+- No `fcntl`, or lock file can't be opened/locked → per-process only, one
+  warning.
+- Tests isolation: root `conftest.py::_isolate_robinhood_login_lock_in_tests`
+  sets `_lock_dir_override` to a per-test temp dir (otherwise xdist workers
+  would refuse each other) and resets `_xlock_holder`.
+- Tests (`tests/test_robinhood_login.py::TestCrossProcessLock`, stub worker
+  only): default path is `OUTPUT_DIR`; lock held on another open file
+  description refuses refresh and connect with owner info, no `Popen`, no
+  credential leakage; sidecar written while held and removed on release;
+  `Popen` failure releases; no-fcntl fallback warns once; **two real
+  processes** (`tests/fixtures/robinhood_login_lock_holder.py`): the second
+  is refused while the first holds the lock, and can start once the first
+  is SIGKILLed (its orphaned stub worker still alive); and once the first
+  finishes its job and exits normally. Plus
+  `tests/test_brokerage_connect.py` (409 for both endpoints with `job=None`)
+  and `tests/test_robinhood_portfolio.py` (tier-3 fallback to stale cache
+  while another process holds the lock, no worker spawned).
+
+### Still open / uncertain
+
+- Disclosed edge: if the lock-holding process dies while its worker is
+  still waiting for approval, the orphaned worker can still complete its own
+  login while another process starts a new one (two prompts, rare).
+- `main.py --refresh-account` (`force=True`) while another process holds
+  the lock now falls back to the cached snapshot instead of logging in; the
+  operator retries after the other login finishes.
+- The lock file lives in `OUTPUT_DIR`; processes configured with different
+  `LOCAL_DATA_ROOT`/`OUTPUT_DIR` values do not share it.
+- Holiday calendar still not handled.

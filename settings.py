@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -1266,6 +1266,19 @@ class Settings(BaseSettings):
             "daily scheduled Robinhood login (see "
             "ROBINHOOD_SCHEDULED_LOGIN_ENABLED). An invalid value disables the "
             "scheduled login with a warning; it never crashes settings load."
+        ),
+    )
+    ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET: str = Field(
+        default="18:00",
+        description=(
+            "US/Eastern evening cut-off (\"HH:MM\", 24-hour) for the daemon's "
+            "scheduled Robinhood login: a login is only STARTED between "
+            "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET and this time on a weekday. A "
+            "daemon that first wakes after the cut-off does nothing that day "
+            "(and does not mark the day attempted); the next attempt is the "
+            "next weekday's scheduled time. An invalid value, or a cut-off at "
+            "or before the scheduled time, disables the scheduled login with a "
+            "warning; it never crashes settings load."
         ),
     )
     # data/robinhood_login.py's killable-subprocess login worker. All three
@@ -5043,9 +5056,9 @@ class Settings(BaseSettings):
         v = str(value or "").strip().lower()
         return v if v in {"off", "shadow", "primary"} else "off"
 
-    @field_validator("ROBINHOOD_SCHEDULED_LOGIN_TIME_ET")
+    @field_validator("ROBINHOOD_SCHEDULED_LOGIN_TIME_ET", "ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET")
     @classmethod
-    def _normalize_scheduled_login_time(cls, value: str) -> str:
+    def _normalize_scheduled_login_time(cls, value: str, info: ValidationInfo) -> str:
         """Normalize a valid time to zero-padded "HH:MM". An invalid value is
         kept verbatim (so the operator sees what they typed) and logged; the
         daemon hook treats it as "scheduled login disabled". Never raises --
@@ -5053,9 +5066,9 @@ class Settings(BaseSettings):
         parsed = parse_scheduled_login_time(value)
         if parsed is None:
             logger.warning(
-                "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET=%r is not a valid HH:MM "
+                "%s=%r is not a valid HH:MM "
                 "time; the daemon's scheduled Robinhood login is disabled.",
-                value,
+                info.field_name, value,
             )
             return str(value or "")
         return f"{parsed[0]:02d}:{parsed[1]:02d}"

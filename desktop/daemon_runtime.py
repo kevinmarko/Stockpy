@@ -405,9 +405,13 @@ class OrchestratorDaemon:
         # Scheduled Robinhood login: the ET date (ISO) this process last
         # claimed, so the hook fires at most once per day even if the durable
         # state write fails; and the last invalid time value warned about, so
-        # a bad ROBINHOOD_SCHEDULED_LOGIN_TIME_ET warns once, not every wake.
+        # a bad ROBINHOOD_SCHEDULED_LOGIN_TIME_ET/_CUTOFF_ET warns once, not
+        # every wake.
         self._scheduled_login_claimed_date: Optional[str] = None
         self._scheduled_login_warned_value: Optional[str] = None
+        # The ET date the after-cut-off INFO line was last logged for, so a
+        # daemon woken repeatedly in the evening logs it once, not per wake.
+        self._scheduled_login_cutoff_logged_date: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -1149,22 +1153,39 @@ class OrchestratorDaemon:
     # Scheduled daily Robinhood device-approval login (step 5, decision 6)
     # ------------------------------------------------------------------
 
-    def _scheduled_login_time(self) -> Optional[tuple[int, int]]:
-        """``(hour, minute)`` ET when the scheduled login is enabled and its
-        time is valid, else ``None``. An invalid time warns once per value."""
+    def _scheduled_login_window(self) -> Optional[tuple[tuple[int, int], tuple[int, int]]]:
+        """``((start_h, start_m), (cutoff_h, cutoff_m))`` ET when the
+        scheduled login is enabled and both times are valid with the cut-off
+        strictly after the start, else ``None``. A login is only STARTED in
+        ``[start, cutoff)``. An invalid window warns once per value pair."""
         if not settings.ROBINHOOD_SCHEDULED_LOGIN_ENABLED:
             return None
         raw = settings.ROBINHOOD_SCHEDULED_LOGIN_TIME_ET
-        parsed = parse_scheduled_login_time(raw)
-        if parsed is None:
-            if self._scheduled_login_warned_value != str(raw):
-                self._scheduled_login_warned_value = str(raw)
-                logger.warning(
-                    "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET=%r is not a valid HH:MM "
-                    "time; the scheduled Robinhood login is disabled.", raw,
-                )
+        raw_cutoff = settings.ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET
+        start = parse_scheduled_login_time(raw)
+        cutoff = parse_scheduled_login_time(raw_cutoff)
+        problem: Optional[str] = None
+        if start is None:
+            problem = (
+                f"ROBINHOOD_SCHEDULED_LOGIN_TIME_ET={raw!r} is not a valid HH:MM time"
+            )
+        elif cutoff is None:
+            problem = (
+                f"ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET={raw_cutoff!r} is not a valid "
+                "HH:MM time"
+            )
+        elif cutoff <= start:
+            problem = (
+                f"ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET={raw_cutoff!r} is not after "
+                f"ROBINHOOD_SCHEDULED_LOGIN_TIME_ET={raw!r}"
+            )
+        if problem is not None:
+            key = f"{raw!s}|{raw_cutoff!s}"
+            if self._scheduled_login_warned_value != key:
+                self._scheduled_login_warned_value = key
+                logger.warning("%s; the scheduled Robinhood login is disabled.", problem)
             return None
-        return parsed
+        return start, cutoff
 
     def _scheduled_login_attempted_date(self) -> Optional[str]:
         """The latest ET date (ISO) a scheduled login was attempted -- this
@@ -1181,9 +1202,10 @@ class OrchestratorDaemon:
         Used by ``_timer_loop`` to wake near the target time even when the
         pipeline interval is much longer. Never raises."""
         try:
-            hm = self._scheduled_login_time()
-            if hm is None:
+            window = self._scheduled_login_window()
+            if window is None:
                 return None
+            hm, cut = window
             now_et = (now_utc or datetime.now(timezone.utc)).astimezone(_ET)
             attempted = self._scheduled_login_attempted_date()
             for offset in range(8):
@@ -1193,6 +1215,11 @@ class OrchestratorDaemon:
                 target = datetime.combine(day, dtime(hm[0], hm[1]), tzinfo=_ET)
                 if offset == 0:
                     if attempted == day.isoformat():
+                        continue
+                    # Past today's cut-off: nothing more today, so the next
+                    # target is the next weekday's start (no repeated wakes
+                    # all evening).
+                    if now_et >= datetime.combine(day, dtime(cut[0], cut[1]), tzinfo=_ET):
                         continue
                     if now_et >= target:
                         return 0.0
@@ -1242,7 +1269,11 @@ class OrchestratorDaemon:
 
         Gated on ``settings.ROBINHOOD_SCHEDULED_LOGIN_ENABLED`` (default
         False -> returns immediately, no I/O). Fires at most once per US/
-        Eastern weekday, at/after ``ROBINHOOD_SCHEDULED_LOGIN_TIME_ET``: the
+        Eastern weekday, at/after ``ROBINHOOD_SCHEDULED_LOGIN_TIME_ET`` and
+        before ``ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET`` (default 18:00). After
+        the cut-off nothing is started AND the day is not claimed, so a
+        daemon first started in the evening does nothing that day and fires
+        at the next weekday's scheduled time. Inside the window the
         day is claimed (in-process, then in
         ``OUTPUT_DIR/robinhood_scheduled_login_state.json``) BEFORE anything
         that could prompt, so neither a later wake nor a same-day daemon
@@ -1254,15 +1285,17 @@ class OrchestratorDaemon:
         the killable worker and returns; a daemon thread watches the job and
         logs/alerts the outcome. Single-flight: a refresh already running
         (e.g. the webapp's Refresh button) is joined; a running connect is
-        left alone. Returns the outcome (``started``, ``skipped_fresh``,
+        left alone, as is a login running in ANOTHER process (cross-process
+        lock in ``data.robinhood_login``). Returns the outcome (``started``, ``skipped_fresh``,
         ``skipped_no_credentials``, ``skipped_login_in_progress``,
         ``start_failed``) or ``None`` when nothing was due. Never raises
         into the timer loop.
         """
         try:
-            hm = self._scheduled_login_time()
-            if hm is None:
+            window = self._scheduled_login_window()
+            if window is None:
                 return None
+            hm, cut = window
             now_et = (now_utc or datetime.now(timezone.utc)).astimezone(_ET)
             if now_et.weekday() >= 5:
                 return None
@@ -1271,6 +1304,20 @@ class OrchestratorDaemon:
                 return None
             today = now_et.date().isoformat()
             if self._scheduled_login_attempted_date() == today:
+                return None
+            cutoff = datetime.combine(now_et.date(), dtime(cut[0], cut[1]), tzinfo=_ET)
+            if now_et >= cutoff:
+                # After the evening cut-off: never prompt, and do NOT claim
+                # the day -- there is nothing to dedup, and the next attempt
+                # is simply the next weekday's scheduled time. Logged once
+                # per ET day per process.
+                if self._scheduled_login_cutoff_logged_date != today:
+                    self._scheduled_login_cutoff_logged_date = today
+                    logger.info(
+                        "Scheduled Robinhood login not started today: it is past "
+                        "the %02d:%02d ET cut-off. Next attempt: the next weekday "
+                        "at %02d:%02d ET.", cut[0], cut[1], hm[0], hm[1],
+                    )
                 return None
 
             # Claim the day first -- see the docstring.
@@ -1305,12 +1352,19 @@ class OrchestratorDaemon:
             try:
                 job = start_login("refresh")
             except RobinhoodLoginInProgress as exc:
+                # exc.job is None when the running login belongs to ANOTHER
+                # process (cross-process lock); its job id is then in
+                # exc.owner (diagnostic sidecar, may be empty).
+                running_id = exc.job.job_id if exc.job is not None else exc.owner.get("job_id")
+                running_mode = exc.job.mode if exc.job is not None else exc.owner.get("mode", "?")
                 logger.info(
                     "Scheduled Robinhood login skipped: a %s login (%s) is "
-                    "already in progress.", exc.job.mode, exc.job.job_id,
+                    "already in progress%s.", running_mode, running_id,
+                    "" if exc.job is not None else " in another process",
                 )
                 _write_scheduled_login_state(
-                    last_outcome="skipped_login_in_progress", job_id=exc.job.job_id,
+                    last_outcome="skipped_login_in_progress",
+                    job_id=running_id if isinstance(running_id, str) else None,
                 )
                 return "skipped_login_in_progress"
             except Exception as exc:  # noqa: BLE001 - e.g. OSError from Popen

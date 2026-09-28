@@ -445,6 +445,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ROBINHOOD_AUTO_REFRESH_ENABLED",
     "ROBINHOOD_SCHEDULED_LOGIN_ENABLED",  # bool — daemon's daily login prompt; DANGEROUS_KEYS member (settings_keysets.py)
     "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET",  # str  — "HH:MM" US/Eastern for the scheduled login
+    "ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET",  # str  — "HH:MM" US/Eastern evening cut-off (no login started after it)
     # GUI-writable by operator decision (previously excluded as a "hand-set
     # only" master switch -- see settings.py's own BROKERAGE_CONNECT_ENABLED
     # field docstring). The brokerage-credential connect/disconnect endpoints

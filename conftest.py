@@ -310,6 +310,21 @@ def _isolate_broker_fills_db_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_robinhood_login_lock_in_tests(monkeypatch, tmp_path_factory):
+    """Point data.robinhood_login's cross-process login lock (+ its owner
+    sidecar) at a per-test temp dir. Without this, every xdist worker's
+    stub-worker login tests would flock the SAME ``OUTPUT_DIR`` lock file
+    and refuse each other (``RobinhoodLoginInProgress``), and the suite
+    could contend with a live daemon's real lock. ``mktemp`` is lazy per
+    test and cheap; tests that need two processes on one lock set
+    ``_lock_dir_override`` themselves."""
+    import data.robinhood_login as _rhl
+
+    monkeypatch.setattr(_rhl, "_lock_dir_override", tmp_path_factory.mktemp("rh_login_lock"))
+    monkeypatch.setattr(_rhl, "_xlock_holder", None)
+
+
+@pytest.fixture(autouse=True)
 def _no_forecast_tracker_due_date_lookup_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     """Disable ForecastTracker.update_actuals's due-date-close lookup (the F5
     fix, ``settings.FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED``) for every test.
