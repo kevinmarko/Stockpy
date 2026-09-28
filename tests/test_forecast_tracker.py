@@ -35,6 +35,7 @@ from forecasting.forecast_tracker import (
     MODEL_MONTE_CARLO,
     MODEL_HOLT_WINTERS,
     MODEL_CNN_LSTM,
+    MODEL_BLEND,
     MODEL_NAIVE,
     ALL_MODEL_NAMES,
     MC_NOMINAL_COVERAGE,
@@ -578,6 +579,8 @@ class TestGetErrorByModel:
             "id", "symbol", "model_name", "horizon_days", "forecast_ts",
             "forecast_price", "actual_price", "squared_error",
             "forecast_lower", "forecast_upper", "recorded_at",
+            # forecasting rebuild F1: the US/Eastern trading-day upsert key.
+            "forecast_day",
         }
 
         rows = tracker.get_error_by_model("AAPL", 30, window_days=180)
@@ -780,13 +783,15 @@ class TestBlendWithSkill:
 # ---------------------------------------------------------------------------
 
 class TestModuleSurface:
-    def test_all_model_names_contains_eight_entries(self):
+    def test_all_model_names_contains_nine_entries(self):
         """Extended for the BERT-LLA ablations (lstm_baseline,
         lstm_attention, bert_lla) alongside the original four, plus the
         zero-cost naive persistence baseline (WP6 -- see
-        docs/known_issues/forecast_ito_double_correction_and_horizon_units.md)."""
-        assert len(ALL_MODEL_NAMES) == 8
+        docs/known_issues/forecast_ito_double_correction_and_horizon_units.md),
+        plus the published ``blend`` (forecasting rebuild F1)."""
+        assert len(ALL_MODEL_NAMES) == 9
         assert MODEL_NAIVE in ALL_MODEL_NAMES
+        assert MODEL_BLEND in ALL_MODEL_NAMES
 
     def test_model_name_constants_are_strings(self):
         for name in ALL_MODEL_NAMES:
@@ -1165,6 +1170,7 @@ class TestSchemaMigration:
         "id", "symbol", "model_name", "horizon_days", "forecast_ts",
         "forecast_price", "actual_price", "squared_error",
         "forecast_lower", "forecast_upper", "recorded_at",
+        "forecast_day",
     }
 
     def test_migrates_old_schema_preserving_data(self, tmp_path):

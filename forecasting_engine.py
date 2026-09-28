@@ -9,6 +9,7 @@
 # =============================================================================
 
 import logging
+import math
 import warnings
 from datetime import datetime, timezone
 
@@ -1649,6 +1650,16 @@ class ForecastingEngine:
                 recordable_forecasts = dict(model_forecasts)
                 if current_price and current_price > 0:
                     recordable_forecasts["naive"] = current_price
+                # The PUBLISHED blend (Forecast_{h}) rides along the same way
+                # (forecasting rebuild F1) so the number decisions actually use
+                # is scored. Only a REAL blend: when model_forecasts is empty,
+                # `blended` is just current_price (the Is_Fallback case) and
+                # recording it would score naive under another name. Same
+                # COPY-only rule as naive: "blend" never enters model_forecasts,
+                # and ForecastTracker.compute_skill_weights_from_stats drops it
+                # (NON_BLEND_MODEL_NAMES) so it can never become a blend input.
+                if model_forecasts and blended is not None and math.isfinite(blended) and blended > 0:
+                    recordable_forecasts["blend"] = float(blended)
                 if self._tracker is not None and recordable_forecasts:
                     try:
                         self._tracker.record_forecasts(

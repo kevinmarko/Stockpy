@@ -946,3 +946,169 @@ class TestGarchHorizonScaling:
                 f"horizon {h}: genuine sigma must be below the naive "
                 f"sigma_10*sqrt(T/10) extrapolation the old bug effectively used"
             )
+
+
+
+# ============================================================================
+# Forecasting rebuild F1: the published blend is recorded, never blended
+# ============================================================================
+
+def _f1_seed_completed_rows(db_path: str, symbol: str, per_model: dict) -> None:
+    """Insert completed forecast_errors rows directly.
+
+    ``per_model`` maps model name -> (n, squared_error), applied at every
+    horizon. Rows sit inside the skill window and are already actualized, so
+    generate_forecast()'s update_actuals has nothing pending to resolve.
+    """
+    import sqlite3
+    from datetime import timedelta
+
+    now = datetime.now(timezone.utc)
+    conn = sqlite3.connect(db_path)
+    try:
+        for h in (10, 30, 60, 90):
+            for model, (n, sq) in per_model.items():
+                for i in range(n):
+                    ts = (now - timedelta(days=20 + i)).isoformat()
+                    conn.execute(
+                        "INSERT INTO forecast_errors (symbol, model_name, horizon_days, forecast_ts, "
+                        "forecast_price, actual_price, squared_error, recorded_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (symbol, model, h, ts, 100.0, 100.0, sq, ts),
+                    )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class TestF1BlendRecordingNeverLeaksIntoBlend:
+    """F1 records the published blend as model ``blend`` (and keeps
+    recording ``naive``) for scoring. Neither may ever change a published
+    Forecast_* value. Proven end-to-end against a REAL ForecastTracker with
+    skill weighting ON (the operator's live setting), in the two regimes
+    where a leak could matter."""
+
+    _ROW = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
+
+    def _run(self, db_path: str, history: pd.Series) -> dict:
+        from forecasting.forecast_tracker import ForecastTracker
+
+        engine = ForecastingEngine(tracker=ForecastTracker(db_path=db_path))
+        np.random.seed(42)
+        return engine.generate_forecast(
+            self._ROW, current_price=float(history.iloc[-1]), history_series=history
+        )
+
+    @pytest.fixture(autouse=True)
+    def _weighting_on(self, monkeypatch):
+        from settings import settings as _settings
+
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_WEIGHTING_ENABLED", True)
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_WINDOW_DAYS", 365)
+        monkeypatch.setattr(_settings, "FORECAST_SKILL_MIN_OBS", 30)
+
+    def _paired_dbs(self, tmp_path, before: dict, after: dict):
+        from forecasting.forecast_tracker import ForecastTracker
+
+        db_before = str(tmp_path / "before.db")
+        db_after = str(tmp_path / "after.db")
+        ForecastTracker(db_path=db_before)
+        ForecastTracker(db_path=db_after)
+        _f1_seed_completed_rows(db_before, "AAPL", before)
+        _f1_seed_completed_rows(db_after, "AAPL", after)
+        return db_before, db_after
+
+    def test_blend_rows_change_nothing_when_real_models_are_mature(self, tmp_path):
+        """Warm regime, pre-F1 ledger (real models + naive) vs the same
+        ledger after F1 has added very accurate, very mature ``blend`` rows:
+        every published value must be byte-identical (``==``, no tolerance)."""
+        real_and_naive = {
+            "arima": (40, 4.0), "monte_carlo": (40, 1.0), "holt_winters": (40, 9.0),
+            "naive": (80, 2.0),
+        }
+        db_before, db_after = self._paired_dbs(
+            tmp_path, before=real_and_naive, after={**real_and_naive, "blend": (80, 0.01)},
+        )
+        history = _price_series(90, seed=21)
+        a = self._run(db_before, history)
+        b = self._run(db_after, history)
+        for h in (10, 30, 60, 90):
+            assert a[f"Forecast_{h}"] == b[f"Forecast_{h}"]
+
+    def test_mature_measurement_rows_alone_cannot_end_the_cold_start(self, tmp_path):
+        """The leak regime (zero live occurrences on 2026-09-27): real models
+        cold (n < min_obs) while naive/blend are mature. Before F1 the
+        graduated-degrade branch returned {naive: 1.0}, _blend_with_skill
+        intersected that with the real models to nothing, and the published
+        value silently switched from the equal-weight cold start to the
+        static sector blend. Now it must equal the ordinary cold start
+        (naive present but immature, as on the pre-F1 ledger)."""
+        cold_real = {"arima": (5, 4.0), "monte_carlo": (5, 1.0), "holt_winters": (5, 9.0)}
+        db_cold, db_leak = self._paired_dbs(
+            tmp_path,
+            before={**cold_real, "naive": (5, 2.0)},
+            after={**cold_real, "naive": (80, 0.01), "blend": (80, 0.01)},
+        )
+        history = _price_series(90, seed=22)
+        a = self._run(db_cold, history)
+        b = self._run(db_leak, history)
+        for h in (10, 30, 60, 90):
+            assert a[f"Forecast_{h}"] == b[f"Forecast_{h}"]
+
+    def test_blend_row_equals_published_forecast_and_never_enters_the_blend(self, tmp_path, monkeypatch):
+        import sqlite3
+
+        from forecasting.forecast_tracker import ForecastTracker
+
+        seen_inputs = []
+        original = ForecastingEngine._blend_with_skill
+
+        def _spy(model_forecasts, skill_weights, preferred_model, current_price):
+            seen_inputs.append((set(model_forecasts), set(skill_weights)))
+            return original(model_forecasts, skill_weights, preferred_model, current_price)
+
+        monkeypatch.setattr(ForecastingEngine, "_blend_with_skill", staticmethod(_spy))
+        db = str(tmp_path / "t.db")
+        tracker = ForecastTracker(db_path=db)
+        _f1_seed_completed_rows(db, "AAPL", {"naive": (80, 0.01), "blend": (80, 0.01)})
+        engine = ForecastingEngine(tracker=tracker)
+        history = _price_series(90, seed=23)
+        np.random.seed(42)
+        result = engine.generate_forecast(
+            self._ROW, current_price=float(history.iloc[-1]), history_series=history
+        )
+
+        assert seen_inputs, "the blend must have run"
+        for forecast_keys, weight_keys in seen_inputs:
+            # Neither can ever be a blend input: _blend_with_skill only
+            # blends names present in model_forecasts.
+            assert not ({"naive", "blend"} & forecast_keys)
+            # blend is dropped from the skill arithmetic entirely (naive
+            # stays in it, as before F1 -- harmless, see above).
+            assert "blend" not in weight_keys
+
+        with sqlite3.connect(db) as conn:
+            rows = dict(conn.execute(
+                "SELECT horizon_days, forecast_price FROM forecast_errors "
+                "WHERE model_name = 'blend' AND actual_price IS NULL"
+            ).fetchall())
+        for h in (10, 30, 60, 90):
+            assert result[f"Forecast_{h}_Is_Fallback"] is False
+            assert rows[h] == result[f"Forecast_{h}"]
+
+    def test_no_blend_row_for_a_fallback_forecast(self, engine):
+        """Thin history: no model produced output, Forecast_h is just the
+        current price (Is_Fallback). Recording it as 'blend' would score
+        naive under another name, so it must not be recorded."""
+        tracker = mock.MagicMock()
+        tracker.get_skill_weights.return_value = {}
+        engine._tracker = tracker
+        history = pd.Series([42.0], index=pd.date_range("2026-01-01", periods=1, freq="B"))
+        result = engine.generate_forecast(
+            pd.Series({"sector": "Technology", "Symbol": "NEWIPO"}),
+            current_price=42.0, history_series=history,
+        )
+        assert result["Forecast_30_Is_Fallback"] is True
+        assert tracker.record_forecasts.call_count > 0
+        for call in tracker.record_forecasts.call_args_list:
+            assert "blend" not in call.args[2]
