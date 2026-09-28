@@ -50,7 +50,7 @@ SUBPROCESS_METHODS = ("run", "call", "check_call", "check_output")
 REQUESTS_METHODS = ("get", "post", "put", "delete", "head", "patch", "request")
 
 ALLOWLIST = [
-    ("main.py", 70),
+    ("main.py", 68),
     ("main_orchestrator.py", 23),
     ("Gravity AI Review Suite.py", 39),
     ("_bootstrap.py", 123),

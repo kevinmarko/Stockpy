@@ -17,10 +17,8 @@ Pipeline stages (per cycle)
                           cross-sectional data rather than the 0-score fallback
   E. Per-symbol evaluate— market data + advisory engine; dead-letter error
                           capture per symbol; never aborts the run
-  F. Sheet sink         — write RunResult to Google Sheets (skipped when
-                          credentials.json is absent)
-  G. HTML report        — generate daily HTML report (skipped on IO error)
-  H. Run summary        — structured log line; return RunResult
+  F. HTML report        — generate daily HTML report (skipped on IO error)
+  G. Run summary        — structured log line; return RunResult
 
 Two-tier refresh cadence
 ------------------------
@@ -155,13 +153,6 @@ from pipeline.steps import (
     PrecomputeStep,
     UniverseStep,
 )
-from reporting.sheets_client import (
-    CREDENTIALS_FILE,
-    SHEET_NAME,
-    TAB_NAME_OUTPUT,
-    get_service_account_client,
-)
-from reporting.sheet_publisher import write_recommendations as _write_to_sheet
 from reporting.html_publisher import write_html_report as _write_html_report
 from reporting.progress import ProgressReporter
 
@@ -286,28 +277,6 @@ def _load_watchlist() -> List[str]:
     return load_env_watchlist(WATCHLIST_FILE)
 
 
-def _load_tickers_from_sheet2() -> List[str]:
-    """Return tickers from Sheet2 column A of the Google Sheet.
-
-    Used as a last-resort fallback when Robinhood is unavailable and no
-    WATCHLIST / watchlist.txt is configured.  Silently returns [] when
-    credentials.json is absent, Sheet2 doesn't exist, or any error occurs.
-    """
-    gc = get_service_account_client()
-    if gc is None:
-        return []
-    try:
-        sh = gc.open(SHEET_NAME)
-        ws = sh.worksheet("Sheet2")
-        col_a = ws.col_values(1)  # 1-indexed; returns list of strings
-        tickers = [v.strip().upper() for v in col_a if v.strip() and not v.strip().startswith("#")]
-        logger.info("Loaded %d tickers from Google Sheet Sheet2 column A.", len(tickers))
-        return tickers
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not read Sheet2 ticker list: %s", exc)
-        return []
-
-
 from pilots.discovery import discovery
 
 def _recently_closed_universe_symbols(held: set) -> set:
@@ -348,8 +317,7 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
       2. WATCHLIST env var or watchlist.txt (always merged in when present).
       3. Discovered scan candidates from `scan_candidates.json` (always merged).
       4. `settings.DEFAULT_TICKERS` (fallback if 1+2+3 are empty).
-      5. Google Sheet → Sheet2 column A (fallback only when 1+2+3+4 are empty).
-      6. Recently-closed positions (settings.CLOSED_POSITION_RETENTION_DAYS,
+      5. Recently-closed positions (settings.CLOSED_POSITION_RETENTION_DAYS,
          always merged in LAST — see below for why the ordering matters).
 
     When ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED`` is on, the held ∪
@@ -362,10 +330,12 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
     and the ``DEFAULT_TICKERS`` fallback live inside
     ``data.portfolio_sync.compute_tracked_universe`` (shared with
     ``pipeline/production_steps.py``'s ``AsyncDataFetchStep`` so the daemon
-    and this orchestrator can't silently diverge on the logic); only the
-    Sheet2 fallback (Google-Sheets-specific, main.py-only) stays local here.
+    and this orchestrator can't silently diverge on the logic). If that whole
+    union (including the ``DEFAULT_TICKERS`` fallback) is still empty, the
+    universe is empty — the Google-Sheets Sheet2 last-resort fallback that
+    used to sit here was retired in step 4e (2026-09); see CLAUDE.md.
 
-    Source 6 (recently-closed retention) is unioned in LAST, after both the
+    Source 5 (recently-closed retention) is unioned in LAST, after both the
     auto-drop subtraction and the empty-fallback decision, deliberately:
       * a retained symbol has ``held=False``, so unioning it before the
         auto-drop subtraction (inside ``compute_tracked_universe``) would let
@@ -373,7 +343,7 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
         symbol silently disappears" bug this feature exists to fix, through
         a different door;
       * unioning it before the ``if not universe:`` check would silently
-        suppress the DEFAULT_TICKERS/Sheet2 fallback on an otherwise-cold
+        suppress the ``DEFAULT_TICKERS`` fallback on an otherwise-cold
         account (the fallback must be decided on the pre-retention set).
     """
     from data.portfolio_sync import compute_tracked_universe
@@ -401,22 +371,15 @@ def _build_universe(snapshot: AccountSnapshot) -> List[str]:
         discovered=discovered,
         default_tickers=settings.DEFAULT_TICKERS,
     )
-    if not universe:
-        # held ∪ watchlist ∪ discovered ∪ DEFAULT_TICKERS were all empty (or
-        # rating-exclusion emptied them) — last-resort Sheet2 fallback, kept
-        # main.py-only (the daemon path has no Google Sheets dependency).
-        sheet2 = set(_load_tickers_from_sheet2())
-        if sheet2:
-            logger.info(
-                "Using %d tickers from Sheet2 (Robinhood unavailable, no WATCHLIST configured).",
-                len(sheet2),
-            )
-        universe = sorted(sheet2)
+    # If held ∪ watchlist ∪ discovered ∪ DEFAULT_TICKERS are all empty (or
+    # rating-exclusion emptied them), `universe` is simply []. The Google
+    # Sheets Sheet2 last-resort fallback that used to run here was retired
+    # in step 4e (2026-09) — see CLAUDE.md.
 
-    # 6. Recently-closed retention — applied LAST, after both the rating-
-    # exclusion subtraction and the DEFAULT_TICKERS/Sheet2 fallback decision
-    # above (both now live inside compute_tracked_universe()/the Sheet2
-    # branch), for the exact reasons in this function's own docstring.
+    # 5. Recently-closed retention — applied LAST, after both the rating-
+    # exclusion subtraction and the DEFAULT_TICKERS fallback decision above
+    # (both now live inside compute_tracked_universe()), for the exact
+    # reasons in this function's own docstring.
     recently_closed = _recently_closed_universe_symbols(held)
     if recently_closed:
         logger.info(
@@ -1466,9 +1429,6 @@ def main() -> None:
                 "Execution queue emit failed (non-critical): %s", _queue_exc,
             )
         # ─────────────────────────────────────────────────────────────────────
-
-        market = get_provider()
-        _write_to_sheet(result, market=market)
 
         # Build macro_dto again cheaply (same result, neutral defaults are fast)
         # to pass macro context to the HTML report template.

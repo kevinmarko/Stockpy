@@ -39,3 +39,41 @@ them. Still in the active tree until step 4f: the four `ETF_*`
 `config.COLUMN_SCHEMA` columns (written as NaN), the `ETF_*` settings fields,
 `size_position()`'s `etf_transmission_multiplier` kwarg, and the
 `etf_holdings` table in `data/historical_store.py`.
+
+## Step 4e: Google Sheet publisher (2026-09)
+
+The operator decided to retire the Google Sheet output sink — the Pilots PWA
+(`webapp/`) is the platform's only frontend, and nothing reads the Sheet
+anymore.
+
+- `reporting/sheet_publisher.py` → `legacy/reporting/sheet_publisher.py`
+  (the `RunResult` → Sheet row mapping, `write_recommendations()`, and the
+  conditional-formatting rules).
+- `reporting/sheets_client.py` → `legacy/reporting/sheets_client.py` (the
+  `gspread` service-account client + `SHEET_NAME`/`TAB_NAME_OUTPUT`
+  constants).
+- The Sheets half of `tests/test_reporting_package.py`
+  (`TestSheetsClient`, `TestSheetPublisher`) → `legacy/tests/test_sheet_publisher.py`.
+  The HTML-publisher tests in that file (`TestHtmlPublisher`) are unaffected
+  and stayed in `tests/`.
+- `tests/test_config.py`'s `TestAdvisoryColumnCoverage` (exercised
+  `rec_to_sheet_row`) → `legacy/tests/test_advisory_column_coverage.py`.
+
+`main.py` no longer imports `reporting.sheet_publisher`/`reporting.sheets_client`,
+no longer calls the Sheet sink, and no longer has a Sheet2-column-A universe
+fallback (`_load_tickers_from_sheet2`) — an empty `held ∪ watchlist ∪
+discovered` universe now falls straight through to
+`compute_tracked_universe()`'s existing `DEFAULT_TICKERS` fallback, and stays
+empty if that's empty too. `pipeline/steps.py` no longer imports `SHEET_NAME`.
+`requirements.txt` no longer lists `gspread`/`gspread-dataframe` (nor
+`google-auth-oauthlib`, which only `gspread` needed); `google-auth` itself is
+kept — it's still a transitive dependency of `google-genai` (Gemini) and
+`google-cloud-language`.
+
+**`credentials.json` is no longer used by any active code.** It was the
+Google Sheets service-account key; the real-vs-mock `DataEngine` gate that
+used to key off its presence was already switched to
+`data_engine.live_data_configured()` (a FRED-key check) in PR #1065, before
+this Sheets retirement landed. The file itself was never tracked by git and
+is left alone — the operator manages it and may still hold a copy on disk,
+but nothing reads it anymore.

@@ -1,11 +1,16 @@
-"""Google Sheets publish path — extracted verbatim from main.py.
+"""Google Sheets publish path — ARCHIVED (2026-09, step 4e).
+
+No longer called by ``main.py`` — the Sheet sink was retired; the Pilots PWA
+is the platform's only frontend. Moved verbatim from ``reporting/`` to
+``legacy/reporting/``; kept so it can be restored if needed. See
+``legacy/README.md``.
 
 Owns the mapping of a ``RunResult`` (advisory recommendations + dead-letter
 errors) to the Google Sheets output tab, including the row builder, the
 best-effort write, and the conditional-formatting rules. Auth is centralized
-through :mod:`reporting.sheets_client` (``get_service_account_client``); the
-Sheet is a best-effort sink — a missing client silently skips the write and any
-error is logged, never propagated.
+through :mod:`legacy.reporting.sheets_client` (``get_service_account_client``);
+the Sheet is a best-effort sink — a missing client silently skips the write
+and any error is logged, never propagated.
 """
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from reporting.sheets_client import (
+from legacy.reporting.sheets_client import (
     get_service_account_client,
     SHEET_NAME,
     TAB_NAME_OUTPUT,

@@ -556,9 +556,11 @@ run it from.
   configure at all. Set `RH_USERNAME`/`RH_PASSWORD` only; approve the login attempt by
   tapping the notification in the Robinhood app. See
   `docs/known_issues/robinhood_device_approval_login_hang_risk.md`.
-- `WATCHLIST` unset AND no `watchlist.txt` AND no held positions → empty universe. Fix
-  with: `WATCHLIST=SPY,QQQ,AAPL` in `.env`, or `watchlist.txt` (one ticker per line), or
-  tickers in **Sheet2 column A** of the Google Sheet (last-resort fallback).
+- `WATCHLIST` unset AND no `watchlist.txt` AND no held positions AND `settings.DEFAULT_TICKERS`
+  empty → empty universe. Fix with: `WATCHLIST=SPY,QQQ,AAPL` in `.env`, `watchlist.txt`
+  (one ticker per line), or `DEFAULT_TICKERS`. (The Sheet2-column-A Google Sheet
+  last-resort fallback this used to also list was retired to `legacy/` in step 4e,
+  2026-09 — see `legacy/README.md`.)
 - First line of `.env` is a comment without `#` prefix → `python-dotenv could not parse
   statement starting at line 1`. Prefix the line with `#`.
 - Running from a git worktree that has never had `.env` copied/symlinked into it: `.env`

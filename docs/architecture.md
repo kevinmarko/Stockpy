@@ -138,12 +138,14 @@ flowchart TD
         HTML["output/daily_report.html\nHoldings & P/L · Δ Since Last Run\nSignals table · Rationale · Gravity audit"]
         SS["output/state_snapshot.json\n(+ rotated history/ copies)"]
         DL["output/decision_log.jsonl\nOperator acted / passed / modified"]
-        GS["Google Sheet\n(FidelityData_Automated tab)\nlegacy sink via main.py"]
         NTFY_OUT["Phone push notification\nntfy.sh topic"]
     end
 
-    REC --> HTML & SS & DL & GS
+    REC --> HTML & SS & DL
     WE --> NTFY_OUT
+
+    %% Google Sheet sink (FidelityData_Automated tab) retired to legacy/
+    %% in step 4e (2026-09) -- see legacy/README.md.
 
     %% ── Diff / Briefing ───────────────────────────────────────────────────
     subgraph DIFF["Δ Diff & Briefing"]

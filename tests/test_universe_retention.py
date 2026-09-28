@@ -5,7 +5,7 @@ recent real Robinhood SELL fill.
 Covers:
   * main.py::_build_universe -- retention unioned AFTER the auto-drop
     subtraction (survives SYMBOL_RATING_AUTO_DROP_ENABLED) and AFTER the
-    empty-universe fallback decision (doesn't suppress DEFAULT_TICKERS/Sheet2).
+    empty-universe fallback decision (doesn't suppress DEFAULT_TICKERS).
   * MAX_SYMBOLS cap and CLOSED_POSITION_RETENTION_DAYS=0 restoring the exact
     pre-2026-08 universe.
   * data/portfolio_sync.py::build_sync_report injecting the synthetic
@@ -95,8 +95,7 @@ class TestBuildUniverseRetention:
         monkeypatch.setattr("main._recently_closed_universe_symbols", lambda held: {"CMCL"})
 
         snap = _make_snapshot(positions={})
-        with patch("main._load_tickers_from_sheet2", return_value=[]):
-            result = _build_universe(snap)
+        result = _build_universe(snap)
         assert "SPY" in result  # fallback still fired
         assert "CMCL" in result  # retention still unioned in after
 
