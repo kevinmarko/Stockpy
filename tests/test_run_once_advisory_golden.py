@@ -2,8 +2,11 @@
 tests/test_run_once_advisory_golden.py -- frozen-input golden for main.run_once()
 ===============================================================================
 
-Pins what ``main.run_once()`` recommends, and the queue ``main.py``'s
-``_run_cycle`` writes from it, for one fixed set of inputs. Step 5 of the
+Pins what ``main.run_once()`` recommends (action, conviction,
+``suggested_position_pct``, ``suggested_exit_pct``, rationale and the
+``key_indicators`` dict), and the ``queue_sources/advisory.json`` and
+``execution_queue.json`` bytes ``main.py``'s ``_run_cycle`` writes from it, for
+one fixed set of inputs. Step 5 of the
 shrink plan (``.claude/shrink_step5_retire_main_py_implementation_plan.md``)
 moves main.py's advisory input helpers into ``pipeline/advisory_inputs.py``
 (PR 5.0) and later runs the same advisory inside the daemon (PR 5.1+). This
@@ -35,7 +38,7 @@ sizing). Only the sources of data are frozen:
                           reproducible for a unit golden) returning a fixed
                           30-day multiple per symbol
   * models             -- no LGBM ranker, no meta-labelers
-  * trade history      -- an empty in-memory TransactionsStore
+  * trade history      -- an in-memory TransactionsStore holding one closed MSFT trade
   * ``now``            -- fixed for the queue writers; bars carry fixed dates
   * concurrency        -- ``ADVISORY_MAX_CONCURRENCY=1``
   * network            -- ``socket.connect`` raises
@@ -295,6 +298,12 @@ def _render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rendered:
     main._reset_macro_engine_cache()
     monkeypatch.setattr(adv, "_get_forecasting_engine", lambda: _FakeForecastingEngine())
     store = TransactionsStore("sqlite:///:memory:")
+    # One closed MSFT round trip, so the excursion (MFE/MAE/Edge Ratio/
+    # Realized Slippage) pre-compute has a real hold window to measure.
+    _msft = _BARS["MSFT"]["Close"]
+    _tid = store.record_trade("MSFT", "long", datetime(2026, 4, 1),
+                              float(_msft.loc["2026-04-01"]), 5.0, strategy="golden")
+    store.close_trade(_tid, datetime(2026, 5, 15), float(_msft.loc["2026-05-15"]))
     monkeypatch.setattr(adv, "_get_transactions_store", lambda: store)
 
     def _no_model():
@@ -317,6 +326,12 @@ def _render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Rendered:
             "suggested_position_pct": r.suggested_position_pct,
             "suggested_exit_pct": r.suggested_exit_pct,
             "rationale": r.rationale,
+            # key_indicators carries what the moved pre-compute produced for
+            # this symbol (xsec_12_1m/xsec_momentum_rank, the multifactor
+            # z-scores, covar_proxy, the excursion fields) alongside the
+            # technicals, so the golden pins the input builders' output
+            # directly, not only through its effect on action/conviction.
+            "key_indicators": r.key_indicators,
         }
         for r in result.recommendations
     ]
@@ -355,6 +370,17 @@ def test_golden_is_not_vacuous():
     assert [r["symbol"] for r in recs] == sorted(
         ["AAPL", "MSFT", "KO", "NVDA", "JNJ", "XOM", "INTC"]
     )
-    assert {r["action"] for r in recs} >= {"BUY"}
+    assert {r["action"] for r in recs} >= {"BUY", "SELL"}
+    # The pre-compute really ran: every symbol got a cross-sectional rank, a
+    # multifactor composite and the portfolio CoVaR proxy, and the closed MSFT
+    # trade produced a real excursion.
+    import math
+
+    for r in recs:
+        ki = r["key_indicators"]
+        for key in ("xsec_12_1m", "xsec_momentum_rank", "multifactor_composite", "covar_proxy"):
+            assert math.isfinite(ki[key]), (r["symbol"], key)
+    msft = next(r for r in recs if r["symbol"] == "MSFT")
+    assert math.isfinite(msft["key_indicators"]["mfe"])
     queue = json.loads(_QUEUE_GOLDEN.read_text(encoding="utf-8"))
     assert queue["intents"], "the golden queue carries no intents"
