@@ -701,15 +701,6 @@ const liveApi = {
       body: JSON.stringify({ values, confirm }),
     }),
 
-  getEtfTransmissionSettings: () => http<TunablesResponse>("/settings/etf-transmission"),
-  updateEtfTransmissionSettings: (
-    values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {},
-  ) =>
-    http<TunablesUpdateResult>("/settings/etf-transmission", {
-      method: "PUT",
-      body: JSON.stringify({ values, confirm }),
-    }),
   getSettingsReference: () => http<SettingsReferenceResponse>("/settings/reference"),
   // Toggle any non-secret BOOLEAN field directly from the Settings Reference
   // screen. `confirm` echoes a DANGEROUS_KEYS field's own name back, exactly

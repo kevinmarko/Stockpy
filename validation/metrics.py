@@ -136,7 +136,7 @@ def infer_annualization_freq(returns: pd.Series, default: int = 252) -> float:
 # std is functionally zero" means, or the diagnostic could describe a
 # condition sharpe_ratio didn't actually hit (or vice versa). Same value as
 # the (independently-declared, per this repo's own documented convention --
-# see risk/etf_transmission.py) 1e-12 floor used across every other
+# see legacy/risk/etf_transmission.py) 1e-12 floor used across every other
 # degenerate-value guard in this codebase.
 _DEGENERATE_STD = 1e-12
 
@@ -162,7 +162,7 @@ def sharpe_ratio(returns: pd.Series, freq: int = 252) -> float:
     # exactly 0.0. An exact `== 0` check misses that, and mean/std then
     # explodes into an absurd, unbounded "Sharpe" (observed: ~1e16 magnitude)
     # instead of the honest NaN (CONSTRAINT #4). 1e-12 mirrors the
-    # degenerate-std threshold already used by risk/etf_transmission.py --
+    # degenerate-std threshold already used by legacy/risk/etf_transmission.py --
     # far above float noise (~1e-16 to 1e-20) and far below any real
     # strategy's daily-return std.
     if np.isnan(std_ret) or std_ret < _DEGENERATE_STD:

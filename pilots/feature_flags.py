@@ -101,8 +101,6 @@ WRITE_GATE_REASONS: dict[str, str] = {
 DIAGNOSTIC_FLAG_REASONS: dict[str, str] = {
     "SECTOR_HEAT_ENABLED": "Enables Sector Heat Factor computation from GDELT article volume.",
     "WIKIPEDIA_ATTENTION_ENABLED": "Enables Attention Score computation from Wikipedia pageviews.",
-    "ETF_HOLDINGS_ENABLED": "Enables fetching ETF constituent baskets for exposure analysis.",
-    "ETF_TRANSMISSION_ENABLED": "Enables ETF volatility-transmission measurement columns (diagnostic only -- not read by scoring or sizing).",
     "MARKET_DATA_LATENCY_TRACKING_ENABLED": "Tracks and surfaces real-time market data feed latency.",
     "SENTIMENT_INDEX_ENABLED": "Computes composite sentiment index from news and reviews.",
     "EDGAR_FULLTEXT_ENABLED": "Enables full-text ingestion of 10-K/10-Q SEC filings.",

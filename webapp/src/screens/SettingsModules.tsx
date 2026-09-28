@@ -26,7 +26,6 @@ export function SettingsModules() {
       <SentimentLink />
       <SectorSelectionLink />
       <FmpLink />
-      <EtfTransmissionLink />
       <CacheLongShortLink />
         <PaperBrokerLink />
       <PromptRegistryLink />
@@ -176,32 +175,6 @@ function FmpLink() {
     </Link>
   );
 }
-
-
-function EtfTransmissionLink() {
-  const { data } = useApi<TunablesResponse>(() => api.getEtfTransmissionSettings(), []);
-  const fieldCount = data?.groups.reduce((acc, g) => acc + g.fields.length, 0) ?? null;
-  return (
-    <Link
-      to="/settings/etf-transmission"
-      className="card card-pad"
-      style={{ display: "block", textDecoration: "none" }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>ETF Volatility Transmission</div>
-          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
-            {fieldCount == null
-              ? "Holdings ingestion, residualization & derates"
-              : `${fieldCount} ETF transmission settings`}
-          </div>
-        </div>
-        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
-      </div>
-    </Link>
-  );
-}
-
 
 
 function PaperBrokerLink() {

@@ -15,9 +15,9 @@ import { theme } from "../theme";
  *
  * The editor itself — dirty tracking, save-only-changed-keys, per-key rejection
  * surfacing, the widget-per-field-type logic and the "applies on next restart"
- * notice — is `GenericSettingsEditor`, shared with the four scoped editors
- * (/settings/sentiment, /settings/sector-selection, /settings/fmp,
- * /settings/etf-transmission). This screen used to carry its own near-verbatim
+ * notice — is `GenericSettingsEditor`, shared with the scoped editors
+ * (/settings/sentiment, /settings/sector-selection, /settings/fmp).
+ * This screen used to carry its own near-verbatim
  * fork of all of that; it no longer does. What is left here is only what is
  * genuinely specific to the general-tunables screen: its title/subtitle, its
  * own empty-state wording, and the Danger Zone below.

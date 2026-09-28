@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 369,
-    "no_op": 10,
-    "restart_required": 98,
+    "live_safe": 356,
+    "no_op": 24,
+    "restart_required": 97,
     "total": 477
   },
   "dynamic_sites": [
@@ -49,28 +49,28 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3228,
+      "line": 3226,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4358,
+      "line": 4356,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4463,
+      "line": 4461,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5397,
+      "line": 5320,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -185,21 +185,8 @@
     "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD",
     "ETF_HOLDINGS_ENABLED",
     "ETF_HOLDINGS_ISSUER_CSV_ENABLED",
-    "ETF_HOLDINGS_MARKET_PROXY",
     "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE",
     "ETF_HOLDINGS_REFRESH_DAYS",
-    "ETF_TRANSMISSION_COV_INFLATION",
-    "ETF_TRANSMISSION_COV_WINDOW_DAYS",
-    "ETF_TRANSMISSION_ENABLED",
-    "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
-    "ETF_TRANSMISSION_MAX_DERATE",
-    "ETF_TRANSMISSION_MIN_MULTIPLIER",
-    "ETF_TRANSMISSION_MIN_OBS",
-    "ETF_TRANSMISSION_OWNERSHIP_REFERENCE",
-    "ETF_TRANSMISSION_PORTFOLIO_ENABLED",
-    "ETF_TRANSMISSION_SIZING_ENABLED",
-    "ETF_TRANSMISSION_WINDOW_DAYS",
-    "ETF_TRANSMISSION_WRAPPERS",
     "EVAL_BROKER_TRADES_ENABLED",
     "EXCURSION_INTRADAY_ENABLED",
     "EXECUTION_PRIORITY_QUEUE_ENABLED",
@@ -486,6 +473,20 @@
   "no_op": [
     "CIRCUIT_BREAKER_ENABLED",
     "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
+    "ETF_HOLDINGS_MARKET_PROXY",
+    "ETF_HOLDINGS_TICKERS",
+    "ETF_TRANSMISSION_COV_INFLATION",
+    "ETF_TRANSMISSION_COV_WINDOW_DAYS",
+    "ETF_TRANSMISSION_ENABLED",
+    "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
+    "ETF_TRANSMISSION_MAX_DERATE",
+    "ETF_TRANSMISSION_MIN_MULTIPLIER",
+    "ETF_TRANSMISSION_MIN_OBS",
+    "ETF_TRANSMISSION_OWNERSHIP_REFERENCE",
+    "ETF_TRANSMISSION_PORTFOLIO_ENABLED",
+    "ETF_TRANSMISSION_SIZING_ENABLED",
+    "ETF_TRANSMISSION_WINDOW_DAYS",
+    "ETF_TRANSMISSION_WRAPPERS",
     "FIX_GATEWAY_ENABLED",
     "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
     "GOOGLE_TRENDS_OVERLAP_DAYS",
@@ -497,15 +498,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 878,
+    "attr": 863,
     "factory_param": 4,
-    "getattr_const": 390,
+    "getattr_const": 378,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 278,
+    "attr": 272,
     "factory_param": 4,
-    "getattr_const": 230,
+    "getattr_const": 220,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -649,7 +650,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4082",
+        "site": "api/pilots_api.py:4080",
         "via": []
       }
     ],
@@ -727,7 +728,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4194",
+        "site": "api/pilots_api.py:4192",
         "via": []
       },
       {
@@ -774,7 +775,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:754",
+        "site": "data/historical_store.py:753",
         "via": []
       },
       {
@@ -965,7 +966,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:765",
+        "site": "data/historical_store.py:764",
         "via": []
       },
       {
@@ -974,7 +975,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:768",
+        "site": "data/historical_store.py:767",
         "via": []
       },
       {
@@ -1255,7 +1256,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:765",
+        "site": "data/historical_store.py:764",
         "via": []
       },
       {
@@ -1264,7 +1265,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:768",
+        "site": "data/historical_store.py:767",
         "via": []
       },
       {
@@ -1502,7 +1503,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4840",
+        "site": "api/pilots_api.py:4838",
         "via": []
       }
     ],
@@ -1513,18 +1514,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4839",
-        "via": []
-      }
-    ],
-    "ETF_HOLDINGS_TICKERS": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "api/pilots_api.py:5009",
+        "site": "api/pilots_api.py:4837",
         "via": []
       }
     ],
@@ -1614,7 +1604,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4981",
+        "site": "api/pilots_api.py:4979",
         "via": []
       }
     ],
@@ -2263,7 +2253,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:765",
+        "site": "data/historical_store.py:764",
         "via": []
       },
       {
@@ -3051,7 +3041,7 @@
   "restart_required_reason_counts": {
     "cross_module_init_helper": 101,
     "default_arg": 2,
-    "dynamic_name_literal_unattributable": 9,
+    "dynamic_name_literal_unattributable": 8,
     "indirect_init_helper_d1": 14,
     "init_body": 13,
     "init_self_assign": 51,
@@ -3064,7 +3054,6 @@
     "DASHBOARD_REFRESH_SECONDS",
     "EDGAR_FULLTEXT_CHUNK_TOKENS",
     "EDGAR_FULLTEXT_FORMS",
-    "ETF_HOLDINGS_TICKERS",
     "FMP_ECON_INDICATORS",
     "MULTI_BROKER_GATEWAY_ENABLED",
     "PROMPT_REGISTRY_REFRESH_SECONDS"

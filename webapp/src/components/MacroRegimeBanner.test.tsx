@@ -15,7 +15,6 @@ import { MacroRegimeBanner } from "./MacroRegimeBanner";
 import { api, ApiError } from "../api/client";
 import type { ObservabilitySummary, RegimeOverlay } from "../api/types";
 import {
-  mockEtfTransmissionDisabled,
   mockForecastSkillBySymbolEmpty,
   mockHeartbeatNoData,
   mockLatencyHeatmapDisabled,
@@ -66,7 +65,6 @@ function buildSummary(regime: RegimeOverlay): ObservabilitySummary {
     },
     system_telemetry: mockSystemTelemetryUnavailable(),
     sizing_cap_audit: mockSizingCapAuditDisabled(),
-    etf_transmission: mockEtfTransmissionDisabled(),
     heartbeat: mockHeartbeatNoData(),
     strategy_pnl: mockStrategyPnlEmpty(),
   };

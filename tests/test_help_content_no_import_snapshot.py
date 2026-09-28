@@ -151,29 +151,6 @@ class TestSettingsChangesReflectedWithoutReimport:
         assert f"capped {threshold_cycles} consecutive cycles" in text
         assert f"down-weighted {escalation_factor:.2f}x" in text
 
-    def test_etf_transmission_settings_in_section_help(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import shared.help_content as hc
-
-        max_derate = 0.61
-        ownership_ref = 0.44
-        min_multiplier = 0.789
-        monkeypatch.setattr(
-            "settings.settings.ETF_TRANSMISSION_MAX_DERATE", max_derate
-        )
-        monkeypatch.setattr(
-            "settings.settings.ETF_TRANSMISSION_OWNERSHIP_REFERENCE", ownership_ref
-        )
-        monkeypatch.setattr(
-            "settings.settings.ETF_TRANSMISSION_MIN_MULTIPLIER", min_multiplier
-        )
-
-        text = hc.section_help("observability.etf_transmission")
-        assert f"up to {int(max_derate * 100)}%" in text
-        assert f"{int(ownership_ref * 100)}%+ ETF ownership" in text
-        assert f"floored at {min_multiplier:.2f}x" in text
-
     def test_value_tracks_live_in_both_directions(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

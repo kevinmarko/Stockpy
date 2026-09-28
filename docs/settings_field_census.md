@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `80c32cee623c487c8c8bf4376e0aabfb6feb5b22`
+- Measured at commit: `21b5cbb259ca33bcacf46fc788025154f56ed312`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -147,19 +147,19 @@ deliberately never GUI-writable, cross-referenced against **actual** current
 
 ## 6. Live-write endpoint inventory — `api/pilots_api.py`
 
-- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **53**
-- routes that mutate a setting: **24**
+- `PUT`/`POST`/`PATCH`/`DELETE` routes total: **51**
+- routes that mutate a setting: **22**
 
 Three *distinct* mutation mechanisms exist — a liveness model that only considers
 "this process's singleton" would miss two of them:
 
 | Mechanism | Routes | Effect |
 |---|---|---|
-| `.env` write via `env_io.write_*` | 24 | durable; takes effect on the **next** process launch |
+| `.env` write via `env_io.write_*` | 22 | durable; takes effect on the **next** process launch |
 | in-process `setattr(settings, ...)` | 0 | patches THIS process's singleton only |
 | push to the daemon via `daemon_client.set_*` | 1 | HTTP call into a **separately running** daemon process |
 
-Routes declaring an `applies` value in their response: **6** of 24.
+Routes declaring an `applies` value in their response: **6** of 22.
 
 Resolution is AST-based and follows one level of indirection: a handler that only calls a
 module-level helper which itself calls `env_io.write_*` (or builds the response carrying
@@ -169,30 +169,28 @@ module-level helper which itself calls `env_io.write_*` (or builds the response 
 
 | Route | Method | Handler | Line | `.env` | `setattr` | daemon push | `applies` claims |
 |---|---|---|---|---|---|---|---|
-| `/observability/macro-gate` | PUT | `put_macro_gate` | 1959 | yes | no | no | `next_daemon_restart` |
-| `/llm/setting` | PUT | `set_llm_setting` | 3159 | yes | no | no | `immediately`, `next_daemon_restart` |
-| `/automation/schedule/interval` | PUT | `set_automation_interval` | 3792 | yes | no | yes | `immediately`, `next_daemon_restart` |
-| `/strategy/modules` | PUT | `set_strategy_modules` | 3875 | yes | no | no | `next_daemon_restart` |
-| `/automation/execution-mode` | PUT | `update_execution_mode` | 3962 | yes | no | no | `next_daemon_restart` |
-| `/settings/tunables` | PUT | `put_settings_tunables` | 4421 | yes | no | no | _(none)_ |
-| `/settings/tunables` | PATCH | `put_settings_tunables` | 4421 | yes | no | no | _(none)_ |
-| `/settings/sentiment` | PUT | `put_settings_sentiment` | 5073 | yes | no | no | _(none)_ |
-| `/settings/sentiment` | PATCH | `put_settings_sentiment` | 5073 | yes | no | no | _(none)_ |
-| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 5098 | yes | no | no | _(none)_ |
-| `/settings/sector-selection` | PATCH | `put_settings_sector_selection` | 5098 | yes | no | no | _(none)_ |
-| `/settings/cache-long-short` | PUT | `put_settings_cache_long_short` | 5123 | yes | no | no | _(none)_ |
-| `/settings/cache-long-short` | PATCH | `put_settings_cache_long_short` | 5123 | yes | no | no | _(none)_ |
-| `/settings/paper-broker` | PUT | `put_settings_paper_broker` | 5145 | yes | no | no | _(none)_ |
-| `/settings/paper-broker` | PATCH | `put_settings_paper_broker` | 5145 | yes | no | no | _(none)_ |
-| `/settings/feature-flags` | PUT | `put_feature_flags_settings` | 5209 | yes | no | no | _(none)_ |
-| `/settings/feature-flags` | PATCH | `put_feature_flags_settings` | 5209 | yes | no | no | _(none)_ |
-| `/settings/fmp` | PUT | `put_settings_fmp` | 5238 | yes | no | no | _(none)_ |
-| `/settings/fmp` | PATCH | `put_settings_fmp` | 5238 | yes | no | no | _(none)_ |
-| `/settings/etf-transmission` | PUT | `put_settings_etf_transmission` | 5263 | yes | no | no | _(none)_ |
-| `/settings/etf-transmission` | PATCH | `put_settings_etf_transmission` | 5263 | yes | no | no | _(none)_ |
-| `/settings/reference` | PUT | `put_settings_reference` | 5478 | yes | no | no | _(none)_ |
-| `/settings/reference` | PATCH | `put_settings_reference` | 5478 | yes | no | no | _(none)_ |
-| `/prompts/pin` | PUT | `put_prompts_pin` | 5759 | yes | no | no | `next_daemon_restart` |
+| `/observability/macro-gate` | PUT | `put_macro_gate` | 1957 | yes | no | no | `next_daemon_restart` |
+| `/llm/setting` | PUT | `set_llm_setting` | 3157 | yes | no | no | `immediately`, `next_daemon_restart` |
+| `/automation/schedule/interval` | PUT | `set_automation_interval` | 3790 | yes | no | yes | `immediately`, `next_daemon_restart` |
+| `/strategy/modules` | PUT | `set_strategy_modules` | 3873 | yes | no | no | `next_daemon_restart` |
+| `/automation/execution-mode` | PUT | `update_execution_mode` | 3960 | yes | no | no | `next_daemon_restart` |
+| `/settings/tunables` | PUT | `put_settings_tunables` | 4419 | yes | no | no | _(none)_ |
+| `/settings/tunables` | PATCH | `put_settings_tunables` | 4419 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PUT | `put_settings_sentiment` | 5022 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PATCH | `put_settings_sentiment` | 5022 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 5047 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PATCH | `put_settings_sector_selection` | 5047 | yes | no | no | _(none)_ |
+| `/settings/cache-long-short` | PUT | `put_settings_cache_long_short` | 5072 | yes | no | no | _(none)_ |
+| `/settings/cache-long-short` | PATCH | `put_settings_cache_long_short` | 5072 | yes | no | no | _(none)_ |
+| `/settings/paper-broker` | PUT | `put_settings_paper_broker` | 5094 | yes | no | no | _(none)_ |
+| `/settings/paper-broker` | PATCH | `put_settings_paper_broker` | 5094 | yes | no | no | _(none)_ |
+| `/settings/feature-flags` | PUT | `put_feature_flags_settings` | 5158 | yes | no | no | _(none)_ |
+| `/settings/feature-flags` | PATCH | `put_feature_flags_settings` | 5158 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PUT | `put_settings_fmp` | 5187 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PATCH | `put_settings_fmp` | 5187 | yes | no | no | _(none)_ |
+| `/settings/reference` | PUT | `put_settings_reference` | 5401 | yes | no | no | _(none)_ |
+| `/settings/reference` | PATCH | `put_settings_reference` | 5401 | yes | no | no | _(none)_ |
+| `/prompts/pin` | PUT | `put_prompts_pin` | 5682 | yes | no | no | `next_daemon_restart` |
 
 ### Existing in-process hot-reload beachhead — `shared/ai_control_center.py::LIVE_PATCHABLE_KEYS`
 
@@ -237,14 +235,14 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _live_settings, _mt
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 777 | 275 |
-| (b) `getattr(settings, "KEY", default)` | 390 | 230 |
+| (a) `settings.KEY` | 762 | 269 |
+| (b) `getattr(settings, "KEY", default)` | 378 | 220 |
 | (c) `getattr(settings, <var>)` (dynamic) | 13 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
-Fields reached by at least one form: **458** of 477.
+Fields reached by at least one form: **445** of 477.
 
-### Fields with NO statically-attributable read — **19**
+### Fields with NO statically-attributable read — **32**
 
 **These are not necessarily dead.** A field whose name is passed as a *string literal* to a
 factory that then does a dynamic `getattr` is read at runtime while being invisible to every
@@ -255,13 +253,26 @@ referenced by name somewhere and is probably read dynamically.
 |---|---|---|
 | `CIRCUIT_BREAKER_ENABLED` | _none_ | no read and no name reference found |
 | `CIRCUIT_BREAKER_REFERENCE_SYMBOL` | _none_ | no read and no name reference found |
-| `CORRELATION_CLUSTER_LOOKBACK_DAYS` | `api/pilots_api.py:4082` | likely read dynamically |
-| `DASHBOARD_REFRESH_SECONDS` | `api/pilots_api.py:4194`, `pilots/settings_domains.py:132` | likely read dynamically |
-| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4840` | likely read dynamically |
-| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4839` | likely read dynamically |
-| `ETF_HOLDINGS_TICKERS` | `api/pilots_api.py:5009` | likely read dynamically |
+| `CORRELATION_CLUSTER_LOOKBACK_DAYS` | `api/pilots_api.py:4080` | likely read dynamically |
+| `DASHBOARD_REFRESH_SECONDS` | `api/pilots_api.py:4192`, `pilots/settings_domains.py:132` | likely read dynamically |
+| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4838` | likely read dynamically |
+| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4837` | likely read dynamically |
+| `ETF_HOLDINGS_MARKET_PROXY` | _none_ | no read and no name reference found |
+| `ETF_HOLDINGS_TICKERS` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_COV_INFLATION` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_COV_WINDOW_DAYS` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_ENABLED` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_EXCLUDED_SYMBOLS` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_MAX_DERATE` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_MIN_MULTIPLIER` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_MIN_OBS` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_OWNERSHIP_REFERENCE` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_PORTFOLIO_ENABLED` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_SIZING_ENABLED` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_WINDOW_DAYS` | _none_ | no read and no name reference found |
+| `ETF_TRANSMISSION_WRAPPERS` | _none_ | no read and no name reference found |
 | `FIX_GATEWAY_ENABLED` | _none_ | no read and no name reference found |
-| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4981` | likely read dynamically |
+| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4979` | likely read dynamically |
 | `FORECAST_BACKFILL_VRP_PROXY_ENABLED` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_OVERLAP_DAYS` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_WINDOW_DAYS` | _none_ | no read and no name reference found |
@@ -273,7 +284,7 @@ referenced by name somewhere and is probably read dynamically.
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1711`, `pilots/feature_flags.py:49` | likely read dynamically |
 | `WS_RISK_STREAM_INTERVAL_SECONDS` | _none_ | no read and no name reference found |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **183**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **176**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -309,15 +320,8 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `EDGAR_MAX_CONCURRENCY` | b | 1 | 0 |
 | `ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD` | b | 1 | 0 |
 | `ETF_HOLDINGS_ISSUER_CSV_ENABLED` | b | 1 | 0 |
-| `ETF_HOLDINGS_MARKET_PROXY` | b | 2 | 0 |
 | `ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE` | b | 1 | 0 |
 | `ETF_HOLDINGS_REFRESH_DAYS` | b | 1 | 0 |
-| `ETF_TRANSMISSION_COV_INFLATION` | b | 1 | 0 |
-| `ETF_TRANSMISSION_COV_WINDOW_DAYS` | b | 1 | 0 |
-| `ETF_TRANSMISSION_EXCLUDED_SYMBOLS` | b | 1 | 0 |
-| `ETF_TRANSMISSION_MIN_OBS` | b | 1 | 0 |
-| `ETF_TRANSMISSION_WINDOW_DAYS` | b | 1 | 0 |
-| `ETF_TRANSMISSION_WRAPPERS` | b | 2 | 0 |
 | `EVAL_BROKER_TRADES_ENABLED` | b | 1 | 0 |
 | `EXCURSION_INTRADAY_ENABLED` | b | 1 | 0 |
 | `EXECUTION_PRIORITY_QUEUE_ENABLED` | b | 1 | 0 |
@@ -473,10 +477,10 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:150` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:186` | `getattr(settings, flag_name, False)` |
-| `api/pilots_api.py:3228` | `getattr(settings, body.key)` |
-| `api/pilots_api.py:4358` | `getattr(settings, key, None)` |
-| `api/pilots_api.py:4463` | `getattr(settings, key, None)` |
-| `api/pilots_api.py:5397` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:3226` | `getattr(settings, body.key)` |
+| `api/pilots_api.py:4356` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:4461` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:5320` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:84` | `getattr(_settings, name, None)` |
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |

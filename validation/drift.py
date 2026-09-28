@@ -183,7 +183,7 @@ def _cusum_drift(arr: np.ndarray, threshold: Optional[float]) -> DriftResult:
     # produce a vanishingly small `slack`/`h` and trip the alarm on pure
     # noise. This repo's documented degenerate-std convention uses 1e-12 —
     # far above float noise, far below any real drift-worthy std (see e.g.
-    # risk/etf_transmission.py, validation/metrics.py::sharpe_ratio).
+    # legacy/risk/etf_transmission.py, validation/metrics.py::sharpe_ratio).
     if sigma < 1e-12 or not math.isfinite(sigma):
         return DriftResult(
             drift_detected=False,

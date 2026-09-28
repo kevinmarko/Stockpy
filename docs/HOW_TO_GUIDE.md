@@ -139,7 +139,7 @@ In the Pilots PWA under **Settings → Modules & Integrations → Settings Refer
 - **Search and Filter**: Filter settings by keyword or functional domain (e.g., Risk & Circuit Breakers, Options Desk & Volatility, LLM & AI Services).
 - **Turn any on/off flag on or off right here**: every non-secret boolean field — not just ones already covered by a specialized editor — shows a real toggle switch you can flip directly on this screen. A safety-critical field (marked "Dangerous") asks you to type its exact name to confirm before it saves, the same protection every other settings editor already enforces. A field marked with a "not read anywhere" warning is genuinely dead code — toggling it is accepted but has no effect, so no switch is shown for it.
 - **Liveness Indicators**: Each setting displays whether updates apply immediately or require an engine/daemon restart, plus any active capture sites.
-- **Direct Navigation**: If a setting is also grouped with related fields in one of the webapp's specialized settings editors (e.g., General Tunables, Feature Flags, Sentiment, Sector Selection, Paper Broker, FMP, ETF Transmission, Cache Long/Short), an **Edit here →** button navigates directly to that editor.
+- **Direct Navigation**: If a setting is also grouped with related fields in one of the webapp's specialized settings editors (e.g., General Tunables, Feature Flags, Sentiment, Sector Selection, Paper Broker, FMP, Cache Long/Short), an **Edit here →** button navigates directly to that editor.
 - **Secret Protection**: API keys and passwords are masked (`•••• (set)` or `(not set)`) everywhere — including their platform default — and can never be leaked or edited through the browser.
 
 ---
@@ -674,7 +674,6 @@ past the attention strip, portfolio risk, and equity chart are collapsed under a
 | System telemetry | Host and process resource usage |
 | Data latency | Per-symbol fetch latency (needs `MARKET_DATA_LATENCY_TRACKING_ENABLED=true`) |
 | Sizing cap-event audit trail | Sizing guardrail cap events |
-| ETF volatility transmission | ETF-transmission switches and per-symbol values |
 | Heartbeat | Current orchestrator heartbeat age (`output/heartbeat.txt`) |
 | Strategy P&L | Realized P&L by strategy |
 | Logs | Tail of `logs/investyo.log` |

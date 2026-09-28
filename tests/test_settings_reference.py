@@ -140,10 +140,13 @@ class TestSettingsReferenceEndpoint:
         # DIAGNOSTIC_FLAG_REASONS / DANGEROUS_KEYS / WRITE_GATE_REASONS
         # respectively), but its own dedicated editor precedes feature-flags
         # in _build_editable_at_index()'s editor list, so it wins.
-        assert fields["ETF_TRANSMISSION_ENABLED"]["editable_at"] == "/settings/etf-transmission"
+        assert fields["SECTOR_HEAT_ENABLED"]["editable_at"] == "/settings/sentiment"
         assert fields["CACHE_LONG_SHORT_WRITES_ENABLED"]["editable_at"] == "/settings/cache-long-short"
         assert fields["PAPER_BROKER_WRITES_ENABLED"]["editable_at"] == "/settings/paper-broker"
         assert fields["FMP_API_KEY"]["editable_at"] is None  # Secret, not in any editor
+        # ETF transmission was archived (step 4d): its editor is gone and its
+        # flags left the Feature Flags registry; the fields stay until 4f.
+        assert fields["ETF_TRANSMISSION_ENABLED"]["editable_at"] is None
 
     def test_no_no_op_promoted_to_tunables(self):
         """Guardrail: prevent accidental promotion of no_op settings to editable tunables."""

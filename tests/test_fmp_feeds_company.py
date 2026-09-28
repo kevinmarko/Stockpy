@@ -21,7 +21,7 @@ the raw HTTP) → persist via a REAL temp-file ``HistoricalStore`` → read back
 → write onto ``dashboard_df`` — because the lookahead rules this series must
 prove (CLAUDE.md's earnings four-rule contract) are enforced by the
 INTERACTION between the writer's query shape and the store's SQL filters, not
-by either half alone. Injected the same way ``tests/test_etf_holdings.py``
+by either half alone. Injected the same way ``legacy/tests/test_etf_holdings.py``
 injects a store into ``get_etf_holdings`` for its cacheless-failure case:
 patching the ``data.historical_store.HistoricalStore`` name itself, since
 ``_apply_fmp_analyst``/``_apply_fmp_earnings`` construct their own store
@@ -256,7 +256,7 @@ def real_store(tmp_path, monkeypatch):
     and then call ``HistoricalStore()`` with no arguments, so patching the
     module attribute (not a function parameter -- neither writer accepts a
     ``store=`` injection point) redirects that zero-arg construction to this
-    fixture's instance, matching ``tests/test_etf_holdings.py``'s
+    fixture's instance, matching ``legacy/tests/test_etf_holdings.py``'s
     ``mock.patch("data.historical_store.HistoricalStore", ...)`` idiom.
     """
     store = HistoricalStore(db_path=str(tmp_path / "fmp_feeds_company.db"))

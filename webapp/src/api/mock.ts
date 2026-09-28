@@ -179,7 +179,6 @@ import type { StrategyReportCardSnapshot,
   SentimentHistory,
   SizingCapAuditTrail,
   SizingCapEvent,
-  EtfTransmissionSummary,
   HeartbeatSummary,
   StrategyPnlSummary,
   EquityCurveResponse,
@@ -2127,7 +2126,6 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
   FMP_QUOTES_REALTIME: ["data/market_data.py:1011"],
   FMP_BARS_ADJUSTMENT: ["data/market_data.py:1942"],
   FMP_ECON_INDICATORS: ["api/pilots_api.py:4981"],
-  ETF_HOLDINGS_TICKERS: ["api/pilots_api.py:5009"],
   SYMBOL_RATING_DROP_THRESHOLD_CYCLES: ["ml/forecast_backfill.py:142"],
 };
 
@@ -4245,9 +4243,6 @@ const SECTOR_SELECTION_TUNABLE_DEFS: MockTunableDef[] = [
 
 const FMP_TUNABLES_KEY = "stockpy.mock.fmp_tunables";
 const FMP_TUNABLES_DRIFT_KEY = "stockpy.mock.fmp_tunables_drift";
-const ETF_TRANSMISSION_TUNABLES_KEY = "stockpy.mock.etf_transmission_tunables";
-const ETF_TRANSMISSION_TUNABLES_DRIFT_KEY =
-  "stockpy.mock.etf_transmission_tunables_drift";
 const CACHE_LONG_SHORT_TUNABLES_KEY = "stockpy.mock.cache_long_short_tunables";
 const CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY =
   "stockpy.mock.cache_long_short_tunables_drift";
@@ -4522,205 +4517,6 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
     group: "Diagnostic & Supplement Feeds", key: "FMP_UNIVERSE_ENABLED", type: "boolean",
     value: false, default: false,
     description: "Use FMP's historical S&P 500 constituent-changes feed as the primary source for survivorship-bias reconstruction (Wikipedia demoted to fallback).",
-  },
-];
-
-const ETF_TRANSMISSION_TUNABLE_DEFS: MockTunableDef[] = [
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Master switch for ETF constituent holdings ingestion (EDGAR N-PORT).",
-  },
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_TICKERS",
-    type: "string",
-    value:
-      '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
-    default:
-      '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
-    description: "JSON array of ETF tickers to ingest holdings for.",
-  },
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_REFRESH_DAYS",
-    type: "number",
-    value: 7,
-    default: 7,
-    min: 1,
-    max: 90,
-    step: 1,
-    description: "Refresh interval for ETF constituent holdings in days.",
-  },
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_ISSUER_CSV_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Allow secondary CSV ingestion directly from issuer sites.",
-  },
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE",
-    type: "number",
-    value: 60.0,
-    default: 60.0,
-    min: 1.0,
-    max: 300.0,
-    step: 1.0,
-    description:
-      "Max wall-clock seconds allocated for ETF holdings ingestion per cycle.",
-  },
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD",
-    type: "number",
-    value: 3,
-    default: 3,
-    min: 1,
-    max: 20,
-    step: 1,
-    description: "Consecutive ingestion failures before circuit breaker trips.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_TRANSMISSION_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Master switch for ETF volatility-transmission measurement columns.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_HOLDINGS_MARKET_PROXY",
-    type: "string",
-    value: "SPY",
-    default: "SPY",
-    description: "Market benchmark ticker used for residualization.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_TRANSMISSION_WRAPPERS",
-    type: "string",
-    value:
-      '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
-    default:
-      '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
-    description:
-      "JSON array of candidate wrapper ETFs considered as transmission wrappers.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
-    type: "string",
-    value: "[]",
-    default: "[]",
-    description:
-      "JSON array of extra symbols excluded from ETF transmission calculation.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_TRANSMISSION_WINDOW_DAYS",
-    type: "number",
-    value: 60,
-    default: 60,
-    min: 10,
-    max: 504,
-    step: 1,
-    description: "Rolling window days for ETF comovement R² calculation.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_TRANSMISSION_MIN_OBS",
-    type: "number",
-    value: 60,
-    default: 60,
-    min: 5,
-    max: 252,
-    step: 1,
-    description: "Minimum required observation days in the rolling window.",
-  },
-  {
-    group: "Position Sizing Derate",
-    key: "ETF_TRANSMISSION_SIZING_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Enable position sizing derate based on ETF ownership & comovement.",
-  },
-  {
-    group: "Position Sizing Derate",
-    key: "ETF_TRANSMISSION_MAX_DERATE",
-    type: "number",
-    value: 0.3,
-    default: 0.3,
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-    description:
-      "Maximum sizing derate fraction (e.g. 0.30 = up to 30% reduction).",
-  },
-  {
-    group: "Position Sizing Derate",
-    key: "ETF_TRANSMISSION_OWNERSHIP_REFERENCE",
-    type: "number",
-    value: 0.2,
-    default: 0.2,
-    min: 0.01,
-    max: 1.0,
-    step: 0.01,
-    description: "Reference ETF ownership percentage scaling the derate.",
-  },
-  {
-    group: "Position Sizing Derate",
-    key: "ETF_TRANSMISSION_MIN_MULTIPLIER",
-    type: "number",
-    value: 0.5,
-    default: 0.5,
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-    description: "Floor for the position sizing multiplier.",
-  },
-  {
-    group: "Portfolio Covariance Adjustment",
-    key: "ETF_TRANSMISSION_PORTFOLIO_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Enable ETF-co-ownership-adjusted portfolio covariance matrix.",
-  },
-  {
-    group: "Portfolio Covariance Adjustment",
-    key: "ETF_TRANSMISSION_COV_INFLATION",
-    type: "number",
-    value: 0.25,
-    default: 0.25,
-    min: 0.0,
-    max: 5.0,
-    step: 0.05,
-    description:
-      "Off-diagonal covariance inflation factor for overlapping ETF holdings.",
-  },
-  {
-    group: "Portfolio Covariance Adjustment",
-    key: "ETF_TRANSMISSION_COV_WINDOW_DAYS",
-    type: "number",
-    value: 60,
-    default: 60,
-    min: 10,
-    max: 504,
-    step: 1,
-    description:
-      "Rolling window days for ETF portfolio covariance calculation.",
   },
 ];
 
@@ -5165,24 +4961,6 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Diagnostic & Data Features",
-    key: "ETF_HOLDINGS_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Enables fetching ETF constituent baskets for exposure analysis.",
-  },
-  {
-    group: "Diagnostic & Data Features",
-    key: "ETF_TRANSMISSION_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Enables ETF volatility-transmission measurement columns (diagnostic only -- not read by scoring or sizing).",
-  },
-  {
-    group: "Diagnostic & Data Features",
     key: "MARKET_DATA_LATENCY_TRACKING_ENABLED",
     type: "boolean",
     value: false,
@@ -5362,7 +5140,8 @@ function mockSettingsReference(): SettingsReferenceResponse {
       domain: "ETF Transmission",
       dangerous: false,
       liveness: mockLiveness("ETF_HOLDINGS_ENABLED"),
-      editable_at: "/settings/etf-transmission",
+      // Archived (2026-09, step 4d): no editor serves it any more.
+      editable_at: null,
     },
     {
       key: "SENTIMENT_INGESTION_ENABLED",
@@ -5624,27 +5403,6 @@ function applyFmpTunables(
     FMP_TUNABLE_DEFS,
     FMP_TUNABLES_KEY,
     FMP_TUNABLES_DRIFT_KEY,
-    confirm,
-  );
-}
-
-function mockEtfTransmissionTunables(): TunablesResponse {
-  return buildTunablesResponse(
-    ETF_TRANSMISSION_TUNABLE_DEFS,
-    ETF_TRANSMISSION_TUNABLES_KEY,
-    ETF_TRANSMISSION_TUNABLES_DRIFT_KEY,
-  );
-}
-
-function applyEtfTransmissionTunables(
-  values: Record<string, number | boolean | string>,
-  confirm: Record<string, string> = {},
-): TunablesUpdateResult {
-  return applyTunablesGeneric(
-    values,
-    ETF_TRANSMISSION_TUNABLE_DEFS,
-    ETF_TRANSMISSION_TUNABLES_KEY,
-    ETF_TRANSMISSION_TUNABLES_DRIFT_KEY,
     confirm,
   );
 }
@@ -7156,7 +6914,7 @@ function mockForecastSkillBySymbol(horizon: number): ForecastSkillBySymbol {
 }
 
 // The honest "no forecast history yet" degrade -- exported for the same
-// reason as mockSizingCapAuditDisabled/mockEtfTransmissionDisabled above:
+// reason as mockSizingCapAuditDisabled above:
 // Observability.test.tsx's COLD_START fixture pins to this canonical shape
 // rather than hand-rolling its own copy.
 export function mockForecastSkillBySymbolEmpty(): ForecastSkillBySymbol {
@@ -7457,52 +7215,6 @@ export function mockSizingCapAuditDisabled(): SizingCapAuditTrail {
   };
 }
 
-// ---- ETF Volatility Transmission (G7) ----
-function mockEtfTransmissionSummary(): EtfTransmissionSummary {
-  return {
-    rows: [
-      {
-        symbol: "SPY",
-        etf_ownership_pct: 1.0,
-        etf_comovement_r2: 1.0,
-        etf_primary_wrapper: "SPY",
-        etf_transmission_multiplier: null,
-      },
-      {
-        symbol: "NVDA",
-        etf_ownership_pct: 0.42,
-        etf_comovement_r2: 0.81,
-        etf_primary_wrapper: "QQQ",
-        etf_transmission_multiplier: 0.74,
-      },
-      {
-        symbol: "JPM",
-        etf_ownership_pct: 0.18,
-        etf_comovement_r2: 0.55,
-        etf_primary_wrapper: "XLF",
-        etf_transmission_multiplier: 0.94,
-      },
-    ],
-    measurement_enabled: true,
-    sizing_enabled: true,
-    portfolio_enabled: false,
-    reason: null,
-  };
-}
-
-// The honest "measurement disabled" degrade -- exported for the same reason
-// as mockSizingCapAuditDisabled above.
-export function mockEtfTransmissionDisabled(): EtfTransmissionSummary {
-  return {
-    rows: [],
-    measurement_enabled: false,
-    sizing_enabled: false,
-    portfolio_enabled: false,
-    reason:
-      "ETF_TRANSMISSION_ENABLED is False -- measurement columns are not computed this cycle.",
-  };
-}
-
 // ---- Heartbeat Age (G7) ----
 // A "Fresh" (<60s) sample by default so mock mode exercises the normal
 // rendering path; mockHeartbeatNoData below is the honest cold-start degrade.
@@ -7585,16 +7297,13 @@ function mockObservabilitySummary(
       : mockSystemTelemetry(),
     // Tracking defaults OFF in real deployments -- mock mode's cold-start
     // toggle mirrors that as the "clean" state, matching every other
-    // opt-in-flag section here (sizing_cap_audit, etf_transmission).
+    // opt-in-flag section here (sizing_cap_audit).
     latency_heatmap: readObservabilityColdStart()
       ? mockLatencyHeatmapDisabled()
       : mockLatencyHeatmap(),
     sizing_cap_audit: readObservabilityColdStart()
       ? mockSizingCapAuditDisabled()
       : mockSizingCapAuditTrail(),
-    etf_transmission: readObservabilityColdStart()
-      ? mockEtfTransmissionDisabled()
-      : mockEtfTransmissionSummary(),
     heartbeat: readObservabilityColdStart()
       ? mockHeartbeatNoData()
       : mockHeartbeatSummary(),
@@ -11451,17 +11160,6 @@ export const mockApi = {
     confirm?: SettingsConfirmMap,
   ): Promise<TunablesUpdateResult> {
     return delay(applyFeatureFlagsTunables(values, confirm ?? {}));
-  },
-
-  async getEtfTransmissionSettings(): Promise<TunablesResponse> {
-    return delay(mockEtfTransmissionTunables());
-  },
-
-  async updateEtfTransmissionSettings(
-    values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {},
-  ): Promise<TunablesUpdateResult> {
-    return delay(applyEtfTransmissionTunables(values, confirm));
   },
 
   async getCacheLongShortSettings(): Promise<TunablesResponse> {

@@ -1165,7 +1165,7 @@ def _build_sortino_drawdown_adapter(
     # (not an exact `> 0`) guards against a near-zero-but-nonzero downside_std
     # that's floating-point noise from a near-constant downside window, not
     # real signal -- the same degenerate-std convention as
-    # risk/etf_transmission.py and validation/metrics.py::sharpe_ratio.
+    # legacy/risk/etf_transmission.py and validation/metrics.py::sharpe_ratio.
     sortino = (avg_return * 252.0) / (downside_std * np.sqrt(252.0))
     sortino = sortino.where(downside_std >= 1e-12)
 
@@ -1589,7 +1589,7 @@ def _build_macro_regime_adapter(
     """
     from data.historical_store import HistoricalStore
 
-    _DEGENERATE_STD = 1e-12  # repo convention -- see risk/etf_transmission.py's _DEGENERATE_STD
+    _DEGENERATE_STD = 1e-12  # repo convention -- see legacy/risk/etf_transmission.py's _DEGENERATE_STD
 
     tradeable = [t for t in closes.columns if t != "SPY"]
     spy_close_raw = closes["SPY"] if "SPY" in closes.columns else None

@@ -725,7 +725,6 @@ _SETTINGS_SUBROUTES = [
     ("/settings/sentiment", "_SENTIMENT_INDEX"),
     ("/settings/sector-selection", "_SECTOR_SELECTION_INDEX"),
     ("/settings/fmp", "_FMP_INDEX"),
-    ("/settings/etf-transmission", "_ETF_TRANSMISSION_INDEX"),
     ("/settings/feature-flags", "_FEATURE_FLAGS_INDEX"),
 ]
 
@@ -777,7 +776,6 @@ class TestSettingsSubroutesRealFieldInvariant:
             "sentiment": set(pilots_api._SENTIMENT_INDEX),
             "sector": set(pilots_api._SECTOR_SELECTION_INDEX),
             "fmp": set(pilots_api._FMP_INDEX),
-            "etf_transmission": set(pilots_api._ETF_TRANSMISSION_INDEX),
         }
         for (name_a, keys_a), (name_b, keys_b) in itertools.combinations(scopes.items(), 2):
             assert not (keys_a & keys_b), f"{name_a} and {name_b} share keys: {keys_a & keys_b}"
@@ -853,7 +851,6 @@ class TestSettingsSubroutesEnvDrift:
             ("/settings/sentiment", "SENTIMENT_INGESTION_LOOKBACK_DAYS", int, 1),
             ("/settings/sector-selection", "SECTOR_SELECTION_TOP_N", int, 1),
             ("/settings/fmp", "FMP_COOLDOWN_THRESHOLD", int, 1),
-            ("/settings/etf-transmission", "ETF_TRANSMISSION_WINDOW_DAYS", int, 1),
         ]
         for url, key, _cast, delta in cases:
             env_file = tmp_path / f"{key}.env"
@@ -878,7 +875,7 @@ class TestSettingsSubroutesEnvDrift:
 
 
 class TestSettingsSubroutesPut:
-    """PUT /settings/sentiment, PUT /settings/sector-selection, PUT /settings/fmp, PUT /settings/etf-transmission."""
+    """PUT /settings/sentiment, PUT /settings/sector-selection, PUT /settings/fmp."""
 
     def test_happy_path_writes_via_env_io_and_echoes(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
@@ -929,25 +926,18 @@ class TestSettingsSubroutesPut:
         assert w.call_count == 1
         assert w.call_args[0][0] == {"FMP_QUOTES_ENABLED": True}
 
-        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put_scoped("/settings/etf-transmission", {"ETF_TRANSMISSION_ENABLED": True})
-        assert resp.status_code == 200
-        assert resp.json()["written"] == {"ETF_TRANSMISSION_ENABLED": True}
-        assert w.call_count == 1
-        assert w.call_args[0][0] == {"ETF_TRANSMISSION_ENABLED": True}
-
     def test_rejects_out_of_scope_key(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put_scoped("/settings/fmp", {"ETF_TRANSMISSION_ENABLED": True})
+            resp = _put_scoped("/settings/fmp", {"SECTOR_SELECTION_TOP_N": 5})
         assert resp.status_code == 200
-        assert resp.json()["rejected"]["ETF_TRANSMISSION_ENABLED"] == "unknown_key"
+        assert resp.json()["rejected"]["SECTOR_SELECTION_TOP_N"] == "unknown_key"
         assert w.call_count == 0
 
     def test_rejects_out_of_range(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put_scoped("/settings/etf-transmission", {"ETF_TRANSMISSION_MAX_DERATE": 5.0})
+            resp = _put_scoped("/settings/fmp", {"FMP_TIMEOUT_SECONDS": 500.0})
         assert resp.status_code == 200
-        assert resp.json()["rejected"]["ETF_TRANSMISSION_MAX_DERATE"] == "out_of_range"
+        assert resp.json()["rejected"]["FMP_TIMEOUT_SECONDS"] == "out_of_range"
         assert w.call_count == 0
 
     def test_fail_closed_when_command_token_unset(self):
@@ -977,7 +967,6 @@ _EDITORS = [
     ("/settings/sentiment", "_SENTIMENT_INDEX"),
     ("/settings/sector-selection", "_SECTOR_SELECTION_INDEX"),
     ("/settings/fmp", "_FMP_INDEX"),
-    ("/settings/etf-transmission", "_ETF_TRANSMISSION_INDEX"),
     ("/settings/feature-flags", "_FEATURE_FLAGS_INDEX"),
 ]
 

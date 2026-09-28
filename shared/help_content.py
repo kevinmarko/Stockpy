@@ -224,18 +224,6 @@ def _sizing_cap_escalation_factor() -> float:
     return settings.SIZING_CAP_ESCALATION_FACTOR
 
 
-def _etf_transmission_max_derate_pct() -> int:
-    return int(settings.ETF_TRANSMISSION_MAX_DERATE * 100)
-
-
-def _etf_transmission_ownership_reference_pct() -> int:
-    return int(settings.ETF_TRANSMISSION_OWNERSHIP_REFERENCE * 100)
-
-
-def _etf_transmission_min_multiplier() -> float:
-    return settings.ETF_TRANSMISSION_MIN_MULTIPLIER
-
-
 # Retrain window (days) used by the Analytics ML-model-monitoring section to
 # flag a stale model. No dedicated setting exists, so this mirrors the default
 # ml.meta_labeling.MetaLabeler(retrain_freq_days=30) cadence and the LGBM ranker's
@@ -1329,20 +1317,6 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         "Values are sourced from the last orchestrator run's state snapshot "
         "(FRED data).  They reflect conditions at pipeline execution time, "
         "not real-time — run the orchestrator to refresh."
-    ),
-    "observability.etf_transmission": lambda: (
-        "Ben-David, Franzoni & Moussawi (2018): ETF arbitrage transmits a "
-        "shock in one constituent to its otherwise-healthy basket peers, so "
-        "a heavily ETF-wrapped name carries extra non-fundamental, "
-        "non-diversifiable variance. Three independent, opt-in layers: "
-        "measurement (`ETF_Ownership_Pct`/`ETF_Comovement_R2`/"
-        "`ETF_Primary_Wrapper`), a per-name sizing derate (up to "
-        f"{_etf_transmission_max_derate_pct()}% at "
-        f"{_etf_transmission_ownership_reference_pct()}%+ ETF ownership, "
-        f"floored at {_etf_transmission_min_multiplier():.2f}x), and a "
-        "portfolio-level covariance overlay that inflates co-movement "
-        "between co-held names in the gross-exposure cap. This panel is "
-        "read-only — it never writes a setting."
     ),
     "observability.sizing_cap_audit": lambda: (
         "Durable log of position-sizing guardrail events — `sizing/"
