@@ -21,6 +21,8 @@ Coverage
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 
 import pytest
@@ -44,6 +46,28 @@ from data.rag_index import DocumentVectorStore, IndexedDocument, _doc_hash, _fai
 # actually run. See
 # docs/known_issues/lightgbm_faiss_libomp_collision_segfault.md.
 _FAISS_INSTALLED = importlib.util.find_spec("faiss") is not None
+
+# Real faiss must never load into a pytest worker process: once faiss's
+# bundled libomp.dylib is in, a later real lightgbm train in the same process
+# segfaults (Round 3 of the known-issues doc above). Root conftest.py's
+# autouse _block_real_faiss_in_pytest_process makes `import faiss` fail in
+# every normal test. The real-faiss test classes below
+# (TestRealFaissRoundTrip, TestFaissThreadCapRegression) therefore only run
+# inside one fresh child pytest process, which sets
+# REAL_FAISS_SUBPROCESS_ENV=1; test_real_faiss_in_subprocess (at the bottom
+# of this file) launches that child and fails unless every one of those tests
+# passed there. In the parent process the classes are skipped here, so their
+# bodies never run in-process.
+_REAL_FAISS_SUBPROCESS_ENV = "STOCKPY_REAL_FAISS_SUBPROCESS"
+_IN_REAL_FAISS_CHILD = os.environ.get(_REAL_FAISS_SUBPROCESS_ENV) == "1"
+_REAL_FAISS_CHILD_ONLY = pytest.mark.skipif(
+    not (_FAISS_INSTALLED and _IN_REAL_FAISS_CHILD),
+    reason=(
+        "faiss-cpu not installed in this environment"
+        if not _FAISS_INSTALLED
+        else "real-faiss test: runs only in the isolated subprocess (see test_real_faiss_in_subprocess)"
+    ),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +208,7 @@ class TestNeverRaisesOnBadInputRegardlessOfFaiss:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _FAISS_INSTALLED, reason="faiss-cpu not installed in this environment")
+@_REAL_FAISS_CHILD_ONLY
 class TestRealFaissRoundTrip:
     def test_index_and_search_round_trip(self, tmp_path):
         docs = [
@@ -324,7 +348,7 @@ class TestRealFaissRoundTrip:
         assert results == []
 
 
-@pytest.mark.skipif(not _FAISS_INSTALLED, reason="faiss-cpu not installed in this environment")
+@_REAL_FAISS_CHILD_ONLY
 class TestFaissThreadCapRegression:
     """Direct, mock-based guard for the Round 2 deadlock fix in
     ``docs/known_issues/lightgbm_faiss_libomp_collision_segfault.md``.
@@ -430,3 +454,173 @@ class TestFaissThreadCapRegression:
 
         assert count == 1
         assert store.get_rag_indexed_doc_count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Subprocess runner for the real-faiss classes above
+# ---------------------------------------------------------------------------
+
+_REAL_FAISS_CLASSES = (TestRealFaissRoundTrip, TestFaissThreadCapRegression)
+_REAL_FAISS_NODE_IDS = sorted(
+    f"{cls.__name__}::{name}"
+    for cls in _REAL_FAISS_CLASSES
+    for name in vars(cls)
+    if name.startswith("test_") and callable(getattr(cls, name))
+)
+_REAL_FAISS_CHILD_TIMEOUT_SECONDS = 600
+
+
+@pytest.fixture(scope="module")
+def real_faiss_child_results(tmp_path_factory):
+    """Run every real-faiss test once, in one fresh child pytest process.
+
+    Returns ``{"Class::test_name": outcome}`` parsed from the child's JUnit
+    XML report, plus the child's exit code and output for failure messages.
+    """
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    this_file = Path(__file__).resolve()
+    repo_root = this_file.parent.parent
+    junit = tmp_path_factory.mktemp("real_faiss_child") / "junit.xml"
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        *[f"{this_file}::{cls.__name__}" for cls in _REAL_FAISS_CLASSES],
+        "-q",
+        "-p",
+        "no:xdist",
+        "-p",
+        "no:randomly",
+        "-p",
+        "no:cacheprovider",
+        f"--junitxml={junit}",
+    ]
+    env = dict(os.environ)
+    env[_REAL_FAISS_SUBPROCESS_ENV] = "1"
+    env["NO_VENV_REEXEC"] = "1"
+    # Don't let the child think it is an xdist worker of the parent run.
+    for key in (
+        "PYTEST_XDIST_WORKER",
+        "PYTEST_XDIST_WORKER_COUNT",
+        "PYTEST_XDIST_TESTRUNUID",
+        "PYTEST_CURRENT_TEST",
+        "PYTEST_ADDOPTS",
+    ):
+        env.pop(key, None)
+    proc = subprocess.run(
+        cmd,
+        cwd=str(repo_root),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=_REAL_FAISS_CHILD_TIMEOUT_SECONDS,
+    )
+    output = (
+        f"child exit code {proc.returncode}\n--- stdout ---\n{proc.stdout[-8000:]}"
+        f"\n--- stderr ---\n{proc.stderr[-4000:]}"
+    )
+
+    results: dict = {}
+    if junit.exists():
+        for case in ET.parse(junit).getroot().iter("testcase"):
+            key = f"{case.get('classname', '').rsplit('.', 1)[-1]}::{case.get('name')}"
+            if case.find("failure") is not None or case.find("error") is not None:
+                results[key] = "failed"
+            elif case.find("skipped") is not None:
+                results[key] = "skipped"
+            else:
+                results[key] = "passed"
+    return {"results": results, "returncode": proc.returncode, "output": output}
+
+
+@pytest.mark.skipif(not _FAISS_INSTALLED, reason="faiss-cpu not installed in this environment")
+@pytest.mark.skipif(_IN_REAL_FAISS_CHILD, reason="runner only; the child runs the real tests directly")
+@pytest.mark.xdist_group("real_faiss_subprocess")
+@pytest.mark.parametrize("node_id", _REAL_FAISS_NODE_IDS)
+def test_real_faiss_in_subprocess(node_id, real_faiss_child_results):
+    """Each real-faiss test must have PASSED (not skipped, not failed) in the
+    isolated child process. Same test bodies and assertions as before; they
+    just run in a process where lightgbm never loads."""
+    outcome = real_faiss_child_results["results"].get(node_id)
+    assert outcome == "passed", (
+        f"{node_id} outcome in the real-faiss subprocess: {outcome!r}\n"
+        f"{real_faiss_child_results['output']}"
+    )
+
+
+@pytest.mark.skipif(not _FAISS_INSTALLED, reason="faiss-cpu not installed in this environment")
+@pytest.mark.skipif(_IN_REAL_FAISS_CHILD, reason="runner only")
+@pytest.mark.xdist_group("real_faiss_subprocess")
+def test_real_faiss_subprocess_ran_exactly_the_expected_tests(real_faiss_child_results):
+    """The child ran exactly the real-faiss tests (none missing, none extra)
+    and exited 0 -- so a test that silently failed to collect can't pass as
+    merely absent."""
+    got = sorted(real_faiss_child_results["results"])
+    assert got == _REAL_FAISS_NODE_IDS, real_faiss_child_results["output"]
+    assert real_faiss_child_results["returncode"] == 0, real_faiss_child_results["output"]
+
+
+def test_real_faiss_is_blocked_in_this_process():
+    """conftest's autouse guard is active: ``import faiss`` fails in a normal
+    pytest process, so no test can load faiss's libomp next to lightgbm's."""
+    if _IN_REAL_FAISS_CHILD:
+        pytest.skip("the isolated child is the one place real faiss may load")
+    assert sys.modules.get("faiss", "absent") is None
+    with pytest.raises(ImportError):
+        import faiss  # noqa: F401
+    assert _faiss_available() is False
+
+
+def test_no_test_module_imports_faiss_outside_the_subprocess_classes():
+    """AST guard: the only faiss imports under tests/ are inside this file's
+    real-faiss classes (which run in the child) and the blocked-import check
+    above. A new real-faiss test elsewhere would otherwise hit the conftest
+    block and silently test the no-faiss path instead."""
+    import ast
+    from pathlib import Path
+
+    tests_dir = Path(__file__).resolve().parent
+    this_file = Path(__file__).resolve()
+    allowed_owners = {cls.__name__ for cls in _REAL_FAISS_CLASSES} | {
+        "test_real_faiss_is_blocked_in_this_process"
+    }
+    offenders = []
+    for path in sorted(tests_dir.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        parents: dict = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parents[child] = node
+        for node in ast.walk(tree):
+            names: list = []
+            if isinstance(node, ast.Import):
+                names = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            elif (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "attr", getattr(node.func, "id", None))
+                in {"import_module", "__import__"}
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                names = [node.args[0].value]
+            if not any(n == "faiss" or n.startswith("faiss.") for n in names):
+                continue
+            owners = set()
+            parent = parents.get(node)
+            while parent is not None:
+                if isinstance(parent, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                    owners.add(parent.name)
+                parent = parents.get(parent)
+            if path.resolve() == this_file and owners & allowed_owners:
+                continue
+            offenders.append(f"{path.relative_to(tests_dir)}:{node.lineno}")
+    assert offenders == [], (
+        "faiss imported outside the subprocess-only real-faiss classes: "
+        f"{offenders}. Put real-faiss tests in those classes so they run in "
+        "the isolated child (see _REAL_FAISS_CHILD_ONLY)."
+    )
