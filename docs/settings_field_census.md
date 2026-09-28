@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `cbc1178b549e546b5c022db154f7e6b434d68246`
+- Measured at commit: `0e88e265b7b85b18d9b2957805313e956c456381`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -223,7 +223,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **381** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **382** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -236,7 +236,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _guard_settings, _m
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 739 | 260 |
+| (a) `settings.KEY` | 744 | 262 |
 | (b) `getattr(settings, "KEY", default)` | 313 | 187 |
 | (c) `getattr(settings, <var>)` (dynamic) | 13 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
@@ -264,7 +264,7 @@ referenced by name somewhere and is probably read dynamically.
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1706`, `pilots/feature_flags.py:49` | likely read dynamically |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **148**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **146**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -354,8 +354,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `FORECAST_MC_RANDOM_SEED` | b | 1 | 0 |
 | `FORECAST_MODEL_PERSISTENCE_ENABLED` | b | 2 | 0 |
 | `FORECAST_NAIVE_GATE_ENABLED` | b | 4 | 0 |
-| `FORECAST_NAIVE_GATE_MIN_IMPROVEMENT` | b | 2 | 0 |
-| `FORECAST_NAIVE_GATE_MIN_OBS` | b | 2 | 0 |
 | `FORECAST_PROPHET_WEIGHT` | b | 2 | 0 |
 | `FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED` | b | 1 | 0 |
 | `FRED_KEY_ROTATED_DATE` | b | 1 | 0 |

@@ -5,11 +5,13 @@ Forecasting rebuild F1: clean the ``forecast_errors`` ledger. **DRY-RUN BY
 DEFAULT** -- without ``--apply`` it opens the database read-only and only
 reports what it would delete.
 
-Three categories, chosen with ``--categories`` (comma list of ``a``, ``b``,
-``c``). **The default is ``a,b``**: category (c) runs only when explicitly
-listed, because deleting the duplicates is a live decision change (see (c)).
-Every count, the deleted/remaining totals and the cold-start estimate reflect
-only the selected categories.
+Four categories, chosen with ``--categories`` (comma list of ``a``, ``b``,
+``c``, ``d``). **The default is ``a,b``**: categories (c) and (d) run only
+when explicitly listed -- (c) because deleting the duplicates is a live
+decision change, (d) because it reads every row plus the daily bars and its
+non-AAPL/SPY hits need an operator's judgment (see (d)). Every count, the
+deleted/remaining totals and the cold-start estimate reflect only the
+selected categories.
 
 (a) ``symbol = 'TEST'`` rows -- test data that leaked into the real ledger.
 
@@ -43,6 +45,35 @@ only the selected categories.
     (c) is selected, both the dry run and ``--apply`` print a warning built
     from the measured numbers.
 
+(d) Price contamination (OPT-IN): rows whose prices are inconsistent with
+    the symbol's REAL market price at forecast time. Written for the two test
+    leaks fixed in F3 (#1076), which wrote AAPL/SPY rows at MockDataEngine
+    prices (~$10) into the live ledger, but the rule is general:
+
+    * cycle = one ``(symbol, forecast_ts)``. Its ANCHOR is the cycle's
+      ``naive`` price (naive is the price at forecast time) when it has one,
+      else the median ``forecast_price`` of its 10-trading-day rows, else the
+      median of all its rows;
+    * reference = the symbol's daily close from ``HistoricalStore`` (opened
+      read-only) on the forecast's US/Eastern day, else the last close before
+      it within 5 calendar days (weekends, holidays);
+    * a row is flagged when BOTH the cycle anchor AND the row's own
+      ``forecast_price`` are more than ``3x`` or less than ``1/3`` of the
+      reference close.
+
+    No reference close (no stored bars, or none within 5 days) means the row
+    is UNVERIFIABLE and is never flagged. A reference close below $1 means the
+    row is NOT CHECKED: sub-$1 bars are stored rounded to $0.0001/$0.000001,
+    so a ratio against them is noise (F1 also excludes sub-$1 names from all
+    scoring). ``--d-symbols`` restricts the deletion to listed symbols; the
+    report always lists every symbol the rule matches.
+    Two simpler rules were tried on the real ledger (2026-09-28) and rejected:
+    comparing each row's own ``forecast_price`` with the close flagged 17,315
+    rows, mostly real model blow-ups (UWMC/SINX CNN-LSTM, ARIMA on sub-$1
+    names) that F2's clamp now catches; comparing only the cycle anchor
+    flagged real ARIMA/Holt-Winters rows at the right price that sat in a
+    cycle whose input price was wrong (ARCC/CMCL, 2026-09-07 and -11).
+
 The dry run also estimates, for the live skill-weight window
 (``FORECAST_SKILL_WINDOW_DAYS``) and threshold (``FORECAST_SKILL_MIN_OBS``),
 how many (symbol, model, horizon) keys would fall below the threshold after
@@ -74,6 +105,8 @@ Usage::
     python scripts/clean_forecast_ledger.py --json              # dry run, JSON
     python scripts/clean_forecast_ledger.py --apply             # backup + delete a,b
     python scripts/clean_forecast_ledger.py --categories a,b,c  # dry run incl. dedup (after F3)
+    python scripts/clean_forecast_ledger.py --categories d      # dry run, price contamination only
+    python scripts/clean_forecast_ledger.py --categories d --d-symbols AAPL,SPY   # restrict (d)
 """
 from __future__ import annotations
 
@@ -99,7 +132,17 @@ MC_MODEL = "monte_carlo"
 MC_ANCHOR_HORIZON = 10
 MC_ANCHOR_MODELS = ("arima", "holt_winters", "naive")
 
-ALL_CATEGORIES = ("a", "b", "c")
+PRICE_RATIO = 3.0
+PRICE_ANCHOR_HORIZON = 10
+PRICE_REF_TOLERANCE_DAYS = 5
+PRICE_MIN_REFERENCE_CLOSE = 1.0
+# Rows whose anchor AND own price sit between 2x and 3x (or 1/3 and 1/2) of
+# the close: not flagged, but listed so a split the bars adjusted for (APH,
+# 2x) is visible rather than silently passed.
+PRICE_NEAR_MISS_RATIO = 2.0
+ET_TZ = "America/New_York"
+
+ALL_CATEGORIES = ("a", "b", "c", "d")
 DEFAULT_CATEGORIES = ("a", "b")
 
 
@@ -223,6 +266,212 @@ def find_mc_seed_rows(conn: sqlite3.Connection) -> Tuple[List[int], Dict[str, in
             ids.append(row_id)
             per_symbol[sym] += 1
     return sorted(ids), dict(sorted(per_symbol.items()))
+
+
+# ---------------------------------------------------------------------------
+# (d) price contamination
+# ---------------------------------------------------------------------------
+
+def parse_symbols(value: Optional[str]) -> Optional[Tuple[str, ...]]:
+    """``"aapl, SPY"`` -> ``("AAPL", "SPY")``. ``None``/empty -> ``None``
+    (no restriction)."""
+    if value is None:
+        return None
+    picked = sorted({part.strip().upper() for part in str(value).split(",") if part.strip()})
+    return tuple(picked) or None
+
+
+def db_file_of(conn: sqlite3.Connection) -> Optional[str]:
+    """Filesystem path of ``conn``'s main database (``None`` for in-memory)."""
+    for _seq, name, path in conn.execute("PRAGMA database_list").fetchall():
+        if name == "main":
+            return path or None
+    return None
+
+
+def load_reference_closes(
+    db_path: Optional[str], symbols: Sequence[str], since: "Any"
+) -> Tuple["Any", Optional[str]]:
+    """Daily closes for ``symbols`` from ``HistoricalStore``, opened
+    READ-ONLY (database-level ``mode=ro``; it never fetches or writes).
+
+    Returns ``(frame, error)``: ``frame`` has columns ``symbol``, ``bar_day``
+    (tz-naive midnight) and ``close`` (> 0 only). A symbol with no stored bars
+    is simply absent. ``error`` is set, and the frame empty, when the bars
+    could not be read at all (no ``price_bars`` table, unreadable file).
+    """
+    import pandas as pd
+
+    empty = pd.DataFrame({"symbol": pd.Series(dtype=object),
+                          "bar_day": pd.Series(dtype="datetime64[ns]"),
+                          "close": pd.Series(dtype=float)})
+    if not db_path:
+        return empty, "no database file (in-memory ledger)"
+    if not symbols:
+        return empty, None
+    from data.historical_store import HistoricalStore
+
+    try:
+        store = HistoricalStore(db_path, readonly=True)
+    except Exception as exc:  # noqa: BLE001 -- reported, never fatal
+        return empty, f"HistoricalStore unavailable: {exc}"
+    lookback = max(30, int((pd.Timestamp.now() - pd.Timestamp(since)).days) + 30)
+    frames = []
+    first_error: Optional[str] = None
+    try:
+        for sym in symbols:
+            try:
+                bars = store._read_from_db(sym, lookback)  # noqa: SLF001 -- the DB-only read path
+            except Exception as exc:  # noqa: BLE001
+                first_error = first_error or f"price_bars unreadable: {exc}"
+                continue
+            if bars is None or bars.empty or "Close" not in bars.columns:
+                continue
+            close = pd.to_numeric(bars["Close"], errors="coerce")
+            ok = close.notna() & (close > 0)
+            if not ok.any():
+                continue
+            frames.append(pd.DataFrame({
+                "symbol": sym,
+                "bar_day": pd.DatetimeIndex(bars.index[ok.to_numpy()]).normalize(),
+                "close": close[ok].to_numpy(dtype=float),
+            }))
+    finally:
+        try:
+            store.engine.dispose()
+        except Exception:  # noqa: BLE001
+            pass
+    if not frames:
+        return empty, first_error
+    out = pd.concat(frames, ignore_index=True)
+    out = out.drop_duplicates(subset=["symbol", "bar_day"], keep="last")
+    return out, None
+
+
+def _price_rule_text() -> str:
+    return (
+        f"cycle anchor = the (symbol, forecast_ts) cycle's naive price, else the median of its "
+        f"{PRICE_ANCHOR_HORIZON}-day rows, else the median of all its rows; reference = the "
+        f"HistoricalStore daily close on the forecast's US/Eastern day, else the last close before it "
+        f"within {PRICE_REF_TOLERANCE_DAYS} calendar days; flag a row when BOTH the anchor and its own "
+        f"forecast_price are > {PRICE_RATIO:g}x or < 1/{PRICE_RATIO:g} of the reference. No reference -> "
+        f"unverifiable (never flagged); reference < ${PRICE_MIN_REFERENCE_CLOSE:g} -> not checked."
+    )
+
+
+def find_price_contamination_rows(
+    conn: sqlite3.Connection,
+    db_path: Optional[str] = None,
+    symbols: Optional[Sequence[str]] = None,
+) -> Tuple[List[int], Dict[str, Any]]:
+    """Category (d). Returns ``(ids, report)``; ``ids`` only covers
+    ``symbols`` when given, while ``report`` always describes every match.
+    See the module docstring for the rule. Reads only."""
+    import pandas as pd
+
+    df = pd.read_sql_query(
+        "SELECT id, symbol, model_name, horizon_days, forecast_ts, forecast_price FROM forecast_errors",
+        conn,
+    )
+    report: Dict[str, Any] = {
+        "rule": _price_rule_text(),
+        "symbol_filter": list(symbols) if symbols else None,
+        "rows_matched": 0,
+        "rows_flagged": 0,
+        "symbols_matched": 0,
+        "matched_by_symbol": {},
+        "unverifiable_rows": 0,
+        "unverifiable_symbols": 0,
+        "unverifiable_by_symbol_top": {},
+        "sub_dollar_not_checked_rows": 0,
+        "near_miss_rows": 0,
+        "near_miss_by_symbol": {},
+        "bars_error": None,
+    }
+    if df.empty:
+        return [], report
+
+    ts = pd.to_datetime(df["forecast_ts"], utc=True, format="ISO8601", errors="coerce")
+    df["dayts"] = ts.dt.tz_convert(ET_TZ).dt.tz_localize(None).dt.normalize()
+    df["forecast_price"] = pd.to_numeric(df["forecast_price"], errors="coerce")
+
+    # Cycle anchor: naive (the price at forecast time) > median of the 10-day
+    # rows > median of all rows.
+    key = ["symbol", "forecast_ts"]
+    anchor = df.groupby(key)["forecast_price"].median()
+    h10 = df[df["horizon_days"] == PRICE_ANCHOR_HORIZON].groupby(key)["forecast_price"].median()
+    naive = df[df["model_name"] == "naive"].groupby(key)["forecast_price"].median()
+    anchor.loc[h10.index] = h10
+    anchor.loc[naive.index] = naive
+    df = df.merge(anchor.rename("anchor").reset_index(), on=key, how="left")
+
+    since = df["dayts"].min()
+    bars, err = load_reference_closes(db_path or db_file_of(conn), sorted(df["symbol"].unique()), since)
+    report["bars_error"] = err
+
+    df["close"] = float("nan")
+    has_day = df["dayts"].notna()
+    if not bars.empty and has_day.any():
+        left = df.loc[has_day, ["id", "symbol", "dayts"]].sort_values("dayts")
+        right = bars.sort_values("bar_day")
+        merged = pd.merge_asof(
+            left, right, left_on="dayts", right_on="bar_day", by="symbol",
+            direction="backward", tolerance=pd.Timedelta(days=PRICE_REF_TOLERANCE_DAYS),
+        )
+        df = df.drop(columns=["close"]).merge(merged[["id", "close"]], on="id", how="left")
+
+    close = df["close"]
+    unverifiable = close.isna()
+    not_checked = ~unverifiable & (close < PRICE_MIN_REFERENCE_CLOSE)
+    checked = ~unverifiable & ~not_checked
+    r_anchor = df["anchor"] / close
+    r_row = df["forecast_price"] / close
+
+    def _out(r, k):
+        return (r > k) | (r < 1.0 / k)
+
+    matched = checked & _out(r_anchor, PRICE_RATIO) & _out(r_row, PRICE_RATIO)
+    near = (checked & ~matched & _out(r_anchor, PRICE_NEAR_MISS_RATIO)
+            & _out(r_row, PRICE_NEAR_MISS_RATIO))
+
+    report["unverifiable_rows"] = int(unverifiable.sum())
+    unv = df[unverifiable].groupby("symbol").size().sort_values(ascending=False)
+    report["unverifiable_symbols"] = int(len(unv))
+    report["unverifiable_by_symbol_top"] = {str(k): int(v) for k, v in unv.head(15).items()}
+    report["sub_dollar_not_checked_rows"] = int(not_checked.sum())
+    nm = df[near].groupby("symbol").size().sort_values(ascending=False)
+    report["near_miss_rows"] = int(near.sum())
+    report["near_miss_by_symbol"] = {str(k): int(v) for k, v in nm.head(15).items()}
+
+    hits = df[matched].copy()
+    hits["r_row"] = r_row[matched]
+    selected = set(symbols) if symbols else None
+    by_symbol: Dict[str, Any] = {}
+    for sym, g in hits.groupby("symbol"):
+        ex = g.sort_values("forecast_ts").iloc[-1]
+        by_symbol[str(sym)] = {
+            "rows": int(len(g)),
+            "selected": selected is None or sym in selected,
+            "days": int(g["dayts"].nunique()),
+            "first_day": g["dayts"].min().strftime("%Y-%m-%d"),
+            "last_day": g["dayts"].max().strftime("%Y-%m-%d"),
+            "models": {str(k): int(v) for k, v in g.groupby("model_name").size().items()},
+            "forecast_price_range": [float(g["forecast_price"].min()), float(g["forecast_price"].max())],
+            "reference_close_range": [float(g["close"].min()), float(g["close"].max())],
+            "example": (
+                f"id={int(ex['id'])} {ex['model_name']} h={int(ex['horizon_days'])} "
+                f"ts={ex['forecast_ts']} forecast=${float(ex['forecast_price']):,.4f} "
+                f"anchor=${float(ex['anchor']):,.4f} close=${float(ex['close']):,.4f}"
+            ),
+        }
+    report["matched_by_symbol"] = dict(sorted(by_symbol.items(), key=lambda kv: -kv[1]["rows"]))
+    report["rows_matched"] = int(matched.sum())
+    report["symbols_matched"] = len(by_symbol)
+    if selected is not None:
+        hits = hits[hits["symbol"].isin(selected)]
+    ids = sorted(int(i) for i in hits["id"])
+    report["rows_flagged"] = len(ids)
+    return ids, report
 
 
 # ---------------------------------------------------------------------------
@@ -354,22 +603,34 @@ def analyze(
     window_days: int,
     min_obs: int,
     categories: Sequence[str] = DEFAULT_CATEGORIES,
+    d_symbols: Optional[Sequence[str]] = None,
+    db_path: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], List[int]]:
     """Counts, totals and the cold-start estimate for the SELECTED categories.
 
     (a)/(b) rows are always COUNTED (cheap, informative) but only removed
-    from the totals when selected. (c) is only computed when selected;
-    otherwise ``c_intraday_duplicate_rows`` is ``None``.
+    from the totals when selected. (c) and (d) are only computed when
+    selected; otherwise ``c_intraday_duplicate_rows`` / ``d_price`` are
+    ``None``. ``d_symbols`` restricts (d)'s deletion to those symbols;
+    ``db_path`` is where (d) reads the daily bars (default: ``conn``'s file).
     """
     cats = tuple(sorted(set(categories)))
     total = conn.execute("SELECT COUNT(*) FROM forecast_errors").fetchone()[0]
     test_ids = find_test_rows(conn)
     mc_ids, mc_per_symbol = find_mc_seed_rows(conn)
+    d_ids: List[int] = []
+    d_report: Optional[Dict[str, Any]] = None
+    if "d" in cats:
+        d_ids, d_report = find_price_contamination_rows(conn, db_path=db_path, symbols=d_symbols)
+        d_set = set(d_ids)
+        d_report["overlap_with_a"] = len(d_set & set(test_ids))
+        d_report["overlap_with_b"] = len(d_set & set(mc_ids))
     excluded_set: set = set()
     if "a" in cats:
         excluded_set |= set(test_ids)
     if "b" in cats:
         excluded_set |= set(mc_ids)
+    excluded_set |= set(d_ids)
     excluded = sorted(excluded_set)
     dedup = "c" in cats
     _build_ranked(conn, excluded, dedup=dedup)
@@ -394,6 +655,7 @@ def analyze(
         ),
         "a_b_overlap": len(set(test_ids) & set(mc_ids)),
         "c_intraday_duplicate_rows": dup_count,
+        "d_price": d_report,
         "rows_after_cleanup": kept,
         "rows_deleted_total": total - kept,
         "cold_start": cold,
@@ -425,12 +687,13 @@ def _warnings(categories: Sequence[str], cold: Dict[str, Any]) -> List[str]:
 # --apply
 # ---------------------------------------------------------------------------
 
-def make_backup(db_path: str, backup_dir: Path) -> Path:
+def make_backup(db_path: str, backup_dir: Path, label: str = "forecast-ledger-clean") -> Path:
     """sqlite3 online ``.backup`` of ``db_path`` into ``backup_dir``, verified
-    by row count. Raises on any failure -- the caller must not delete then."""
+    by row count. Raises on any failure -- the caller must not delete then.
+    ``label`` names the operation in the file name."""
     backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    dest = backup_dir / f"{Path(db_path).name}.backup-before-forecast-ledger-clean-{stamp}"
+    dest = backup_dir / f"{Path(db_path).name}.backup-before-{label}-{stamp}"
     if dest.exists():
         raise RuntimeError(f"backup target already exists: {dest}")
     src = sqlite3.connect(db_path)
@@ -459,8 +722,13 @@ def apply_cleanup(
     min_obs: int,
     backup_dir: Path,
     categories: Sequence[str] = DEFAULT_CATEGORIES,
+    d_symbols: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
-    """Back up, then delete ONLY the selected categories in one transaction."""
+    """Back up, then delete ONLY the selected categories in one transaction.
+
+    (d)'s daily bars are read through a separate read-only ``HistoricalStore``
+    connection inside the transaction; ``BEGIN IMMEDIATE`` takes only the
+    RESERVED lock, which never blocks readers."""
     cats = tuple(sorted(set(categories)))
     backup = make_backup(db_path, backup_dir)  # raises -> nothing deleted
     conn = _connect(db_path, readonly=False)
@@ -470,7 +738,7 @@ def apply_cleanup(
         try:
             if not _has_column(conn, "forecast_day"):
                 conn.execute("ALTER TABLE forecast_errors ADD COLUMN forecast_day TEXT")
-            summary, excluded = analyze(conn, window_days, min_obs, cats)
+            summary, excluded = analyze(conn, window_days, min_obs, cats, d_symbols=d_symbols, db_path=db_path)
             conn.execute("DELETE FROM forecast_errors WHERE id IN (SELECT id FROM temp.fe_excluded)")
             if "c" in cats:
                 conn.execute(
@@ -507,6 +775,39 @@ def _default_db_path() -> str:
     return ForecastTracker(readonly=True)._db_path  # noqa: SLF001 -- same resolution as the live tracker
 
 
+def _render_d(d: Optional[Dict[str, Any]]) -> List[str]:
+    if d is None:
+        return ["(d) price contamination:            not selected (opt-in with --categories d)"]
+    flt = d.get("symbol_filter")
+    lines = [
+        f"(d) price-contamination rows:        {d['rows_flagged']:>10,}"
+        f"  (rule matched {d['rows_matched']:,} rows in {d['symbols_matched']} symbols"
+        f"{'; deleting only ' + ','.join(flt) if flt else ''})",
+        f"    rule: {d['rule']}",
+        "    per symbol (rows | days | models | forecast_price range | reference close range):",
+    ]
+    for sym, s in d["matched_by_symbol"].items():
+        mark = "" if s["selected"] else "   [NOT SELECTED -- kept]"
+        lo, hi = s["forecast_price_range"]
+        clo, chi = s["reference_close_range"]
+        lines.append(
+            f"      {sym:<8} {s['rows']:>6,} | {s['days']:>3}d {s['first_day']}..{s['last_day']} | "
+            f"{s['models']} | ${lo:,.4g}-${hi:,.4g} | ${clo:,.4g}-${chi:,.4g}{mark}"
+        )
+        lines.append(f"               e.g. {s['example']}")
+    lines += [
+        f"    unverifiable rows (no bar within {PRICE_REF_TOLERANCE_DAYS}d, never flagged): "
+        f"{d['unverifiable_rows']:,} in {d['unverifiable_symbols']} symbols; top {d['unverifiable_by_symbol_top']}",
+        f"    sub-${PRICE_MIN_REFERENCE_CLOSE:g} reference close, not checked: {d['sub_dollar_not_checked_rows']:,}",
+        f"    near misses ({PRICE_NEAR_MISS_RATIO:g}x-{PRICE_RATIO:g}x, kept): {d['near_miss_rows']:,} "
+        f"{d['near_miss_by_symbol']}",
+        f"    (d)/(a) overlap: {d.get('overlap_with_a', 0):,}   (d)/(b) overlap: {d.get('overlap_with_b', 0):,}",
+    ]
+    if d.get("bars_error"):
+        lines.append(f"    bars: {d['bars_error']}")
+    return lines
+
+
 def _render(summary: Dict[str, Any], db_path: str, applied: bool) -> str:
     cs = summary["cold_start"]
     cats = summary["categories"]
@@ -524,6 +825,7 @@ def _render(summary: Dict[str, Any], db_path: str, applied: bool) -> str:
         if c_rows is not None
         else "(c) intra-day duplicates:            not selected (opt-in with --categories a,b,c; after F3)"
     )
+    d_lines = _render_d(summary.get("d_price"))
     lines = banner + [
         f"forecast_errors cleanup -- {head}",
         f"categories: {','.join(cats)}",
@@ -536,6 +838,7 @@ def _render(summary: Dict[str, Any], db_path: str, applied: bool) -> str:
         f"    by symbol: {summary['b_mc_seed_rows_by_symbol']}",
         f"    (a)/(b) overlap:                 {summary['a_b_overlap']:>10,}",
         c_line,
+        *d_lines,
         f"rows deleted in total:               {summary['rows_deleted_total']:>10,}",
         f"rows after cleanup:                  {summary['rows_after_cleanup']:>10,}",
         "",
@@ -568,8 +871,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--apply", action="store_true",
                         help="Back up, then delete the selected categories in one transaction.")
     parser.add_argument("--categories", default=",".join(DEFAULT_CATEGORIES),
-                        help="Comma list from a,b,c (default a,b). (c) is a live decision change: "
-                             "run it only after F3's naive gate.")
+                        help="Comma list from a,b,c,d (default a,b). (c) is a live decision change: "
+                             "run it only after F3's naive gate. (d) is price contamination (opt-in).")
+    parser.add_argument("--d-symbols", default=None,
+                        help="Comma list: restrict (d)'s deletion to these symbols (the report still "
+                             "lists every symbol the rule matches).")
     parser.add_argument("--backup-dir", default=None,
                         help="Backup directory (default: <LOCAL_DATA_ROOT>/backups).")
     parser.add_argument("--window-days", type=int, default=None,
@@ -592,13 +898,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     window = args.window_days if args.window_days is not None else int(settings.FORECAST_SKILL_WINDOW_DAYS)
     min_obs = args.min_obs if args.min_obs is not None else int(settings.FORECAST_SKILL_MIN_OBS)
 
+    d_symbols = parse_symbols(args.d_symbols)
+    if d_symbols and "d" not in categories:
+        parser.error("--d-symbols needs category d (--categories ...,d)")
+
     if args.apply:
         backup_dir = Path(args.backup_dir) if args.backup_dir else Path(settings.LOCAL_DATA_ROOT) / "backups"
-        summary = apply_cleanup(db_path, window, min_obs, backup_dir, categories)
+        summary = apply_cleanup(db_path, window, min_obs, backup_dir, categories, d_symbols=d_symbols)
     else:
         conn = _connect(db_path, readonly=True)
         try:
-            summary, _ = analyze(conn, window, min_obs, categories)
+            summary, _ = analyze(conn, window, min_obs, categories, d_symbols=d_symbols, db_path=db_path)
         finally:
             conn.close()
         summary["applied"] = False
