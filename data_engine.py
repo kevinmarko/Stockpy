@@ -96,6 +96,20 @@ class IDataProvider(ABC):
         pass
 
 
+def live_data_configured() -> bool:
+    """True when the pipeline should use the real ``DataEngine``.
+
+    Real market/macro data needs a FRED key (``DataEngine`` refuses to build
+    without one), so that is the switch. Until 2026-09 the switch was
+    ``os.path.exists("credentials.json")`` -- the Google Sheets service-account
+    file -- which tied the choice of real vs. mock data to an unrelated,
+    being-retired integration: removing the Sheets file would silently put the
+    daemon on ``MockDataEngine``'s fabricated data. Tests patch this function
+    (see ``conftest.py::_force_mock_data_engine_in_tests``).
+    """
+    return bool(settings.FRED_API_KEY)
+
+
 # =============================================================================
 # 2. OPERATIONAL YAHOO FINANCE & FRED ENGINE
 # =============================================================================

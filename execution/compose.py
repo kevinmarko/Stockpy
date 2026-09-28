@@ -877,15 +877,16 @@ def compose_and_emit(
             recommendations=composed, snapshot=account_snapshot, macro_dto=resolved_macro,
         )
         from execution.queue_builder import emit_execution_queue
-        # Decision D3 (pilots/mirror.py): follows use a deliberately low
-        # min_conviction floor so a Pilot's own conviction-independent
-        # rebalance still queues. Lazy import (matches this module's own
-        # emit_execution_queue import above, and avoids a circular import
-        # since pilots/mirror.py imports THIS module's compose_and_emit).
-        from pilots.mirror import FOLLOW_MIN_CONVICTION
+        # min_conviction 0.0: the composed queue has always used Decision
+        # D3's floor (pilots/mirror.py's FOLLOW_MIN_CONVICTION, which is
+        # 0.0) so a conviction-independent rebalance still queues. Inlined
+        # as a literal (2026-09, step 4 prep) because Follow-a-Pilot is
+        # being archived: importing it here sat inside this function's
+        # try/except, so a missing module would silently stop
+        # execution_queue.json from ever being written.
         return emit_execution_queue(
             run_result, mode=mode, output_dir=output_dir,
-            config={"strategy_id": "composed", "min_conviction": FOLLOW_MIN_CONVICTION}, now=now,
+            config={"strategy_id": "composed", "min_conviction": 0.0}, now=now,
             macro_dto=resolved_macro,
         )
     except Exception as exc:  # pragma: no cover - belt-and-suspenders dead-letter

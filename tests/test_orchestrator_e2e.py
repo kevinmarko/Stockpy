@@ -24,7 +24,7 @@ broker-quarantine check) wired together and exercised jointly:
   directly, never through _main_body()'s real call sites.
 
 This file closes that gap: one shared, real _main_body() invocation (no
-credentials.json -> MockDataEngine path, so the data layer is fully
+live data configured -> MockDataEngine path, so the data layer is fully
 synthetic/offline) with only the genuinely external dependencies mocked
 (Robinhood, the live market-data quote/bars/fundamentals provider, the
 Robinhood account-snapshot reader), then several tests assert on the
@@ -69,26 +69,15 @@ OUTPUT_DIR / quant_platform.db isolation pattern from items #1-#3):
   ``HistoricalStore``/``cache/account_snapshot.json``/live Robinhood in that
   order; mocked to raise so the advisory loop's own try/except degrades to
   ``_rh_snapshot=None`` without touching the real on-disk DB or cache file.
-- A blanket ``mock.patch("os.path.exists", return_value=False)`` (the
-  pattern tests/test_advisory_pause_gate.py uses successfully) is too broad
-  here: that test mocks ``run_pipeline`` away entirely and returns before
-  any downstream code runs, so the blast radius never matters. This file
-  lets the REAL pipeline run all the way through report generation, and
-  Plotly's own validator-cache loader (``diagnostics_and_visuals.
-  generate_plotly_volatility_bands`` -> ``plotly.graph_objs.Figure()``)
-  calls ``os.path.exists`` internally to locate its own bundled JSON schema
-  file -- a blanket patch makes Plotly believe its own installed package
-  data is missing and raise ``FileNotFoundError``, breaking chart
-  generation for a reason that has nothing to do with credentials.json.
-  Fixed with a ``side_effect`` that only fakes the answer for the literal
-  ``"credentials.json"`` path and delegates everything else to the real
-  ``os.path.exists``.
+- The MockDataEngine path is forced by patching
+  ``data_engine.live_data_configured`` to False (the FRED-key check that
+  picks real vs. mock data), never ``os.path.exists`` -- a blanket
+  ``exists`` patch breaks Plotly's own bundled-schema lookup.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import json
 from pathlib import Path
 from unittest import mock
@@ -132,22 +121,12 @@ def orchestrator_run(tmp_path_factory):
     # quant_platform.db during development of this file; redirect the same way).
     from volatility.iv_engine import IVHistoryStore
 
-    _real_exists = os.path.exists
-
-    def _fake_credentials_check(path):  # noqa: ANN001
-        """Only fakes the credentials.json existence check (forcing the
-        MockDataEngine path); every other os.path.exists call -- notably
-        Plotly's own internal validator-cache file lookup -- is delegated to
-        the real implementation. See module docstring for why a blanket
-        patch breaks chart generation."""
-        if str(path) == "credentials.json":
-            return False
-        return _real_exists(path)
-
     captured_stdout = {}
 
     with (
-        mock.patch("os.path.exists", side_effect=_fake_credentials_check),
+        # Force the MockDataEngine path (see conftest's
+        # _force_mock_data_engine_in_tests).
+        mock.patch("data_engine.live_data_configured", return_value=False),
         # main_orchestrator.py's account-fetch integration point (module-top
         # `from data.robinhood_portfolio import fetch_account_snapshot` --
         # patching the original module's attribute below does NOT affect

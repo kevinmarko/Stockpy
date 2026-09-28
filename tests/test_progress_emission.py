@@ -411,19 +411,10 @@ class TestMainOrchestratorProgressFatalPath:
     ) -> None:
         import main_orchestrator as mo
 
-        # Scoped to "credentials.json" only -- a blanket `exists -> False`
-        # also fakes away pathlib.Path.exists() on Python 3.13+ (it delegates
-        # straight to os.path.exists there; it did not on 3.12, this repo's
-        # pinned interpreter), which would make read_progress()'s own
-        # `path.exists()` check below spuriously report the progress.json
-        # this test just wrote as missing. See tests/test_daemon_runtime.py's
-        # `_patch_data_engine_construction` fixture for the same pattern.
-        _real_exists = mo.os.path.exists
-        monkeypatch.setattr(
-            mo.os.path,
-            "exists",
-            lambda p: False if p == "credentials.json" else _real_exists(p),
-        )
+        # Force the MockDataEngine branch (see conftest's
+        # _force_mock_data_engine_in_tests).
+        import data_engine as _de
+        monkeypatch.setattr(_de, "live_data_configured", lambda: False)
         monkeypatch.setattr(_settings, "OUTPUT_DIR", tmp_path)
 
         monkeypatch.setattr(mo, "fetch_account_snapshot", lambda: None)
