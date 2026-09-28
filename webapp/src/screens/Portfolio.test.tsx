@@ -1,6 +1,6 @@
 /**
  * Portfolio.test.tsx — renders against the real mock API. Covers the
- * account-truth tiles, the "not fabricated" empty-follows state, and that
+ * account-truth tiles, the absence of the removed "Active follows" section, and that
  * an unavailable account snapshot renders the honest error state rather than
  * a fabricated $0 portfolio.
  */
@@ -110,13 +110,12 @@ describe("Portfolio screen (real mock API)", () => {
     expect(await screen.findByText("No realized trades cached yet.")).toBeInTheDocument();
   });
 
-  it("no active follows renders the honest empty state with a link back to the marketplace, not a fabricated follow", async () => {
-    vi.spyOn(api, "getFollows").mockResolvedValueOnce([]);
-
+  it("renders no 'Active follows' section (Follow-a-Pilot was removed)", async () => {
     renderPortfolio();
 
-    expect(await screen.findByText("You aren't following any Pilots yet.")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Browse Pilots" })).toBeInTheDocument();
+    expect(await screen.findByText("Reconciliation")).toBeInTheDocument();
+    expect(screen.queryByText("Active follows")).not.toBeInTheDocument();
+    expect(screen.queryByText("You aren't following any Pilots yet.")).not.toBeInTheDocument();
   });
 
   // ---- G12: held-vs-signal reconciliation (client-side, no backend change) ----

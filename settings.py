@@ -4047,27 +4047,24 @@ class Settings(BaseSettings):
     # output/state_snapshot.json signals[] (re-blending each module's raw score
     # under the Pilot's custom weight vector — no engine imports on the read
     # path). PILOTS_TOP_N caps the number of names any single Pilot advertises /
-    # mirrors, so both the Pilot-detail holdings list and the gated follow queue
-    # stay bounded.
+    # surfaces, so the Pilot-detail holdings list stays bounded.
     PILOTS_TOP_N: int = Field(
         default=20,
         description=(
             "Maximum number of top-scoring holdings a single Pilot surfaces "
-            "(pilots/scoring.py::pilot_holdings) and mirrors into the gated "
-            "follow queue (pilots/mirror.py). Positive scores only, normalized "
-            "to target weights before the top-N cut."
+            "(pilots/scoring.py::pilot_holdings). Positive scores only, "
+            "normalized to target weights before the top-N cut."
         ),
     )
-    # Minimum dollar amount the Pilots PWA accepts for a "Follow" allocation.
-    # A UX floor surfaced by api/pilots_api.py's POST /pilots/{id}/follow response
-    # (min_amount) and enforced client-side by the Follow modal — NOT a broker
-    # constraint; the gated queue itself is bounded by ROBINHOOD_MAX_NOTIONAL_PER_ORDER.
+    # UNUSED since Follow-a-Pilot was archived (2026-09, step 4c): nothing reads
+    # it any more. Kept only so an existing .env line doesn't trip anything
+    # before the field itself is retired (step 4f).
     FOLLOW_MIN_AMOUNT: float = Field(
         default=100.0,
         description=(
-            "Minimum USD amount accepted for a Pilot follow allocation, surfaced "
-            "as `min_amount` in the follow API response and enforced in the PWA "
-            "Follow modal. Not a broker constraint."
+            "Unused: Follow-a-Pilot was archived (2026-09, step 4c). Formerly "
+            "the minimum USD amount accepted for a Pilot follow allocation. "
+            "Scheduled for removal."
         ),
     )
     # Master switch for the Pilots API's brokerage-credential intake endpoints

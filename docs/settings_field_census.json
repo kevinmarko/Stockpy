@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "a6052be8cbdea8aba927a7967940d3749ce43d4c",
+    "git_commit": "8c5e73cb9a836ce92863745ec27d25f0b629aa28",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -987,142 +987,142 @@
       "FORECAST_SKILL_MIN_OBS": 3998,
       "MACRO_REGIME_GATE_ENABLED": 4018,
       "DISABLED_SIGNAL_MODULES": 4036,
-      "PILOTS_TOP_N": 4052,
-      "FOLLOW_MIN_AMOUNT": 4065,
-      "BROKERAGE_CONNECT_ENABLED": 4082,
-      "AUTOMATION_WRITES_ENABLED": 4104,
-      "STRATEGY_WRITES_ENABLED": 4127,
-      "LLM_WRITES_ENABLED": 4150,
-      "AGENTIC_DISCOVERY_ENABLED": 4172,
-      "GENERAL_SETTINGS_WRITES_ENABLED": 4199,
-      "RLHF_CALIBRATION_ENABLED": 4218,
-      "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD": 4230,
-      "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED": 4238,
-      "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED": 4250,
-      "AI_GENERATION_API_ENABLED": 4279,
-      "RAG_QUERY_API_ENABLED": 4303,
-      "MACRO_GATE_WRITES_ENABLED": 4335,
-      "BROKERAGE_REFRESH_ENABLED": 4367,
-      "AGENTIC_MAX_CANDIDATES": 4385,
-      "OPTIONS_MATRIX_ENABLED": 4401,
-      "PAIRS_SNAPSHOT_ENABLED": 4409,
-      "PAIRS_SNAPSHOT_MAX_PAIRS": 4417,
-      "MULTIFACTOR_MICROCAP_THRESHOLD": 4426,
-      "META_LABEL_MIN_CONFIDENCE": 4442,
-      "META_LABELING_ENABLED": 4457,
-      "META_LABELING_BACKFILL_BRIDGE_ENABLED": 4465,
-      "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS": 4474,
-      "META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS": 4481,
-      "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS": 4485,
-      "SNAPSHOT_HISTORY_DAYS": 4499,
-      "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 4506,
-      "WATCH_RULES_FILE": 4520,
-      "RATIONALE_VERBOSITY": 4541,
-      "NEWS_LOOKBACK_DAYS": 4558,
-      "FINBERT_ENABLED": 4566,
-      "FINBERT_BATCH_SIZE": 4575,
-      "FINBERT_SCORE_CACHE_ENABLED": 4585,
-      "LLM_COMMENTARY_ENABLED": 4608,
-      "LLM_COMMENTARY_RATIONALE_PROVIDER": 4617,
-      "LLM_COMMENTARY_ALERT_PROVIDER": 4626,
-      "LLM_COMMENTARY_CACHE_PATH": 4635,
-      "LLM_COMMENTARY_TIMEOUT_SECONDS": 4642,
-      "LLM_STATUS_MAX_AGE_HOURS": 4649,
-      "ANTHROPIC_API_KEY": 4661,
-      "GEMINI_API_KEY": 4670,
-      "AI_CHAT_TIMEOUT_SECONDS": 4680,
-      "GEMINI_LIVE_CHAT_ENABLED": 4704,
-      "GEMINI_LIVE_CHAT_MODEL": 4711,
-      "GEMINI_LIVE_VOICE_NAME": 4718,
-      "GEMINI_CHAT_MODEL": 4725,
-      "LOCAL_LLM_BASE_URL": 4732,
-      "LOCAL_LLM_MODEL": 4739,
-      "LOCAL_LLM_API_KEY": 4746,
-      "AI_CHAT_DEFAULT_PROVIDER": 4752,
-      "AI_CHAT_DEFAULT_MODEL": 4758,
-      "OPAL_RESEARCH_ENABLED": 4770,
-      "OPAL_RESEARCH_PROVIDER": 4780,
-      "OPAL_RESEARCH_MODEL": 4788,
-      "OPAL_RESEARCH_TIMEOUT_SECONDS": 4798,
-      "OPENAI_API_KEY": 4806,
-      "GRAVITY_AI_RUNNER_ENABLED": 4824,
-      "GRAVITY_AI_RUNNER_OUTPUT_PATH": 4834,
-      "NEWS_EARNINGS_SUPPRESS_HOURS": 4841,
-      "NEWS_EARNINGS_DAMPEN_DAYS": 4849,
-      "SENTIMENT_SOCIAL_BLEND_WEIGHT": 4857,
-      "CORRELATION_CLUSTER_LOOKBACK_DAYS": 4875,
-      "CORRELATION_CLUSTER_THRESHOLD": 4883,
-      "USE_DUAL_MOMENTUM_OVERLAY": 4894,
-      "DUAL_MOMENTUM_SAFE_ASSET": 4902,
-      "DUAL_MOMENTUM_RISKY_ASSETS": 4906,
-      "PROMPT_REGISTRY_ENABLED": 4921,
-      "PROMPT_REGISTRY_BACKEND": 4928,
-      "PROMPT_REGISTRY_URL": 4935,
-      "PROMPT_REGISTRY_TOKEN": 4943,
-      "PROMPT_REGISTRY_PUBLISH_TOKEN": 4951,
-      "PROMPT_REGISTRY_SIGNING_KEY": 4959,
-      "PROMPT_REGISTRY_PINS": 4968,
-      "PROMPT_REGISTRY_REFRESH_SECONDS": 4978,
-      "PROMPT_CACHE_DIR": 4986,
-      "PROMPT_CACHE_KEEP_VERSIONS": 4994,
-      "PROMPT_MAX_CHARS": 5002,
-      "RAG_PORTFOLIO_CONTEXT_ENABLED": 5019,
-      "RAG_PORTFOLIO_CONTEXT_PROVIDER": 5031,
-      "RAG_EMBEDDING_PROVIDER": 5040,
-      "RAG_INDEX_MAX_DOCUMENTS": 5049,
-      "RAG_RETRIEVAL_TOP_K": 5058,
-      "RAG_INDEX_LOOKBACK_DAYS": 5065,
-      "ETF_HOLDINGS_ENABLED": 5084,
-      "ETF_HOLDINGS_TICKERS": 5097,
-      "ETF_HOLDINGS_REFRESH_DAYS": 5114,
-      "ETF_HOLDINGS_ISSUER_CSV_ENABLED": 5127,
-      "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE": 5143,
-      "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD": 5157,
-      "OPTIONS_TRUE_IVR_ENABLED": 5168,
-      "DEAD_LETTER_RETRY_ENABLED": 5220,
-      "PROMPT_REGISTRY_WRITES_ENABLED": 5246,
-      "UNIVERSE_SYNC_ENABLED": 5264,
-      "FORECAST_BACKFILL_HORIZONS": 5285,
-      "FORECAST_BACKFILL_LOOKBACK_YEARS": 5292,
-      "FORECAST_BACKFILL_MOMENTUM_WINDOW": 5303,
-      "FORECAST_BACKFILL_VOL_SHORT_WINDOW": 5307,
-      "FORECAST_BACKFILL_VOL_LONG_WINDOW": 5311,
-      "FORECAST_BACKFILL_RSI_WINDOW": 5315,
-      "FORECAST_BACKFILL_MACD_FAST": 5319,
-      "FORECAST_BACKFILL_MACD_SLOW": 5323,
-      "FORECAST_BACKFILL_VOL_RATIO_WINDOW": 5327,
-      "FORECAST_BACKFILL_TRAIN_SPLIT": 5331,
-      "FORECAST_BACKFILL_N_ESTIMATORS": 5335,
-      "FORECAST_BACKFILL_MAX_DEPTH": 5339,
-      "FORECAST_BACKFILL_RANDOM_STATE": 5343,
-      "FORECAST_BACKFILL_CLASSIFIER_TYPE": 5347,
-      "FORECAST_BACKFILL_ENABLED": 5366,
-      "FORECAST_BACKFILL_DEADLINE_SECONDS": 5381,
-      "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED": 5404,
-      "FORECAST_BACKFILL_VRP_PROXY_ENABLED": 5423,
-      "CACHE_LONG_SHORT_ENABLED": 5556,
-      "CACHE_LONG_SHORT_WRITES_ENABLED": 5567,
-      "CACHE_LONG_SHORT_MIN_CORRELATION": 5580,
-      "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT": 5581,
-      "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS": 5582,
-      "CACHE_LONG_SHORT_PROXY_CANDIDATES": 5583,
-      "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD": 5588,
-      "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS": 5599,
-      "GOOGLE_TRENDS_ENABLED": 5603,
-      "GOOGLE_TRENDS_WINDOW_DAYS": 5607,
-      "GOOGLE_TRENDS_OVERLAP_DAYS": 5611,
-      "GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS": 5615,
-      "GOOGLE_TRENDS_MAX_RETRIES": 5619,
-      "GOOGLE_TRENDS_COOLDOWN_THRESHOLD": 5623,
-      "GOOGLE_TRENDS_COOLDOWN_SECONDS": 5627,
-      "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE": 5631,
-      "WATCHLIST": 5684,
-      "GCLOUD_BIN": 5688,
-      "GRAVITY_REQUIRE_NATIVE": 5704,
-      "QDRANT_COLLECTION": 5708,
-      "QDRANT_URL": 5712,
-      "WEEKLY_DIGEST_ENABLED": 5717,
-      "WEEKLY_DIGEST_INTERVAL_HOURS": 5728
+      "PILOTS_TOP_N": 4051,
+      "FOLLOW_MIN_AMOUNT": 4062,
+      "BROKERAGE_CONNECT_ENABLED": 4079,
+      "AUTOMATION_WRITES_ENABLED": 4101,
+      "STRATEGY_WRITES_ENABLED": 4124,
+      "LLM_WRITES_ENABLED": 4147,
+      "AGENTIC_DISCOVERY_ENABLED": 4169,
+      "GENERAL_SETTINGS_WRITES_ENABLED": 4196,
+      "RLHF_CALIBRATION_ENABLED": 4215,
+      "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD": 4227,
+      "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED": 4235,
+      "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED": 4247,
+      "AI_GENERATION_API_ENABLED": 4276,
+      "RAG_QUERY_API_ENABLED": 4300,
+      "MACRO_GATE_WRITES_ENABLED": 4332,
+      "BROKERAGE_REFRESH_ENABLED": 4364,
+      "AGENTIC_MAX_CANDIDATES": 4382,
+      "OPTIONS_MATRIX_ENABLED": 4398,
+      "PAIRS_SNAPSHOT_ENABLED": 4406,
+      "PAIRS_SNAPSHOT_MAX_PAIRS": 4414,
+      "MULTIFACTOR_MICROCAP_THRESHOLD": 4423,
+      "META_LABEL_MIN_CONFIDENCE": 4439,
+      "META_LABELING_ENABLED": 4454,
+      "META_LABELING_BACKFILL_BRIDGE_ENABLED": 4462,
+      "META_LABELING_BACKFILL_ELIGIBLE_SIGNALS": 4471,
+      "META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS": 4478,
+      "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS": 4482,
+      "SNAPSHOT_HISTORY_DAYS": 4496,
+      "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 4503,
+      "WATCH_RULES_FILE": 4517,
+      "RATIONALE_VERBOSITY": 4538,
+      "NEWS_LOOKBACK_DAYS": 4555,
+      "FINBERT_ENABLED": 4563,
+      "FINBERT_BATCH_SIZE": 4572,
+      "FINBERT_SCORE_CACHE_ENABLED": 4582,
+      "LLM_COMMENTARY_ENABLED": 4605,
+      "LLM_COMMENTARY_RATIONALE_PROVIDER": 4614,
+      "LLM_COMMENTARY_ALERT_PROVIDER": 4623,
+      "LLM_COMMENTARY_CACHE_PATH": 4632,
+      "LLM_COMMENTARY_TIMEOUT_SECONDS": 4639,
+      "LLM_STATUS_MAX_AGE_HOURS": 4646,
+      "ANTHROPIC_API_KEY": 4658,
+      "GEMINI_API_KEY": 4667,
+      "AI_CHAT_TIMEOUT_SECONDS": 4677,
+      "GEMINI_LIVE_CHAT_ENABLED": 4701,
+      "GEMINI_LIVE_CHAT_MODEL": 4708,
+      "GEMINI_LIVE_VOICE_NAME": 4715,
+      "GEMINI_CHAT_MODEL": 4722,
+      "LOCAL_LLM_BASE_URL": 4729,
+      "LOCAL_LLM_MODEL": 4736,
+      "LOCAL_LLM_API_KEY": 4743,
+      "AI_CHAT_DEFAULT_PROVIDER": 4749,
+      "AI_CHAT_DEFAULT_MODEL": 4755,
+      "OPAL_RESEARCH_ENABLED": 4767,
+      "OPAL_RESEARCH_PROVIDER": 4777,
+      "OPAL_RESEARCH_MODEL": 4785,
+      "OPAL_RESEARCH_TIMEOUT_SECONDS": 4795,
+      "OPENAI_API_KEY": 4803,
+      "GRAVITY_AI_RUNNER_ENABLED": 4821,
+      "GRAVITY_AI_RUNNER_OUTPUT_PATH": 4831,
+      "NEWS_EARNINGS_SUPPRESS_HOURS": 4838,
+      "NEWS_EARNINGS_DAMPEN_DAYS": 4846,
+      "SENTIMENT_SOCIAL_BLEND_WEIGHT": 4854,
+      "CORRELATION_CLUSTER_LOOKBACK_DAYS": 4872,
+      "CORRELATION_CLUSTER_THRESHOLD": 4880,
+      "USE_DUAL_MOMENTUM_OVERLAY": 4891,
+      "DUAL_MOMENTUM_SAFE_ASSET": 4899,
+      "DUAL_MOMENTUM_RISKY_ASSETS": 4903,
+      "PROMPT_REGISTRY_ENABLED": 4918,
+      "PROMPT_REGISTRY_BACKEND": 4925,
+      "PROMPT_REGISTRY_URL": 4932,
+      "PROMPT_REGISTRY_TOKEN": 4940,
+      "PROMPT_REGISTRY_PUBLISH_TOKEN": 4948,
+      "PROMPT_REGISTRY_SIGNING_KEY": 4956,
+      "PROMPT_REGISTRY_PINS": 4965,
+      "PROMPT_REGISTRY_REFRESH_SECONDS": 4975,
+      "PROMPT_CACHE_DIR": 4983,
+      "PROMPT_CACHE_KEEP_VERSIONS": 4991,
+      "PROMPT_MAX_CHARS": 4999,
+      "RAG_PORTFOLIO_CONTEXT_ENABLED": 5016,
+      "RAG_PORTFOLIO_CONTEXT_PROVIDER": 5028,
+      "RAG_EMBEDDING_PROVIDER": 5037,
+      "RAG_INDEX_MAX_DOCUMENTS": 5046,
+      "RAG_RETRIEVAL_TOP_K": 5055,
+      "RAG_INDEX_LOOKBACK_DAYS": 5062,
+      "ETF_HOLDINGS_ENABLED": 5081,
+      "ETF_HOLDINGS_TICKERS": 5094,
+      "ETF_HOLDINGS_REFRESH_DAYS": 5111,
+      "ETF_HOLDINGS_ISSUER_CSV_ENABLED": 5124,
+      "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE": 5140,
+      "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD": 5154,
+      "OPTIONS_TRUE_IVR_ENABLED": 5165,
+      "DEAD_LETTER_RETRY_ENABLED": 5217,
+      "PROMPT_REGISTRY_WRITES_ENABLED": 5243,
+      "UNIVERSE_SYNC_ENABLED": 5261,
+      "FORECAST_BACKFILL_HORIZONS": 5282,
+      "FORECAST_BACKFILL_LOOKBACK_YEARS": 5289,
+      "FORECAST_BACKFILL_MOMENTUM_WINDOW": 5300,
+      "FORECAST_BACKFILL_VOL_SHORT_WINDOW": 5304,
+      "FORECAST_BACKFILL_VOL_LONG_WINDOW": 5308,
+      "FORECAST_BACKFILL_RSI_WINDOW": 5312,
+      "FORECAST_BACKFILL_MACD_FAST": 5316,
+      "FORECAST_BACKFILL_MACD_SLOW": 5320,
+      "FORECAST_BACKFILL_VOL_RATIO_WINDOW": 5324,
+      "FORECAST_BACKFILL_TRAIN_SPLIT": 5328,
+      "FORECAST_BACKFILL_N_ESTIMATORS": 5332,
+      "FORECAST_BACKFILL_MAX_DEPTH": 5336,
+      "FORECAST_BACKFILL_RANDOM_STATE": 5340,
+      "FORECAST_BACKFILL_CLASSIFIER_TYPE": 5344,
+      "FORECAST_BACKFILL_ENABLED": 5363,
+      "FORECAST_BACKFILL_DEADLINE_SECONDS": 5378,
+      "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED": 5401,
+      "FORECAST_BACKFILL_VRP_PROXY_ENABLED": 5420,
+      "CACHE_LONG_SHORT_ENABLED": 5553,
+      "CACHE_LONG_SHORT_WRITES_ENABLED": 5564,
+      "CACHE_LONG_SHORT_MIN_CORRELATION": 5577,
+      "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT": 5578,
+      "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS": 5579,
+      "CACHE_LONG_SHORT_PROXY_CANDIDATES": 5580,
+      "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD": 5585,
+      "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS": 5596,
+      "GOOGLE_TRENDS_ENABLED": 5600,
+      "GOOGLE_TRENDS_WINDOW_DAYS": 5604,
+      "GOOGLE_TRENDS_OVERLAP_DAYS": 5608,
+      "GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS": 5612,
+      "GOOGLE_TRENDS_MAX_RETRIES": 5616,
+      "GOOGLE_TRENDS_COOLDOWN_THRESHOLD": 5620,
+      "GOOGLE_TRENDS_COOLDOWN_SECONDS": 5624,
+      "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE": 5628,
+      "WATCHLIST": 5681,
+      "GCLOUD_BIN": 5685,
+      "GRAVITY_REQUIRE_NATIVE": 5701,
+      "QDRANT_COLLECTION": 5705,
+      "QDRANT_URL": 5709,
+      "WEEKLY_DIGEST_ENABLED": 5714,
+      "WEEKLY_DIGEST_INTERVAL_HOURS": 5725
     }
   },
   "env_io_lists": {
@@ -1688,19 +1688,19 @@
       {
         "field": "GCLOUD_BIN",
         "in_excluded_from_gui": true,
-        "settings_py_line": 5688,
+        "settings_py_line": 5685,
         "description": "Path to the gcloud binary for environment integrations. NOTE: the LIVE read of this value (mcp_remote_adapter.py, a standalone stdio-proxy script) is deliberately a raw os.environ.get('GCLOUD_BIN')..."
       },
       {
         "field": "GRAVITY_AI_RUNNER_OUTPUT_PATH",
         "in_excluded_from_gui": true,
-        "settings_py_line": 4834,
+        "settings_py_line": 4831,
         "description": "Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored."
       },
       {
         "field": "LLM_COMMENTARY_CACHE_PATH",
         "in_excluded_from_gui": true,
-        "settings_py_line": 4635,
+        "settings_py_line": 4632,
         "description": "JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored."
       },
       {
@@ -1718,7 +1718,7 @@
       {
         "field": "PROMPT_CACHE_DIR",
         "in_excluded_from_gui": true,
-        "settings_py_line": 4986,
+        "settings_py_line": 4983,
         "description": "Directory for the signed-version disk cache. Each prompt ID gets a sub-directory; up to PROMPT_CACHE_KEEP_VERSIONS signed .json files are kept per ID for offline rollback."
       },
       {
@@ -1730,7 +1730,7 @@
       {
         "field": "WATCH_RULES_FILE",
         "in_excluded_from_gui": true,
-        "settings_py_line": 4520,
+        "settings_py_line": 4517,
         "description": "Path to watch_rules.yaml. Defines per-symbol ntfy push-alert rules (action_change, conviction_above, conviction_below). Missing file = no rules active (silent no-op)."
       }
     ],
@@ -2014,11 +2014,11 @@
       },
       {
         "field": "PROMPT_REGISTRY_PUBLISH_TOKEN",
-        "settings_py_line": 4951,
+        "settings_py_line": 4948,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 4951,
+            "line": 4948,
             "origin": "Field(description=...)",
             "text": "SECRET \u2014 never GUI-writable, never logged.",
             "matched": "never GUI-writable"
@@ -2030,11 +2030,11 @@
       },
       {
         "field": "PROMPT_REGISTRY_SIGNING_KEY",
-        "settings_py_line": 4959,
+        "settings_py_line": 4956,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 4959,
+            "line": 4956,
             "origin": "Field(description=...)",
             "text": "SECRET \u2014 never GUI-writable, never logged.",
             "matched": "never GUI-writable"
@@ -2046,11 +2046,11 @@
       },
       {
         "field": "PROMPT_REGISTRY_TOKEN",
-        "settings_py_line": 4943,
+        "settings_py_line": 4940,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 4943,
+            "line": 4940,
             "origin": "Field(description=...)",
             "text": "SECRET \u2014 never GUI-writable, never logged.",
             "matched": "never GUI-writable"
@@ -2062,11 +2062,11 @@
       },
       {
         "field": "PROMPT_REGISTRY_URL",
-        "settings_py_line": 4935,
+        "settings_py_line": 4932,
         "marker_sites": [
           {
             "file": "settings.py",
-            "line": 4935,
+            "line": 4932,
             "origin": "Field(description=...)",
             "text": "SECRET \u2014 never GUI-writable, never logged.",
             "matched": "never GUI-writable"
@@ -2115,7 +2115,7 @@
       {
         "candidate_field": "RAG_PORTFOLIO_CONTEXT_PROVIDER",
         "file": "settings.py",
-        "line": 5031,
+        "line": 5028,
         "origin": "Field(description=...)",
         "text": "Requires the matching API key (ANTHROPIC_API_KEY or GEMINI_API_KEY, both classified as SECRET_KEYS \u2014 never GUI-writable).",
         "matched": "never GUI-writable",
@@ -2130,7 +2130,7 @@
   },
   "write_endpoints_pilots_api": {
     "file": "api/pilots_api.py",
-    "total_write_method_routes": 51,
+    "total_write_method_routes": 49,
     "mutating_settings_routes": 22,
     "env_writing_routes": 22,
     "live_setattr_routes": 0,
@@ -2145,7 +2145,7 @@
         "route": "/pilots/forecast_backfill/run",
         "method": "POST",
         "function": "run_forecast_backfill_endpoint",
-        "line": 1107,
+        "line": 1090,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2162,7 +2162,7 @@
         "route": "/pilots/forecast_backfill/cancel/{job_id}",
         "method": "POST",
         "function": "cancel_forecast_backfill_job",
-        "line": 1181,
+        "line": 1164,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2179,7 +2179,7 @@
         "route": "/pilots/{pilot_id}/simulate",
         "method": "POST",
         "function": "simulate_pilot",
-        "line": 1322,
+        "line": 1304,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2196,7 +2196,7 @@
         "route": "/universe/{symbol}/reinclude",
         "method": "POST",
         "function": "reinclude_universe_symbol",
-        "line": 1364,
+        "line": 1346,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2213,7 +2213,7 @@
         "route": "/portfolio/attribution/brinson-fachler",
         "method": "POST",
         "function": "post_brinson_fachler_attribution",
-        "line": 1835,
+        "line": 1817,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2230,7 +2230,7 @@
         "route": "/observability/macro-gate",
         "method": "PUT",
         "function": "put_macro_gate",
-        "line": 1957,
+        "line": 1939,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2253,41 +2253,7 @@
         "route": "/decisions",
         "method": "POST",
         "function": "create_decision",
-        "line": 2520,
-        "writes_env": false,
-        "env_write_calls_direct": [],
-        "env_write_calls_via_helper": [],
-        "live_setattr": false,
-        "live_setattr_sites": [],
-        "live_setattr_via_helper": [],
-        "live_daemon_push": false,
-        "live_daemon_push_calls": [],
-        "applies_values": [],
-        "applies_declared_directly": [],
-        "applies_declared_via_helper": []
-      },
-      {
-        "route": "/follows",
-        "method": "PUT",
-        "function": "upsert_follow",
-        "line": 2594,
-        "writes_env": false,
-        "env_write_calls_direct": [],
-        "env_write_calls_via_helper": [],
-        "live_setattr": false,
-        "live_setattr_sites": [],
-        "live_setattr_via_helper": [],
-        "live_daemon_push": false,
-        "live_daemon_push_calls": [],
-        "applies_values": [],
-        "applies_declared_directly": [],
-        "applies_declared_via_helper": []
-      },
-      {
-        "route": "/pilots/{pilot_id}/follow",
-        "method": "POST",
-        "function": "follow_pilot",
-        "line": 2610,
+        "line": 2500,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2304,7 +2270,7 @@
         "route": "/agentic/scan-config",
         "method": "PUT",
         "function": "put_agentic_scan_config",
-        "line": 2780,
+        "line": 2648,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2325,7 +2291,7 @@
         "route": "/agentic/watch",
         "method": "POST",
         "function": "post_agentic_watch",
-        "line": 2809,
+        "line": 2677,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2346,7 +2312,7 @@
         "route": "/rlhf/proposals",
         "method": "POST",
         "function": "create_rlhf_proposal",
-        "line": 2937,
+        "line": 2805,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2363,7 +2329,7 @@
         "route": "/rlhf/proposals/{proposal_id}/review",
         "method": "POST",
         "function": "review_rlhf_proposal",
-        "line": 3003,
+        "line": 2871,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2380,7 +2346,7 @@
         "route": "/rlhf/export-sft",
         "method": "POST",
         "function": "export_rlhf_sft",
-        "line": 3052,
+        "line": 2920,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2397,7 +2363,7 @@
         "route": "/llm/setting",
         "method": "PUT",
         "function": "set_llm_setting",
-        "line": 3157,
+        "line": 3025,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2422,7 +2388,7 @@
         "route": "/brokerage/connect",
         "method": "POST",
         "function": "connect_brokerage",
-        "line": 3284,
+        "line": 3152,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2439,7 +2405,7 @@
         "route": "/brokerage/disconnect",
         "method": "POST",
         "function": "disconnect_brokerage",
-        "line": 3319,
+        "line": 3187,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2456,7 +2422,7 @@
         "route": "/brokerage/refresh",
         "method": "POST",
         "function": "refresh_brokerage",
-        "line": 3342,
+        "line": 3210,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2473,7 +2439,7 @@
         "route": "/brokerage/login/cancel/{job_id}",
         "method": "POST",
         "function": "cancel_brokerage_login",
-        "line": 3397,
+        "line": 3265,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2490,7 +2456,7 @@
         "route": "/automation/run",
         "method": "POST",
         "function": "trigger_automation_run",
-        "line": 3693,
+        "line": 3561,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2507,7 +2473,7 @@
         "route": "/automation/pause",
         "method": "POST",
         "function": "pause_automation",
-        "line": 3733,
+        "line": 3601,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2524,7 +2490,7 @@
         "route": "/automation/resume",
         "method": "POST",
         "function": "resume_automation",
-        "line": 3759,
+        "line": 3627,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2541,7 +2507,7 @@
         "route": "/automation/schedule/interval",
         "method": "PUT",
         "function": "set_automation_interval",
-        "line": 3790,
+        "line": 3658,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2568,7 +2534,7 @@
         "route": "/strategy/modules",
         "method": "PUT",
         "function": "set_strategy_modules",
-        "line": 3873,
+        "line": 3741,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_many_atomic"
@@ -2591,7 +2557,7 @@
         "route": "/automation/execution-mode",
         "method": "PUT",
         "function": "update_execution_mode",
-        "line": 3960,
+        "line": 3828,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2614,7 +2580,7 @@
         "route": "/settings/tunables",
         "method": "PUT",
         "function": "put_settings_tunables",
-        "line": 4419,
+        "line": 4287,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2633,7 +2599,7 @@
         "route": "/settings/tunables",
         "method": "PATCH",
         "function": "put_settings_tunables",
-        "line": 4419,
+        "line": 4287,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2652,7 +2618,7 @@
         "route": "/settings/sentiment",
         "method": "PUT",
         "function": "put_settings_sentiment",
-        "line": 5022,
+        "line": 4890,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2671,7 +2637,7 @@
         "route": "/settings/sentiment",
         "method": "PATCH",
         "function": "put_settings_sentiment",
-        "line": 5022,
+        "line": 4890,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2690,7 +2656,7 @@
         "route": "/settings/sector-selection",
         "method": "PUT",
         "function": "put_settings_sector_selection",
-        "line": 5047,
+        "line": 4915,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2709,7 +2675,7 @@
         "route": "/settings/sector-selection",
         "method": "PATCH",
         "function": "put_settings_sector_selection",
-        "line": 5047,
+        "line": 4915,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2728,7 +2694,7 @@
         "route": "/settings/cache-long-short",
         "method": "PUT",
         "function": "put_settings_cache_long_short",
-        "line": 5072,
+        "line": 4940,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2747,7 +2713,7 @@
         "route": "/settings/cache-long-short",
         "method": "PATCH",
         "function": "put_settings_cache_long_short",
-        "line": 5072,
+        "line": 4940,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2766,7 +2732,7 @@
         "route": "/settings/paper-broker",
         "method": "PUT",
         "function": "put_settings_paper_broker",
-        "line": 5094,
+        "line": 4962,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2785,7 +2751,7 @@
         "route": "/settings/paper-broker",
         "method": "PATCH",
         "function": "put_settings_paper_broker",
-        "line": 5094,
+        "line": 4962,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2804,7 +2770,7 @@
         "route": "/settings/feature-flags",
         "method": "PUT",
         "function": "put_feature_flags_settings",
-        "line": 5158,
+        "line": 5026,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2823,7 +2789,7 @@
         "route": "/settings/feature-flags",
         "method": "PATCH",
         "function": "put_feature_flags_settings",
-        "line": 5158,
+        "line": 5026,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2842,7 +2808,7 @@
         "route": "/settings/fmp",
         "method": "PUT",
         "function": "put_settings_fmp",
-        "line": 5187,
+        "line": 5055,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2861,7 +2827,7 @@
         "route": "/settings/fmp",
         "method": "PATCH",
         "function": "put_settings_fmp",
-        "line": 5187,
+        "line": 5055,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2880,7 +2846,7 @@
         "route": "/settings/reference",
         "method": "PUT",
         "function": "put_settings_reference",
-        "line": 5401,
+        "line": 5269,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2899,7 +2865,7 @@
         "route": "/settings/reference",
         "method": "PATCH",
         "function": "put_settings_reference",
-        "line": 5401,
+        "line": 5269,
         "writes_env": true,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [
@@ -2918,7 +2884,7 @@
         "route": "/dead-letter/retry",
         "method": "POST",
         "function": "post_dead_letter_retry",
-        "line": 5532,
+        "line": 5400,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2939,7 +2905,7 @@
         "route": "/prompts/pin",
         "method": "PUT",
         "function": "put_prompts_pin",
-        "line": 5682,
+        "line": 5550,
         "writes_env": true,
         "env_write_calls_direct": [
           "write_setting"
@@ -2962,7 +2928,7 @@
         "route": "/rag/query",
         "method": "POST",
         "function": "post_rag_query",
-        "line": 5759,
+        "line": 5627,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2979,7 +2945,7 @@
         "route": "/pilots/cache-long-short/start",
         "method": "POST",
         "function": "start_cls_strategy",
-        "line": 5864,
+        "line": 5732,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -2996,7 +2962,7 @@
         "route": "/pilots/cache-long-short/approve-bulk",
         "method": "POST",
         "function": "approve_cls_bulk",
-        "line": 5876,
+        "line": 5744,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -3013,7 +2979,7 @@
         "route": "/pilots/paper-broker/reset",
         "method": "POST",
         "function": "post_paper_broker_reset",
-        "line": 5948,
+        "line": 5816,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -3030,7 +2996,7 @@
         "route": "/pilots/paper-broker/order",
         "method": "POST",
         "function": "post_paper_broker_equity_order",
-        "line": 5957,
+        "line": 5825,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -3047,7 +3013,7 @@
         "route": "/pilots/execution/{token}/approve",
         "method": "POST",
         "function": "post_live_trade_approve",
-        "line": 5984,
+        "line": 5852,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -3064,7 +3030,7 @@
         "route": "/pilots/execution/{token}/reject",
         "method": "POST",
         "function": "post_live_trade_reject",
-        "line": 6008,
+        "line": 5876,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -3081,7 +3047,7 @@
         "route": "/pilots/ml/lstm-attention-forecast",
         "method": "POST",
         "function": "run_lstm_attention_forecast_endpoint",
-        "line": 6027,
+        "line": 5895,
         "writes_env": false,
         "env_write_calls_direct": [],
         "env_write_calls_via_helper": [],
@@ -3444,7 +3410,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 383,
+    "files_scanned": 380,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3452,7 +3418,6 @@
       "_bl_settings",
       "_dsr_settings",
       "_gravity_settings",
-      "_live_settings",
       "_mt_settings",
       "_oos_gate_settings",
       "_rh_settings",
@@ -3471,12 +3436,12 @@
       "settings",
       "settings_module.settings"
     ],
-    "distinct_settings_alias_count": 22,
+    "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 745,
-      "distinct_fields": 262,
+      "total_reads": 738,
+      "distinct_fields": 260,
       "counts": {
-        "OUTPUT_DIR": 115,
+        "OUTPUT_DIR": 114,
         "LOCAL_DATA_ROOT": 23,
         "SIGNAL_WEIGHTS": 18,
         "FRED_API_KEY": 13,
@@ -3540,8 +3505,6 @@
         "NEWS_EARNINGS_SUPPRESS_HOURS": 3,
         "RISK_FREE_RATE": 3,
         "ROBINHOOD_AUTO_REFRESH_ENABLED": 3,
-        "ROBINHOOD_EXECUTION_MODE": 3,
-        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 3,
         "RUNTIME_FLAGS_REFRESH_ENABLED": 3,
         "SECTOR_SELECTION_ENABLED": 3,
         "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE": 3,
@@ -3574,7 +3537,6 @@
         "FINNHUB_RATE_LIMIT_PER_MIN": 2,
         "FMP_API_KEY": 2,
         "FMP_PAPER_STARTING_CASH": 2,
-        "FOLLOW_MIN_AMOUNT": 2,
         "FORECAST_BACKFILL_DEADLINE_SECONDS": 2,
         "FORECAST_USE_GARCH_SIGMA": 2,
         "FRED_REQUEST_TIMEOUT_SECONDS": 2,
@@ -3617,6 +3579,7 @@
         "RH_PASSWORD": 2,
         "RH_USERNAME": 2,
         "RLHF_CALIBRATION_ENABLED": 2,
+        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 2,
         "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS": 2,
         "SECTOR_HEAT_ENABLED": 2,
         "SECTOR_SIMILARITY_POOLING": 2,
@@ -3741,8 +3704,8 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 306,
-      "distinct_fields": 183,
+      "total_reads": 302,
+      "distinct_fields": 182,
       "counts": {
         "FMP_API_KEY": 13,
         "GEMINI_API_KEY": 9,
@@ -3759,7 +3722,6 @@
         "FMP_SCREENER_ENABLED": 4,
         "GRAVITY_AI_RUNNER_ENABLED": 4,
         "LOCAL_LLM_BASE_URL": 4,
-        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 4,
         "DATA_FETCH_MAX_CONCURRENCY": 3,
         "FMP_NEWS_MAX_PAGES": 3,
         "FMP_NEWS_PAGE_LIMIT": 3,
@@ -3768,7 +3730,6 @@
         "MCP_DATABASE_URL_RO": 3,
         "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED": 3,
         "RAG_PORTFOLIO_CONTEXT_ENABLED": 3,
-        "ROBINHOOD_EXECUTION_MODE": 3,
         "ADVISORY_MAX_CONCURRENCY": 2,
         "AI_CHAT_DEFAULT_PROVIDER": 2,
         "ALPACA_API_KEY": 2,
@@ -3794,6 +3755,8 @@
         "META_LABEL_MIN_CONFIDENCE": 2,
         "OPAL_RESEARCH_PROVIDER": 2,
         "OPTIONS_RISK_FREE_RATE": 2,
+        "ROBINHOOD_EXECUTION_MODE": 2,
+        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 2,
         "SENTIMENT_LLM_VERIFICATION_ENABLED": 2,
         "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 2,
         "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED": 2,
@@ -3897,7 +3860,6 @@
         "MARKET_DATA_WS_RECONNECT_MAX_SECONDS": 1,
         "MARKET_DATA_WS_STALE_SECONDS": 1,
         "MARKET_DATA_WS_SYMBOLS": 1,
-        "MAX_POSITION_WEIGHT": 1,
         "META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS": 1,
         "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS": 1,
         "META_LABELING_ENABLED": 1,
@@ -3954,22 +3916,22 @@
         },
         {
           "file": "api/pilots_api.py",
-          "line": 3226,
+          "line": 3094,
           "expr": "getattr(settings, body.key)"
         },
         {
           "file": "api/pilots_api.py",
-          "line": 4356,
+          "line": 4224,
           "expr": "getattr(settings, key, None)"
         },
         {
           "file": "api/pilots_api.py",
-          "line": 4461,
+          "line": 4329,
           "expr": "getattr(settings, key, None)"
         },
         {
           "file": "api/pilots_api.py",
-          "line": 5320,
+          "line": 5188,
           "expr": "getattr(settings, key, None)"
         },
         {
@@ -4010,7 +3972,7 @@
         "os.environ.get()": 2
       }
     },
-    "fields_reached_by_any_form": 404,
+    "fields_reached_by_any_form": 403,
     "fields_only_via_b_or_d": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -4147,6 +4109,7 @@
       "RAG_PORTFOLIO_CONTEXT_ENABLED",
       "RAG_PORTFOLIO_CONTEXT_PROVIDER",
       "RAG_RETRIEVAL_TOP_K",
+      "ROBINHOOD_EXECUTION_MODE",
       "ROBINHOOD_LIMIT_BUFFER_BPS",
       "SECTOR_FORECAST_CONFIGS",
       "SECTOR_FORECAST_CONFIG_PATH",
@@ -4155,7 +4118,7 @@
       "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
       "VALIDATION_HARNESS_OOS_GATE_ENABLED"
     ],
-    "fields_only_via_b_or_d_count": 142,
+    "fields_only_via_b_or_d_count": 143,
     "fields_only_via_b": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -4290,6 +4253,7 @@
       "RAG_PORTFOLIO_CONTEXT_ENABLED",
       "RAG_PORTFOLIO_CONTEXT_PROVIDER",
       "RAG_RETRIEVAL_TOP_K",
+      "ROBINHOOD_EXECUTION_MODE",
       "ROBINHOOD_LIMIT_BUFFER_BPS",
       "SECTOR_FORECAST_CONFIGS",
       "SECTOR_FORECAST_CONFIG_PATH",
@@ -4339,6 +4303,7 @@
       "FMP_ECON_INDICATORS",
       "FMP_OPTIONS_CONTEXT_ENABLED",
       "FMP_OPTIONS_HEALTH_ENABLED",
+      "FOLLOW_MIN_AMOUNT",
       "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
       "GOOGLE_TRENDS_OVERLAP_DAYS",
       "GOOGLE_TRENDS_WINDOW_DAYS",
@@ -4377,7 +4342,7 @@
       "UNIVERSE_SYNC_ENABLED",
       "WS_RISK_STREAM_INTERVAL_SECONDS"
     ],
-    "fields_no_static_read_count": 73,
+    "fields_no_static_read_count": 74,
     "fields_no_static_read_detail": [
       {
         "field": "CIRCUIT_BREAKER_ENABLED",
@@ -4418,7 +4383,7 @@
       {
         "field": "CORRELATION_CLUSTER_LOOKBACK_DAYS",
         "name_literal_sites": [
-          "api/pilots_api.py:4080"
+          "api/pilots_api.py:3948"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4426,7 +4391,7 @@
       {
         "field": "DASHBOARD_REFRESH_SECONDS",
         "name_literal_sites": [
-          "api/pilots_api.py:4192",
+          "api/pilots_api.py:4060",
           "pilots/settings_domains.py:132"
         ],
         "name_literal_site_count": 2,
@@ -4435,7 +4400,7 @@
       {
         "field": "EDGAR_FULLTEXT_CHUNK_TOKENS",
         "name_literal_sites": [
-          "api/pilots_api.py:4838"
+          "api/pilots_api.py:4706"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4443,7 +4408,7 @@
       {
         "field": "EDGAR_FULLTEXT_FORMS",
         "name_literal_sites": [
-          "api/pilots_api.py:4837"
+          "api/pilots_api.py:4705"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4589,7 +4554,7 @@
       {
         "field": "FMP_ECON_INDICATORS",
         "name_literal_sites": [
-          "api/pilots_api.py:4979"
+          "api/pilots_api.py:4847"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4597,7 +4562,7 @@
       {
         "field": "FMP_OPTIONS_CONTEXT_ENABLED",
         "name_literal_sites": [
-          "api/pilots_api.py:4990"
+          "api/pilots_api.py:4858"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4605,7 +4570,15 @@
       {
         "field": "FMP_OPTIONS_HEALTH_ENABLED",
         "name_literal_sites": [
-          "api/pilots_api.py:4989"
+          "api/pilots_api.py:4857"
+        ],
+        "name_literal_site_count": 1,
+        "likely_dynamic_read": true
+      },
+      {
+        "field": "FOLLOW_MIN_AMOUNT",
+        "name_literal_sites": [
+          "pilots/settings_domains.py:70"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4631,7 +4604,7 @@
       {
         "field": "MAX_CONCURRENT_OPTION_POSITIONS",
         "name_literal_sites": [
-          "api/pilots_api.py:4269"
+          "api/pilots_api.py:4137"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4639,7 +4612,7 @@
       {
         "field": "MAX_OPTION_NOTIONAL_PER_TRADE",
         "name_literal_sites": [
-          "api/pilots_api.py:4268"
+          "api/pilots_api.py:4136"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4664,7 +4637,7 @@
       {
         "field": "OPTIONS_0DTE_ENABLED",
         "name_literal_sites": [
-          "api/pilots_api.py:4264"
+          "api/pilots_api.py:4132"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4672,7 +4645,7 @@
       {
         "field": "OPTIONS_0DTE_HARD_EXIT_TIME",
         "name_literal_sites": [
-          "api/pilots_api.py:4267"
+          "api/pilots_api.py:4135"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4680,7 +4653,7 @@
       {
         "field": "OPTIONS_0DTE_PROFIT_TARGET_PCT",
         "name_literal_sites": [
-          "api/pilots_api.py:4265"
+          "api/pilots_api.py:4133"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4688,7 +4661,7 @@
       {
         "field": "OPTIONS_0DTE_STOP_LOSS_PCT",
         "name_literal_sites": [
-          "api/pilots_api.py:4266"
+          "api/pilots_api.py:4134"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4702,7 +4675,7 @@
       {
         "field": "OPTIONS_AUTO_EXIT_ENABLED",
         "name_literal_sites": [
-          "api/pilots_api.py:4258"
+          "api/pilots_api.py:4126"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4716,7 +4689,7 @@
       {
         "field": "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
         "name_literal_sites": [
-          "api/pilots_api.py:4263"
+          "api/pilots_api.py:4131"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4724,7 +4697,7 @@
       {
         "field": "OPTIONS_DELTA_HEDGE_ENABLED",
         "name_literal_sites": [
-          "api/pilots_api.py:4262"
+          "api/pilots_api.py:4130"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4768,7 +4741,7 @@
       {
         "field": "OPTIONS_MANAGE_DTE_THRESHOLD",
         "name_literal_sites": [
-          "api/pilots_api.py:4261"
+          "api/pilots_api.py:4129"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4776,7 +4749,7 @@
       {
         "field": "OPTIONS_MATRIX_ENABLED",
         "name_literal_sites": [
-          "api/pilots_api.py:4223"
+          "api/pilots_api.py:4091"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4790,7 +4763,7 @@
       {
         "field": "OPTIONS_PROFIT_TARGET_PCT",
         "name_literal_sites": [
-          "api/pilots_api.py:4259"
+          "api/pilots_api.py:4127"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4804,7 +4777,7 @@
       {
         "field": "OPTIONS_STOP_LOSS_MULTIPLE",
         "name_literal_sites": [
-          "api/pilots_api.py:4260"
+          "api/pilots_api.py:4128"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4812,7 +4785,7 @@
       {
         "field": "OPTIONS_TRUE_IVR_ENABLED",
         "name_literal_sites": [
-          "api/pilots_api.py:4224"
+          "api/pilots_api.py:4092"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4826,7 +4799,7 @@
       {
         "field": "OPTIONS_VRP_THRESHOLD",
         "name_literal_sites": [
-          "api/pilots_api.py:4153"
+          "api/pilots_api.py:4021"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true
@@ -4834,7 +4807,7 @@
       {
         "field": "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
         "name_literal_sites": [
-          "api/pilots_api.py:4257",
+          "api/pilots_api.py:4125",
           "pilots/settings_domains.py:74"
         ],
         "name_literal_site_count": 2,

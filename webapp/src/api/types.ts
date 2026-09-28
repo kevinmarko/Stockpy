@@ -137,10 +137,7 @@ export interface PilotSummary {
   headline: Headline;
   holdings_count: number;
   top_holdings: Holding[];
-  aum_proxy: number; // derived from follows.json (honest, local)
-  followers_proxy: number;
   long_only: boolean;
-  followable: boolean;
 }
 
 export interface Holding {
@@ -277,44 +274,6 @@ export interface Portfolio {
   // the mock (which omits them) still satisfies the type.
   is_stale?: boolean;
   age_hours?: number;
-}
-
-/** Execution mode surfaced to the UI so a follow is never presented as executed. */
-export type ExecutionMode = "off" | "review" | "paper" | "live";
-
-/** One planned BUY intent in a gated follow queue (preview only, never placed). */
-export interface PlannedIntent {
-  symbol: string;
-  side: "BUY";
-  target_notional: number;
-  weight: number;
-  conviction: number;
-  allow_place: boolean; // structurally false unless mode==live & gates clear
-}
-
-export interface Follow {
-  pilot_id: string;
-  amount: number;
-  created_at: string;
-  updated_at: string;
-  // Real vocabulary per `pilots/follows_store.py` (STATUS_ACTIVE/STATUS_CANCELLED):
-  // "active" | "cancelled". GET /follows only ever returns "active" rows
-  // (FollowsStore.list_active()) — "cancelled" is retained server-side but
-  // filtered out of this list.
-  status: string; // "active" | "cancelled"
-}
-
-/** POST /pilots/{id}/follow response. */
-export interface FollowResult {
-  follow: Follow;
-  planned_intents: PlannedIntent[];
-  mode: ExecutionMode;
-  queue_written: boolean;
-  notional_cap: number; // ROBINHOOD_MAX_NOTIONAL_PER_ORDER
-  min_amount: number;
-  sizing_path?: string;
-  kelly_weight?: number;
-  notice: string; // human-readable gating notice
 }
 
 /** GET /symbols/{ticker} — one row of the reverse cross-link "which Pilots hold this symbol." */
@@ -606,8 +565,6 @@ export interface Thresholds {
   kelly_cap: number;
   /** Live settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER — USD cap per gated queue order (0 = unset). */
   robinhood_max_notional_per_order: number;
-  /** Live settings.FOLLOW_MIN_AMOUNT — USD floor the Follow modal enforces. */
-  follow_min_amount: number;
   /** Live settings.AGENTIC_MAX_CANDIDATES — cap on GET /agentic/discovery's candidate list. */
   agentic_max_candidates: number;
   /**
@@ -3218,12 +3175,6 @@ export interface AgenticQueueSummary {
   age_seconds: number | null;
 }
 
-/** GET /agentic/status -> follows sub-section (active Pilot follows only). */
-export interface AgenticFollowsSummary {
-  n_active: number;
-  total_amount: number;
-}
-
 /** GET /agentic/status -> agent_loop sub-section, from
  *  engine/advisory_agent.py's persisted AgentState (output/agent_state.json).
  *  `reason` is set (and the numeric fields are honest zeros, not fabricated)
@@ -3245,7 +3196,6 @@ export interface AgenticStatus {
   advisory_only: boolean;
   kill_switch: { active: boolean; reason: string | null };
   queue: AgenticQueueSummary;
-  follows: AgenticFollowsSummary;
   agent_loop: AgentLoopStatus;
 }
 

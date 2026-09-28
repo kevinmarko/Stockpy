@@ -23,7 +23,7 @@ self-built ``tmp_path`` fixtures wherever possible:
   ``TestToolOutputUnaffectedByMetaChange``, and ``TestBearerAuthMiddleware``
   additionally depend on ``investyo_mcp_server.py`` actually defining
   ``_WIDGETS_AVAILABLE``/``_PILOT_PICKER_UI``/``_PILOT_DETAIL_UI``/
-  ``_FOLLOW_RESULT_UI``/``_bearer_auth_asgi_middleware`` -- both sibling
+  ``_bearer_auth_asgi_middleware`` -- both sibling
   modules landed by the time this suite was run, and all 14 tests pass
   (verified: ``pytest tests/test_investyo_mcp_widgets.py -v``).
 """
@@ -125,9 +125,7 @@ class TestRegisterWidgetResourcesDegrade:
         for name in (
             "pilot-picker.html",
             "pilot-detail.html",
-            "follow-result.html",
             "pilot-compare.html",
-            "pilot-portfolio.html",
         ):
             (tmp_path / name).write_text("<p>placeholder</p>")
 
@@ -150,9 +148,7 @@ class TestRegisterWidgetResourcesSuccess:
     _TEMPLATE_NAMES = (
         "pilot-picker.html",
         "pilot-detail.html",
-        "follow-result.html",
         "pilot-compare.html",
-        "pilot-portfolio.html",
         "equity-curve.html",
         "risk-matrix.html",
         "signal-tree.html",
@@ -216,9 +212,7 @@ class TestRegisterWidgetResourcesSuccess:
 _EXPECTED_UI_URIS = {
     "_PILOT_PICKER_UI": "ui://widgets/pilot-picker.html",
     "_PILOT_DETAIL_UI": "ui://widgets/pilot-detail.html",
-    "_FOLLOW_RESULT_UI": "ui://widgets/follow-result.html",
     "_PILOT_COMPARE_UI": "ui://widgets/pilot-compare.html",
-    "_PILOT_PORTFOLIO_UI": "ui://widgets/pilot-portfolio.html",
     "_EQUITY_CURVE_UI": "ui://widgets/equity-curve.html",
     "_RISK_MATRIX_UI": "ui://widgets/risk-matrix.html",
     "_SIGNAL_TREE_UI": "ui://widgets/signal-tree.html",
@@ -323,55 +317,28 @@ class TestPilotCompareWidgetSmoke:
         assert tool.meta == srv._PILOT_COMPARE_UI
 
 
-class TestPilotPortfolioWidgetSmoke:
-    """Mirrors ``TestPilotCompareWidgetSmoke`` for the ``get_portfolio_by_pilot``
-    widget (``pilot-portfolio.html``) -- runs the real vendored bundle
-    (skipped when it hasn't been built locally) instead of a synthetic
-    tmp_path fixture."""
+class TestFollowWidgetsRetired:
+    """follow-result.html and pilot-portfolio.html belonged to follow_pilot and
+    get_portfolio_by_pilot, retired with Follow-a-Pilot (2026-09, step 4c)."""
 
-    @pytest.mark.skipif(
-        not mcp_widget_resources.BUNDLE_PATH.exists(),
-        reason=(
-            "vendored ext-apps bundle not built locally; run: "
-            "cd mcp_widgets/build && npm install && npm run build"
-        ),
-    )
-    def test_pilot_portfolio_renders_with_no_leftover_placeholders(self):
-        result = mcp_widget_resources.render_widget_html("pilot-portfolio.html")
-        assert result is not None
-        assert "__EXT_APPS_BUNDLE__" not in result
-        assert "__WIDGET_COMMON_CSS__" not in result
-        assert "__WIDGET_COMMON_JS__" not in result
-        assert "globalThis.ExtApps=" in result
+    def test_follow_widgets_not_registered_or_shipped(self):
+        uris = {uri for _name, uri, _title in mcp_widget_resources._WIDGET_RESOURCES}
+        assert "ui://widgets/follow-result.html" not in uris
+        assert "ui://widgets/pilot-portfolio.html" not in uris
+        assert not (mcp_widget_resources.TEMPLATES_DIR / "follow-result.html").exists()
+        assert not (mcp_widget_resources.TEMPLATES_DIR / "pilot-portfolio.html").exists()
 
-    @pytest.mark.skipif(
-        not mcp_widget_resources.BUNDLE_PATH.exists(),
-        reason=(
-            "vendored ext-apps bundle not built locally; run: "
-            "cd mcp_widgets/build && npm install && npm run build"
-        ),
-    )
-    def test_pilot_portfolio_bundle_contains_new_render_function(self):
-        result = mcp_widget_resources.render_widget_html("pilot-portfolio.html")
-        assert result is not None
-        assert "function renderPortfolioByPilotPanel" in result
-        # Reuses existing shared helpers verbatim (not re-implemented).
-        assert "function formatCurrency" in result
-
-    def test_pilot_portfolio_ui_wiring_consistent_with_widgets_available(self):
+    def test_server_has_no_follow_widget_constants(self):
         import investyo_mcp_server as srv
 
-        if srv._WIDGETS_AVAILABLE:
-            assert srv._PILOT_PORTFOLIO_UI == {"ui": {"resourceUri": "ui://widgets/pilot-portfolio.html"}}
-        else:
-            assert srv._PILOT_PORTFOLIO_UI is None
+        assert not hasattr(srv, "_FOLLOW_RESULT_UI")
+        assert not hasattr(srv, "_PILOT_PORTFOLIO_UI")
 
-    def test_get_portfolio_by_pilot_tool_meta_matches_constant(self):
-        import investyo_mcp_server as srv
-
-        tool = srv.mcp._tool_manager.get_tool("get_portfolio_by_pilot")
-        assert tool is not None
-        assert tool.meta == srv._PILOT_PORTFOLIO_UI
+    def test_shared_widget_js_has_no_follow_form(self):
+        js = (mcp_widget_resources.TEMPLATES_DIR / "_common.js").read_text(encoding="utf-8")
+        assert "renderFollowForm" not in js
+        assert "follow_pilot" not in js
+        assert "renderPortfolioByPilotPanel" not in js
 
 
 class TestAnalyticsWidgetsSmoke:
@@ -914,7 +881,7 @@ class TestAnalyticsWidgetsSmoke:
 
 # ---------------------------------------------------------------------------
 # Regression tripwire: the meta= decorator edit changed nothing observable
-# about list_pilots / get_pilot_detail / follow_pilot's actual output.
+# about list_pilots / get_pilot_detail's actual output.
 # ---------------------------------------------------------------------------
 
 
@@ -967,36 +934,6 @@ class TestToolOutputUnaffectedByMetaChange:
         assert "AAPL" in result
         assert "Technology" in result
         assert "```json" in result
-
-    def test_follow_pilot_output_unchanged(self, monkeypatch):
-        import data.historical_store as hs_mod
-        import execution.kill_switch as ks_mod
-        import investyo_mcp_server as srv
-        import pilots.follows_store as fs_mod
-        import pilots.mirror as mirror_mod
-        import pilots.scoring as scoring_mod
-
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: False)
-        monkeypatch.setattr(
-            fs_mod.FollowsStore, "upsert", lambda self, pid, amt: {"pilot_id": pid, "amount": amt}
-        )
-        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
-        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: None)
-        monkeypatch.setattr(
-            mirror_mod,
-            "plan_follow",
-            lambda pilot, amount, account_snapshot, snapshot=None: {
-                "planned_intents": [],
-                "mode": "off",
-                "queue_written": False,
-            },
-        )
-
-        result = srv.follow_pilot("trend-following", 500)
-
-        assert isinstance(result, str)
-        assert "no account snapshot" in result
-        assert '"queue_written": false' in result
 
 
 # ---------------------------------------------------------------------------

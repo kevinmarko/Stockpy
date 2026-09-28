@@ -284,7 +284,7 @@ function ResetOnboardingSection() {
     <SectionCard title="Reset onboarding">
       <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
         Clears the local "onboarding complete" marker and returns to the
-        Choose Pilot step. Does not touch any account, follow, or backend
+        Choose Pilot step. Does not touch any account or backend
         state — this is a local device setting only.
       </p>
       <Button variant="neutral" onClick={() => setConfirming(true)}>

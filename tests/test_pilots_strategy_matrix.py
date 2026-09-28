@@ -597,17 +597,10 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         allowed = allowed | {"dataclasses"}
     if module_name == "feature_flags":
         allowed = allowed | {"settings_keysets"}
-    if module_name == "follows_store":
-        allowed = allowed | {"datetime"}
     if module_name == "forecast_skill":
         # lazy forecasting.forecast_tracker.ForecastTracker -- NOT the
         # AST-forbidden forecasting_engine.
         allowed = allowed | {"forecasting"}
-    if module_name == "mirror":
-        # lazy execution.queue_builder/execution.compose,
-        # pilots.scoring/pilots.follows_store, sizing.kelly/sizing.vol_target,
-        # transactions_store.TransactionsStore, observability.alerts.send_alert.
-        allowed = allowed | {"dataclasses", "execution", "observability", "pilots", "sizing", "transactions_store"}
     if module_name == "price_provider":
         allowed = allowed | {"data"}
     if module_name == "realized":

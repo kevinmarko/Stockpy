@@ -4,6 +4,8 @@
 
 > **2026-09 (step 4a):** the MCP tools `get_options_directive`, `analyze_options_chain` and `scan_0dte_signals` are retired stubs (still registered, return a fixed retired message, never raise); `validate_order_compliance` keeps only its Kelly-cap check (the VRP regime half is gone). `broker_live_execution_mcp.py` no longer routes through `MultiBrokerGateway`, and `GET /commands` no longer returns the two options strategy registries. Entries below that describe the removed behavior are historical.
 
+> **2026-09 (step 4c):** Follow-a-Pilot is archived. Removed from `api/pilots_api.py`: `GET/PUT /follows`, `POST /pilots/{id}/follow`, the `aum_proxy`/`followers_proxy`/`followable` fields of `/pilots` and `/pilots/{id}`, `/agentic/status`'s `follows` block and `/thresholds`' `follow_min_amount`. In `investyo_mcp_server.py`, `follow_pilot`/`unfollow_pilot`/`get_follows`/`get_portfolio_by_pilot` are read-only retired stubs, `list_pilots` has no AUM column, and the `follow-result.html` and `pilot-portfolio.html` widgets are gone (17 widgets). `FOLLOW_API_TOKEN` stays as the general command token. Entries below that describe following are historical.
+
 > Part of the split-out `CLAUDE.md` System Architecture reference. See [../../CLAUDE.md](../../CLAUDE.md) for the index.
 
 - **observability/__init__.py** — Empty package marker.

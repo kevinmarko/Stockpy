@@ -9,11 +9,12 @@ Why a THIRD, separate app (not an extension of ``api/state_api.py``)
 --------------------------------------------------------------------
 ``api/state_api.py`` is deliberately pure: a test-enforced AST guard proves it
 NEVER imports engine/calculation OR broker/execution modules. That purity is
-load-bearing and must never regress. This module, by contrast, needs the
-follow write-path (``pilots.mirror`` → ``execution.queue_builder``) and the
-kill switch (``execution.kill_switch``), so it gets its own file — mirroring
-exactly how ``api/control_api.py`` split off from ``state_api.py`` for the same
-reason.
+load-bearing and must never regress. This module, by contrast, needs
+command-token-gated writes and the kill switch (``execution.kill_switch``), so
+it gets its own file — mirroring exactly how ``api/control_api.py`` split off
+from ``state_api.py`` for the same reason. (It also used to host the
+Follow-a-Pilot write-path, ``pilots.mirror``; that was archived to ``legacy/``
+in 2026-09, step 4c.)
 
 What this module MAY import (and its own AST guard test enforces): the pure
 ``pilots.*`` package, ``execution.kill_switch``, ``data.historical_store``,
@@ -21,8 +22,7 @@ What this module MAY import (and its own AST guard test enforces): the pure
 NEVER import directly: the heavy calculation engines (``processing_engine``,
 ``strategy_engine``, ``forecasting_engine``, ``macro_engine``,
 ``technical_options_engine``, ``main_orchestrator``) — all Pilot reads run off
-already-persisted state, and the follow write reaches execution only through
-``pilots.mirror``.
+already-persisted state.
 
 Brokerage-connect credential intake (``/brokerage/*``)
 --------------------------------------------------------
@@ -30,8 +30,8 @@ A deliberate, narrowly-scoped exception to this codebase's normal
 hand-edit-``.env`` posture for secrets — see ``data/brokerage_credentials.py``
 for the full rationale. Gated behind THREE independent controls, all of which
 must pass: (1) ``settings.BROKERAGE_CONNECT_ENABLED`` (default ``False``,
-GUI-writable), (2) the same fail-closed ``FOLLOW_API_TOKEN`` command
-token as the follow write-path, (3) ``require_loopback`` — the request must
+GUI-writable), (2) the fail-closed ``FOLLOW_API_TOKEN`` command
+token, (3) ``require_loopback`` — the request must
 originate from ``127.0.0.1``/``::1``. ``POST /brokerage/connect`` and
 ``POST /brokerage/refresh`` are asynchronous, job-based endpoints (202 +
 ``job_id``, polled via ``GET /brokerage/login/status/{job_id}``) — Robinhood
@@ -57,11 +57,13 @@ Two independent bearer-token guards (both ``HTTPBearer(auto_error=False)`` +
     request. FAIL-OPEN when unset (mirrors ``api/state_api.py`` exactly). Guards
     every GET *read* endpoint.
   * ``require_command_token`` — reads ``settings.FOLLOW_API_TOKEN`` live per
-    request. FAIL-CLOSED when unset: the follow endpoints (``GET/PUT /follows``,
-    ``POST /pilots/{id}/follow``) are disabled entirely (403), because
-    persisting a follow that produces a gated order queue is a materially
+    request. FAIL-CLOSED when unset: every command/write endpoint it guards is
+    disabled entirely (403), because a persisted write is a materially
     different risk than reading persisted state (mirrors
-    ``api/control_api.py``'s ``ORCHESTRATOR_DAEMON_TOKEN`` posture).
+    ``api/control_api.py``'s ``ORCHESTRATOR_DAEMON_TOKEN`` posture). The
+    token's name is historical: it was introduced for the Follow-a-Pilot
+    endpoints (archived 2026-09, step 4c) and is now the general command
+    token.
 
 Several additional FAIL-CLOSED master-switch guards stack ON TOP of the command
 token for the writes with real persistence/rollback cost, each a dedicated
@@ -153,7 +155,7 @@ from validation.thresholds import (
     STRESS_MAX_DRAWDOWN,
 )
 
-# Pilot layer (pure, persisted-state readers) + the gated follow write-path.
+# Pilot layer (pure, persisted-state readers).
 from pilots import (
     agentic,
     alerts_feed,
@@ -189,8 +191,6 @@ from pilots import (
     validation_trend as validation_trend_reader,
     weekly_digest,
 )
-from pilots.follows_store import FollowsStore
-from pilots.mirror import plan_follow
 from pilots.portfolio import serialize_portfolio as _serialize_portfolio
 from pilots.scan_config_store import ScanConfigStore
 
@@ -198,7 +198,7 @@ from pilots.scan_config_store import ScanConfigStore
 # POST /rlhf/proposals/{id}/review, POST /rlhf/export-sft) — a dedicated,
 # non-``pilots``-package store (see its own module docstring for why it is
 # NOT a TransactionsStore extension). Imported at module top, mirroring
-# FollowsStore/ScanConfigStore above, so tests can
+# ScanConfigStore above, so tests can
 # ``mock.patch.object(pilots_api, "RlhfCalibrationStore", ...)``. Not on the
 # AST guard's heavy-engine deny-list — its own imports are db_config/settings/
 # stdlib only.
@@ -328,11 +328,10 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="InvestYo Pilots API",
     description=(
-        "Read/follow API for the Autopilot 'Pilots' marketplace. Serves Pilot "
+        "Read/command API for the Autopilot 'Pilots' marketplace. Serves Pilot "
         "catalog, holdings, sector allocation, recent signal-change trades, "
-        "honest backtest headlines, the account portfolio, and the gated, "
-        "paper-first follow write-path. Reads only already-persisted state; "
-        "never calls the heavy calculation engines."
+        "honest backtest headlines, and the account portfolio. Reads only "
+        "already-persisted state; never calls the heavy calculation engines."
     ),
     version="0.1.0",
 )
@@ -370,10 +369,6 @@ _MISSING_SNAPSHOT_DETAIL = "No state snapshot yet — run the pipeline first."
 _MISSING_PORTFOLIO_DETAIL = "No account snapshot yet — run the pipeline first."
 _UNKNOWN_PILOT_DETAIL = "No such pilot."
 _UNKNOWN_SYMBOL_DETAIL = "No such symbol in the latest snapshot."
-_NOT_FOLLOWABLE_DETAIL = (
-    "This Pilot is not followable — it's a standalone strategy, not a signal "
-    "blend, so there is nothing for the Follow mechanism to replay."
-)
 _DEFAULT_TRADES_LIMIT = 20
 _DETAIL_TRADES_LIMIT = 10
 
@@ -441,9 +436,9 @@ def require_automation_writes_enabled() -> None:
     is GUI-writable (as of 2026-08-08) — surfaced in the Feature Flags screen.
 
     ``POST /automation/run`` and ``POST /automation/pause`` are NOT gated by
-    this — they sit behind ``require_command_token`` alone, matching
-    ``POST /pilots/{id}/follow``'s existing risk posture (an order-queue write
-    under ``FOLLOW_API_TOKEN`` alone, no master flag)."""
+    this — they sit behind ``require_command_token`` alone (the posture the
+    since-archived ``POST /pilots/{id}/follow`` order-queue write had:
+    ``FOLLOW_API_TOKEN`` alone, no master flag)."""
     if not settings.AUTOMATION_WRITES_ENABLED:
         raise HTTPException(
             status_code=403,
@@ -655,8 +650,8 @@ if not settings.STATE_API_TOKEN:
     )
 if not settings.FOLLOW_API_TOKEN:
     logger.warning(
-        "FOLLOW_API_TOKEN not set — follow endpoints (GET/PUT /follows, "
-        "POST /pilots/{id}/follow) are DISABLED (fail-closed, 403 on every "
+        "FOLLOW_API_TOKEN not set — command-token endpoints (writes, job "
+        "launches, brokerage connect) are DISABLED (fail-closed, 403 on every "
         "call). Set FOLLOW_API_TOKEN to enable them."
     )
 
@@ -721,18 +716,6 @@ def _load_snapshot() -> Optional[dict]:
 # Request bodies
 # ---------------------------------------------------------------------------
 
-
-class FollowUpsertRequest(BaseModel):
-    """Body for ``PUT /follows``. ``amount == 0`` cancels the follow."""
-
-    pilot_id: str = Field(..., min_length=1)
-    amount: float = Field(..., ge=0.0)
-
-
-class FollowRequest(BaseModel):
-    """Body for ``POST /pilots/{id}/follow``. Must allocate a positive amount."""
-
-    amount: float = Field(..., gt=0.0)
 
 
 class PilotSimulationRequest(BaseModel):
@@ -936,7 +919,7 @@ class ScanConfigRequest(BaseModel):
     broker-scan config in ``output/scan_configs.json`` (``pilots.scan_config_store.
     ScanConfigStore``), consumed by the ``agentic-discovery`` Claude Code skill —
     NOT an ``.env`` write (scan configs are structured, multi-row, operator-editable
-    data, same shape as a Pilot follow, not a global tunable). ``filters`` is stored
+    data, not a global tunable). ``filters`` is stored
     verbatim; this API has no knowledge of the Robinhood scanner's filter schema
     (``get_scanner_filter_specs`` on the Robinhood MCP is the source of truth for
     that — only the discovery skill calls it), so nothing here validates filter
@@ -1000,9 +983,13 @@ class RlhfProposalReviewRequest(BaseModel):
 
 _TOP_HOLDINGS_PREVIEW_N = 3
 
-def _pilot_summary(pilot: Any, snapshot: Optional[dict], store: FollowsStore) -> Dict[str, Any]:
+def _pilot_summary(pilot: Any, snapshot: Optional[dict]) -> Dict[str, Any]:
     """The PilotSummary contract (webapp/src/api/types.ts): identity + headline
-    metrics + follow proxies + holdings_count + ``long_only``.
+    metrics + holdings_count + ``long_only``.
+
+    The follow proxies (``aum_proxy``/``followers_proxy``) and ``followable``
+    were removed with Follow-a-Pilot (2026-09, step 4c): with no follows
+    they were always 0, and no client needs them.
 
     Shared by BOTH the marketplace list (``/pilots``) and the detail endpoint
     (``/pilots/{id}``, whose ``PilotDetail extends PilotSummary``) so the two
@@ -1017,10 +1004,7 @@ def _pilot_summary(pilot: Any, snapshot: Optional[dict], store: FollowsStore) ->
         "headline": performance.pilot_headline(pilot, reports_dir=_reports_dir()),
         "holdings_count": len(holdings),
         "top_holdings": holdings[:_TOP_HOLDINGS_PREVIEW_N],
-        "aum_proxy": store.aum_for(pilot.id),
-        "followers_proxy": store.followers_for(pilot.id),
         "long_only": pilot.long_only,
-        "followable": getattr(pilot, "followable", True),
     }
 
 
@@ -1042,12 +1026,11 @@ def health() -> Dict[str, str]:
 
 @app.get("/pilots", dependencies=[Depends(require_read_token)])
 def list_pilots() -> List[Dict[str, Any]]:
-    """Return every Pilot with its headline metrics, follow proxies and the
-    count of names it currently holds (0 when no snapshot exists — the list is
-    never 404'd on a cold start)."""
+    """Return every Pilot with its headline metrics and the count of names it
+    currently holds (0 when no snapshot exists — the list is never 404'd on a
+    cold start)."""
     snapshot = _load_snapshot()
-    store = FollowsStore()
-    return [_pilot_summary(p, snapshot, store) for p in catalog.list_pilots()]
+    return [_pilot_summary(p, snapshot) for p in catalog.list_pilots()]
 
 
 @app.get("/pilots/forecast_backfill", dependencies=[Depends(require_read_token)])
@@ -1133,8 +1116,8 @@ def run_forecast_backfill_endpoint(req: ForecastBackfillRunRequest) -> Any:
     Gated by two independent controls (see the dependencies above): the
     dedicated ``FORECAST_BACKFILL_ENABLED`` flag (default ``False``,
     GUI-writable but confirmation-required -- see
-    ``require_forecast_backfill_enabled``) and the fail-closed follow
-    command token.
+    ``require_forecast_backfill_enabled``) and the fail-closed command
+    token.
 
     ``req.horizons`` is still validated by ``ForecastBackfillRunRequest``'s
     own ``@field_validator`` -- FastAPI resolves the route's ``dependencies``
@@ -1231,11 +1214,10 @@ def get_pilot_detail(pilot_id: str) -> Any:
         raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)
 
     snapshot = _load_snapshot()
-    store = FollowsStore()
-    # Start from the full PilotSummary contract (headline + proxies + long_only)
-    # so detail carries every summary field it extends, then layer on the
+    # Start from the full PilotSummary contract (headline + long_only) so
+    # detail carries every summary field it extends, then layer on the
     # detail-only identity + holdings fields.
-    payload = _pilot_summary(pilot, snapshot, store)
+    payload = _pilot_summary(pilot, snapshot)
     payload["validation_strategy_id"] = pilot.validation_strategy_id
     payload["weights"] = dict(pilot.weights)
     has_news = pilot.weights.get("news_catalyst", 0.0) > 0.0
@@ -1325,7 +1307,7 @@ def simulate_pilot(pilot_id: str, body: PilotSimulationRequest) -> Dict[str, Any
     to this Pilot on top of their real current holdings?
 
     ``require_read_token`` ALONE — this performs no writes (no order is
-    placed, no follow is created, nothing is persisted), matching this file's
+    placed, nothing is persisted), matching this file's
     ``/data/cache-long-short/simulate``-style "interactive, on-demand" read
     tier per the pilots-endpoint skill.
 
@@ -2075,8 +2057,7 @@ def get_thresholds() -> Dict[str, float]:
     Streamlit Command Center (see that module's docstring: "Never hard-code
     numeric thresholds here").
 
-    ``robinhood_max_notional_per_order``, ``follow_min_amount``, and
-    ``agentic_max_candidates`` back the Agentic Trading tab's glossary
+    ``robinhood_max_notional_per_order`` and ``agentic_max_candidates`` back the Agentic Trading tab's glossary
     entries the same way the other five keys back Strategy Health / Pilots —
     see ``settings.AGENTIC_MAX_CANDIDATES``'s docstring ("never re-typed as a
     literal in the reader or the webapp").
@@ -2104,7 +2085,6 @@ def get_thresholds() -> Dict[str, float]:
         "kelly_fraction": settings.KELLY_FRACTION,
         "kelly_cap": settings.KELLY_CAP,
         "robinhood_max_notional_per_order": settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER,
-        "follow_min_amount": settings.FOLLOW_MIN_AMOUNT,
         "agentic_max_candidates": float(settings.AGENTIC_MAX_CANDIDATES),
         "retrain_window_days": float(MODEL_RETRAIN_WINDOW_DAYS),
     }
@@ -2579,114 +2559,6 @@ def create_decision(body: DecisionCreateRequest) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Follow endpoints (fail-closed command token)
-# ---------------------------------------------------------------------------
-
-
-@app.get("/follows", dependencies=[Depends(require_command_token)])
-def list_follows() -> List[Dict[str, Any]]:
-    """Return the active follows. Guarded by the fail-closed command token
-    (follow-state is more sensitive than public read data)."""
-    return FollowsStore().list_active()
-
-
-@app.put("/follows", dependencies=[Depends(require_command_token)])
-def upsert_follow(body: FollowUpsertRequest) -> Dict[str, Any]:
-    """Create/update a follow. ``amount == 0`` cancels it. 404 on unknown
-    Pilot; 400 if attempting to actually allocate (``amount > 0``) to a
-    non-followable Pilot — cancelling (``amount == 0``) is always allowed
-    regardless of ``followable``, so an existing follow can still be zeroed
-    out. Returns the updated follow row."""
-    pilot = catalog.get_pilot(body.pilot_id)
-    if pilot is None:
-        raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)
-    if body.amount > 0.0 and not pilot.followable:
-        raise HTTPException(status_code=400, detail=_NOT_FOLLOWABLE_DETAIL)
-    follow = FollowsStore().upsert(body.pilot_id, body.amount)
-    return {"follow": follow}
-
-
-@app.post("/pilots/{pilot_id}/follow", dependencies=[Depends(require_command_token)])
-def follow_pilot(pilot_id: str, body: FollowRequest) -> Any:
-    """Follow a Pilot with a dollar amount: persist the follow, then build the
-    gated, paper-first dry-run order queue via ``pilots.mirror.plan_follow``.
-
-    Order (auth is already checked by the dependency): 404 unknown Pilot →
-    400 if the Pilot isn't followable → 423 if the kill switch is active →
-    persist the follow → plan the gated queue. Idempotent. When no account
-    snapshot is available the follow is still persisted and a preview-only
-    result (empty ``planned_intents`` + an honest ``note``) is returned rather
-    than a fabricated equity figure (CONSTRAINT #4).
-
-    ``FollowRequest.amount`` is constrained ``gt=0.0`` (see its definition),
-    so every call here is a genuine "start/increase a follow" — there is no
-    zero-amount/cancel case to carve out, unlike ``PUT /follows`` below.
-    """
-    pilot = catalog.get_pilot(pilot_id)
-    if pilot is None:
-        raise HTTPException(status_code=404, detail=_UNKNOWN_PILOT_DETAIL)
-    if not pilot.followable:
-        raise HTTPException(status_code=400, detail=_NOT_FOLLOWABLE_DETAIL)
-
-    ks = GlobalKillSwitch()
-    if ks.is_active():
-        raise HTTPException(
-            status_code=423,
-            detail={
-                "detail": "Kill switch active — following is paused.",
-                "kill_switch_reason": ks.reason() or "",
-            },
-        )
-
-    follow = FollowsStore().upsert(pilot_id, body.amount)
-
-    snapshot = _load_snapshot()
-    account_snapshot = None
-    try:
-        account_snapshot = HistoricalStore(readonly=True).latest_account_snapshot()
-    except Exception as exc:  # noqa: BLE001 - dead-letter: no account -> preview only
-        logger.warning("pilots_api: follow could not load account snapshot: %s", exc)
-
-    plan = plan_follow(pilot, body.amount, account_snapshot, snapshot=snapshot)
-
-    # Always render a human-readable gating notice — the PWA Follow modal renders
-    # `notice` unconditionally, so an empty/missing value shows a blank banner.
-    notice = (
-        "This creates a gated, paper-first order queue that you must confirm. "
-        "No order is placed automatically."
-    )
-    note = None
-    if account_snapshot is None:
-        note = (
-            "No account snapshot available — follow persisted, but a "
-            "proportional order preview requires a stored account snapshot "
-            "(run the pipeline). No equity was fabricated."
-        )
-        # Merge the honesty message into the always-rendered notice so it isn't
-        # dropped by clients that only read `notice`.
-        notice = f"{notice} {note}"
-
-    response: Dict[str, Any] = {
-        "follow": follow,
-        "planned_intents": plan.get("planned_intents", []),
-        "mode": plan.get("mode"),
-        "queue_written": plan.get("queue_written", False),
-        # Fields the FollowResult UI contract (webapp/src/api/types.ts) requires.
-        # notional_cap is the live per-order ceiling (0.0 = unset — the UI renders
-        # "not configured" rather than "$0.00"); min_amount is the PWA's dollar floor.
-        "notional_cap": float(settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER),
-        "min_amount": float(settings.FOLLOW_MIN_AMOUNT),
-        "sizing_path": plan.get("sizing_path"),
-        "kelly_weight": plan.get("kelly_weight"),
-        "notice": notice,
-    }
-    if note is not None:
-        # Retained for back-compat with any client reading `note` directly.
-        response["note"] = note
-    return response
-
-
-# ---------------------------------------------------------------------------
 # Agentic Trading tab — composite status + scan-based discovery (read + gated write)
 # ---------------------------------------------------------------------------
 
@@ -2695,13 +2567,14 @@ def follow_pilot(pilot_id: str, body: FollowRequest) -> Any:
 def get_agentic_status() -> Dict[str, Any]:
     """Composite "what is the agent doing" answer for the Agentic Trading tab.
 
-    Composes FOUR already-imported, dependency-light sources exactly like
+    Composes THREE already-imported, dependency-light sources exactly like
     ``GET /automation/status`` does (no monolithic ``pilots/*.py`` helper
     needed — each piece already has one): ``shared.robinhood_execution_panel``
-    for the gated execution queue, ``pilots.follows_store.FollowsStore`` for
-    active Pilot follows, ``execution.kill_switch.GlobalKillSwitch`` for the
-    kill switch, and ``pilots.agentic.agent_loop_status`` (the one piece with
-    no existing reader) for the advisory-loop agent's persisted cadence state.
+    for the gated execution queue, ``execution.kill_switch.GlobalKillSwitch``
+    for the kill switch, and ``pilots.agentic.agent_loop_status`` (the one
+    piece with no existing reader) for the advisory-loop agent's persisted
+    cadence state. (The ``follows`` block went with Follow-a-Pilot, 2026-09,
+    step 4c.)
 
     Never raises, never 500s (CONSTRAINT #6) — every sub-read already degrades
     to an honest empty/``None`` shape on its own failure."""
@@ -2727,7 +2600,6 @@ def get_agentic_status() -> Dict[str, Any]:
 
     ks = GlobalKillSwitch()
     ks_active = ks.is_active()
-    active_follows = FollowsStore().list_active()
 
     return {
         "mode": queue_summary["mode"],
@@ -2737,10 +2609,6 @@ def get_agentic_status() -> Dict[str, Any]:
             "reason": ks.reason() if ks_active else None,
         },
         "queue": queue_summary,
-        "follows": {
-            "n_active": len(active_follows),
-            "total_amount": float(sum(f.get("amount", 0.0) for f in active_follows)),
-        },
         "agent_loop": agentic.agent_loop_status(),
     }
 
@@ -3287,7 +3155,7 @@ def connect_brokerage(body: BrokerageConnectRequest) -> Dict[str, Any]:
     job's initial status rather than blocking on the login itself.
 
     Gated by three independent controls (see the dependencies above):
-    ``BROKERAGE_CONNECT_ENABLED``, the fail-closed follow command token, and a
+    ``BROKERAGE_CONNECT_ENABLED``, the fail-closed command token, and a
     loopback-only request check.
 
     Robinhood's device-approval flow requires a human to tap "approve" in the
@@ -3348,7 +3216,7 @@ def refresh_brokerage() -> Dict[str, Any]:
     Gated by three independent controls (see the dependencies above): a
     DEDICATED ``BROKERAGE_REFRESH_ENABLED`` flag (not
     ``BROKERAGE_CONNECT_ENABLED`` — see ``require_brokerage_refresh_enabled``),
-    the fail-closed follow command token, and the same loopback-only check as
+    the fail-closed command token, and the same loopback-only check as
     ``/brokerage/connect`` and ``/brokerage/disconnect``.
 
     Returns immediately (202) with the started job's initial status — the
@@ -3653,10 +3521,10 @@ def get_system_cron_status() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Data & Automation — WRITE endpoints (Phase 3). Auth posture, per endpoint:
 #
-#   POST /automation/run     -> require_command_token alone (matches
-#                                POST /pilots/{id}/follow's existing posture:
-#                                an order-queue write under FOLLOW_API_TOKEN
-#                                alone, no master flag — gating a run trigger
+#   POST /automation/run     -> require_command_token alone (the posture of
+#                                the archived POST /pilots/{id}/follow order-
+#                                queue write: FOLLOW_API_TOKEN alone, no
+#                                master flag — gating a run trigger
 #                                MORE strictly would invert the risk ordering)
 #   POST /automation/pause   -> require_command_token alone (same reasoning;
 #                                pausing is the SAFE direction)
@@ -4032,7 +3900,7 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
 # pydantic Field(description=...), never fabricated (CONSTRAINT #4).
 #
 # Auth: PUT sits behind require_command_token ALONE (same fail-closed tier as
-# POST /decisions and POST /pilots/{id}/follow) — NOT a dedicated *_WRITES_ENABLED
+# POST /decisions) — NOT a dedicated *_WRITES_ENABLED
 # master flag. Every accepted value is still re-checked against
 # env_io.ALLOWED_KEYS / SECRET_KEYS at write time (defensive `forbidden_key`
 # rejection), and the write goes through env_io.write_many_atomic — all-or-nothing

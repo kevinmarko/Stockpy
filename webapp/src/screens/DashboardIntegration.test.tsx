@@ -36,7 +36,7 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
     const pilot = (id: string, name: string, sharpe: number): PilotSummary => ({
       id, name, category: "Momentum", description: "",
       headline: { sharpe, dsr: 0.97, pbo: 0.3, max_drawdown: -0.15, deployable: true },
-      holdings_count: 0, top_holdings: [], aum_proxy: 0, followers_proxy: 0, long_only: true, followable: true,
+      holdings_count: 0, top_holdings: [], long_only: true,
     });
     vi.spyOn(api, "listPilots").mockResolvedValue([
       pilot("trend-following", "Trend Follower", 1.12),
@@ -133,52 +133,6 @@ describe("Dashboard Integration & E2E Scenarios (T3 & T4)", () => {
 
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
     expect(screen.getByText("Run the Stockpy pipeline to produce data, then pull to refresh.")).toBeInTheDocument();
-  });
-
-  // T4.2: Strategy Evaluation and Active Follow
-  it("guides operator from comparing strategies to following, committing amount, and writing follow queue", async () => {
-    const followSpy = vi.spyOn(api, "follow").mockResolvedValue({
-      follow: { pilot_id: "trend-following", amount: 1000, created_at: "", updated_at: "", status: "active" },
-      planned_intents: [],
-      mode: "review",
-      queue_written: true,
-      notional_cap: 2500,
-      min_amount: 100,
-      notice: "Gated queue created."
-    });
-
-    render(
-      <MemoryRouter>
-        <Comparison />
-      </MemoryRouter>
-    );
-
-    // Select pilot and click Follow
-    const cb = await screen.findByTestId("comparison-checkbox-trend-following");
-    fireEvent.click(cb);
-
-    const followBtn = await screen.findByTestId("follow-pilot-btn-trend-following");
-    fireEvent.click(followBtn);
-
-    // Follow modal mounts
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText("Follow Trend Follower")).toBeInTheDocument();
-
-    // Fill amount and click preview
-    const amountInput = screen.getByLabelText("Amount (USD)");
-    fireEvent.change(amountInput, { target: { value: "1000" } });
-
-    const previewBtn = screen.getByText("Preview queue");
-    fireEvent.click(previewBtn);
-
-    // Wait for follow call
-    expect(followSpy).toHaveBeenCalledWith("trend-following", 1000);
-    
-    // Complete the flow
-    const doneBtn = await screen.findByText("Done");
-    fireEvent.click(doneBtn);
-
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   // T4.3: Sudden Volatility Event Alert Response

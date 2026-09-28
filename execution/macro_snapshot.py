@@ -22,7 +22,8 @@ per cycle (``_build_macro_dto()``) and now threads it explicitly into
 no such value in scope: ``execution/kill_switch.py``'s
 ``GlobalKillSwitch.activate()`` (which can fire from a CLI invocation, a
 watchdog, or an operator action — no pipeline ``RunResult`` anywhere nearby)
-and ``pilots/mirror.py``'s follow-composer path. This module gives both a
+and, until its 2026-09 archive, ``pilots/mirror.py``'s follow-composer path.
+This module gives such callers a
 lightweight fallback: read whatever macro data is already cached in
 ``HistoricalStore`` (populated by the advisory cycle's own FRED fetches) with
 **zero network calls**, matching the zero-network invariant

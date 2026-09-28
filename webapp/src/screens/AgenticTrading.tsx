@@ -40,7 +40,7 @@ import { ModelHealthPanel } from "../components/ModelHealthPanel";
 
 /**
  * Agentic Trading — the consolidated command center for the platform's
- * Robinhood-backed agentic loop: Pilots follow/mirror, the gated dry-run
+ * Robinhood-backed agentic loop: the gated dry-run
  * order queue, scan-based candidate discovery, and the decision journal.
  * All previously scattered across Commands, Settings, and AIControlCenter.
  *
@@ -345,10 +345,6 @@ function AgentStatusHeader({
           label={data.advisory_only ? "Advisory only" : "Live trading enabled"}
           tone={data.advisory_only ? "muted" : "caution"}
         />
-        <Chip
-          label={`${data.follows.n_active} active follow${data.follows.n_active === 1 ? "" : "s"}`}
-          tone="muted"
-        />
       </div>
       {data.kill_switch.active && data.kill_switch.reason && (
         <p style={{ color: theme.caution, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
@@ -387,14 +383,6 @@ function AgentStatusHeader({
                   data.queue.generated_at
                 )}${data.queue.stale ? " (stale)" : ""}`
               : "No queue yet"
-          }
-        />
-        <StatRow
-          label="Pilot follows"
-          value={
-            data.follows.n_active === 0
-              ? "None active"
-              : `$${data.follows.total_amount.toLocaleString()} across ${data.follows.n_active}`
           }
         />
       </div>
@@ -981,12 +969,6 @@ function ControlsSection({
           <div style={{ fontWeight: 600, color: theme.textPrimary }}>Change execution mode →</div>
           <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
             Advisory / simulation / paper / live — a deliberate safety ladder, managed in Settings.
-          </div>
-        </Link>
-        <Link to="/marketplace" className="card card-pad" style={{ textDecoration: "none" }}>
-          <div style={{ fontWeight: 600, color: theme.textPrimary }}>Manage Pilot follows →</div>
-          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
-            Follow, adjust, or cancel a Pilot — feeds this queue via the gated mirror rebalance.
           </div>
         </Link>
       </div>

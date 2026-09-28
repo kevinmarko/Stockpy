@@ -63,7 +63,6 @@ vi.mock("../api/client", () => ({
         capabilities: [],
       })
     ),
-    getFollows: vi.fn(() => Promise.resolve([])),
     getPilots: vi.fn(() => Promise.resolve([])),
     getThresholds: vi.fn(() => Promise.resolve({
       vix_stress: 30,

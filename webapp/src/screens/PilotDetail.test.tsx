@@ -3,10 +3,10 @@
  * honesty invariants (CONSTRAINT #4): a Pilot with no persisted backtest curve
  * must render "No backtest series yet" with its `reason`, never a fabricated
  * line; a non-deployable Pilot's badge must render plainly. Also covers the
- * Follow CTA opening the modal and an unknown pilot id's 404 state.
+ * the Follow CTA's absence (Follow-a-Pilot was removed) and an unknown pilot
+ * id's 404 state.
  */
 import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PilotDetail } from "./PilotDetail";
@@ -38,13 +38,14 @@ describe("PilotDetail screen (real mock API)", () => {
     expect(screen.getByText("demo")).toBeInTheDocument();
   });
 
-  it("renders holdings, sector allocation, and the Follow CTA for a deployable pilot", async () => {
+  it("renders holdings and sector allocation for a deployable pilot, with no Follow CTA", async () => {
     renderDetail("trend-following");
 
     expect(await screen.findByRole("heading", { name: "Trend Follower" })).toBeInTheDocument();
     expect(screen.getByText(/Holdings/)).toBeInTheDocument();
     expect(screen.getByText(/Sector allocation/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Follow/ })).toBeInTheDocument();
+    // Follow-a-Pilot was removed: Pilot Detail is research-only now.
+    expect(screen.queryByRole("button", { name: /^Follow/ })).not.toBeInTheDocument();
 
     // Verify new holding properties render
     const actionEls = await screen.findAllByText(/BUY|HOLD|SELL/);
@@ -81,16 +82,6 @@ describe("PilotDetail screen (real mock API)", () => {
     expect(document.querySelector(".recharts-area")).not.toBeInTheDocument();
   });
 
-  it("a followable:false pilot renders a disabled, explained Follow CTA -- never a silently hidden button", async () => {
-    renderDetail("regime-navigator");
-
-    await screen.findByRole("heading", { name: "Regime Navigator" });
-    const restrictedBtn = screen.getByRole("button", { name: /Follow \(Restricted\)/ });
-    expect(restrictedBtn).toBeDisabled();
-    // No active (non-restricted) Follow button also renders for this pilot.
-    expect(screen.queryByRole("button", { name: /^Follow ·/ })).not.toBeInTheDocument();
-  });
-
   it("momentum-burst renders its 'Not deployable' badge plainly, never hidden or softened", async () => {
     renderDetail("momentum-burst");
 
@@ -98,19 +89,6 @@ describe("PilotDetail screen (real mock API)", () => {
     // Both the honesty badge and the description call out the failed gate —
     // it must never be hidden or softened into a passing-looking state.
     expect(screen.getAllByText(/not deployable/i).length).toBeGreaterThan(0);
-  });
-
-  it("clicking Follow opens the FollowModal with the unmissable gated-queue notice", async () => {
-    const user = userEvent.setup();
-    renderDetail("trend-following");
-
-    const followBtn = await screen.findByRole("button", { name: /Follow/ });
-    await user.click(followBtn);
-
-    expect(
-      screen.getByText(/this creates a/i, { exact: false })
-    ).toBeInTheDocument();
-    expect(screen.getByText(/No order is placed automatically/i)).toBeInTheDocument();
   });
 
   it("an unknown pilot id renders the honest 404 'Nothing here yet' state", async () => {

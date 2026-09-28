@@ -39,8 +39,6 @@ import type { StrategyReportCardSnapshot,
   DecisionCreateResult,
   DecisionEntry,
   EdgeByStrategy,
-  Follow,
-  FollowResult,
   ForecastSkill,
   ForecastBackfillSummary,
   ForecastBackfillJob,
@@ -304,8 +302,8 @@ async function http<T>(
   init?: RequestInit & { method?: string }
 ): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
-  // Only idempotent reads are ever cached/served-from-cache — a POST (follow,
-  // connectBrokerage, ...) must never be silently satisfied by a stale value.
+  // Only idempotent reads are ever cached/served-from-cache — a POST
+  // (connectBrokerage, ...) must never be silently satisfied by a stale value.
   const cacheable = method === "GET";
   const headers: Record<string, string> = {
     Accept: "application/json",
@@ -713,12 +711,6 @@ const liveApi = {
     http<TunablesUpdateResult>("/settings/reference", {
       method: "PUT",
       body: JSON.stringify({ values, confirm }),
-    }),
-  getFollows: () => http<Follow[]>("/follows"),
-  follow: (id: string, amount: number) =>
-    http<FollowResult>(`/pilots/${encodeURIComponent(id)}/follow`, {
-      method: "POST",
-      body: JSON.stringify({ amount }),
     }),
   getAutomationStatus: () => http<AutomationStatus>("/automation/status"),
   getAutomationSchedule: () => http<AutomationSchedule>("/automation/schedule"),

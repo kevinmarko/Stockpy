@@ -3,8 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 
 /**
- * Codifies the hand-rolled write-path shape used by FollowModal.tsx (the
- * only mutation in the app before this): local pending/result/error state,
+ * Codifies the hand-rolled write-path shape the since-removed FollowModal.tsx
+ * used (the only mutation in the app before this): local pending/result/error state,
  * try/catch/finally, `instanceof Error` narrowing. `useApi` is deliberately
  * read-only (it re-runs `fn` on a dependency change, not on demand); this is
  * its write-side counterpart, not a replacement — a screen with a five-way

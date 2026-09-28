@@ -634,7 +634,7 @@ class TestNoOrderFunctions:
     # place_* / submit_order / *_order function or class (only emit a gated
     # JSON queue; the Robinhood MCP placement happens in a Claude Code agent,
     # not in committed Python). Uses the STRICTER check from
-    # tests/test_pilots_mirror.py::TestNoOrderSymbols (exact names ∪
+    # legacy/tests/test_pilots_mirror.py (archived)::TestNoOrderSymbols (exact names ∪
     # startswith("place_") ∪ endswith("_order"), and FunctionDef/
     # AsyncFunctionDef/ClassDef all scanned) rather than the repo-wide scan's
     # looser ``_ORDER_NAMES ∪ startswith("place_")`` — the repo-wide check
@@ -680,7 +680,7 @@ class TestNoOrderFunctions:
     def _strict_forbidden_names_in(cls, path: Path) -> list[str]:
         """FunctionDef/AsyncFunctionDef/ClassDef names matching the stricter
         exact-names ∪ place_* ∪ *_order check (mirrors
-        tests/test_pilots_mirror.py::TestNoOrderSymbols._defined_names)."""
+        legacy/tests/test_pilots_mirror.py (archived)::TestNoOrderSymbols._defined_names)."""
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         found = []
         for node in ast.walk(tree):
