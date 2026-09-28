@@ -40,14 +40,15 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, time as dtime, timezone, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import main_orchestrator
 import runtime_flags
-from settings import settings, validate_interval_seconds
+from settings import parse_scheduled_login_time, settings, validate_interval_seconds
 import data_engine
 from data_engine import DataEngine, MockDataEngine
 from reporting.atomic_write import atomic_write_json
@@ -76,6 +77,92 @@ _STORE_UNCHECKED = object()
 #: See ``maybe_dispatch_weekly_digest``'s own docstring for the concrete
 #: case this constant was introduced to fix.
 _PARKED_TIMER_POLL_SECONDS = 3600.0
+
+#: US/Eastern -- the scheduled Robinhood login's wall-clock zone (same zone
+#: engine.advisory_agent's market-hours gates use; no holiday calendar).
+_ET = ZoneInfo("America/New_York")
+
+#: Filename (under settings.OUTPUT_DIR) for the scheduled Robinhood login's
+#: durable "last attempted ET date" -- see maybe_run_scheduled_robinhood_login.
+_SCHEDULED_LOGIN_STATE_FILENAME = "robinhood_scheduled_login_state.json"
+
+#: Floor on any timer wait shortened for the scheduled login, so a hook that
+#: somehow fails to record its attempt can never turn the loop into a spin.
+_SCHEDULED_LOGIN_MIN_WAIT_SECONDS = 5.0
+
+#: Slack added when waking for the scheduled time, so the hook reliably sees
+#: "now >= target" on the wake (never a hair early).
+_SCHEDULED_LOGIN_WAKE_SLACK_SECONDS = 1.0
+
+#: How often the scheduled login's outcome watcher polls the login job.
+_SCHEDULED_LOGIN_WATCH_POLL_SECONDS = 2.0
+
+
+def _scheduled_login_state_path() -> Path:
+    return Path(settings.OUTPUT_DIR) / _SCHEDULED_LOGIN_STATE_FILENAME
+
+
+def _read_scheduled_login_state() -> dict:
+    """The durable scheduled-login state, or ``{}`` if missing/unreadable.
+    Never raises."""
+    try:
+        path = _scheduled_login_state_path()
+        if not path.exists():
+            return {}
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6
+        logger.warning("scheduled Robinhood login: state file unreadable (%s).", exc)
+        return {}
+
+
+def _write_scheduled_login_state(**fields: Any) -> None:
+    """Merge ``fields`` into the durable state file (atomic). Never raises --
+    the in-process claim still prevents a same-process re-prompt when this
+    write fails; only restart-dedup is lost, and that is logged."""
+    try:
+        state = _read_scheduled_login_state()
+        state.update(fields)
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        path = _scheduled_login_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(path, state)
+    except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6
+        logger.warning(
+            "scheduled Robinhood login: could not persist state (%s); a daemon "
+            "restart today could prompt again.", exc,
+        )
+
+
+def _latest_account_snapshot_fetched_at() -> Optional[datetime]:
+    """Newest ``fetched_at`` across the two cached Robinhood snapshot tiers
+    (DB, then JSON cache -- the same tiers fetch_account_snapshot reads), as
+    an aware UTC datetime, or ``None`` if neither has one. Read-only; never
+    logs in; never raises."""
+    candidates: list[datetime] = []
+    try:
+        from data.historical_store import HistoricalStore
+
+        snap = HistoricalStore(readonly=True).latest_account_snapshot()
+        if snap is not None and snap.fetched_at is not None:
+            candidates.append(snap.fetched_at)
+    except Exception as exc:  # noqa: BLE001 - dead-letter: fall through to the JSON tier
+        logger.debug("scheduled Robinhood login: DB snapshot read failed: %s", exc)
+    try:
+        from data.robinhood_portfolio import _read_cache
+
+        cached = _read_cache()
+        if cached is not None and cached.fetched_at is not None:
+            candidates.append(cached.fetched_at)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("scheduled Robinhood login: JSON cache read failed: %s", exc)
+    normalized = [
+        (c if c.tzinfo is not None else c.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+        for c in candidates
+        if isinstance(c, datetime)
+    ]
+    return max(normalized) if normalized else None
+
 
 #: Filename (under settings.OUTPUT_DIR) for the weekly digest's durable
 #: last-dispatch state. See ``_weekly_digest_state_path`` /
@@ -315,6 +402,13 @@ class OrchestratorDaemon:
         # "the file wasn't there last time either" (see that method).
         self._last_seen_store_stat: Any = _STORE_UNCHECKED
 
+        # Scheduled Robinhood login: the ET date (ISO) this process last
+        # claimed, so the hook fires at most once per day even if the durable
+        # state write fails; and the last invalid time value warned about, so
+        # a bad ROBINHOOD_SCHEDULED_LOGIN_TIME_ET warns once, not every wake.
+        self._scheduled_login_claimed_date: Optional[str] = None
+        self._scheduled_login_warned_value: Optional[str] = None
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -358,6 +452,7 @@ class OrchestratorDaemon:
             self._interval_seconds > 0
             or settings.WEEKLY_DIGEST_ENABLED
             or settings.GOOGLE_TRENDS_ENABLED
+            or settings.ROBINHOOD_SCHEDULED_LOGIN_ENABLED
         )
         if needs_timer_thread:
             self._stop_event.clear()
@@ -1050,6 +1145,250 @@ class OrchestratorDaemon:
                 pass
 
 
+    # ------------------------------------------------------------------
+    # Scheduled daily Robinhood device-approval login (step 5, decision 6)
+    # ------------------------------------------------------------------
+
+    def _scheduled_login_time(self) -> Optional[tuple[int, int]]:
+        """``(hour, minute)`` ET when the scheduled login is enabled and its
+        time is valid, else ``None``. An invalid time warns once per value."""
+        if not settings.ROBINHOOD_SCHEDULED_LOGIN_ENABLED:
+            return None
+        raw = settings.ROBINHOOD_SCHEDULED_LOGIN_TIME_ET
+        parsed = parse_scheduled_login_time(raw)
+        if parsed is None:
+            if self._scheduled_login_warned_value != str(raw):
+                self._scheduled_login_warned_value = str(raw)
+                logger.warning(
+                    "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET=%r is not a valid HH:MM "
+                    "time; the scheduled Robinhood login is disabled.", raw,
+                )
+            return None
+        return parsed
+
+    def _scheduled_login_attempted_date(self) -> Optional[str]:
+        """The latest ET date (ISO) a scheduled login was attempted -- this
+        process's own claim, else the durable state file's (so a daemon
+        restart the same day does not prompt again)."""
+        durable = _read_scheduled_login_state().get("last_attempted_et_date")
+        durable = durable if isinstance(durable, str) else None
+        return max(filter(None, (self._scheduled_login_claimed_date, durable)), default=None)
+
+    def seconds_until_scheduled_login(self, now_utc: Optional[datetime] = None) -> Optional[float]:
+        """Seconds until the scheduled login is next due (``0.0`` if due now),
+        or ``None`` when disabled/invalid. Weekdays only (US/Eastern, no
+        holiday calendar); a weekday already attempted counts as done.
+        Used by ``_timer_loop`` to wake near the target time even when the
+        pipeline interval is much longer. Never raises."""
+        try:
+            hm = self._scheduled_login_time()
+            if hm is None:
+                return None
+            now_et = (now_utc or datetime.now(timezone.utc)).astimezone(_ET)
+            attempted = self._scheduled_login_attempted_date()
+            for offset in range(8):
+                day: date = now_et.date() + timedelta(days=offset)
+                if day.weekday() >= 5:
+                    continue
+                target = datetime.combine(day, dtime(hm[0], hm[1]), tzinfo=_ET)
+                if offset == 0:
+                    if attempted == day.isoformat():
+                        continue
+                    if now_et >= target:
+                        return 0.0
+                return max(0.0, (target - now_et).total_seconds())
+            return None  # pragma: no cover - a weekday always exists within 8 days
+        except Exception:  # noqa: BLE001 - CONSTRAINT #6
+            logger.warning("seconds_until_scheduled_login: unexpected failure", exc_info=True)
+            return None
+
+    def _bounded_wait_timeout(self, base: float) -> float:
+        """``base``, shortened so the timer loop wakes just after the
+        scheduled login is due. Exactly ``base`` when the scheduled login is
+        off, so the timer loop's pre-existing waits are unchanged."""
+        until = self.seconds_until_scheduled_login()
+        if until is None:
+            return base
+        return min(
+            base,
+            max(until + _SCHEDULED_LOGIN_WAKE_SLACK_SECONDS, _SCHEDULED_LOGIN_MIN_WAIT_SECONDS),
+        )
+
+    def _wait_out_interval(self, interval: float) -> bool:
+        """Wait ``interval`` seconds for the next interval cycle, waking early
+        (without shortening the cycle cadence) to run the scheduled login
+        when it falls inside the wait. Returns True if woken by
+        ``_wake_event`` (interval change or shutdown), False once the full
+        interval has elapsed. With the scheduled login off this is exactly
+        one ``_wake_event.wait(interval)`` -- the pre-existing behaviour."""
+        deadline = time.monotonic() + interval
+        timeout = self._bounded_wait_timeout(interval)
+        while True:
+            if self._wake_event.wait(timeout=timeout):
+                return True
+            if self._stop_event.is_set():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self.maybe_run_scheduled_robinhood_login()
+            timeout = self._bounded_wait_timeout(remaining)
+
+    def maybe_run_scheduled_robinhood_login(self, now_utc: Optional[datetime] = None) -> Optional[str]:
+        """Start the day's Robinhood device-approval login at the scheduled
+        time, so the approval push arrives when the operator can tap it
+        (shrink step 5, operator decision 6 -- replaces main.py's 08:45 ET
+        launchd run as the thing that triggers the daily prompt).
+
+        Gated on ``settings.ROBINHOOD_SCHEDULED_LOGIN_ENABLED`` (default
+        False -> returns immediately, no I/O). Fires at most once per US/
+        Eastern weekday, at/after ``ROBINHOOD_SCHEDULED_LOGIN_TIME_ET``: the
+        day is claimed (in-process, then in
+        ``OUTPUT_DIR/robinhood_scheduled_login_state.json``) BEFORE anything
+        that could prompt, so neither a later wake nor a same-day daemon
+        restart prompts again -- whatever the outcome. Skips (still claiming
+        the day) when no credentials are configured or when the cached
+        account snapshot is already newer than today's scheduled time.
+
+        Non-blocking: ``data.robinhood_login.start_login("refresh")`` spawns
+        the killable worker and returns; a daemon thread watches the job and
+        logs/alerts the outcome. Single-flight: a refresh already running
+        (e.g. the webapp's Refresh button) is joined; a running connect is
+        left alone. Returns the outcome (``started``, ``skipped_fresh``,
+        ``skipped_no_credentials``, ``skipped_login_in_progress``,
+        ``start_failed``) or ``None`` when nothing was due. Never raises
+        into the timer loop.
+        """
+        try:
+            hm = self._scheduled_login_time()
+            if hm is None:
+                return None
+            now_et = (now_utc or datetime.now(timezone.utc)).astimezone(_ET)
+            if now_et.weekday() >= 5:
+                return None
+            target = datetime.combine(now_et.date(), dtime(hm[0], hm[1]), tzinfo=_ET)
+            if now_et < target:
+                return None
+            today = now_et.date().isoformat()
+            if self._scheduled_login_attempted_date() == today:
+                return None
+
+            # Claim the day first -- see the docstring.
+            self._scheduled_login_claimed_date = today
+            _write_scheduled_login_state(
+                last_attempted_et_date=today, last_outcome="claimed",
+                job_id=None, last_error_code=None,
+            )
+
+            from data.brokerage_credentials import rh_credentials_present
+
+            if not rh_credentials_present():
+                logger.warning(
+                    "Scheduled Robinhood login skipped: RH_USERNAME/RH_PASSWORD "
+                    "are not configured."
+                )
+                _write_scheduled_login_state(last_outcome="skipped_no_credentials")
+                return "skipped_no_credentials"
+
+            fetched_at = _latest_account_snapshot_fetched_at()
+            if fetched_at is not None and fetched_at >= target.astimezone(timezone.utc):
+                logger.info(
+                    "Scheduled Robinhood login skipped: the account snapshot "
+                    "(%s) is already newer than today's %02d:%02d ET.",
+                    fetched_at.isoformat(), hm[0], hm[1],
+                )
+                _write_scheduled_login_state(last_outcome="skipped_fresh")
+                return "skipped_fresh"
+
+            from data.robinhood_login import RobinhoodLoginInProgress, start_login
+
+            try:
+                job = start_login("refresh")
+            except RobinhoodLoginInProgress as exc:
+                logger.info(
+                    "Scheduled Robinhood login skipped: a %s login (%s) is "
+                    "already in progress.", exc.job.mode, exc.job.job_id,
+                )
+                _write_scheduled_login_state(
+                    last_outcome="skipped_login_in_progress", job_id=exc.job.job_id,
+                )
+                return "skipped_login_in_progress"
+            except Exception as exc:  # noqa: BLE001 - e.g. OSError from Popen
+                logger.error("Scheduled Robinhood login could not start: %s", exc)
+                _write_scheduled_login_state(last_outcome="start_failed")
+                self._send_scheduled_login_alert(
+                    "WARNING",
+                    "Scheduled Robinhood login could not start. Use Refresh in "
+                    "the webapp to log in.",
+                )
+                return "start_failed"
+
+            logger.info(
+                "Scheduled Robinhood login started (job %s): approve the push "
+                "in the Robinhood app within %ss.",
+                job.job_id, settings.RH_LOGIN_DEADLINE_SECONDS,
+            )
+            _write_scheduled_login_state(last_outcome="started", job_id=job.job_id)
+            self._send_scheduled_login_alert(
+                "INFO",
+                f"Robinhood login started: approve the push in the Robinhood "
+                f"app within {settings.RH_LOGIN_DEADLINE_SECONDS}s.",
+            )
+            threading.Thread(
+                target=self._watch_scheduled_login, args=(job.job_id,),
+                name="ScheduledRobinhoodLoginWatcher", daemon=True,
+            ).start()
+            return "started"
+        except Exception:  # noqa: BLE001 - CONSTRAINT #6, never break the timer loop
+            logger.warning("maybe_run_scheduled_robinhood_login: unexpected failure", exc_info=True)
+            return None
+
+    def _watch_scheduled_login(self, job_id: str) -> None:
+        """Wait for the scheduled login job to finish, then record and alert
+        its outcome. Bounded by the job's own RH_LOGIN_DEADLINE_SECONDS;
+        stops early on daemon shutdown. Never raises."""
+        try:
+            from data.robinhood_login import get_login_state
+
+            while True:
+                if self._stop_event.is_set():
+                    return
+                job = get_login_state(job_id)
+                if job is None:
+                    return
+                with job._lock:
+                    state, error_code = job.state, job.error_code
+                if state != "running":
+                    break
+                self._stop_event.wait(timeout=_SCHEDULED_LOGIN_WATCH_POLL_SECONDS)
+            _write_scheduled_login_state(last_outcome=state, last_error_code=error_code)
+            if state == "succeeded":
+                logger.info("Scheduled Robinhood login %s succeeded.", job_id)
+                self._send_scheduled_login_alert(
+                    "INFO", "Robinhood login succeeded; account snapshot refreshed.",
+                )
+            else:
+                logger.warning(
+                    "Scheduled Robinhood login %s ended %s (%s).", job_id, state, error_code,
+                )
+                self._send_scheduled_login_alert(
+                    "WARNING",
+                    f"Scheduled Robinhood login ended '{state}' ({error_code}). It "
+                    "will not retry today; use Refresh in the webapp to log in.",
+                )
+        except Exception:  # noqa: BLE001 - CONSTRAINT #6
+            logger.warning("scheduled Robinhood login watcher failed", exc_info=True)
+
+    @staticmethod
+    def _send_scheduled_login_alert(level: str, message: str) -> None:
+        """Best-effort operator alert; never raises."""
+        try:
+            from observability.alerts import send_alert
+
+            send_alert(level, message, dedup_key="robinhood_scheduled_login")
+        except Exception as exc:  # noqa: BLE001 - alerting is best-effort
+            logger.debug("scheduled Robinhood login alert failed: %s", exc)
+
     def _timer_loop(self) -> None:
         while not self._stop_event.is_set():
             # Clear BEFORE reading the interval. If set_interval() fires
@@ -1075,6 +1414,7 @@ class OrchestratorDaemon:
             # Same "called unconditionally, self-gates internally" contract --
             # see maybe_alert_on_pipeline_stall's own docstring.
             self.maybe_alert_on_pipeline_stall()
+            self.maybe_run_scheduled_robinhood_login()
             with self._lock:
                 interval = self._interval_seconds
             if self._stop_event.is_set():
@@ -1090,9 +1430,17 @@ class OrchestratorDaemon:
                 # for the full rationale; every check above already self-
                 # gates on its own settings flag, so a periodic wake-and-
                 # recheck costs nothing when they're disabled.
-                self._wake_event.wait(timeout=_PARKED_TIMER_POLL_SECONDS)
+                # Shortened (never lengthened) so the scheduled Robinhood
+                # login fires within seconds of its time; unchanged when off.
+                self._wake_event.wait(
+                    timeout=self._bounded_wait_timeout(_PARKED_TIMER_POLL_SECONDS)
+                )
                 continue
-            if self._wake_event.wait(timeout=interval):
+            # _wait_out_interval is one _wake_event.wait(interval) unless the
+            # scheduled Robinhood login falls inside this interval; then it
+            # wakes for it and resumes waiting to the SAME deadline, so the
+            # interval-cycle cadence is not shortened.
+            if self._wait_out_interval(interval):
                 continue  # interval changed OR shutting down -- re-check at the top
             if self._stop_event.is_set():
                 break
@@ -1101,6 +1449,7 @@ class OrchestratorDaemon:
             self.maybe_refresh_google_trends()
             self.maybe_dispatch_weekly_digest()
             self.maybe_alert_on_pipeline_stall()
+            self.maybe_run_scheduled_robinhood_login()
             # ALREADY_RUNNING (previous interval cycle still in flight) is
             # expected and fine -- just proceed to the next wait.
             if is_automatic_run_gated(

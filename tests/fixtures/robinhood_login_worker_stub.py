@@ -27,6 +27,10 @@ full parent environment):
                           emitting 'started'. The parent's startup-timeout
                           guard kills this process and reports
                           child_start_failed.
+  delayed_success       -- emit 'started' + an 'awaiting_approval' phase,
+                          sleep STUB_DELAY_SECONDS (default 1.0), then a
+                          successful 'result'. Used by the single-flight
+                          tests to join a still-running job.
   echo_creds            -- read the one JSON credentials line off
                           --creds-fd and write it VERBATIM to the file at
                           the STUB_ECHO_PATH environment variable (a
@@ -107,6 +111,15 @@ def main(argv=None) -> int:
         if behavior == "fail":
             emit({"event": "result", "ok": False, "code": "auth_failed"})
             return 1
+
+        if behavior == "delayed_success":
+            # Awaiting approval for STUB_DELAY_SECONDS (default 1.0), then a
+            # successful result -- lets single-flight tests join a job that
+            # is genuinely still running and later succeeds.
+            emit({"event": "phase", "phase": "awaiting_approval"})
+            time.sleep(float(os.environ.get("STUB_DELAY_SECONDS", "1.0")))
+            emit({"event": "result", "ok": True})
+            return 0
 
         # "success" (default)
         emit({"event": "result", "ok": True})

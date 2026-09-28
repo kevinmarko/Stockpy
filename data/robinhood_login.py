@@ -26,6 +26,31 @@ Two ways to use a login attempt:
     unattended-context login to the isolated worker while still presenting
     a simple synchronous call to every existing caller of
     ``fetch_account_snapshot()``.
+
+Single-flight (2026-09)
+-----------------------
+Every login attempt sends the operator a device-approval push. Two callers
+in one process -- e.g. the daemon's scheduled/auto refresh and a webapp
+``POST /brokerage/refresh`` -- must never launch two workers (two prompts,
+two competing sessions). ``start_login`` therefore holds a module lock
+across "is a job already running?" + ``Popen`` + registration, and allows
+at most ONE non-terminal job per process:
+
+  - ``refresh`` requested while a ``refresh`` is running: the RUNNING job is
+    returned (the caller joins it; no new worker, no second prompt).
+    ``login_blocking("refresh")`` then simply waits on that existing job.
+  - Anything else while a job is running (``connect`` while anything runs,
+    or ``refresh`` while a ``connect`` runs): raises
+    :class:`RobinhoodLoginInProgress` carrying the running job. A
+    ``connect`` carries candidate credentials that a running job was not
+    started with, and a ``connect`` job does not fetch an account snapshot,
+    so joining across modes would silently answer a different question.
+    The Pilots API maps this to HTTP 409.
+
+The guard is per process. A separate process (e.g. the standalone Data API
+on 8603 calling ``fetch_account_snapshot`` with auto-refresh on) is not
+covered; the daemon hosts both the scheduled login and the Pilots API's
+``/brokerage/*`` routes in ONE process, which is the case this closes.
 """
 
 from __future__ import annotations
@@ -76,6 +101,49 @@ class LoginJobState:
 
 _jobs: dict[str, LoginJobState] = {}
 _jobs_lock = threading.Lock()
+#: Serializes start_login's check-running + Popen + register sequence so two
+#: near-simultaneous callers can never both observe "nothing running" and
+#: both launch a worker. Separate from _jobs_lock so status polls never wait
+#: on a Popen.
+_start_lock = threading.Lock()
+#: The most recently started job -- the only one that can still be running,
+#: because start_login refuses to start another while it is.
+_active_job: Optional[LoginJobState] = None
+
+
+class RobinhoodLoginTimeout(RuntimeError):
+    """Raised by login_blocking() when the attempt hit its deadline without
+    a human approving in time."""
+
+
+class RobinhoodLoginFailed(RuntimeError):
+    """Raised by login_blocking() for any other non-success terminal state
+    (bad credentials, an unsupported SMS/email challenge, cancellation, or
+    the child failing to start)."""
+
+
+class RobinhoodLoginInProgress(RobinhoodLoginFailed):
+    """Raised by start_login() (and so login_blocking()) when a login job
+    is already running and the request cannot join it -- see the module
+    docstring's single-flight section. ``.job`` is the running job."""
+
+    def __init__(self, job: LoginJobState, requested_mode: str) -> None:
+        self.job = job
+        self.requested_mode = requested_mode
+        super().__init__(
+            f"A Robinhood login ({job.mode}, job {job.job_id}) is already in "
+            f"progress; not starting a '{requested_mode}' login. Approve or "
+            f"cancel it first."
+        )
+
+
+def _running_job() -> Optional[LoginJobState]:
+    """The in-flight job, or None. Caller must hold _start_lock."""
+    job = _active_job
+    if job is None:
+        return None
+    with job._lock:
+        return job if job.state == "running" else None
 
 
 def _drain_events(events_r: int, job: LoginJobState) -> None:
@@ -186,7 +254,31 @@ def start_login(mode: LoginMode, *, username: str = "", password: str = "") -> L
     never argv or the environment. Leave both empty for ``mode="refresh"``,
     where the worker reads the already-configured ``RH_USERNAME``/
     ``RH_PASSWORD`` off the settings singleton itself.
+
+    Single-flight: while a job is running, a ``refresh`` request returns
+    that running ``refresh`` job instead of launching a second worker, and
+    any other request raises :class:`RobinhoodLoginInProgress` -- see the
+    module docstring.
     """
+    global _active_job
+    with _start_lock:
+        running = _running_job()
+        if running is not None:
+            if mode == "refresh" and running.mode == "refresh":
+                logger.info(
+                    "robinhood_login: refresh login %s already running; "
+                    "joining it instead of starting a second worker.",
+                    running.job_id,
+                )
+                return running
+            raise RobinhoodLoginInProgress(running, mode)
+        job = _launch(mode, username=username, password=password)
+        _active_job = job
+        return job
+
+
+def _launch(mode: LoginMode, *, username: str, password: str) -> LoginJobState:
+    """Spawn the worker and register the job. Caller holds _start_lock."""
     job_id = f"rhlogin-{uuid.uuid4().hex[:8]}"
     job = LoginJobState(job_id=job_id, mode=mode)
 
@@ -258,17 +350,6 @@ def cancel_login(job_id: str) -> bool:
         return True
 
 
-class RobinhoodLoginTimeout(RuntimeError):
-    """Raised by login_blocking() when the attempt hit its deadline without
-    a human approving in time."""
-
-
-class RobinhoodLoginFailed(RuntimeError):
-    """Raised by login_blocking() for any other non-success terminal state
-    (bad credentials, an unsupported SMS/email challenge, cancellation, or
-    the child failing to start)."""
-
-
 def login_blocking(mode: LoginMode, *, username: str = "", password: str = "", poll_interval: float = 0.5) -> None:
     """Start a login attempt and block the calling thread until it reaches a
     terminal state. Raises on anything but success — callers that need a
@@ -277,6 +358,11 @@ def login_blocking(mode: LoginMode, *, username: str = "", password: str = "", p
     callers (``data.robinhood_portfolio._fetch_live_snapshot``,
     ``main.py --refresh-account``) that already expect a plain blocking
     call and just need it to no longer be able to hang forever.
+
+    If a ``refresh`` job is already running, a ``refresh`` call waits on
+    that job rather than starting another (single-flight). A running job of
+    the other mode raises :class:`RobinhoodLoginInProgress` (a
+    :class:`RobinhoodLoginFailed`) immediately.
     """
     job = start_login(mode, username=username, password=password)
     while True:

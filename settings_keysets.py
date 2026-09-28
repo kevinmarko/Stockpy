@@ -380,6 +380,13 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "operator's actual brokerage account bypassing the daily cache — "
         "not a simulated or sandboxed action."
     ),
+    "ROBINHOOD_SCHEDULED_LOGIN_ENABLED": (
+        "Makes the orchestrator daemon start a real Robinhood device-approval "
+        "login against the operator's actual brokerage account every "
+        "weekday at ROBINHOOD_SCHEDULED_LOGIN_TIME_ET, pushing an approval "
+        "prompt to their phone -- same risk class as BROKERAGE_REFRESH_ENABLED, "
+        "but unattended and recurring."
+    ),
     "CACHE_LONG_SHORT_WRITES_ENABLED": (
         "Gates POST /pilots/cache-long-short/{start,approve-bulk}, which "
         "persists a new tracked position or approves a TLH recommendation — "

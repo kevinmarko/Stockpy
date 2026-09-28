@@ -2089,6 +2089,7 @@ const MOCK_DANGEROUS_KEYS = new Set([
   "AI_GENERATION_API_ENABLED",
   "AUTOMATION_WRITES_ENABLED",
   "BROKERAGE_REFRESH_ENABLED",
+  "ROBINHOOD_SCHEDULED_LOGIN_ENABLED",
   "COMMAND_EXECUTION_ENABLED",
   "DEAD_LETTER_RETRY_ENABLED",
   "GENERAL_SETTINGS_WRITES_ENABLED",
@@ -4456,6 +4457,15 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     default: true,
     description:
       "Gates POST /brokerage/refresh -- a real live login against the operator's actual brokerage account, bypassing the daily cache.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "ROBINHOOD_SCHEDULED_LOGIN_ENABLED",
+    type: "boolean",
+    value: false,
+    default: false,
+    description:
+      "Makes the orchestrator daemon start a real Robinhood device-approval login every weekday at ROBINHOOD_SCHEDULED_LOGIN_TIME_ET, pushing an approval prompt to the operator's phone.",
   },
   {
     group: "Write & Execution Gates",

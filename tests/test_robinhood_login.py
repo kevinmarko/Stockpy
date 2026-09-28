@@ -62,6 +62,7 @@ class _PopenProxy:
         assert argv[1:3] == ["-m", "data.robinhood_login_worker"], (
             f"unexpected argv shape -- patch point may have drifted: {argv}"
         )
+        self.popen_calls = getattr(self, "popen_calls", 0) + 1
         new_argv = [argv[0], str(_STUB_PATH)] + list(argv[3:])
         return self._real.Popen(new_argv, *args, **kwargs)
 
@@ -69,8 +70,27 @@ class _PopenProxy:
 @pytest.fixture(autouse=True)
 def _stub_worker(monkeypatch):
     """Redirect data.robinhood_login's own subprocess.Popen calls to launch
-    the stub script instead of the real worker module."""
-    monkeypatch.setattr(robinhood_login, "subprocess", _PopenProxy(subprocess))
+    the stub script instead of the real worker module. Returns the proxy so
+    a test can count how many workers were actually spawned."""
+    proxy = _PopenProxy(subprocess)
+    monkeypatch.setattr(robinhood_login, "subprocess", proxy)
+    return proxy
+
+
+@pytest.fixture(autouse=True)
+def _reset_single_flight():
+    """Each test starts with no in-flight job (the single-flight guard is
+    module state), and any job a test leaves running is killed afterwards so
+    it can't leak into the next test."""
+    robinhood_login._active_job = None
+    yield
+    job = robinhood_login._active_job
+    if job is not None:
+        with job._lock:
+            if job.state == "running":
+                robinhood_login._kill_process_group(job._process)
+                job.state = "cancelled"
+    robinhood_login._active_job = None
 
 
 @pytest.fixture(autouse=True)
@@ -282,3 +302,139 @@ class TestLoginBlocking:
             robinhood_login.login_blocking(
                 "connect", username="u@example.com", password="pw", poll_interval=0.05
             )
+
+
+# ---------------------------------------------------------------------------
+# Single-flight -- at most one running login job (one approval prompt) per
+# process. See data/robinhood_login.py's module docstring.
+# ---------------------------------------------------------------------------
+
+def _wait_until_awaiting(job, timeout: float = 5.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with job._lock:
+            if job.phase != "starting":
+                return
+        time.sleep(0.05)
+    pytest.fail("child never left the 'starting' phase")
+
+
+class TestSingleFlight:
+    @pytest.fixture(autouse=True)
+    def _long_deadline(self, monkeypatch):
+        monkeypatch.setattr("settings.settings.RH_LOGIN_DEADLINE_SECONDS", 30.0)
+        monkeypatch.setattr("settings.settings.RH_LOGIN_STARTUP_SECONDS", 10.0)
+
+    def test_refresh_while_refresh_running_joins_the_running_job(self, monkeypatch, _stub_worker) -> None:
+        _set_behavior(monkeypatch, "hang_after_started")
+        first = robinhood_login.start_login("refresh")
+        _wait_until_awaiting(first)
+
+        second = robinhood_login.start_login("refresh")
+
+        assert second is first
+        assert _stub_worker.popen_calls == 1
+
+    def test_connect_while_refresh_running_is_refused(self, monkeypatch, _stub_worker) -> None:
+        _set_behavior(monkeypatch, "hang_after_started")
+        running = robinhood_login.start_login("refresh")
+
+        with pytest.raises(robinhood_login.RobinhoodLoginInProgress) as exc_info:
+            robinhood_login.start_login("connect", username="u@example.com", password="pw")
+
+        assert exc_info.value.job is running
+        assert exc_info.value.requested_mode == "connect"
+        assert "u@example.com" not in str(exc_info.value)
+        assert _stub_worker.popen_calls == 1
+
+    def test_refresh_while_connect_running_is_refused(self, monkeypatch, _stub_worker) -> None:
+        _set_behavior(monkeypatch, "hang_after_started")
+        running = robinhood_login.start_login("connect", username="u@example.com", password="pw")
+
+        with pytest.raises(robinhood_login.RobinhoodLoginInProgress) as exc_info:
+            robinhood_login.start_login("refresh")
+
+        assert exc_info.value.job is running
+        assert _stub_worker.popen_calls == 1
+
+    def test_connect_while_connect_running_is_refused(self, monkeypatch, _stub_worker) -> None:
+        _set_behavior(monkeypatch, "hang_after_started")
+        robinhood_login.start_login("connect", username="a@example.com", password="pw1")
+
+        with pytest.raises(robinhood_login.RobinhoodLoginInProgress):
+            robinhood_login.start_login("connect", username="b@example.com", password="pw2")
+        assert _stub_worker.popen_calls == 1
+
+    def test_in_progress_is_a_login_failed_subclass(self) -> None:
+        assert issubclass(
+            robinhood_login.RobinhoodLoginInProgress, robinhood_login.RobinhoodLoginFailed
+        )
+
+    def test_new_job_starts_once_the_previous_one_is_terminal(self, monkeypatch, _stub_worker) -> None:
+        _set_behavior(monkeypatch, "success")
+        first = robinhood_login.start_login("refresh")
+        _wait_until_terminal(first)
+
+        second = robinhood_login.start_login("refresh")
+
+        assert second is not first
+        assert second.job_id != first.job_id
+        assert _stub_worker.popen_calls == 2
+        _wait_until_terminal(second)
+
+    def test_cancelled_job_frees_the_slot(self, monkeypatch, _stub_worker) -> None:
+        _set_behavior(monkeypatch, "hang_after_started")
+        first = robinhood_login.start_login("refresh")
+        _wait_until_awaiting(first)
+        robinhood_login.cancel_login(first.job_id)
+
+        _set_behavior(monkeypatch, "success")
+        second = robinhood_login.start_login("connect", username="u@example.com", password="pw")
+        assert second is not first
+        _wait_until_terminal(second)
+        assert second.state == "succeeded"
+
+    def test_concurrent_refresh_callers_spawn_exactly_one_worker(self, monkeypatch, _stub_worker) -> None:
+        import threading
+
+        _set_behavior(monkeypatch, "hang_after_started")
+        barrier = threading.Barrier(8)
+        results: list = []
+        errors: list = []
+
+        def _call() -> None:
+            barrier.wait()
+            try:
+                results.append(robinhood_login.start_login("refresh"))
+            except Exception as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=_call) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10.0)
+
+        assert not errors
+        assert len(results) == 8
+        assert len({id(j) for j in results}) == 1
+        assert _stub_worker.popen_calls == 1
+
+    def test_login_blocking_waits_on_the_existing_refresh_job(self, monkeypatch, _stub_worker) -> None:
+        monkeypatch.setenv("STUB_DELAY_SECONDS", "1.0")
+        _set_behavior(monkeypatch, "delayed_success")
+        running = robinhood_login.start_login("refresh")
+        _wait_until_awaiting(running)
+
+        robinhood_login.login_blocking("refresh", poll_interval=0.05)  # must not raise
+
+        assert running.state == "succeeded"
+        assert _stub_worker.popen_calls == 1
+
+    def test_login_blocking_raises_in_progress_when_a_connect_is_running(self, monkeypatch, _stub_worker) -> None:
+        _set_behavior(monkeypatch, "hang_after_started")
+        robinhood_login.start_login("connect", username="u@example.com", password="pw")
+
+        with pytest.raises(robinhood_login.RobinhoodLoginInProgress):
+            robinhood_login.login_blocking("refresh", poll_interval=0.05)
+        assert _stub_worker.popen_calls == 1

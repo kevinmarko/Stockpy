@@ -887,6 +887,44 @@ rm ~/Library/LaunchAgents/com.investyo.daily-advisory.plist
 > the plist) so 08:45 lands pre-market ET. If the Mac is asleep at 08:45, the
 > job runs at the next wake.
 
+#### 5.1a Daily Robinhood login from the daemon (step 5.3 cutover)
+
+Today the 08:45 launchd `main.py` run is what triggers the day's Robinhood
+device-approval push. When you unload that job at the step-5.3 cutover
+(`.claude/shrink_step5_retire_main_py_implementation_plan.md`), turn on the
+daemon's own scheduled login in the **same** change, or no morning prompt
+will arrive:
+
+```bash
+# .env (or Settings → Feature Flags; ENABLED needs typed confirmation)
+ROBINHOOD_SCHEDULED_LOGIN_ENABLED=true
+ROBINHOOD_SCHEDULED_LOGIN_TIME_ET=08:40   # HH:MM, US/Eastern, weekdays only
+```
+
+Then restart the daemon (required if `ORCHESTRATOR_INTERVAL_SECONDS=0`;
+harmless otherwise).
+
+- **What happens:** at/after 08:40 ET each weekday the daemon starts one
+  non-blocking `refresh` login. Approve the push in the Robinhood app within
+  `RH_LOGIN_DEADLINE_SECONDS` (180 s). No holiday calendar: it prompts on
+  market holidays too.
+- **When it skips (and does not retry that day):** the cached account
+  snapshot is already newer than today's 08:40 (for example you pressed
+  Refresh at 08:41), `RH_USERNAME`/`RH_PASSWORD` are missing, or a Connect
+  login is in flight.
+- **Once per day, restart-safe:** the attempted date is stored in
+  `~/.stockpy_local/output/robinhood_scheduled_login_state.json` (`last_attempted_et_date`,
+  `last_outcome`, `job_id`, `last_error_code`). Restarting the daemon the same
+  day does not prompt again. A daemon started after 08:40 on a weekday that
+  has not been attempted yet prompts immediately.
+- **If you missed the push** (`last_outcome` = `timeout`): press Refresh on
+  the webapp's brokerage card. Only one login can run at a time. A Refresh
+  while the scheduled login is still waiting joins it (same job) instead of
+  sending a second push; a Connect while any login runs returns 409.
+- **Invalid time** (e.g. `8:40pm`): the scheduled login is disabled and the
+  daemon logs a warning.
+- **Turn off:** `ROBINHOOD_SCHEDULED_LOGIN_ENABLED=false`.
+
 ### 5.2 Track-record status report
 
 `scripts/track_record_status.py` (no network calls) reports how close you are
