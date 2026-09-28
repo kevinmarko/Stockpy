@@ -79,6 +79,7 @@ class AsyncDataFetchStep(PipelineStep):
     async def run(self, ctx: RunContext) -> None:
         """Fetch macro, fundamentals, and technicals concurrently into the RunContext."""
         import main_orchestrator
+        import data_engine as data_engine_mod
         from data_engine import DataEngine, MockDataEngine
         from dto_models import RobinhoodPositionDTO
 
@@ -129,13 +130,12 @@ class AsyncDataFetchStep(PipelineStep):
         # Initialize data engine
         de = ctx.market
         if de is None:
-            creds_exist = os.path.exists("credentials.json")
-            if creds_exist:
+            if data_engine_mod.live_data_configured():
                 settings.ensure_fred_configured()
                 de = DataEngine(settings.FRED_API_KEY)
                 ctx.symbols = base_symbols
             else:
-                telemetry.warning("credentials.json not found. Operating with deterministic MockDataEngine.")
+                telemetry.warning("FRED_API_KEY not configured. Operating with deterministic MockDataEngine.")
                 de = MockDataEngine()
                 ctx.symbols = ["AAPL"]
             ctx.market = de

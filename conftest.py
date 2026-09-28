@@ -725,6 +725,26 @@ def _isolate_paper_and_transactions_db_in_tests(monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.fixture(autouse=True)
+def _force_mock_data_engine_in_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pipeline tests use ``MockDataEngine`` unless they opt in.
+
+    ``data_engine.live_data_configured()`` (true when a FRED key is set) picks
+    the real ``DataEngine`` in ``AsyncDataFetchStep`` and the daemon. A
+    developer shell or ``.env`` with ``FRED_API_KEY`` set would otherwise
+    send unpatched pipeline tests to live FRED/market data. Before 2026-09
+    the switch was ``credentials.json`` in the CWD, which tests got as
+    "absent" for free. Opt out with ``@pytest.mark.live_data_engine``.
+    """
+    if request.node.get_closest_marker("live_data_engine") is not None:
+        return
+    try:
+        import data_engine as _de
+    except Exception:
+        return
+    monkeypatch.setattr(_de, "live_data_configured", lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def _stub_paper_marking_network_in_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep ``PaperAccountStore`` position marking network-free in tests.
 

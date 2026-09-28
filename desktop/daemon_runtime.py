@@ -36,7 +36,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import threading
 import time
 import uuid
@@ -49,6 +48,7 @@ from typing import Any, Optional
 import main_orchestrator
 import runtime_flags
 from settings import settings, validate_interval_seconds
+import data_engine
 from data_engine import DataEngine, MockDataEngine
 from reporting.atomic_write import atomic_write_json
 from reporting.progress import read_progress
@@ -428,8 +428,7 @@ class OrchestratorDaemon:
         """Construct a DataEngine/MockDataEngine exactly the way
         ``main_orchestrator._main_body`` would have, so ``start()`` produces
         the identical choice, just once instead of every cycle."""
-        creds_exist = os.path.exists("credentials.json")
-        if creds_exist:
+        if data_engine.live_data_configured():
             try:
                 settings.ensure_fred_configured()
                 return DataEngine(settings.FRED_API_KEY)
@@ -440,7 +439,7 @@ class OrchestratorDaemon:
                 )
                 return MockDataEngine()
         else:
-            logger.warning("credentials.json not found. Operating with deterministic MockDataEngine.")
+            logger.warning("FRED_API_KEY not configured. Operating with deterministic MockDataEngine.")
             return MockDataEngine()
 
     # ------------------------------------------------------------------

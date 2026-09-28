@@ -6,13 +6,13 @@ PR3 groundwork: main_orchestrator._main_body() now accepts optional
 parameters, mirroring the same warm-injection pattern PR2 added to
 run_pipeline(). This lets a persistent caller (the orchestrator daemon)
 supply a pre-built DataEngine + EngineContext so a cycle reuses them instead
-of re-checking credentials.json / re-constructing every engine from scratch.
+of re-checking the live-data (FRED key) check / re-constructing every engine from scratch.
 
 Verifies:
   - the default (engines=None, data_engine=None) path is unaffected --
-    credentials.json is still checked and DataEngine/MockDataEngine still
+    the live-data check still runs and DataEngine/MockDataEngine still
     constructed exactly as before.
-  - supplying data_engine bypasses the credentials.json check entirely and
+  - supplying data_engine bypasses the live-data check entirely and
     uses settings.DEFAULT_TICKERS directly.
   - engines is threaded straight through to run_pipeline(engines=...).
 """
@@ -75,19 +75,16 @@ class TestDataEngineInjection:
             )
 
         monkeypatch.setattr(mo, "run_pipeline", _fake_run_pipeline)
-        # os.path.exists must NOT even be consulted for credentials.json when
-        # data_engine is injected -- assert by making it raise if called with
-        # that specific path.
-        real_exists = mo.os.path.exists
+        # The live-vs-mock data check must NOT even be consulted when
+        # data_engine is injected -- assert by making it raise if called.
+        import data_engine as _de
 
-        def _guard_exists(path):
-            if path == "credentials.json":
-                raise AssertionError(
-                    "credentials.json check must be skipped when data_engine is injected"
-                )
-            return real_exists(path)
+        def _guard_live_data_configured():
+            raise AssertionError(
+                "live_data_configured check must be skipped when data_engine is injected"
+            )
 
-        monkeypatch.setattr(mo.os.path, "exists", _guard_exists)
+        monkeypatch.setattr(_de, "live_data_configured", _guard_live_data_configured)
 
         asyncio.run(mo._main_body(False, strict=False, data_engine=fake_de))
 
