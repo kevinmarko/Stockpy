@@ -1,5 +1,5 @@
 /**
- * PilotCard.test.tsx — renders PilotCard/PopularCard against the REAL mock API
+ * PilotCard.test.tsx — renders PilotCard against the REAL mock API
  * (no vi.mock — `api` resolves to `mockApi` by default), covering the
  * mini-sparkline's async fetch (skeleton while loading, chart once the curve
  * resolves, honest empty state when a pilot has no persisted backtest curve —
@@ -9,7 +9,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { PilotCard, PopularCard } from "./PilotCard";
+import { PilotCard } from "./PilotCard";
 import { api } from "../api/client";
 import type { PilotSummary } from "../api/types";
 
@@ -87,40 +87,5 @@ describe("PilotCard (real mock API)", () => {
 
     expect(trendFollowing.headline.dsr).not.toBeNull();
     expect(screen.getByText(/DSR/)).toBeInTheDocument();
-  });
-});
-
-describe("PopularCard (real mock API)", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("renders followers/AUM tiles, category chip, Sharpe, and the sparkline once performance resolves", async () => {
-    renderCard(<PopularCard pilot={trendFollowing} />);
-
-    expect(screen.getByText("Trend Follower")).toBeInTheDocument();
-    expect(screen.getByText("Momentum")).toBeInTheDocument();
-    expect(screen.getByText(trendFollowing.followers_proxy.toLocaleString())).toBeInTheDocument();
-    expect(screen.getByText("1.12")).toBeInTheDocument();
-
-    const card = screen.getByText("Trend Follower").closest("a")!;
-    await waitFor(() => expect(card.querySelector(".recharts-responsive-container")).toBeInTheDocument());
-  });
-
-  it("value-quality (curve:null) renders honestly — no fabricated sparkline or Sharpe", async () => {
-    renderCard(<PopularCard pilot={valueQuality} />);
-
-    expect(screen.getByText("Value + Quality")).toBeInTheDocument();
-    expect(screen.getByText("Long-only")).toBeInTheDocument();
-
-    const card = screen.getByText("Value + Quality").closest("a")!;
-    await waitFor(() => expect(card.querySelector(".skeleton")).toBeNull());
-    expect(card.querySelector(".recharts-responsive-container")).toBeNull();
-  });
-
-  it("a non-deployable pilot (momentum-burst) still surfaces its badge honestly", async () => {
-    renderCard(<PopularCard pilot={momentumBurst} />);
-
-    expect(await screen.findByText(/not deployable/i)).toBeInTheDocument();
   });
 });

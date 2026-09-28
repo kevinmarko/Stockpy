@@ -146,3 +146,17 @@ regression guard proving no active entry point (`main.py`,
 `broker_live_execution_mcp.py`, the three `api/*.py` services,
 `execution/fmp_paper_broker.py`, `data/paper_account_store.py`,
 `pipeline/production_steps.py`) needs any of the 50 modules above.
+
+## Step 4c: Follow-a-Pilot (2026-09)
+
+The operator dropped Follow-a-Pilot and every follow had already been
+cancelled. The Pilots catalog/marketplace (browse, compare, pilot detail), the
+advisory execution queue, agentic Robinhood trading and the MCP server all
+stay; `FOLLOW_API_TOKEN` stays as the general command token.
+
+| Moved | Why |
+|---|---|
+| `pilots/mirror.py` | Follow planner (`plan_follow`, `build_follow_targets`/`_intents`). Its only callers were the removed `/pilots/{id}/follow` route and the retired `follow_pilot` MCP tool. |
+| `pilots/follows_store.py` | `output/follows.json` store. Readers were the removed `/follows` routes, the `/pilots` AUM/follower proxies, `/agentic/status`'s follows block, `execution/compose.py`'s follow enumeration, the NotebookLM export's follow sections and the retired MCP tools. |
+| `pilots/portfolio_attribution.py` | Per-Pilot P&L attribution built from follow targets; only used by the retired `get_portfolio_by_pilot` MCP tool. |
+| `tests/test_pilots_mirror.py`, `tests/test_pilots_follows.py`, `tests/test_pilots_portfolio_attribution.py` | The suites for the three modules above. |

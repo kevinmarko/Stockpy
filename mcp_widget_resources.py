@@ -2,8 +2,8 @@
 mcp_widget_resources.py
 ========================
 Vendors and serves the static MCP "Apps SDK" widget HTML resources consumed
-by investyo_mcp_server.py's Pilot-picker flow (list_pilots / get_pilot_detail
-/ follow_pilot). Degrades gracefully (returns False, logs one actionable
+by investyo_mcp_server.py's tools (e.g. the Pilot-picker flow: list_pilots /
+get_pilot_detail). Degrades gracefully (returns False, logs one actionable
 warning) when the one-time npm build step (mcp_widgets/build/) has never
 been run locally — every other MCP tool must keep working with no widgets
 registered at all in that case; this is cosmetic, additive functionality,
@@ -33,9 +33,7 @@ _JS_PLACEHOLDER = "/*__WIDGET_COMMON_JS__*/"
 _WIDGET_RESOURCES = [
     ("pilot-picker.html", "ui://widgets/pilot-picker.html", "Pilot Picker"),
     ("pilot-detail.html", "ui://widgets/pilot-detail.html", "Pilot Detail"),
-    ("follow-result.html", "ui://widgets/follow-result.html", "Follow Confirmation"),
     ("pilot-compare.html", "ui://widgets/pilot-compare.html", "Pilot Comparison"),
-    ("pilot-portfolio.html", "ui://widgets/pilot-portfolio.html", "Portfolio by Pilot"),
     ("equity-curve.html", "ui://widgets/equity-curve.html", "Equity Curve"),
     ("risk-matrix.html", "ui://widgets/risk-matrix.html", "Risk Matrix"),
     ("signal-tree.html", "ui://widgets/signal-tree.html", "Signal Tree"),

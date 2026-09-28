@@ -397,7 +397,7 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "transactions_store 'trades' ledger (default ON since 2026-09, "
         "signal-driven equity trades only), which has no paper/live "
         "discriminator column and feeds strategy_engine.py's Kelly sizing, "
-        "main_orchestrator.py, pilots/mirror.py, and MCP reporting tools -- "
+        "main_orchestrator.py, and MCP reporting tools -- "
         "toggling it changes what those consumers learn from and report."
     ),
     "DEAD_LETTER_RETRY_ENABLED": (

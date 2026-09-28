@@ -3,16 +3,15 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { api } from "../api/client";
 import type { PilotSummary, CurvePoint } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { ErrorState, Loading, InfoTip, Notice, DeployableBadge } from "../components/ui";
+import { ErrorState, Loading, Notice, DeployableBadge } from "../components/ui";
 import { Toggle } from "../components/Toggle";
 import { ActivityFeed } from "../components/ActivityFeed";
 import { RecommendedStocks } from "../components/RecommendedStocks";
 import { SymbolComparison } from "../components/SymbolComparison";
 import { TabGuide } from "../components/TabGuide";
 import { chartAxisLine, chartAxisTick, chartGridProps, chartTooltipStyle } from "../components/charts";
-import { FollowModal } from "./FollowModal";
 import { seriesColor, theme } from "../theme";
-import { fmtNum, fmtPct, fmtUsd } from "../format";
+import { fmtNum, fmtPct } from "../format";
 
 export function Comparison() {
   const [selectedIds, setSelectedIds] = useState<string[]>(() => {
@@ -33,7 +32,6 @@ export function Comparison() {
   const [nullCurves, setNullCurves] = useState<Record<string, string>>({});
   const [fetchErrors, setFetchErrors] = useState<Record<string, string>>({});
   const [loadingCurves, setLoadingCurves] = useState(false);
-  const [followPilot, setFollowPilot] = useState<PilotSummary | null>(null);
   const pilotsList = useApi<PilotSummary[]>(() => api.listPilots(), []);
 
   useEffect(() => {
@@ -470,72 +468,10 @@ export function Comparison() {
 
                       {/* DSR */}
                       <div style={{ display: "contents" }} role="row">
-                        <div role="cell" style={stickyColStyle}>DSR</div>
+                        <div role="cell" style={{ ...stickyColStyle, borderBottom: "none" }}>DSR</div>
                         {selectedPilots.map(p => (
-                          <div role="cell" key={`dsr-${p.id}`} className="num" style={{ ...cellStyle, ...getHeatmap(p.headline.dsr, maxDsr) }}>
+                          <div role="cell" key={`dsr-${p.id}`} className="num" style={{ ...cellStyle, borderBottom: "none", ...getHeatmap(p.headline.dsr, maxDsr) }}>
                             {p.headline.dsr == null ? "—" : fmtNum(p.headline.dsr, 3)}
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* AUM Proxy */}
-                      <div style={{ display: "contents" }} role="row">
-                        <div role="cell" style={stickyColStyle}>AUM Proxy</div>
-                        {selectedPilots.map(p => (
-                          <div role="cell" key={`aum-${p.id}`} className="num" style={cellStyle}>
-                            {p.aum_proxy == null ? "—" : fmtUsd(p.aum_proxy)}
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Followers */}
-                      <div style={{ display: "contents" }} role="row">
-                        <div role="cell" style={{ ...stickyColStyle, borderBottom: "none" }}>Followers</div>
-                        {selectedPilots.map(p => (
-                          <div role="cell" key={`fol-${p.id}`} className="num" style={{ ...cellStyle, borderBottom: "none" }}>
-                            {p.followers_proxy == null ? "—" : p.followers_proxy}
-                          </div>
-                        ))}
-                      </div>
-                      
-                      {/* Actions */}
-                      <div style={{ display: "contents" }} role="row">
-                        <div role="cell" style={{ ...stickyColStyle, borderBottom: "none", borderTop: `1px solid ${theme.borderStrong}` }}>Actions</div>
-                        {selectedPilots.map(p => (
-                          <div role="cell" key={`act-${p.id}`} style={{ ...cellStyle, borderBottom: "none", borderTop: `1px solid ${theme.borderStrong}` }}>
-                            {!p.followable ? (
-                              // The InfoTip trigger sits BESIDE the disabled
-                              // button, never wrapping it -- an InfoTip whose
-                              // own trigger is a real <button> must not nest
-                              // a second native <button> inside it (invalid
-                              // HTML, breaks keyboard/screen-reader focus).
-                              <div style={{ display: "flex", alignItems: "center", gap: "var(--s-1)" }}>
-                                <button
-                                  className="btn btn-primary"
-                                  disabled
-                                  style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}
-                                  data-testid={`follow-pilot-btn-${p.id}-disabled`}
-                                  title="This pilot is currently restricted from accepting new allocations."
-                                >
-                                  Restricted
-                                </button>
-                                <InfoTip
-                                  triggerClassName="chip"
-                                  content="This pilot is currently restricted from accepting new allocations."
-                                >
-                                  ?
-                                </InfoTip>
-                              </div>
-                            ) : (
-                              <button
-                                className="btn btn-primary"
-                                onClick={() => setFollowPilot(p)}
-                                style={{ fontSize: "var(--t-caption)", padding: "var(--s-1) var(--s-2)" }}
-                                data-testid={`follow-pilot-btn-${p.id}`}
-                              >
-                                Follow
-                              </button>
-                            )}
                           </div>
                         ))}
                       </div>
@@ -559,13 +495,6 @@ export function Comparison() {
           </div>
         </div>
       </div>
-
-      {followPilot && (
-        <FollowModal
-          pilot={followPilot}
-          onClose={() => setFollowPilot(null)}
-        />
-      )}
     </div>
   );
 }

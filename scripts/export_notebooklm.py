@@ -4,7 +4,7 @@ Formats the platform's current state into a modular multi-source knowledge
 pack for NotebookLM ingestion:
 
   - ``output/notebooklm_source.md`` -- the original consolidated export
-    (macro/portfolio/follows), plus a trailing note pointing at the 5
+    (macro/portfolio), plus a trailing note pointing at the 5
     modular files below.
   - ``output/notebooklm/01_macro_and_regime.md`` -- macro & regime detail.
   - ``output/notebooklm/02_portfolio_and_greeks.md`` -- portfolio holdings
@@ -43,7 +43,6 @@ from scripts._bootstrap import bootstrap  # noqa: E402
 bootstrap()
 
 from data.historical_store import HistoricalStore  # noqa: E402
-from pilots.follows_store import FollowsStore  # noqa: E402
 from pilots.portfolio import serialize_portfolio  # noqa: E402
 from settings import settings  # noqa: E402
 
@@ -66,7 +65,7 @@ logger = logging.getLogger("notebooklm_export")
 #
 # A test exercising the modular path monkeypatches these names onto this
 # module the same way the existing test suite already monkeypatches
-# `HistoricalStore`/`FollowsStore`.
+# `HistoricalStore`.
 # ---------------------------------------------------------------------------
 
 _MODULAR_SECTION_FILENAMES: Tuple[str, ...] = (
@@ -619,8 +618,9 @@ def _fmt_bool_honest(value: Any) -> str:
 
 
 def generate_signals_picks_source(output_dir: Path) -> str:
-    """Generate the Strategy Signals, Tactical Execution & Pilot Follows
-    source document (03_strategy_signals_and_picks.md).
+    """Generate the Strategy Signals & Tactical Execution source document
+    (03_strategy_signals_and_picks.md). (Its "Active Pilot Strategy
+    Subscriptions" section went with Follow-a-Pilot, 2026-09, step 4c.)
 
     ``output_dir`` is the directory containing ``state_snapshot.json`` (i.e.
     ``settings.OUTPUT_DIR``) -- passed explicitly by the caller, never read
@@ -629,40 +629,18 @@ def generate_signals_picks_source(output_dir: Path) -> str:
 
     Never raises past this function's boundary (CONSTRAINT #6): every
     section degrades to an honest "unavailable"/"N/A" message on any failure
-    rather than propagating, and a failure in one section (e.g. the Follows
-    store) never prevents the others (state_snapshot-derived sections) from
-    rendering, and vice versa.
+    rather than propagating, and a failure in one section never prevents
+    the others from rendering.
     """
     lines: List[str] = []
-    lines.append("# Quantitative Strategy Signals, Tactical Execution & Pilot Follows")
+    lines.append("# Quantitative Strategy Signals & Tactical Execution")
     lines.append(f"**Generated At (UTC):** {datetime.now(timezone.utc).isoformat()}")
-    lines.append("")
-
-    # ------------------------------------------------------------------
-    # 1. Active Pilot Strategy Subscriptions
-    # ------------------------------------------------------------------
-    lines.append("## Active Pilot Strategy Subscriptions")
-    try:
-        follows = FollowsStore(path=str(Path(output_dir) / "follows.json")).list_active()
-        if follows:
-            lines.append("| Pilot ID | Allocated Amount | Status |")
-            lines.append("|---|---|---|")
-            for f in follows:
-                pilot_id = _md_escape(f.get("pilot_id", "Unknown"))
-                amount_str = _fmt_money(f.get("amount"))
-                status = _md_escape(f.get("status", "Unknown"))
-                lines.append(f"| {pilot_id} | {amount_str} | {status} |")
-        else:
-            lines.append("No active pilot follows.")
-    except Exception as exc:
-        logger.warning(f"Failed to fetch active pilot follows: {exc}")
-        lines.append("Active pilot follows are unavailable.")
     lines.append("")
 
     # ------------------------------------------------------------------
     # Load state_snapshot.json ONCE, shared by all three signal-derived
     # sections below -- a load failure degrades every one of them
-    # identically and independently of the Follows section above.
+    # identically.
     # ------------------------------------------------------------------
     snapshot = _load_json_file(Path(output_dir) / "state_snapshot.json")
     raw_signals = snapshot.get("signals") if snapshot else None
@@ -671,7 +649,7 @@ def generate_signals_picks_source(output_dir: Path) -> str:
     )
 
     # ------------------------------------------------------------------
-    # 2. Daily Tactical Recommendations (BUY / SELL / HOLD)
+    # 1. Daily Tactical Recommendations (BUY / SELL / HOLD)
     # ------------------------------------------------------------------
     lines.append("## Daily Tactical Recommendations (BUY / SELL / HOLD)")
     if signals is None:
@@ -700,7 +678,7 @@ def generate_signals_picks_source(output_dir: Path) -> str:
     lines.append("")
 
     # ------------------------------------------------------------------
-    # 3. Multifactor Z-Score Attribution -- only rendered when the signals
+    # 2. Multifactor Z-Score Attribution -- only rendered when the signals
     #    table above rendered (same `signals is None` gate).
     # ------------------------------------------------------------------
     lines.append("## Multifactor Z-Score Attribution")
@@ -725,7 +703,7 @@ def generate_signals_picks_source(output_dir: Path) -> str:
     lines.append("")
 
     # ------------------------------------------------------------------
-    # 4. Sizing Guardrails -- same gate again. (The ETF-transmission
+    # 3. Sizing Guardrails -- same gate again. (The ETF-transmission
     #    multiplier column was dropped when that feature was archived,
     #    2026-09 step 4d.)
     # ------------------------------------------------------------------
@@ -1052,7 +1030,8 @@ def generate_consolidated_source(store, output_dir: Path) -> str:
     """Renders the consolidated Markdown export as a string.
 
     This is the original single-file ``build_export()`` logic (Macro
-    Context / Current Portfolio / Active Pilot Follows), extracted
+    Context / Current Portfolio; the Active Pilot Follows section went with
+    Follow-a-Pilot, 2026-09, step 4c), extracted
     VERBATIM except that it now returns the rendered Markdown instead of
     writing it directly -- the actual atomic write is the caller's
     responsibility (see ``build_export()``). Behavior for every existing
@@ -1141,33 +1120,11 @@ def generate_consolidated_source(store, output_dir: Path) -> str:
         lines.append("Portfolio snapshot is unavailable.")
     lines.append("")
 
-    # 3. Active Follows
-    lines.append("## Active Pilot Follows")
-    try:
-        follows = FollowsStore().list_active()
-        if follows:
-            # Same buffer-then-commit discipline as the Portfolio section
-            # above: a later follow row that fails to format must not leave
-            # earlier real follow lines in the document.
-            section_lines = []
-            for f in follows:
-                pilot_id = f.get('pilot_id', 'Unknown')
-                amount = _fmt_money(f.get('amount'))
-                status = f.get('status', 'Unknown')
-                section_lines.append(f"- **Pilot ID**: {pilot_id} | **Amount**: {amount} | **Status**: {status}")
-            lines.extend(section_lines)
-        else:
-            lines.append("No active pilot follows.")
-    except Exception as exc:
-        logger.warning(f"Failed to fetch active follows: {exc}")
-        lines.append("Active pilot follows are unavailable.")
-
-    # 4. NEW: Modular Sources Note -- the only behavioral addition vs. the
+    # 3. NEW: Modular Sources Note -- the only behavioral addition vs. the
     # pre-refactor single-file export.
-    lines.append("")
     lines.append("## Modular Sources Note")
     lines.append(
-        "This consolidated file summarizes core account/macro/follows "
+        "This consolidated file summarizes core account/macro "
         "state. For deeper per-domain detail (regime diagnostics, portfolio "
         "holdings, strategy signals, the trade ledger, and the options "
         f"pricing matrix), see the modular files under `{output_dir / 'notebooklm'}`:"
@@ -1242,7 +1199,7 @@ def build_export(
     # --- Consolidated export -------------------------------------------------
     # NOTE: deliberately NOT wrapped in its own try/except here, unlike the 5
     # modular sections below. `generate_consolidated_source()` already has
-    # its own internal per-subsection try/excepts (macro/portfolio/follows),
+    # its own internal per-subsection try/excepts (macro/portfolio),
     # so in practice this only ever raises on a genuine I/O failure inside
     # `_atomic_write_file` -- and that failure is meant to propagate out of
     # `build_export()` exactly as it did pre-refactor (see

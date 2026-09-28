@@ -32,11 +32,12 @@ describe("Marketplace screen (real mock API)", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders Top Performers, Most Popular, and category rails from the real mock catalog", async () => {
+  it("renders Top Performers and category rails from the real mock catalog (no follows-based Most Popular rail)", async () => {
     renderMarketplace();
 
     expect(await screen.findByText("Top Performers")).toBeInTheDocument();
-    expect(screen.getByText("Most Popular")).toBeInTheDocument();
+    // Popularity was follows-based; Follow-a-Pilot was removed, so the rail is gone.
+    expect(screen.queryByText("Most Popular")).not.toBeInTheDocument();
     expect(screen.getByText("Browse by category")).toBeInTheDocument();
 
     // A known pilot from pilots/catalog.py's mock mirror should render as a card.
@@ -110,8 +111,6 @@ describe("Marketplace screen (real mock API)", () => {
         description: "cached description",
         headline: { sharpe: 1.1, dsr: 0.97, pbo: 0.3, max_drawdown: 0.2, deployable: true },
         holdings_count: 5,
-        aum_proxy: 100,
-        followers_proxy: 10,
         long_only: false,
       },
     ];
@@ -137,7 +136,6 @@ describe("Marketplace screen (real mock API)", () => {
 
     // Rails are gone; only Momentum-category pilots render, as cards in a grid.
     expect(screen.queryByText("Top Performers")).not.toBeInTheDocument();
-    expect(screen.queryByText("Most Popular")).not.toBeInTheDocument();
     expect(screen.queryByText("Browse by category")).not.toBeInTheDocument();
     expect(screen.getAllByText(/Trend Follower/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Momentum Burst/i).length).toBeGreaterThan(0);
@@ -148,7 +146,6 @@ describe("Marketplace screen (real mock API)", () => {
     await user.click(allPill);
 
     expect(screen.getByText("Top Performers")).toBeInTheDocument();
-    expect(screen.getByText("Most Popular")).toBeInTheDocument();
     expect(screen.getByText("Browse by category")).toBeInTheDocument();
   });
 });

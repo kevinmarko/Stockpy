@@ -59,8 +59,6 @@ import type { StrategyReportCardSnapshot,
   EquityDrawdownPoint,
   ExplainTickerResponse,
   FactorExposure,
-  Follow,
-  FollowResult,
   ForecastSkill,
   ForecastBackfillSummary,
   ForecastBackfillJob,
@@ -414,8 +412,6 @@ const RAW: Array<{
   description: string;
   headline: Headline;
   long_only: boolean;
-  aum: number;
-  followers: number;
   hasCurve: boolean;
   drift: number;
   vol: number;
@@ -423,7 +419,6 @@ const RAW: Array<{
   // Optional; defaults to true (a distinct SPY macro overlay is available).
   // Set false to model the honest redundancy case (underlying already IS SPY).
   macroBenchmark?: boolean;
-  followable?: boolean;
 }> = [
   {
     id: "trend-following",
@@ -433,8 +428,6 @@ const RAW: Array<{
       "Rides sustained multi-month price trends across large caps. Time-series momentum (Moskowitz/Ooi/Pedersen) — buys strength, cuts weakness.",
     headline: h(1.12, 0.972, 0.31, 0.19, true),
     long_only: false,
-    aum: 184200,
-    followers: 62,
     hasCurve: true,
     drift: 0.14,
     vol: 0.13,
@@ -456,8 +449,6 @@ const RAW: Array<{
       "Connors-style RSI(2) mean reversion, long-only above the 200-day line. Buys short-term oversold dips in uptrending names; regime-gated off in stress.",
     headline: h(0.83, 0.961, 0.38, 0.14, true),
     long_only: true,
-    aum: 97400,
-    followers: 41,
     hasCurve: true,
     drift: 0.09,
     vol: 0.1,
@@ -477,8 +468,6 @@ const RAW: Array<{
       "Fama-French-style multifactor tilt — Value, Quality, Low-Vol and Size, cross-sectionally z-scored. Diversified, low-turnover core sleeve.",
     headline: h(0.94, 0.958, 0.34, 0.16, true),
     long_only: true,
-    aum: 251900,
-    followers: 88,
     hasCurve: true,
     drift: 0.11,
     vol: 0.11,
@@ -500,8 +489,6 @@ const RAW: Array<{
       "MACD + Aroon trend confirmation with a chop filter to suppress false crossovers. Medium-horizon momentum with a volatility-aware corridor.",
     headline: h(1.01, 0.965, 0.29, 0.21, true),
     long_only: false,
-    aum: 132600,
-    followers: 54,
     hasCurve: true,
     drift: 0.12,
     vol: 0.14,
@@ -525,8 +512,6 @@ const RAW: Array<{
       "Jegadeesh-Titman cross-sectional momentum (12-1m). Ranks the universe and holds the top decile of relative strength, rebalanced monthly.",
     headline: h(1.05, 0.969, 0.33, 0.23, true),
     long_only: false,
-    aum: 118300,
-    followers: 47,
     hasCurve: true,
     drift: 0.13,
     vol: 0.15,
@@ -549,8 +534,6 @@ const RAW: Array<{
     // it, so validation_strategy_id=None -> curve:null (mirrors pilots/catalog.py).
     headline: h(null, null, null, null, false, false),
     long_only: false,
-    aum: 402700,
-    followers: 133,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -573,8 +556,6 @@ const RAW: Array<{
       "Concentrated Value and Quality tilt (cheap, profitable, well-capitalized). Backtest series pending point-in-time fundamentals — metrics shown honestly.",
     headline: h(null, null, null, null, false, false),
     long_only: true,
-    aum: 38100,
-    followers: 19,
     hasCurve: false, // curve:null — no fabricated line
     drift: 0,
     vol: 0,
@@ -595,8 +576,6 @@ const RAW: Array<{
       "Tilts toward durable dividend payers with healthy, well-covered yields — an income-oriented quality screen. Backtest pending point-in-time fundamentals.",
     headline: h(null, null, null, null, false, false),
     long_only: true,
-    aum: 71500,
-    followers: 33,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -616,8 +595,6 @@ const RAW: Array<{
       "Screens for stocks trading cheap versus their Graham intrinsic value. Backtest pending point-in-time fundamentals — metrics shown honestly.",
     headline: h(null, null, null, null, false, false),
     long_only: true,
-    aum: 44300,
-    followers: 21,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -633,13 +610,10 @@ const RAW: Array<{
     id: "regime-navigator",
     name: "Regime Navigator",
     category: "Macro",
-    followable: false,
     description:
       "Top-down macro regime read — leans defensive in Recession/Credit-Event regimes and rotates toward risk-on sectors when the systemic backdrop clears.",
     headline: h(null, null, null, null, false, false),
     long_only: false,
-    aum: 58900,
-    followers: 27,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -659,8 +633,6 @@ const RAW: Array<{
       "Per-symbol statistical edge ratio combined with a GARCH tail-risk volatility veto — rewards names with a favorable historical risk/reward profile, penalized in high-volatility regimes.",
     headline: h(0.88, 0.961, 0.35, 0.12, true),
     long_only: false,
-    aum: 96700,
-    followers: 44,
     hasCurve: true,
     drift: 0.1,
     vol: 0.09,
@@ -683,8 +655,6 @@ const RAW: Array<{
       "Fades short-term extremes with the classic RSI(14) rule — buys oversold washouts and trims overbought spikes back toward the mean.",
     headline: h(0.62, 0.951, 0.41, 0.17, true),
     long_only: false,
-    aum: 51200,
-    followers: 24,
     hasCurve: true,
     drift: 0.06,
     vol: 0.12,
@@ -705,8 +675,6 @@ const RAW: Array<{
       "Favors the names outrunning the S&P 500 — a relative-strength tilt that holds the market's leaders and sidesteps the laggards.",
     headline: h(0.79, 0.957, 0.36, 0.22, true),
     long_only: false,
-    aum: 88400,
-    followers: 39,
     hasCurve: true,
     drift: 0.12,
     vol: 0.14,
@@ -727,8 +695,6 @@ const RAW: Array<{
       "Reacts to fresh headline sentiment and earnings catalysts, dampening signals around scheduled events where the reaction is unpredictable.",
     headline: h(null, null, null, null, false, false),
     long_only: false,
-    aum: 33800,
-    followers: 18,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -748,8 +714,6 @@ const RAW: Array<{
       "Tilts toward names whose projected multi-horizon forecast points to meaningful upside, and away from those forecast to decline.",
     headline: h(null, null, null, null, false, false),
     long_only: false,
-    aum: 41100,
-    followers: 20,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -769,8 +733,6 @@ const RAW: Array<{
       "Rewards durable risk-adjusted performance — favoring high-Sortino names while penalizing deep, painful drawdowns.",
     headline: h(0.71, 0.953, 0.39, 0.11, true),
     long_only: false,
-    aum: 36400,
-    followers: 17,
     hasCurve: true,
     drift: 0.08,
     vol: 0.08,
@@ -791,8 +753,6 @@ const RAW: Array<{
       "High-turnover short-horizon momentum. Fails the overfitting gate (PBO high, DSR below threshold) — shown as NOT deployable. Educational example of an honest fail.",
     headline: h(0.41, 0.72, 0.63, 0.34, false, true),
     long_only: false,
-    aum: 12400,
-    followers: 8,
     hasCurve: true,
     drift: 0.05,
     vol: 0.26,
@@ -815,10 +775,7 @@ const CATALOG: MockPilot[] = RAW.map((r) => {
     headline: r.headline,
     holdings_count: hs.length,
     top_holdings: hs.slice(0, 3),
-    aum_proxy: r.aum,
-    followers_proxy: r.followers,
     long_only: r.long_only,
-    followable: r.followable ?? true,
   };
   return {
     summary,
@@ -1033,28 +990,7 @@ export function __resetMockRatingOverrides() {
   };
 }
 
-// ---- Local follows store (persisted to localStorage so the mock feels live) ----
-const FOLLOWS_KEY = "stockpy.mock.follows";
-
-function readFollows(): Follow[] {
-  try {
-    const raw = localStorage.getItem(FOLLOWS_KEY);
-    return raw ? (JSON.parse(raw) as Follow[]) : [];
-  } catch {
-    return [];
-  }
-}
-function writeFollows(fs: Follow[]) {
-  try {
-    localStorage.setItem(FOLLOWS_KEY, JSON.stringify(fs));
-  } catch {
-    /* ignore quota */
-  }
-}
-
 const MOCK_MODE = "review" as const; // paper-first: nothing is ever placed
-const NOTIONAL_CAP = 2500;
-const MIN_AMOUNT = 100;
 
 
 
@@ -8157,8 +8093,8 @@ const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
   ],
 };
 
-// ---- Local scan-config store (localStorage) — mirrors the follows-store
-// pattern above; backs the Agentic Trading tab's Discovery section. Seeded
+// ---- Local scan-config store (localStorage) — a small localStorage-backed
+// mock store; backs the Agentic Trading tab's Discovery section. Seeded
 // with one enabled config so the demo shows a populated Discovery section by
 // default; a fresh browser with a cleared localStorage still degrades
 // honestly (readScanConfigs falls back to this same seed, not an empty
@@ -9721,7 +9657,6 @@ export const mockApi = {
       kelly_fraction: 0.5,
       kelly_cap: 0.2,
       robinhood_max_notional_per_order: 0.0,
-      follow_min_amount: 100.0,
       agentic_max_candidates: 25,
       retrain_window_days: MODEL_RETRAIN_WINDOW_DAYS,
     });
@@ -9961,75 +9896,6 @@ export const mockApi = {
         0.03,
         6100,
       ),
-    });
-  },
-
-  async getFollows(): Promise<Follow[]> {
-    return delay(readFollows(), 80);
-  },
-
-  async follow(id: string, amount: number): Promise<FollowResult> {
-    const p = findPilot(id);
-    if (!p) throw notFound(id);
-    const now = new Date().toISOString();
-    const existing = readFollows();
-    const prior = existing.find((f) => f.pilot_id === id);
-    const follow: Follow = {
-      pilot_id: id,
-      // Matches the real backend exactly: `follow.amount` is always the
-      // raw requested amount (FollowsStore().upsert(pilot_id, body.amount)
-      // in api/pilots_api.py) -- it is NEVER the Kelly-clamped amount. The
-      // clamped figure only exists as the sum of `planned_intents[].
-      // target_notional` below; that discrepancy is exactly what
-      // FollowModal.tsx's "capped" notice exists to surface honestly.
-      amount,
-      created_at: prior?.created_at ?? now,
-      updated_at: now,
-      // Matches the real `pilots/follows_store.py` vocabulary ("active" |
-      // "cancelled") — the mock previously used "queued", which the real
-      // backend never emits.
-      status: amount <= 0 ? "cancelled" : "active",
-    };
-    const next = existing.filter((f) => f.pilot_id !== id);
-    if (amount > 0) next.push(follow);
-    writeFollows(next);
-
-    // Kelly-ceiling sizing simulation (mirrors pilots/mirror.py's
-    // plan_follow) -- a deliberately simplified, deterministic stand-in for
-    // the real bootstrap-Kelly/vol-target math, not a replication of it.
-    // MOCK_TOTAL_EQUITY matches getPortfolioSummary's mock fixture so the
-    // implied kelly_weight fraction stays internally consistent.
-    const MOCK_TOTAL_EQUITY = 48213.55;
-    const MOCK_KELLY_CEILING = 1800; // deliberately below the $2500 quick-chip, above $1000
-    const kellyWeight = +(MOCK_KELLY_CEILING / MOCK_TOTAL_EQUITY).toFixed(4);
-    const capped = amount > MOCK_KELLY_CEILING;
-    const allocated = capped ? MOCK_KELLY_CEILING : amount;
-    const sizingPath = capped
-      ? "vol_target_fallback_no_scalein(n=0)"
-      : "bootstrap_kelly_5th_pct(n=45,k5=0.09,k50=0.14,k95=0.21)";
-
-    const planned = p.holdings.map((hd) => ({
-      symbol: hd.symbol,
-      side: "BUY" as const,
-      target_notional: +Math.min(allocated * hd.weight, NOTIONAL_CAP).toFixed(
-        2,
-      ),
-      weight: hd.weight,
-      conviction: +(0.55 + hd.score * 0.35).toFixed(2),
-      allow_place: false, // mock is review-mode; nothing is ever placeable
-    }));
-
-    return delay({
-      follow,
-      planned_intents: amount > 0 ? planned : [],
-      mode: MOCK_MODE,
-      queue_written: amount > 0,
-      notional_cap: NOTIONAL_CAP,
-      min_amount: MIN_AMOUNT,
-      sizing_path: amount > 0 ? sizingPath : undefined,
-      kelly_weight: amount > 0 ? kellyWeight : undefined,
-      notice:
-        "This creates a gated, paper-first order queue that you must confirm. No order is placed automatically.",
     });
   },
 
@@ -11736,7 +11602,6 @@ export const mockApi = {
 
   // ---- Agentic Trading tab ----
   async getAgenticStatus(): Promise<AgenticStatus> {
-    const activeFollows = readFollows().filter((f) => f.status === "active");
     return delay({
       mode: MOCK_EXECUTION_QUEUE.mode,
       advisory_only: false,
@@ -11748,10 +11613,6 @@ export const mockApi = {
         n_placeable: MOCK_EXECUTION_QUEUE.n_placeable,
         stale: MOCK_EXECUTION_QUEUE.stale,
         age_seconds: MOCK_EXECUTION_QUEUE.age_seconds,
-      },
-      follows: {
-        n_active: activeFollows.length,
-        total_amount: activeFollows.reduce((sum, f) => sum + f.amount, 0),
       },
       agent_loop: MOCK_AGENT_LOOP,
     });
@@ -12930,7 +12791,7 @@ const MOCK_REPORT_CONTENT: Record<string, ReportContent> = {
     name: "notebooklm_source.md",
     kind: "notebooklm_export",
     content_type: "markdown",
-    text: "# Stockpy System Export\n**Generated At (UTC):** 2026-08-31T14:34:15+00:00\n\n## Macro Context\n- **VIX**: 15.5\n\n## Current Portfolio\n- **Total Equity**: $43,086.18\n\n## Active Pilot Follows\n- **Pilot ID**: trend-following | **Amount**: $500.00 | **Status**: active\n",
+    text: "# Stockpy System Export\n**Generated At (UTC):** 2026-08-31T14:34:15+00:00\n\n## Macro Context\n- **VIX**: 15.5\n\n## Current Portfolio\n- **Total Equity**: $43,086.18\n",
     json: null,
     size: 3084,
     mtime: "2026-08-31T14:34:15+00:00",
@@ -13213,8 +13074,6 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
 
 export const MOCK_META = {
   mode: MOCK_MODE,
-  notionalCap: NOTIONAL_CAP,
-  minAmount: MIN_AMOUNT,
   sectors: SECTORS,
 };
 

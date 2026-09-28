@@ -12,9 +12,9 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 326,
+    "live_safe": 325,
     "no_op": 46,
-    "restart_required": 105,
+    "restart_required": 106,
     "total": 477
   },
   "dynamic_sites": [
@@ -49,28 +49,28 @@
     {
       "expr": "getattr(settings, body.key)",
       "file": "api/pilots_api.py",
-      "line": 3226,
+      "line": 3094,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4356,
+      "line": 4224,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4461,
+      "line": 4329,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5320,
+      "line": 5188,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -110,7 +110,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 383,
+  "files_scanned": 380,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -221,7 +221,6 @@
     "FMP_SECTOR_SNAPSHOT_ENABLED",
     "FMP_TIMEOUT_SECONDS",
     "FMP_UNIVERSE_ENABLED",
-    "FOLLOW_MIN_AMOUNT",
     "FORECAST_BACKFILL_DEADLINE_SECONDS",
     "FORECAST_BACKFILL_ENABLED",
     "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED",
@@ -490,15 +489,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 837,
+    "attr": 830,
     "factory_param": 4,
-    "getattr_const": 306,
+    "getattr_const": 302,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 265,
+    "attr": 263,
     "factory_param": 4,
-    "getattr_const": 183,
+    "getattr_const": 182,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -598,7 +597,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4080",
+        "site": "api/pilots_api.py:3948",
         "via": []
       }
     ],
@@ -636,7 +635,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:342",
+        "site": "api/pilots_api.py:341",
         "via": []
       },
       {
@@ -667,7 +666,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4192",
+        "site": "api/pilots_api.py:4060",
         "via": []
       },
       {
@@ -1370,7 +1369,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4838",
+        "site": "api/pilots_api.py:4706",
         "via": []
       }
     ],
@@ -1381,7 +1380,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4837",
+        "site": "api/pilots_api.py:4705",
         "via": []
       }
     ],
@@ -1447,7 +1446,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4979",
+        "site": "api/pilots_api.py:4847",
         "via": []
       }
     ],
@@ -1458,7 +1457,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4990",
+        "site": "api/pilots_api.py:4858",
         "via": []
       }
     ],
@@ -1469,7 +1468,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4989",
+        "site": "api/pilots_api.py:4857",
         "via": []
       }
     ],
@@ -1504,7 +1503,18 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:656",
+        "site": "api/pilots_api.py:651",
+        "via": []
+      }
+    ],
+    "FOLLOW_MIN_AMOUNT": [
+      {
+        "discarded": false,
+        "form": "name_literal",
+        "rules": [
+          "dynamic_name_literal_unattributable"
+        ],
+        "site": "pilots/settings_domains.py:70",
         "via": []
       }
     ],
@@ -1669,7 +1679,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "scripts/export_notebooklm.py:153",
+        "site": "scripts/export_notebooklm.py:152",
         "via": []
       }
     ],
@@ -2038,7 +2048,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4269",
+        "site": "api/pilots_api.py:4137",
         "via": []
       }
     ],
@@ -2060,7 +2070,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4268",
+        "site": "api/pilots_api.py:4136",
         "via": []
       }
     ],
@@ -2232,7 +2242,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6406",
+        "site": "investyo_mcp_server.py:6115",
         "via": []
       }
     ],
@@ -2252,7 +2262,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6351",
+        "site": "investyo_mcp_server.py:6060",
         "via": []
       }
     ],
@@ -2292,7 +2302,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6359",
+        "site": "investyo_mcp_server.py:6068",
         "via": []
       }
     ],
@@ -2356,7 +2366,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4264",
+        "site": "api/pilots_api.py:4132",
         "via": []
       }
     ],
@@ -2367,7 +2377,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4267",
+        "site": "api/pilots_api.py:4135",
         "via": []
       }
     ],
@@ -2378,7 +2388,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4265",
+        "site": "api/pilots_api.py:4133",
         "via": []
       }
     ],
@@ -2389,7 +2399,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4266",
+        "site": "api/pilots_api.py:4134",
         "via": []
       }
     ],
@@ -2400,7 +2410,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4258",
+        "site": "api/pilots_api.py:4126",
         "via": []
       }
     ],
@@ -2411,7 +2421,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4263",
+        "site": "api/pilots_api.py:4131",
         "via": []
       }
     ],
@@ -2422,7 +2432,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4262",
+        "site": "api/pilots_api.py:4130",
         "via": []
       }
     ],
@@ -2433,7 +2443,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4261",
+        "site": "api/pilots_api.py:4129",
         "via": []
       }
     ],
@@ -2444,7 +2454,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4223",
+        "site": "api/pilots_api.py:4091",
         "via": []
       }
     ],
@@ -2455,7 +2465,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4259",
+        "site": "api/pilots_api.py:4127",
         "via": []
       }
     ],
@@ -2466,7 +2476,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4260",
+        "site": "api/pilots_api.py:4128",
         "via": []
       }
     ],
@@ -2477,7 +2487,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4224",
+        "site": "api/pilots_api.py:4092",
         "via": []
       }
     ],
@@ -2488,7 +2498,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4153",
+        "site": "api/pilots_api.py:4021",
         "via": []
       }
     ],
@@ -2567,15 +2577,6 @@
           "module_level"
         ],
         "site": "main_orchestrator.py:117",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "pilots/follows_store.py:99",
         "via": []
       },
       {
@@ -2730,7 +2731,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4257",
+        "site": "api/pilots_api.py:4125",
         "via": []
       },
       {
@@ -2941,7 +2942,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/pilots_api.py:651",
+        "site": "api/pilots_api.py:646",
         "via": []
       },
       {
@@ -2997,10 +2998,10 @@
   ],
   "restart_required_reason_counts": {
     "cross_module_init_helper": 92,
-    "dynamic_name_literal_unattributable": 29,
+    "dynamic_name_literal_unattributable": 30,
     "indirect_init_helper_d1": 12,
     "init_body": 12,
-    "init_self_assign": 45,
+    "init_self_assign": 44,
     "method_self_assign": 8,
     "module_level": 50,
     "os_environ": 2
@@ -3013,6 +3014,7 @@
     "FMP_ECON_INDICATORS",
     "FMP_OPTIONS_CONTEXT_ENABLED",
     "FMP_OPTIONS_HEALTH_ENABLED",
+    "FOLLOW_MIN_AMOUNT",
     "MAX_CONCURRENT_OPTION_POSITIONS",
     "MAX_OPTION_NOTIONAL_PER_TRADE",
     "MULTI_BROKER_GATEWAY_ENABLED",

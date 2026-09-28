@@ -2,6 +2,8 @@
 
 > **2026-09 (step 3e):** the options-desk HTTP routes (`/pilots/options/*`, the options `/pilots/paper-broker/*` actions, `/pilots/ai/*`, `/pilots/portfolio/optimize/hrp-cvar`, `/pilots/execution/{optimize,fix,brokers}/*`, `/brokerage/options/order`, `/options`, `/symbols/{t}/options`, `/data/options/*`, `/metrics/options/*`, `/ws/risk/portfolio`) are removed. Mentions of them below are historical; the modules behind them moved to `legacy/` in step 4b (see `legacy/README.md`). The live-trade approval routes under `/pilots/execution/` are kept.
 
+> **2026-09 (step 4c):** Follow-a-Pilot is archived. `execution/compose.py` now composes the advisory source only (no `follow-<pilot_id>` sources, no netting, no `FollowsStore` read, no `write_follow_source`); the advisory-only `execution_queue.json` is byte-identical to before (pinned by `tests/test_compose_advisory_only_golden.py`). `pilots/mirror.py`, `pilots/follows_store.py` and `pilots/portfolio_attribution.py` moved to `legacy/pilots/`. Entries below that describe follow netting are historical.
+
 > Part of the split-out `CLAUDE.md` System Architecture reference. See [../../CLAUDE.md](../../CLAUDE.md) for the index.
 
 - **execution/cost_model.py** — Tiered execution cost model and Backtrader CommissionInfo (SEC §31, FINRA TAF, tiered spreads, market order slippage).

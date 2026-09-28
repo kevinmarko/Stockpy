@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-07-17T15:00:00+00:00",
+  "mode": "review",
+  "kill_switch_active": false,
+  "max_notional_per_order": 0.0,
+  "limit_buffer_bps": 0,
+  "n_intents": 3,
+  "n_placeable": 0,
+  "intents": [
+    {
+      "client_order_id": "a3ab31ff75f323ec7354cbefcbbd7c37154ab2e521968dbf",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "side": "buy",
+      "qty": null,
+      "target_notional": 3000.0,
+      "order_type": "market",
+      "limit_price": null,
+      "conviction": 0.87,
+      "gate_allowed": true,
+      "gate_reasons": [],
+      "allow_place": false,
+      "rationale": "because",
+      "strategy": "quality",
+      "sources": [
+        {
+          "source_id": "advisory",
+          "target_notional": 3000.0
+        }
+      ],
+      "overridden": []
+    },
+    {
+      "client_order_id": "0d3cbd0fe7e5ed1f4cdec8cf9cc883a4a9a07d76d9775ee2",
+      "symbol": "MSFT",
+      "action": "SELL",
+      "side": "sell",
+      "qty": 10.0,
+      "target_notional": 4000.0,
+      "order_type": "market",
+      "limit_price": null,
+      "conviction": 0.9,
+      "gate_allowed": true,
+      "gate_reasons": [],
+      "allow_place": false,
+      "rationale": "exit: score decay",
+      "strategy": "advisory",
+      "sources": [
+        {
+          "source_id": "advisory",
+          "target_notional": 0.0
+        }
+      ],
+      "overridden": []
+    },
+    {
+      "client_order_id": "610884579b0ae481dabf54e8d6f306a470a1605f02cc5216",
+      "symbol": "NVDA",
+      "action": "BUY",
+      "side": "buy",
+      "qty": null,
+      "target_notional": 4000.0,
+      "order_type": "market",
+      "limit_price": null,
+      "conviction": 0.93,
+      "gate_allowed": true,
+      "gate_reasons": [],
+      "allow_place": false,
+      "rationale": "trend + momentum",
+      "strategy": "advisory",
+      "sources": [
+        {
+          "source_id": "advisory",
+          "target_notional": 4000.0
+        }
+      ],
+      "overridden": []
+    }
+  ]
+}

@@ -25,9 +25,7 @@ function makePilot(overrides: Partial<PilotSummary> = {}): PilotSummary {
     },
     holdings_count: 8,
     top_holdings: [],
-    aum_proxy: 125000,
-    followers_proxy: 4,
-    long_only: true, followable: true,
+    long_only: true,
     ...overrides,
   };
 }

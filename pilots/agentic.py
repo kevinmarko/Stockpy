@@ -5,7 +5,6 @@ The Agent Status header on the webapp's Agentic Trading tab (``GET
 /agentic/status``) is a COMPOSITE of several sources that already have their
 own dependency-light readers imported at ``api/pilots_api.py``'s module top
 (``shared.robinhood_execution_panel`` for the execution queue,
-``pilots.follows_store.FollowsStore`` for active follows,
 ``execution.kill_switch.GlobalKillSwitch`` for the kill switch) — the endpoint
 composes those directly, the same way ``GET /automation/status`` already
 stitches together ``shared.daemon_client`` + ``pilots.run_status`` +

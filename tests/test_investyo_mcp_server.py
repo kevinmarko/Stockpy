@@ -3665,10 +3665,11 @@ class TestGenerateDailySignals:
 
 # ---------------------------------------------------------------------------
 # Pilots marketplace tools (list_pilots / get_pilot_detail /
-# get_pilot_performance / get_pilot_trades / get_follows / follow_pilot)
+# get_pilot_performance / get_pilot_trades), plus the four retired
+# Follow-a-Pilot stubs (archived 2026-09, step 4c).
 #
-# These wrap pilots.catalog / pilots.scoring / pilots.performance /
-# pilots.follows_store / pilots.mirror -- each of which already has its own
+# These wrap pilots.catalog / pilots.scoring / pilots.performance -- each of
+# which already has its own
 # dedicated test suite (tests/test_pilots_*.py). Tests here therefore focus
 # on the MCP tool WIRING: arg validation, markdown+json rendering, unknown-
 # pilot 404-equivalent messages, and dead-letter degradation -- not on
@@ -4029,237 +4030,54 @@ class TestGetPilotTrades:
         assert "Failed to get trades" in result
 
 
-class TestGetFollows:
-    def test_no_active_follows(self, monkeypatch):
-        import pilots.follows_store as fs_mod
+class TestRetiredFollowTools:
+    """Follow-a-Pilot was archived (2026-09, step 4c). The four tool names stay
+    registered as stubs that return a clear retired message, never raise, and
+    touch no follow state (the follow modules are not even importable here)."""
 
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_active", lambda self: [])
+    @pytest.fixture(autouse=True)
+    def _follow_modules_unimportable(self, monkeypatch):
+        import sys as _sys
 
-        result = srv.get_follows()
-        assert "No active follows" in result
+        for name in ("pilots.mirror", "pilots.follows_store", "pilots.portfolio_attribution"):
+            monkeypatch.setitem(_sys.modules, name, None)
 
-    def test_happy_path(self, monkeypatch):
-        import pilots.follows_store as fs_mod
+    @pytest.mark.parametrize(
+        "name, call",
+        [
+            ("get_follows", lambda: srv.get_follows()),
+            ("follow_pilot", lambda: srv.follow_pilot("trend-following", 1000.0)),
+            ("unfollow_pilot", lambda: srv.unfollow_pilot("trend-following")),
+            ("get_portfolio_by_pilot", lambda: srv.get_portfolio_by_pilot()),
+        ],
+    )
+    def test_stub_returns_retired_message(self, name, call, tmp_path, monkeypatch):
+        from settings import settings as _settings
 
-        rows = [
-            {
-                "pilot_id": "trend-following",
-                "amount": 500.0,
-                "created_at": "t1",
-                "updated_at": "t2",
-                "status": "active",
-            }
-        ]
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_active", lambda self: rows)
+        monkeypatch.setattr(_settings, "OUTPUT_DIR", tmp_path, raising=False)
+        result = call()
+        assert f"`{name}` is retired" in result
+        assert "list_pilots" in result  # points at what still works
+        assert not (tmp_path / "follows.json").exists()
+        assert not (tmp_path / "execution_queue.json").exists()
 
-        result = srv.get_follows()
-        assert "trend-following" in result
-        assert "$500.00" in result
+    @pytest.mark.parametrize(
+        "name", ["get_follows", "follow_pilot", "unfollow_pilot", "get_portfolio_by_pilot"]
+    )
+    def test_stub_is_read_only_and_has_no_widget(self, name):
+        tool = srv.mcp._tool_manager.get_tool(name)
+        assert tool is not None
+        assert tool.annotations is not None and tool.annotations.readOnlyHint is True
+        assert not tool.meta
 
-    def test_exception_degrades(self, monkeypatch):
-        import pilots.follows_store as fs_mod
-
-        def _raise(self):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_active", _raise)
-
-        result = srv.get_follows()
-        assert "Failed to list follows" in result
-
-
-class TestFollowPilot:
-    def test_unknown_pilot(self):
-        assert "No such pilot" in srv.follow_pilot("nope", 100)
-
-    def test_non_positive_amount_rejected(self):
-        assert "amount must be > 0" in srv.follow_pilot("trend-following", 0)
-        assert "amount must be > 0" in srv.follow_pilot("trend-following", -5)
-
-    def test_kill_switch_blocks(self, monkeypatch):
-        import execution.kill_switch as ks_mod
-
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: True)
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "reason", lambda self: "VIX spike")
-
-        result = srv.follow_pilot("trend-following", 500)
-
-        assert "Kill switch is active" in result
-        assert "VIX spike" in result
-
-    def test_happy_path_no_account_snapshot(self, monkeypatch):
-        import data.historical_store as hs_mod
-        import execution.kill_switch as ks_mod
-        import pilots.follows_store as fs_mod
-        import pilots.mirror as mirror_mod
+    def test_list_pilots_has_no_follow_proxies(self, monkeypatch):
         import pilots.scoring as scoring_mod
 
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: False)
-        follow_row = {"pilot_id": "trend-following", "amount": 500.0, "status": "active"}
-        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: follow_row)
         monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
-        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: None)
-        monkeypatch.setattr(
-            mirror_mod,
-            "plan_follow",
-            lambda pilot, amount, account_snapshot, snapshot=None: {
-                "planned_intents": [],
-                "mode": "off",
-                "queue_written": False,
-            },
-        )
-
-        result = srv.follow_pilot("trend-following", 500)
-
-        assert "no account snapshot" in result
-        assert "No order is placed automatically" in result
-        assert '"queue_written": false' in result
-
-    def test_happy_path_with_planned_intents(self, monkeypatch):
-        import data.historical_store as hs_mod
-        import execution.kill_switch as ks_mod
-        import pilots.follows_store as fs_mod
-        import pilots.mirror as mirror_mod
-        import pilots.scoring as scoring_mod
-
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: False)
-        monkeypatch.setattr(
-            fs_mod.FollowsStore, "upsert", lambda self, pid, amt: {"pilot_id": pid, "amount": amt}
-        )
-        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: {"timestamp": "t"})
-        fake_snap = SimpleNamespace(total_equity=10000.0)
-        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: fake_snap)
-        monkeypatch.setattr(
-            mirror_mod,
-            "plan_follow",
-            lambda pilot, amount, account_snapshot, snapshot=None: {
-                "planned_intents": [
-                    {"symbol": "AAPL", "action": "BUY", "target_notional": 300.0, "rationale": "underweight"}
-                ],
-                "mode": "review",
-                "queue_written": True,
-            },
-        )
-
-        result = srv.follow_pilot("trend-following", 500)
-
-        assert "account snapshot loaded (DB)" in result
-        assert "AAPL" in result
-        assert "$300.00" in result
-
-    def test_exception_degrades(self, monkeypatch):
-        import pilots.catalog as catalog_mod
-
-        def _raise(*a, **k):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(catalog_mod, "get_pilot", _raise)
-
-        result = srv.follow_pilot("trend-following", 500)
-        assert "Failed to follow pilot" in result
-
-
-# ---------------------------------------------------------------------------
-# unfollow_pilot -- Tool 1 of the "PR A" Pilot marketplace batch. Cancels a
-# follow via FollowsStore.upsert(pilot_id, 0.0), NOT .remove() (would delete
-# the mirrored attribution). No widget, never gated on the kill switch, no
-# ToolAnnotations(readOnlyHint=True) (it writes state).
-# ---------------------------------------------------------------------------
-
-
-class TestUnfollowPilot:
-    def test_unknown_pilot(self):
-        result = srv.unfollow_pilot("does-not-exist")
-        assert "No such pilot 'does-not-exist'" in result
-
-    def test_not_currently_following_short_circuits(self, monkeypatch):
-        import pilots.follows_store as fs_mod
-
-        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: None)
-
-        result = srv.unfollow_pilot("trend-following")
-        assert "Not currently following" in result
-        assert "trend-following" in result
-
-    def test_happy_path_reports_residual_mirrored(self, monkeypatch):
-        import pilots.follows_store as fs_mod
-
-        row = {"pilot_id": "trend-following", "amount": 500.0, "status": "active"}
-        mirrored = [{"symbol": "AAPL", "weight": 1.0, "target_notional": 500.0}]
-
-        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
-        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: mirrored)
-        captured = {}
-        monkeypatch.setattr(
-            fs_mod.FollowsStore,
-            "upsert",
-            lambda self, pid, amt: captured.update(pid=pid, amt=amt) or row,
-        )
-
-        result = srv.unfollow_pilot("trend-following")
-
-        assert captured == {"pid": "trend-following", "amt": 0.0}
-        assert "Follow cancelled (was $500.00)" in result
-        assert "Still Held (not automatically sold)" in result
-        assert "will not be automatically sold" in result
-        assert "AAPL" in result
-        assert "$500.00" in result
-        assert '"was_following": true' in result
-
-    def test_happy_path_no_residual_mirrored(self, monkeypatch):
-        import pilots.follows_store as fs_mod
-
-        row = {"pilot_id": "trend-following", "amount": 100.0, "status": "active"}
-        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
-        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: [])
-        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: row)
-
-        result = srv.unfollow_pilot("trend-following")
-
-        assert "Follow cancelled" in result
-        assert "No attributed positions on record" in result
-
-    def test_already_cancelled_is_idempotent(self, monkeypatch):
-        import pilots.follows_store as fs_mod
-
-        row = {"pilot_id": "trend-following", "amount": 0.0, "status": "cancelled"}
-        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
-        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: [])
-        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: row)
-
-        result = srv.unfollow_pilot("trend-following")
-
-        assert "Already not actively following" in result
-        assert '"was_following": false' in result
-
-    def test_not_gated_on_kill_switch(self, monkeypatch):
-        """Unlike follow_pilot, unfollow_pilot must succeed even when the
-        global kill switch is active -- it takes on no new risk."""
-        import execution.kill_switch as ks_mod
-        import pilots.follows_store as fs_mod
-
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: True)
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "reason", lambda self: "VIX spike")
-        row = {"pilot_id": "trend-following", "amount": 500.0, "status": "active"}
-        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
-        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: [])
-        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: row)
-
-        result = srv.unfollow_pilot("trend-following")
-
-        assert "Kill switch" not in result
-        assert "Follow cancelled" in result
-
-    def test_exception_degrades(self, monkeypatch):
-        import pilots.catalog as catalog_mod
-
-        def _raise(*a, **k):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(catalog_mod, "get_pilot", _raise)
-
-        result = srv.unfollow_pilot("trend-following")
-        assert "Failed to unfollow pilot" in result
+        result = srv.list_pilots()
+        assert "aum_proxy" not in result
+        assert "followers_proxy" not in result
+        assert "AUM" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -4351,106 +4169,6 @@ class TestGetQuote:
 
         result = srv.get_quote("AAPL")
         assert "Failed to get quote for 'AAPL'" in result
-
-
-# ---------------------------------------------------------------------------
-# get_portfolio_by_pilot -- Tool 4 of the "PR A" Pilot marketplace batch.
-# Thin MCP-tool wrapper over the pure pilots.portfolio_attribution algorithm
-# (see tests/test_pilots_portfolio_attribution.py for the math itself). Tests
-# here focus on tool wiring: account-snapshot sourcing, follows/catalog
-# threading, markdown rendering, dead-letter degradation.
-# ---------------------------------------------------------------------------
-
-
-class TestGetPortfolioByPilot:
-    def test_no_account_snapshot(self, monkeypatch):
-        import data.historical_store as hs_mod
-        import pilots.follows_store as fs_mod
-
-        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: None)
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_all", lambda self: [])
-
-        result = srv.get_portfolio_by_pilot()
-
-        assert "# Portfolio by Pilot (proxy attribution)" in result
-        assert "no account snapshot on record" in result
-        assert "NOT per-lot cost-basis P&L tracking" in result
-
-    def test_happy_path_renders_attribution_and_unattributed(self, monkeypatch):
-        import data.historical_store as hs_mod
-        import pilots.follows_store as fs_mod
-
-        position = SimpleNamespace(market_value=1000.0, unrealized_pl=100.0)
-        other_position = SimpleNamespace(market_value=200.0, unrealized_pl=-10.0)
-        fake_snapshot = SimpleNamespace(
-            positions={"AAPL": position, "MSFT": other_position},
-            fetched_at=datetime(2026, 8, 1, tzinfo=None),
-        )
-        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: fake_snapshot)
-        follows = [
-            {
-                "pilot_id": "trend-following",
-                "status": "active",
-                "mirrored": [{"symbol": "AAPL", "weight": 1.0, "target_notional": 600.0}],
-                "mirrored_updated_at": "2026-07-30T00:00:00+00:00",
-            }
-        ]
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_all", lambda self: follows)
-
-        result = srv.get_portfolio_by_pilot()
-
-        assert "By Pilot" in result
-        assert "`trend-following`" in result
-        assert "$600.00" in result
-        assert "Unattributed" in result
-        assert "MSFT" in result  # fully unclaimed -> in the unattributed bucket
-        assert "$200.00" in result
-        payload = json.loads(result.split("```json")[1].split("```")[0])
-        assert payload["pilots"][0]["pilot_id"] == "trend-following"
-        # AAPL: $400 of the $1000 held is unclaimed (target_notional=600 < market_value=1000);
-        # MSFT: fully unclaimed.
-        assert payload["unattributed"] == [
-            {"symbol": "AAPL", "value": 400.0},
-            {"symbol": "MSFT", "value": 200.0},
-        ]
-
-    def test_account_snapshot_fetch_exception_degrades_to_no_data(self, monkeypatch):
-        import data.historical_store as hs_mod
-        import pilots.follows_store as fs_mod
-
-        def _raise(self):
-            raise RuntimeError("db unavailable")
-
-        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", _raise)
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_all", lambda self: [])
-
-        result = srv.get_portfolio_by_pilot()
-
-        assert "no account snapshot on record" in result
-
-    def test_exception_degrades(self, monkeypatch):
-        import pilots.catalog as catalog_mod
-
-        def _raise(*a, **k):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(catalog_mod, "list_pilots", _raise)
-
-        result = srv.get_portfolio_by_pilot()
-        assert "Failed to build portfolio-by-pilot attribution" in result
-
-    def test_tool_meta_wired_to_pilot_portfolio_widget(self):
-        """The widget for this tool was deferred at v1 and shipped later --
-        confirm the ``meta=`` kwarg now points at ``pilot-portfolio.html``
-        (mirrors compare_pilots' equivalent wiring test in
-        tests/test_investyo_mcp_widgets.py::TestPilotCompareWidgetSmoke)."""
-        tool = srv.mcp._tool_manager.get_tool("get_portfolio_by_pilot")
-        assert tool is not None
-        assert tool.meta == srv._PILOT_PORTFOLIO_UI
-        if srv._WIDGETS_AVAILABLE:
-            assert tool.meta == {"ui": {"resourceUri": "ui://widgets/pilot-portfolio.html"}}
-        else:
-            assert tool.meta is None
 
 
 # ---------------------------------------------------------------------------

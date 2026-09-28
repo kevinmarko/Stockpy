@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router";
 import { api, apiMeta } from "../api/client";
 import type { PilotSummary } from "../api/types";
@@ -10,8 +10,11 @@ import { fmtNum } from "../format";
 import { theme } from "../theme";
 
 /**
- * 3-step onboarding: Choose a Pilot -> Connect brokerage (paper-first) -> Set amount.
- * Completion is persisted client-side; the app then routes to the marketplace.
+ * 2-step onboarding: Choose a Pilot -> Connect brokerage (paper-first).
+ * Completion is persisted client-side; the app then routes to the chosen
+ * Pilot's detail page (or the marketplace). There is no allocation step: the
+ * Follow-a-Pilot feature was removed, so picking a Pilot here only decides
+ * which strategy's detail page you land on — it never sizes or queues orders.
  */
 export function Onboarding({ onDone }: { onDone: () => void }) {
   const nav = useNavigate();
@@ -20,17 +23,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [brokerage, setBrokerage] = useState<"paper" | "robinhood" | "skip" | null>(
     null
   );
-  const [amount, setAmount] = useState<number>(500);
   const [rhConnected, setRhConnected] = useState(false);
 
   const { data: pilots, loading } = useApi<PilotSummary[]>(
     () => api.listPilots(),
     []
-  );
-
-  const deployable = useMemo(
-    () => (pilots ?? []).filter((p) => p.headline.deployable),
-    [pilots]
   );
 
   const canContinueStep1 =
@@ -41,7 +38,6 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     completeOnboarding({
       pilotId: pilotId ?? undefined,
       brokerage: brokerage ?? "skip",
-      amount,
     });
     onDone();
     if (pilotId) nav(`/pilots/${pilotId}`);
@@ -52,7 +48,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     <div className="screen" style={{ paddingBottom: 24 }}>
       {/* progress dots */}
       <div style={{ display: "flex", gap: "var(--s-1-5)", marginBottom: "var(--s-5)" }}>
-        {[0, 1, 2].map((i) => (
+        {[0, 1].map((i) => (
           <div
             key={i}
             style={{
@@ -70,7 +66,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           <h1 className="screen-title">Choose a Pilot</h1>
           <p className="screen-sub">
             Pilots are Stockpy's own quant strategies, ranked by honest,
-            overfitting-gated backtests. Pick one to follow.
+            overfitting-gated backtests. Pick one to explore first.
           </p>
           {loading ? (
             <Loading lines={4} />
@@ -158,7 +154,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               textAlign: "center",
             }}
           >
-            Prefer picking individual stocks instead of following a Pilot? Try
+            Prefer picking individual stocks instead of a Pilot? Try
             Data Explorer →
           </button>
         </>
@@ -168,9 +164,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         <>
           <h1 className="screen-title">Connect brokerage</h1>
           <p className="screen-sub">
-            Stockpy is advisory and <strong>paper-first</strong>. Following a Pilot
-            builds a gated order queue you confirm yourself — no live order is ever
-            placed automatically.
+            Stockpy is advisory and <strong>paper-first</strong>. Any order it
+            proposes lands in a gated queue you confirm yourself — no live order is
+            ever placed automatically.
           </p>
 
           <button
@@ -254,66 +250,6 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               className="btn btn-primary"
               style={{ flex: 2 }}
               disabled={!canContinueStep1}
-              onClick={() => setStep(2)}
-            >
-              Continue
-            </button>
-          </div>
-        </>
-      )}
-
-      {step === 2 && (
-        <>
-          <h1 className="screen-title">Set amount</h1>
-          <p className="screen-sub">
-            How much would you allocate to{" "}
-            <strong>
-              {deployable.find((p) => p.id === pilotId)?.name ??
-                pilots?.find((p) => p.id === pilotId)?.name ??
-                "this Pilot"}
-            </strong>
-            ? This sizes the preview queue — you confirm before anything runs.
-          </p>
-
-          <label className="tile-label" htmlFor="ob-amount">
-            Allocation (USD)
-          </label>
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)" }}>
-            <span style={{ fontSize: "var(--t-display)", fontWeight: 700, color: theme.textMuted }}>
-              $
-            </span>
-            <input
-              id="ob-amount"
-              className="field"
-              type="number"
-              inputMode="decimal"
-              min={100}
-              step={0.01}
-              value={amount}
-              onChange={(e) => setAmount(Math.max(0, Number(e.target.value)))}
-            />
-          </div>
-
-          <div style={{ display: "flex", gap: "var(--s-2)", marginTop: "var(--s-3)" }}>
-            {[250, 500, 1000, 2500].map((a) => (
-              <button
-                key={a}
-                className="chip"
-                style={{ flex: 1, justifyContent: "center", minHeight: 38 }}
-                onClick={() => setAmount(a)}
-              >
-                ${a}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ display: "flex", gap: "var(--s-2-5)", marginTop: "var(--s-6)" }}>
-            <button className="btn" style={{ flex: 1 }} onClick={() => setStep(1)}>
-              Back
-            </button>
-            <button
-              className="btn btn-primary"
-              style={{ flex: 2 }}
               onClick={finish}
             >
               Get started

@@ -2,10 +2,8 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api/client";
 import type {
-  Follow,
   PerfRange,
   Portfolio as PortfolioT,
-  PilotSummary,
   EquityCurveResponse,
   RealizedPerformance,
   UniverseResponse,
@@ -122,8 +120,6 @@ export function Portfolio() {
 
   const port = useApi<PortfolioT>(() => api.getPortfolio(), []);
   const equity = useApi<EquityCurveResponse>(() => api.getEquityCurve(range), [range]);
-  const follows = useApi<Follow[]>(() => api.getFollows(), []);
-  const pilots = useApi<PilotSummary[]>(() => api.listPilots(), []);
   const realized = useApi<RealizedPerformance>(() => api.getRealized(), []);
   const universe = useApi<UniverseResponse>(() => api.getUniverse(), []);
 
@@ -131,8 +127,6 @@ export function Portfolio() {
     () => {
       port.reload();
       equity.reload();
-      follows.reload();
-      pilots.reload();
       realized.reload();
       universe.reload();
     },
@@ -162,8 +156,6 @@ export function Portfolio() {
   }
 
   const p = port.data;
-  const pilotName = (id: string) =>
-    pilots.data?.find((x) => x.id === id)?.name ?? id;
 
   return (
     <div className="screen">
@@ -199,8 +191,7 @@ export function Portfolio() {
             .dashboard-layout > [data-grid-area="summary"] { grid-column: span 12; }
             .dashboard-layout > [data-grid-area="equity"] { grid-column: span 12; height: 400px; }
             .dashboard-layout > [data-grid-area="reconciliation"] { grid-column: span 12; }
-            .dashboard-layout > [data-grid-area="realized"] { grid-column: span 7; height: 100%; }
-            .dashboard-layout > [data-grid-area="follows"] { grid-column: span 5; height: 100%; }
+            .dashboard-layout > [data-grid-area="realized"] { grid-column: span 12; height: 100%; }
             .dashboard-layout > [data-grid-area="positions"] { grid-column: span 12; }
           }
         `}</style>
@@ -379,54 +370,6 @@ export function Portfolio() {
             )}
           </>
         )}
-      </section>
-
-      {/* Active follows */}
-      <section data-grid-area="follows" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-        <div style={{ marginBottom: 'var(--s-1)', paddingBottom: 'var(--s-1)', borderBottom: `1px solid ${theme.border}` }}>
-          <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Active follows</h2>
-        </div>
-        {follows.loading ? (
-          <Loading lines={2} />
-        ) : (follows.data ?? []).length === 0 ? (
-          <div className="empty" style={{ padding: 22 }}>
-            You aren't following any Pilots yet.
-            <div style={{ marginTop: "var(--s-2-5)" }}>
-              <Link to="/" className="btn" style={{ display: "inline-flex" }}>
-                Browse Pilots
-              </Link>
-            </div>
-          </div>
-        ) : (
-          <div className="list">
-            {(follows.data ?? []).map((f) => (
-              <Link className="row" key={f.pilot_id} to={`/pilots/${f.pilot_id}`}>
-                <div className="row-main">
-                  <span className="row-title">{pilotName(f.pilot_id)}</span>
-                  <span className="row-sub">Updated {timeAgo(f.updated_at)}</span>
-                </div>
-                <div className="row-end">
-                  <div className="num" style={{ fontWeight: 700 }}>
-                    {fmtUsd(f.amount)}
-                  </div>
-                  <div>
-                    <span
-                      className={`badge ${
-                        f.status === "active" ? "badge-warn" : "badge-neutral"
-                      }`}
-                    >
-                      {f.status === "active" ? "gated queue" : f.status}
-                    </span>
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </div>
-        )}
-        <p style={{ color: theme.textMuted, fontSize: "var(--t-footnote)", marginTop: "var(--s-3)" }}>
-          Follows build a gated, paper-first order queue. Confirm each queue in the
-          robinhood-execution flow — nothing is placed automatically.
-        </p>
       </section>
 
       {/* Positions */}

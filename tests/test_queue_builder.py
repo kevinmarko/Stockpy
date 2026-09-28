@@ -322,35 +322,6 @@ class TestRationaleField:
         assert all(tok in {"alpha", "bravo", "charlie", "delta", "echo", "foxtrot"}
                    for tok in body.split())
 
-    def test_follow_intent_rationale_is_an_honest_ranking(self, no_cap):
-        # A follow intent's rationale must read as a RANKING built from real
-        # numbers (score/weight/target), never a fabricated thesis. Build a real
-        # follow intent through pilots.mirror and confirm it survives to the queue.
-        from pilots.mirror import _follow_rationale
-
-        class _P:
-            id = "trend-following"
-            name = "Trend Follower"
-
-        text = _follow_rationale(
-            _P(), rank=2, total=20, score=0.82, weight=0.25, target_notional=2500.0
-        )
-        assert "ranked #2 of 20" in text
-        assert "score 0.82" in text          # a REAL number, not invented
-        assert "25.0% target weight" in text
-        assert "$2,500 target" in text
-        # Never implies discretionary judgment.
-        assert "believe" not in text.lower()
-        assert "think" not in text.lower()
-
-        # And it flows through to the emitted queue unchanged (below the cap).
-        rec = _Rec("NVDA", "BUY", 0.9)
-        rec.suggested_position_pct = 0.05
-        rec.strategy = "Follow:trend-following"
-        rec.rationale = text
-        intent = qb.build_execution_queue(_rr([rec]), mode="review", now=_RTH)["intents"][0]
-        assert intent["rationale"] == text
-
 
 # ===========================================================================
 # gate_intent unit
