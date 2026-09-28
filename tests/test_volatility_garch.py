@@ -282,6 +282,10 @@ class TestGarchTermStructure:
 # TechnicalOptionsEngine's delegates and these core functions in the same
 # process and confirming they returned identical values (as
 # TestDelegatesMatchCore used to assert directly).
+# The GARCH fit is a numerical optimizer, so results differ slightly across
+# platforms (these values were captured on macOS; Linux CI lands ~1.6e-4
+# relative away). 1e-3 still catches any real change to the model.
+_GARCH_REL_TOL = 1e-3
 _PINNED_VOL = 0.2269718721069769
 _PINNED_TERM_STRUCTURE = {1: 0.2269718721069769, 10: 0.2382429251742835, 30: 0.2391614478444859}
 _PINNED_INDICATORS = {
@@ -296,7 +300,7 @@ class TestPinnedCoreValues:
     def test_garch_volatility_matches_pinned_value(self):
         df = _ohlcv(300, seed=21)
         core = GarchVolatilityEstimator()
-        assert core.estimate_gjr_garch_volatility(df) == pytest.approx(_PINNED_VOL, rel=1e-4)
+        assert core.estimate_gjr_garch_volatility(df) == pytest.approx(_PINNED_VOL, rel=_GARCH_REL_TOL)
 
     def test_garch_term_structure_matches_pinned_values(self):
         df = _ohlcv(300, seed=21)
@@ -304,7 +308,7 @@ class TestPinnedCoreValues:
         got = core.estimate_gjr_garch_volatility_term_structure(df, horizons=(1, 10, 30))
         assert set(got) == set(_PINNED_TERM_STRUCTURE)
         for h, expected in _PINNED_TERM_STRUCTURE.items():
-            assert got[h] == pytest.approx(expected, rel=1e-4), f"horizon {h}"
+            assert got[h] == pytest.approx(expected, rel=_GARCH_REL_TOL), f"horizon {h}"
 
     def test_trend_exit_indicators_match_pinned_values(self):
         df = _ohlcv(300, seed=21)
