@@ -1430,23 +1430,11 @@ def main() -> None:
             )
         # ─────────────────────────────────────────────────────────────────────
 
-        # Build macro_dto again cheaply (same result, neutral defaults are fast)
-        # to pass macro context to the HTML report template.
-        try:
-            from dto_models import MacroEconomicDTO as _MDTO
-
-            _macro = _MDTO(
-                yield_curve_10y_2y=0.5,
-                high_yield_oas=3.5,
-                inflation_rate=3.0,
-                nominal_10y=4.5,
-                vix_value=18.0,
-                sahm_rule_indicator=0.0,
-            )
-        except Exception:
-            _macro = None
-
-        _write_html_report(result, macro_dto=_macro)
+        # Pass the cycle's real macro context (built once by MacroStep). This
+        # used to be a hand-built "neutral" DTO, which wrote a fake RISK ON /
+        # VIX-from-defaults macro into daily_report.html and state_snapshot.json
+        # every run, overwriting the daemon's real macro fields.
+        _write_html_report(result, macro_dto=result.macro_dto)
         return result
 
     if args.agent:
