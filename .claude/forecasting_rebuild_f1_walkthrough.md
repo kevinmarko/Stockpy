@@ -55,9 +55,23 @@ signal changes because of this PR. The one indirect effect is disclosed under
    `--min-price`, `--db`, `--json`), read-only.
 
 6. **Ledger cleanup** `scripts/clean_forecast_ledger.py`, dry run by default.
-   `--apply` backs up via sqlite3 `.backup` to `<LOCAL_DATA_ROOT>/backups/`,
-   verifies the backup's row count, then deletes in one transaction and
-   backfills `forecast_day` on the survivors. **Not run by the agent.**
+   - `--categories` is a comma list from `a,b,c`, **default `a,b`**.
+     Category (c), the intra-day dedup, runs only when explicitly listed and
+     must wait for the F3 naive gate (follow-up commit, coordinator request).
+   - Every count, the deleted/remaining totals and the cold-start estimate
+     reflect only the selected categories.
+   - When (c) is selected, the dry run and `--apply` both print a warning at
+     the top and bottom built from the measured numbers.
+   - The estimate also reports which (symbol, horizon) pairs' live skill
+     WEIGHTS change, recomputed with the live formula, and warns when any do.
+     This found that (b) alone is not weight-neutral (see below).
+   - `--apply` backs up via sqlite3 `.backup` to `<LOCAL_DATA_ROOT>/backups/`,
+     verifies the backup's row count, then deletes only the selected
+     categories in one transaction. The `forecast_day` backfill on survivors
+     runs only with (c): without the dedup a legacy day still holds many
+     pending duplicates, and giving them a day key would make the next upsert
+     overwrite all of them at once.
+   - **Not run on the real DB by the agent.**
 
 7. **UI window.** `pilots/forecast_skill.py` passes
    `FORECAST_SKILL_WINDOW_DAYS`/`FORECAST_SKILL_MIN_OBS` to
@@ -96,9 +110,16 @@ signal changes because of this PR. The one indirect effect is disclosed under
   start for about 30 trading days after its first horizon matures instead of
   about 2. That is the plan's intent ("removes the fake maturity") but it is a
   change in how fast weights warm up.
-- Running the cleanup `--apply` would drop 1,194 of the 1,223 currently-warm
-  (symbol, horizon) pairs back to the equal-weight cold start (dry-run
-  estimate below). That is an operator decision.
+- Running the cleanup with category (c) would drop 1,194 of the 1,223
+  currently-warm (symbol, horizon) pairs back to the equal-weight cold start.
+  (c) is therefore opt-in and waits for F3.
+- Running the default a,b cleanup sends no real symbol to the cold start, but
+  it does move live weights: removing the 2026-08-14 Monte Carlo seed rows
+  (squared errors of ~(100 - 20)^2 each) raises Monte Carlo's skill weight
+  for 54 (symbol, horizon) pairs, by up to 0.337 (IVR@10, ABR@10). With skill
+  weighting on, those symbols' published `Forecast_10`/`Forecast_30` move.
+  That corrects a corrupted input, but it is a decision change the operator
+  should know about before running `--apply`.
 
 ## Real-DB outputs (read-only)
 
@@ -118,7 +139,30 @@ Skill report, window 365 d, min price $1:
 `naive` has only been recorded since 2026-09-06, so only 10-day pairs exist
 yet. `blend` has no matured rows yet (it starts with this PR).
 
-Cleanup dry run (window 365, min_obs 30):
+Cleanup dry run, **default categories a,b**, on a fresh read-only copy of
+the live ledger (sqlite3 online backup from a `mode=ro` source), window 365,
+min_obs 30:
+
+```
+categories: a,b
+total rows:                           2,426,104
+(a) symbol='TEST' rows:                   3,972
+(b) 2026-08-14 MC seed rows:                480  (30 symbols)
+(c) intra-day duplicates:            not selected (opt-in with --categories a,b,c; after F3)
+rows deleted in total:                    4,452
+rows after cleanup:                   2,421,652
+keys (symbol, model, horizon) mature now: 4,596; falling below min_obs: 7 (all TEST)
+(symbol, horizon) pairs warm now: 1,223; dropping to cold start: 2 (TEST@10, TEST@30)
+pairs of remaining symbols whose weights change: 54 (max shift 0.337)
+```
+
+So zero real (symbol, horizon) pairs return to the cold start under a,b.
+`--apply` with a,b was also run on that COPY: 2,421,652 rows remained,
+matching the dry run, and a before/after comparison of the live weight
+formula showed the same 54 changed pairs.
+
+Dry run with `--categories a,b,c` (earlier run on the live ledger, same
+numbers on the copy apart from rows written since):
 
 ```
 total rows:                           2,425,936

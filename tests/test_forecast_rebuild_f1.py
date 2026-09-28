@@ -468,7 +468,8 @@ def _seed_ledger(db: str) -> None:
     now = datetime.now(timezone.utc)
     # (a) TEST rows
     for i in range(3):
-        _insert(db, "TEST", MODEL_ARIMA, 10, (now - timedelta(hours=i)).isoformat(), 1.0, None)
+        # All on one US/Eastern day, so (c) alone would collapse them to 1.
+        _insert(db, "TEST", MODEL_ARIMA, 10, f"2026-09-01T14:0{i}:00+00:00", 1.0, None)
     # (b) 2026-08-14 seed-bug cycle for SEED (priced ~$20) and a healthy cycle
     # for PENNY whose 90-day ARIMA/HW trended far below its MC.
     bug = "2026-08-14T14:00:00+00:00"
@@ -495,13 +496,14 @@ class TestCleanForecastLedger:
         before = _rows(db, "SELECT COUNT(*) FROM forecast_errors")[0][0]
         conn = clf._connect(db, readonly=True)
         try:
-            summary, excluded = clf.analyze(conn, window_days=365, min_obs=3)
+            summary, excluded = clf.analyze(conn, window_days=365, min_obs=3, categories=("a", "b", "c"))
         finally:
             conn.close()
+        assert summary["categories"] == ["a", "b", "c"]
         assert summary["a_test_symbol_rows"] == 3
         assert summary["b_mc_seed_rows"] == 2
         assert summary["b_mc_seed_rows_by_symbol"] == {"SEED": 2}  # PENNY's healthy MC kept
-        # TEST: 3 rows on (at most) 2 ET days are excluded by (a), not (c).
+        # TEST: 3 rows (one ET day) are excluded by (a), so (c) never sees them.
         # KEEP: 5 rows on one ET day -> 4 duplicates.
         assert summary["c_intraday_duplicate_rows"] == 4
         assert summary["rows_deleted_total"] == 3 + 2 + 4
@@ -523,14 +525,16 @@ class TestCleanForecastLedger:
         assert "DRY RUN" in out and "2026-08-14" in out
         assert _rows(db, "SELECT COUNT(*) FROM forecast_errors")[0][0] == before
 
-    def test_apply_backs_up_then_deletes_in_one_transaction(self, tmp_path):
+    def test_apply_with_c_backs_up_then_deletes_in_one_transaction(self, tmp_path):
         from scripts import clean_forecast_ledger as clf
 
         db = str(tmp_path / "ledger.db")
         _seed_ledger(db)
         before = _rows(db, "SELECT COUNT(*) FROM forecast_errors")[0][0]
         backups = tmp_path / "backups"
-        summary = clf.apply_cleanup(db, window_days=365, min_obs=3, backup_dir=backups)
+        summary = clf.apply_cleanup(
+            db, window_days=365, min_obs=3, backup_dir=backups, categories=("a", "b", "c"),
+        )
         files = list(backups.iterdir())
         assert len(files) == 1 and Path(summary["backup_path"]) == files[0]
         assert _rows(str(files[0]), "SELECT COUNT(*) FROM forecast_errors")[0][0] == before
@@ -564,8 +568,8 @@ class TestCleanForecastLedger:
         before = _rows(db, "SELECT COUNT(*) FROM forecast_errors")[0][0]
         real_analyze = clf.analyze
 
-        def _lying_analyze(conn, w, m):
-            summary, excluded = real_analyze(conn, w, m)
+        def _lying_analyze(conn, w, m, cats):
+            summary, excluded = real_analyze(conn, w, m, cats)
             summary["rows_after_cleanup"] = -1  # forces the post-delete check to fail
             return summary, excluded
 
@@ -581,6 +585,173 @@ class TestCleanForecastLedger:
                   "2026-01-15T04:30:00", "2026-03-08T06:59:00+00:00", "2026-03-08T07:01:00+00:00"):
             assert et_day(s) == eastern_trading_day(s)
 
+
+class TestCleanForecastLedgerCategories:
+    """Category (c) is opt-in: the default is a,b, and every total and the
+    cold-start estimate reflect only the selected categories."""
+
+    @staticmethod
+    def _analyze(db, categories=None):
+        from scripts import clean_forecast_ledger as clf
+
+        conn = clf._connect(db, readonly=True)
+        try:
+            if categories is None:
+                return clf.analyze(conn, window_days=365, min_obs=3)[0]
+            return clf.analyze(conn, window_days=365, min_obs=3, categories=categories)[0]
+        finally:
+            conn.close()
+
+    def test_parse_categories(self):
+        from scripts.clean_forecast_ledger import DEFAULT_CATEGORIES, parse_categories
+
+        assert DEFAULT_CATEGORIES == ("a", "b")
+        assert parse_categories(None) == ("a", "b")
+        assert parse_categories("c, A,b,c") == ("a", "b", "c")
+        with pytest.raises(ValueError):
+            parse_categories("a,d")
+        with pytest.raises(ValueError):
+            parse_categories(" , ")
+
+    def test_default_excludes_c(self, tmp_path):
+        db = str(tmp_path / "ledger.db")
+        _seed_ledger(db)
+        before = _rows(db, "SELECT COUNT(*) FROM forecast_errors")[0][0]
+        summary = self._analyze(db)
+        assert summary["categories"] == ["a", "b"]
+        assert summary["c_intraday_duplicate_rows"] is None
+        assert summary["rows_deleted_total"] == 3 + 2
+        assert summary["rows_after_cleanup"] == before - 5
+        cs = summary["cold_start"]
+        # Only TEST is removed; KEEP's 5 completed rows all stay mature.
+        assert cs["keys_falling_below_min_obs"] == 0
+        assert cs["symbol_horizon_pairs_dropping_to_cold_start"] == 0
+        assert not any("CATEGORY (c)" in w for w in summary["warnings"])
+
+    def test_c_opt_in_adds_duplicates_and_warning_from_real_numbers(self, tmp_path):
+        db = str(tmp_path / "ledger.db")
+        _seed_ledger(db)
+        summary = self._analyze(db, ("a", "b", "c"))
+        assert summary["c_intraday_duplicate_rows"] == 4
+        assert summary["rows_deleted_total"] == 3 + 2 + 4
+        cs = summary["cold_start"]
+        assert cs["symbol_horizon_pairs_dropping_to_cold_start"] == 1
+        (warning,) = [w for w in summary["warnings"] if "CATEGORY (c)" in w]
+        assert (
+            f"{cs['symbol_horizon_pairs_dropping_to_cold_start']:,} of "
+            f"{cs['symbol_horizon_pairs_with_mature_model_before']:,} warm" in warning
+        )
+        assert "F3" in warning
+
+    @pytest.mark.parametrize(
+        "cats,deleted",
+        [
+            (("a",), 3), (("b",), 2), (("a", "b"), 5),
+            # c alone: KEEP's 4 duplicates + TEST's 3 same-day rows collapse to 1.
+            (("c",), 4 + 2),
+            (("a", "c"), 3 + 4), (("a", "b", "c"), 9),
+        ],
+    )
+    def test_totals_per_selection(self, tmp_path, cats, deleted):
+        db = str(tmp_path / "ledger.db")
+        _seed_ledger(db)
+        before = _rows(db, "SELECT COUNT(*) FROM forecast_errors")[0][0]
+        summary = self._analyze(db, cats)
+        assert summary["rows_deleted_total"] == deleted
+        assert summary["rows_after_cleanup"] == before - deleted
+        # a/b are always counted for information, whether or not selected.
+        assert summary["a_test_symbol_rows"] == 3 and summary["b_mc_seed_rows"] == 2
+
+    def test_c_without_a_counts_test_duplicates(self, tmp_path):
+        """With (a) unselected, TEST rows stay and take part in the dedup."""
+        db = str(tmp_path / "ledger.db")
+        _seed_ledger(db)
+        summary = self._analyze(db, ("c",))
+        # KEEP: 4 duplicates; TEST: 3 same-ET-day rows collapse to 1; the
+        # seed ledger's other symbols have one row per key.
+        assert summary["c_intraday_duplicate_rows"] == 4 + 2
+        assert summary["a_test_symbol_rows"] == 3  # counted, not deleted
+
+    def test_main_default_prints_c_not_selected_and_no_c_warning(self, tmp_path, capsys):
+        from scripts import clean_forecast_ledger as clf
+
+        db = str(tmp_path / "ledger.db")
+        _seed_ledger(db)
+        assert clf.main(["--db", db, "--window-days", "365", "--min-obs", "3"]) == 0
+        out = capsys.readouterr().out
+        assert "categories: a,b" in out
+        assert "not selected" in out
+        assert "CATEGORY (c)" not in out
+
+    def test_main_with_c_prints_warning(self, tmp_path, capsys):
+        from scripts import clean_forecast_ledger as clf
+
+        db = str(tmp_path / "ledger.db")
+        _seed_ledger(db)
+        assert clf.main(["--db", db, "--window-days", "365", "--min-obs", "3", "--categories", "a,b,c"]) == 0
+        out = capsys.readouterr().out
+        assert out.count("CATEGORY (c) IS A LIVE DECISION CHANGE") == 2  # top and bottom
+        assert "1 of 1 warm (symbol, horizon) pairs" in out
+
+    def test_main_rejects_unknown_category(self, tmp_path):
+        from scripts import clean_forecast_ledger as clf
+
+        db = str(tmp_path / "ledger.db")
+        _seed_ledger(db)
+        with pytest.raises(SystemExit):
+            clf.main(["--db", db, "--categories", "a,x"])
+
+    def test_default_apply_deletes_only_a_and_b(self, tmp_path):
+        from scripts import clean_forecast_ledger as clf
+
+        db = str(tmp_path / "ledger.db")
+        _seed_ledger(db)
+        before = _rows(db, "SELECT COUNT(*) FROM forecast_errors")[0][0]
+        summary = clf.apply_cleanup(db, window_days=365, min_obs=3, backup_dir=tmp_path / "b")
+        assert summary["categories"] == ["a", "b"]
+        assert summary["rows_remaining"] == before - 5
+        assert len(list((tmp_path / "b").iterdir())) == 1
+        assert _rows(db, "SELECT COUNT(*) FROM forecast_errors WHERE symbol = 'TEST'")[0][0] == 0
+        assert _rows(
+            db, "SELECT COUNT(*) FROM forecast_errors WHERE symbol = 'SEED' AND model_name = 'monte_carlo'"
+        )[0][0] == 0
+        # Duplicates untouched and NOT given a day key (no upsert target created).
+        keep = _rows(db, "SELECT forecast_day FROM forecast_errors WHERE symbol = 'KEEP'")
+        assert len(keep) == 5 and all(r[0] is None for r in keep)
+
+    def test_apply_via_main_with_c_prints_warning(self, tmp_path, capsys):
+        from scripts import clean_forecast_ledger as clf
+
+        db = str(tmp_path / "ledger.db")
+        _seed_ledger(db)
+        assert clf.main([
+            "--db", db, "--window-days", "365", "--min-obs", "3", "--categories", "a,b,c",
+            "--apply", "--backup-dir", str(tmp_path / "b"),
+        ]) == 0
+        out = capsys.readouterr().out
+        assert "APPLIED" in out and "CATEGORY (c) IS A LIVE DECISION CHANGE" in out
+        assert _rows(db, "SELECT COUNT(*) FROM forecast_errors WHERE symbol = 'KEEP'")[0][0] == 1
+
+    def test_weight_shift_is_reported_without_any_cold_start(self, tmp_path):
+        """Deleting a bad completed MC seed row moves the MC weight of a
+        symbol that stays warm; the estimate must say so."""
+        db = str(tmp_path / "w.db")
+        ForecastTracker(db_path=db)
+        now = datetime.now(timezone.utc)
+        for i in range(5):
+            ts = (now - timedelta(days=5 + i)).isoformat()
+            _insert(db, "WX", MODEL_ARIMA, 10, ts, 21.0, 20.0)
+            _insert(db, "WX", MODEL_MONTE_CARLO, 10, ts, 20.5, 20.0)
+        bug = "2026-08-14T14:00:00+00:00"
+        _insert(db, "WX", MODEL_ARIMA, 10, bug, 20.0, 20.0)
+        _insert(db, "WX", MODEL_MONTE_CARLO, 10, bug, 99.0, 20.0)
+        summary = self._analyze(db, ("b",))
+        cs = summary["cold_start"]
+        assert summary["b_mc_seed_rows"] == 1
+        assert cs["symbol_horizon_pairs_dropping_to_cold_start"] == 0
+        assert cs["symbol_horizon_pairs_with_weight_change"] == 1
+        assert cs["max_model_weight_shift"] > 0.3
+        assert any("LIVE SKILL WEIGHTS CHANGE for 1" in w for w in summary["warnings"])
 
 class TestForecastSkillReportScript:
     def test_json_report(self, tmp_path, capsys):
