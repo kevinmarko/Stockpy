@@ -1,6 +1,8 @@
 # Architecture: Signal & Calculation Engines
 
 > Part of the split-out `CLAUDE.md` System Architecture reference. See [../../CLAUDE.md](../../CLAUDE.md) for the index.
+>
+> **2026-09 (step 4b):** any options-desk module mentioned below (`technical_options_engine.py`, `volatility/iv_engine.py`, and the rest of the step-4 archive set) moved to `legacy/` — see `legacy/README.md` for the full list.
 
 > **Step 4d (2026-09):** ETF volatility transmission is archived to `legacy/`. The `risk/etf_transmission.py` entry and the ETF derate/covariance sub-bullets under `sizing/position_sizer.py` below are historical; the portfolio gross cap now runs on its own via `pipeline/production_steps.py::_apply_portfolio_gross_cap()`.
 

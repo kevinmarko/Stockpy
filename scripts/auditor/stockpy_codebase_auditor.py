@@ -79,6 +79,7 @@ DEFAULT_EXCLUDE_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
     "webapp",  # the PWA is TypeScript, not Python
+    "legacy",  # archived modules (step 4b options-desk archive, and earlier) — dead code
 }
 
 # Files that are intentionally exempt from some checks (auditors/harnesses that

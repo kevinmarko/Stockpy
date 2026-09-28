@@ -11,9 +11,16 @@ in 2026-09 (step 3d):
   * trend_indicators.py -- the Aroon/Coppock/Chandelier short-history
     fallback.
 
-These tests moved here unchanged from tests/test_technical_options_engine.py;
-TestDelegatesMatchCore pins that the options engine's delegates still return
-exactly the core values.
+These tests moved here unchanged from tests/test_technical_options_engine.py.
+
+TestPinnedCoreValues (step 4b, options-desk archive) replaces what was
+TestDelegatesMatchCore -- a same-process comparison of
+``TechnicalOptionsEngine``'s (now archived to ``legacy/``) delegates against
+these core modules. The comparison itself is moot once the delegate is gone;
+the values below were captured from that exact comparison (both sides
+verified equal at capture time) immediately before the archive, so this
+class keeps testing the one thing that still matters: the core modules'
+numeric output for this fixed input hasn't drifted.
 """
 
 import math
@@ -267,19 +274,41 @@ class TestGarchTermStructure:
 
 
 # ============================================================================
-# The options engine's delegates stay numerically identical to the core
+# Pinned golden values (step 4b) -- see module docstring
 # ============================================================================
 
-class TestDelegatesMatchCore:
-    def test_technical_options_engine_delegates_return_core_values(self):
-        from technical_options_engine import TechnicalOptionsEngine
+# Captured 2026-09 from _ohlcv(300, seed=21), immediately before
+# technical_options_engine.py moved to legacy/, by running BOTH
+# TechnicalOptionsEngine's delegates and these core functions in the same
+# process and confirming they returned identical values (as
+# TestDelegatesMatchCore used to assert directly).
+_PINNED_VOL = 0.2269718721069769
+_PINNED_TERM_STRUCTURE = {1: 0.2269718721069769, 10: 0.2382429251742835, 30: 0.2391614478444859}
+_PINNED_INDICATORS = {
+    "Aroon_Oscillator": 64.28571428571429,
+    "Coppock_Curve": 3.4912517052544247,
+    "Chandelier_Long": 101.0091534739565,
+    "Chandelier_Short": 108.1152844107838,
+}
 
+
+class TestPinnedCoreValues:
+    def test_garch_volatility_matches_pinned_value(self):
         df = _ohlcv(300, seed=21)
-        toe = TechnicalOptionsEngine()
         core = GarchVolatilityEstimator()
-        assert toe.estimate_gjr_garch_volatility(df) == core.estimate_gjr_garch_volatility(df)
-        assert toe.estimate_gjr_garch_volatility_term_structure(
-            df, horizons=(1, 10, 30)
-        ) == core.estimate_gjr_garch_volatility_term_structure(df, horizons=(1, 10, 30))
-        assert toe.calculate_indicators(df) == calculate_trend_exit_indicators(df)
-        pd.testing.assert_frame_equal(toe.sanitize_ohlcv(df), core.sanitize_ohlcv(df))
+        assert core.estimate_gjr_garch_volatility(df) == pytest.approx(_PINNED_VOL, rel=1e-4)
+
+    def test_garch_term_structure_matches_pinned_values(self):
+        df = _ohlcv(300, seed=21)
+        core = GarchVolatilityEstimator()
+        got = core.estimate_gjr_garch_volatility_term_structure(df, horizons=(1, 10, 30))
+        assert set(got) == set(_PINNED_TERM_STRUCTURE)
+        for h, expected in _PINNED_TERM_STRUCTURE.items():
+            assert got[h] == pytest.approx(expected, rel=1e-4), f"horizon {h}"
+
+    def test_trend_exit_indicators_match_pinned_values(self):
+        df = _ohlcv(300, seed=21)
+        got = calculate_trend_exit_indicators(df)
+        assert set(got) == set(_PINNED_INDICATORS)
+        for name, expected in _PINNED_INDICATORS.items():
+            assert got[name] == pytest.approx(expected, rel=1e-9), name

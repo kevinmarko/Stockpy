@@ -18,6 +18,7 @@ import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncGenerator, Optional
+from unittest import mock
 
 import pytest
 
@@ -152,6 +153,17 @@ class TestGlobalKillSwitch:
         assert not tmp_ks.is_soft_halt_active()
         assert tmp_ks.soft_halt_reason() == ""
 
+    def test_soft_halt_alert_dispatch(self, tmp_ks: GlobalKillSwitch):
+        """Moved from tests/test_dynamic_circuit_breaker.py (step 4b, options
+        desk archive) -- this is a GlobalKillSwitch/observability.alerts
+        behavior, not a dynamic-circuit-breaker one, so it belongs here."""
+        with mock.patch("observability.alerts.send_alert") as m_alert:
+            tmp_ks.activate_soft_halt(reason="Test soft halt alert")
+        assert m_alert.called
+        args, kwargs = m_alert.call_args
+        assert args[0] == "WARNING"
+        assert "Soft halt ACTIVATED" in args[1]
+        assert kwargs.get("dedup_key") == "soft_halt_activate"
 
 
 # ---------------------------------------------------------------------------

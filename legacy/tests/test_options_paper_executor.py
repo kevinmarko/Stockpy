@@ -985,3 +985,25 @@ def test_strike_built_earnings_crush_sells_at_the_bid(monkeypatch):
     )
     assert res["success"] is True
     assert {round(l["fill_price"], 2) for l in res["legs"]} == {410.0}
+
+
+# ---------------------------------------------------------------------------
+# Auto-exit evaluation never acts on a placeholder mark
+#
+# Moved from tests/test_paper_marking_and_model_feed.py (step 4b, options
+# desk archive): that file's remaining tests are about the kept
+# PaperAccountStore marking logic itself (data/option_symbols.py-backed),
+# not this (now archived) auto-exit engine.
+# ---------------------------------------------------------------------------
+
+
+def test_exit_evaluation_skips_groups_with_unpriced_legs():
+    store = PaperAccountStore(db_url="sqlite:///:memory:")
+    exp = (date.today() + timedelta(days=5)).isoformat()
+    sym = f"AAPL {exp} $150.00 CALL"
+    assert store.apply_fill("oc1", sym, "buy", 1.0, 500.0) is True
+    executor = OptionsPaperExecutor(store=store)
+    with patch.object(pas, "_fetch_stock_prices", return_value={}), \
+         patch.object(pas, "_fetch_option_chain", return_value=None):
+        # 5 DTE would normally trip the 21-DTE management rule.
+        assert executor.evaluate_position_exits() == []

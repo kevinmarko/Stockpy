@@ -420,11 +420,6 @@ class TestGlobalKillSwitchSoftHalt:
         assert not tmp_ks.is_soft_halt_active()
         assert tmp_ks.soft_halt_reason() == ""
 
-    def test_soft_halt_alert_dispatch(self, tmp_ks: GlobalKillSwitch):
-        with mock.patch("observability.alerts.send_alert") as m_alert:
-            tmp_ks.activate_soft_halt(reason="Test soft halt alert")
-        assert m_alert.called
-        args, kwargs = m_alert.call_args
-        assert args[0] == "WARNING"
-        assert "Soft halt ACTIVATED" in args[1]
-        assert kwargs.get("dedup_key") == "soft_halt_activate"
+    # test_soft_halt_alert_dispatch moved to tests/test_kill_switch.py (step
+    # 4b, options desk archive) -- it exercises GlobalKillSwitch/
+    # observability.alerts, not this (now archived) dynamic circuit breaker.

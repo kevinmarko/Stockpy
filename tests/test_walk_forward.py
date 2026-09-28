@@ -1,6 +1,11 @@
 """
-Unit tests for validation/walk_forward.py (Walk-Forward Analysis Engine)
-and validation/options_selling_backtest.py margin tracking.
+Unit tests for validation/walk_forward.py (Walk-Forward Analysis Engine).
+
+(Step 4b, options desk archive: the validation/options_selling_backtest.py
+margin-tracking tests this file used to also carry were split out into
+tests/test_options_selling_backtest_margin.py, which moves to legacy/ with
+that module -- validation/walk_forward.py itself is a kept, general-purpose
+module with no options-desk dependency.)
 """
 
 from __future__ import annotations
@@ -13,11 +18,6 @@ from validation.walk_forward import (
     run_walk_forward_analysis,
     _split_walk_forward_windows,
     _default_cross_sectional_rebalance,
-)
-from validation.options_selling_backtest import (
-    simulate_options_strategy_with_margin,
-    simulate_put_credit_spread_with_margin,
-    simulate_vrp_iron_condor_with_margin,
 )
 
 
@@ -193,54 +193,7 @@ def test_cross_sectional_rebalance_point_in_time_synchronization():
 
 
 # =============================================================================
-# 6. Options Selling Margin Utilization & Dynamic Margin Calls
-# =============================================================================
-
-def test_options_selling_margin_utilization_tracking():
-    """Verify simulate_options_strategy_with_margin records margin utilization and risk metrics."""
-    spy = _generate_single_asset_series(n_bars=350, seed=42)
-    start = str(spy.index[285].date())
-    end = str(spy.index[-1].date())
-
-    res = simulate_options_strategy_with_margin(
-        "put_credit_spread", start, end, ticker="SPY", closes=spy, initial_capital=10000.0
-    )
-
-    assert isinstance(res, dict)
-    assert "returns" in res
-    assert "equity_curve" in res
-    assert "margin_utilization" in res
-    assert "margin_calls" in res
-    assert "max_margin_utilization" in res
-    assert "avg_margin_utilization" in res
-    assert "sharpe" in res
-    assert "ulcer_index" in res
-    assert "profit_factor" in res
-
-    assert isinstance(res["margin_utilization"], pd.Series)
-    assert not res["margin_utilization"].empty
-    assert res["max_margin_utilization"] >= 0.0
-    assert isinstance(res["margin_calls"], int)
-    assert res["margin_calls"] >= 0
-
-
-def test_options_selling_margin_convenience_wrappers():
-    """Verify convenience wrappers execute with margin tracking."""
-    spy = _generate_single_asset_series(n_bars=350, seed=99)
-    start = str(spy.index[285].date())
-    end = str(spy.index[-1].date())
-
-    pcs_res = simulate_put_credit_spread_with_margin(start, end, ticker="SPY", closes=spy)
-    assert "margin_utilization" in pcs_res
-    assert isinstance(pcs_res["margin_utilization"], pd.Series)
-
-    ic_res = simulate_vrp_iron_condor_with_margin(start, end, ticker="SPY", closes=spy)
-    assert "margin_utilization" in ic_res
-    assert isinstance(ic_res["margin_utilization"], pd.Series)
-
-
-# =============================================================================
-# 7. Edge Cases & Defensive Degradation
+# 6. Edge Cases & Defensive Degradation
 # =============================================================================
 
 def test_walk_forward_insufficient_data_degrades_gracefully():

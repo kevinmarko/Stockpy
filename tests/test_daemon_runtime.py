@@ -1374,22 +1374,17 @@ class TestDaemonNoOptionsLifecycle:
     """The options paper-trading lifecycle (auto-exits, strategy
     auto-execution, delta hedging, 0DTE exits) left the daemon with the
     options desk (2026-09, step 3d). A successful full cycle must not reach
-    it at all."""
+    it at all.
 
-    def test_full_cycle_never_calls_the_options_lifecycle(self, monkeypatch):
-        async def _fake_main_body(*_a, **_k):
-            return mock.sentinel.macro_dto
-
-        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
-
-        with mock.patch(
-            "execution.options_lifecycle.run_automated_options_lifecycle"
-        ) as mock_lifecycle:
-            d = OrchestratorDaemon()
-            d._run_one_cycle(run_id="test-run-1", reason="interval", mode="full")
-
-        mock_lifecycle.assert_not_called()
-        assert d.get_run("test-run-1").state == RunState.SUCCEEDED
+    (Step 4b, options desk archive: ``execution/options_lifecycle.py`` itself
+    moved to ``legacy/`` -- the class used to also carry
+    ``test_full_cycle_never_calls_the_options_lifecycle``, which
+    ``mock.patch("execution.options_lifecycle.run_automated_options_lifecycle")``ed
+    and asserted the patch was never called. That patch target no longer
+    resolves (the module doesn't exist at that dotted path any more), and the
+    property it proved is now structurally guaranteed rather than merely
+    tested -- the daemon cannot call a module that isn't importable. The
+    source-scan test below remains a real, live-running regression guard.)"""
 
     def test_daemon_source_no_longer_references_options_lifecycle_or_0dte(self):
         import inspect

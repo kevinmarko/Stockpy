@@ -657,9 +657,11 @@ class TestNoOrderFunctions:
     # scan (excluded: it lives under execution/) NOR this per-file check.
     # Audit finding: a real coverage gap (no live violation -- the file
     # currently defines no forbidden name), closed here.
+    # execution/options_queue_builder.py was archived to legacy/ (step 4b,
+    # options desk archive) -- it never had any active-code importer left,
+    # so it's no longer part of the live execution/ zone this guard covers.
     _EXECUTION_ZONE_GUARDED_FILES = (
         "execution/queue_builder.py",
-        "execution/options_queue_builder.py",
         "execution/compose.py",
         "execution/priority_queue.py",
         "execution/macro_snapshot.py",

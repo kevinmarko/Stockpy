@@ -97,6 +97,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 _EXCLUDE_DIR_PARTS = {
     "node_modules", "webapp", ".git", ".claude", "__pycache__",
     "build", "dist", ".venv", "venv",
+    # legacy/ (step 4b, options desk archive): archived modules are dead
+    # code, no longer part of the active guard surface -- mirrors "tests/"
+    # being excluded from _iter_store_files() a few lines below.
+    "legacy",
 }
 
 
@@ -536,7 +540,10 @@ def test_bare_construction_in_tests_has_isolation_evidence() -> None:
 
 _EXPECTED_CONFTEST_ISOLATED = {
     "validation/validation_history_store.py",
-    "data/execution_audit_store.py",
+    # data/execution_audit_store.py's _isolate_execution_audit_db_in_tests
+    # fixture was removed in step 4b (options desk archive) -- the module
+    # itself moved to legacy/data/execution_audit_store.py, and nothing in
+    # tests/ constructs it directly any more.
     "data/broker_fills_store.py",
     "data/paper_account_store.py",
     "transactions_store.py",
