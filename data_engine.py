@@ -590,8 +590,8 @@ class MockDataEngine(IDataProvider):
         involvement makes sense here. Exists purely so callers that
         unconditionally call ``fetch_technical_raw_cached()``
         (``main_orchestrator.py``'s ``fetch_all_data_async``, which falls
-        back to a fresh ``MockDataEngine()`` when ``credentials.json`` is
-        absent or live data comes back empty) work identically whether
+        back to a fresh ``MockDataEngine()`` when live data is not
+        configured or comes back empty) work identically whether
         ``de`` is a real ``DataEngine`` or this test/offline-fallback fixture.
         """
         return self.fetch_technical_raw(tickers)
