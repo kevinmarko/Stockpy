@@ -44,9 +44,9 @@ import {
  * Every scoped `.env`-write editor screen renders through this one component:
  * the general runtime tunables (`/settings/tunables`, SettingsManager.tsx) plus
  * the four narrower ones (`/settings/sentiment`, `/settings/sector-selection`,
- * `/settings/fmp`, `/settings/etf-transmission`), one per scoped GET/PUT pair
+ * `/settings/fmp`), one per scoped GET/PUT pair
  * in `api/pilots_api.py` (`_TUNABLE_INDEX`, `_SENTIMENT_INDEX`,
- * `_SECTOR_SELECTION_INDEX`, `_FMP_INDEX`, `_ETF_TRANSMISSION_INDEX`). Each
+ * `_SECTOR_SELECTION_INDEX`, `_FMP_INDEX`). Each
  * screen is a thin wrapper supplying its own title/subtitle and its own api
  * method pair; the dirty-tracking, validation, save-only-changed-keys,
  * rejection-surfacing, and widget-selection logic all live here, once.

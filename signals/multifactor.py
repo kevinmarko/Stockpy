@@ -103,7 +103,7 @@ def _zscore_winsorize(series: pd.Series, limit: float = WINSOR_LIMIT) -> pd.Seri
     std = valid.std(ddof=1)
     # A near-zero (but not exactly zero) std is floating-point noise from a
     # near-constant cross-section, not real dispersion -- the same
-    # degenerate-std convention as risk/etf_transmission.py and
+    # degenerate-std convention as legacy/risk/etf_transmission.py and
     # validation/metrics.py::sharpe_ratio. Without this, such a cross-section
     # would fabricate a confident (bounded but arbitrary-sign) +/-WINSOR_LIMIT
     # z-score from noise instead of the honest NaN this docstring promises.

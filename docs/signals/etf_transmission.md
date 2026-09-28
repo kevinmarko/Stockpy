@@ -1,4 +1,6 @@
-# Feature: ETF Volatility Transmission
+# Feature: ETF Volatility Transmission (archived)
+
+> **Archived (2026-09, step 4d).** ETF volatility transmission was moved to `legacy/` (`legacy/risk/etf_transmission.py`, `legacy/data/etf_holdings.py`, tests under `legacy/tests/`). The pipeline no longer computes it; the four `ETF_*` columns are written as NaN until the step-4f schema trim. What follows describes the feature as it stood before archiving.
 
 **File:** `risk/etf_transmission.py` (pure math, zero I/O)
 **Wiring:** `pipeline/production_steps.py::_apply_etf_transmission` (measurement columns) + `_apply_etf_transmission_multiplier` (per-name sizing derate) + `_build_etf_transmission_cov_matrix` (portfolio-level covariance) — all called from `StrategyEvalStep.run`

@@ -10,7 +10,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PortfolioHeatWidget } from "./PortfolioHeatWidget";
 import { api, ApiError } from "../api/client";
 import {
-  mockEtfTransmissionDisabled,
   mockForecastSkillBySymbolEmpty,
   mockHeartbeatNoData,
   mockLatencyHeatmapDisabled,
@@ -73,7 +72,6 @@ function baseSummary(): Omit<ObservabilitySummary, "portfolio_heat"> {
     },
     system_telemetry: mockSystemTelemetryUnavailable(),
     sizing_cap_audit: mockSizingCapAuditDisabled(),
-    etf_transmission: mockEtfTransmissionDisabled(),
     heartbeat: mockHeartbeatNoData(),
     strategy_pnl: mockStrategyPnlEmpty(),
   };

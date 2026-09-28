@@ -75,7 +75,7 @@ def cost_sensitivity_curve(strategy_returns: pd.Series, cost_bps_range: Tuple[fl
     # but pandas' two-pass std() accumulates floating-point rounding noise
     # over many rows, so it lands near (not bit-identical to) 0.0 rather than
     # exactly 0.0 -- an exact `== 0` check misses that. 1e-12 mirrors the
-    # degenerate-std threshold used by risk/etf_transmission.py and
+    # degenerate-std threshold used by legacy/risk/etf_transmission.py and
     # validation/metrics.py::sharpe_ratio.
     if strategy_returns.empty or strategy_returns.std() < 1e-12:
         logger.warning("No returns data for sensitivity analysis.")

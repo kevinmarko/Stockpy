@@ -8,7 +8,7 @@ The FMP rate limit is **per-account**, not per-concern. Six planned consumers
 one budget, so a per-consumer limiter would blow that budget *by construction*
 — the same reasoning that keeps ONE module-level GDELT limiter in
 ``data/sentiment_sources.py`` for both of its consumers, and that makes
-``data/etf_holdings.py`` reuse ``data/edgar_fundamentals._throttle`` instead of
+``legacy/data/etf_holdings.py`` reuse ``data/edgar_fundamentals._throttle`` instead of
 opening a second SEC client.
 
 This module is deliberately thin: base URL, credential, throttle/retry/breaker,

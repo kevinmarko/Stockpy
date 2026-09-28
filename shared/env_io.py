@@ -395,9 +395,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "RAG_RETRIEVAL_TOP_K",                # int — nearest-neighbor count per query
     "RAG_INDEX_LOOKBACK_DAYS",            # int — indexing scan window (days)
     # ETF volatility-transmission risk overlay (Ben-David, Franzoni & Moussawi
-    # 2018, Journal of Finance 73(6)) — holdings ingestion (data/etf_holdings.py),
+    # 2018, Journal of Finance 73(6)) — holdings ingestion (legacy/data/etf_holdings.py),
     # market-residualized measurement columns + portfolio covariance inflation
-    # (risk/etf_transmission.py), and the per-name sizing derate
+    # (legacy/risk/etf_transmission.py), and the per-name sizing derate
     # (sizing/position_sizer.py). All 19 keys below are non-secret: SEC N-PORT
     # and the optional iShares CSV endpoint are both unauthenticated, so there
     # is no credential material anywhere in this family. Every default

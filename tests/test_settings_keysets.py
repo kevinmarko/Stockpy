@@ -75,14 +75,13 @@ CENSUS_JSON = REPO_ROOT / "docs" / "settings_field_census.json"
 
 MODEL_FIELDS = set(Settings.model_fields)
 
-# The five independently-shipped scoped settings editors in api/pilots_api.py.
+# The four independently-shipped scoped settings editors in api/pilots_api.py.
 # Each already has its own GET/PUT pair and its own write-permission gate.
 EDITOR_INDEXES = {
     "_TUNABLE_INDEX": pilots_api._TUNABLE_INDEX,
     "_SENTIMENT_INDEX": pilots_api._SENTIMENT_INDEX,
     "_SECTOR_SELECTION_INDEX": pilots_api._SECTOR_SELECTION_INDEX,
     "_FMP_INDEX": pilots_api._FMP_INDEX,
-    "_ETF_TRANSMISSION_INDEX": pilots_api._ETF_TRANSMISSION_INDEX,
 }
 ALL_EDITOR_KEYS = set().union(*(set(idx) for idx in EDITOR_INDEXES.values()))
 
@@ -306,9 +305,10 @@ class TestExistingEditorsAreNotBootstrap:
             "_SENTIMENT_INDEX": 33,
             "_SECTOR_SELECTION_INDEX": 11,
             "_FMP_INDEX": 32,
-            "_ETF_TRANSMISSION_INDEX": 19,
         }
-        assert len(ALL_EDITOR_KEYS) == 203
+        # 203 -> 184 (2026-09, step 4d): the 19-key /settings/etf-transmission
+        # editor was removed when ETF volatility transmission was archived.
+        assert len(ALL_EDITOR_KEYS) == 184
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

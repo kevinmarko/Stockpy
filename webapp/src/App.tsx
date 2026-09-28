@@ -32,7 +32,6 @@ import { SettingsManager } from "./screens/SettingsManager";
 import { SentimentSettings } from "./screens/SentimentSettings";
 import { SectorSelectionSettings } from "./screens/SectorSelectionSettings";
 import { FmpSettings } from "./screens/FmpSettings";
-import { EtfTransmissionSettings } from "./screens/EtfTransmissionSettings";
 import { SettingsCacheLongShort } from "./screens/SettingsCacheLongShort";
 import { SettingsReference } from "./screens/SettingsReference";
 import { FeatureFlagsScreen } from "./screens/FeatureFlagsScreen";
@@ -302,7 +301,6 @@ export default function App() {
                     <Route path="sentiment" element={<SentimentSettings />} />
                     <Route path="sector-selection" element={<SectorSelectionSettings />} />
                     <Route path="fmp" element={<FmpSettings />} />
-                    <Route path="etf-transmission" element={<EtfTransmissionSettings />} />
                     <Route path="cache-long-short" element={<SettingsCacheLongShort />} />
             <Route path="paper-broker" element={<SettingsPaperBroker />} />
 

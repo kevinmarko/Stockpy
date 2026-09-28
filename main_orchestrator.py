@@ -616,8 +616,8 @@ async def _execute_broker_orders(
                     # target_qty is the pre-portfolio-cap, pre-Dual-Momentum sizing
                     # target implied by Kelly_Target_Post_Regime -- the per-name-
                     # capped weight strategy_engine.py computes (Kelly cap,
-                    # MAX_POSITION_WEIGHT, regime multiplier, meta-label composite,
-                    # ETF-transmission multiplier all already applied) BEFORE the
+                    # MAX_POSITION_WEIGHT, regime multiplier, meta-label composite
+                    # all already applied) BEFORE the
                     # Dual Momentum safe-asset override and the cycle-wide portfolio
                     # gross cap overwrite "Kelly Target" — both of which only ever
                     # reduce weight further. Falls back to `kelly` (today's exact
@@ -872,23 +872,6 @@ def _write_state_snapshot(
                     # per-cycle time budget was exhausted before this symbol
                     # was reached.
                     "google_trends_asvi": _safe_float_or_none(row.get("Google_Trends_ASVI")),
-                    # ETF volatility transmission (Ben-David, Franzoni &
-                    # Moussawi 2018) -- see risk/etf_transmission.py and
-                    # pipeline/production_steps.py::_apply_etf_transmission.
-                    # DIAGNOSTIC ONLY: nothing in scoring/sizing/execution
-                    # reads these. Same NaN-never-fabricated convention as the
-                    # multifactor z-scores above -- NaN -> JSON null when
-                    # settings.ETF_TRANSMISSION_ENABLED is False, the ticker is
-                    # in no covered basket, the holdings fetch failed, the
-                    # ticker is itself an ETF, or the aligned return overlap is
-                    # shorter than the full R2 window.
-                    "etf_ownership_pct": _safe_float_or_none(row.get("ETF_Ownership_Pct")),
-                    "etf_comovement_r2": _safe_float_or_none(row.get("ETF_Comovement_R2")),
-                    # String column: NaN -> None (never the literal text "nan").
-                    "etf_primary_wrapper": (
-                        None if pd.isna(row.get("ETF_Primary_Wrapper"))
-                        else str(row.get("ETF_Primary_Wrapper"))
-                    ),
                     # Task C3 — post-trade evaluation metrics (evaluation_engine.py
                     # EvaluationEngine.evaluate_portfolio()/calculate_edge_ratio()
                     # already compute these into dashboard_df every cycle; they
@@ -936,18 +919,6 @@ def _write_state_snapshot(
                     # never coerced into a fabricated no-op.
                     "meta_label_composite": _safe_float_or_none(row.get("Meta_Label_Composite")),
                     "regime_multiplier": _safe_float_or_none(row.get("Regime_Multiplier")),
-                    # ETF-arbitrage volatility-transmission derate applied to
-                    # this name's sizing weight (risk/etf_transmission.py,
-                    # composed in sizing/position_sizer.py::size_position step
-                    # 3 alongside regime_multiplier above). null -- never a
-                    # fabricated 1.0 -- when settings.ETF_TRANSMISSION_SIZING_ENABLED
-                    # is False, i.e. the multiplier was never computed at all
-                    # (CONSTRAINT #4). Orchestrator-only: the advisory path
-                    # keeps its own decoupled 5% cap and is not routed through
-                    # size_position(), so it has no source for this field --
-                    # pinned in tests/test_state_snapshot_parity.py's
-                    # ORCHESTRATOR_ONLY_FIELDS.
-                    "etf_transmission_multiplier": _safe_float_or_none(row.get("ETF_Transmission_Multiplier")),
                     "kelly_target_pre_regime": _safe_float_or_none(row.get("Kelly_Target_Pre_Regime")),
                     "kelly_target_post_regime": _safe_float_or_none(row.get("Kelly_Target_Post_Regime")),
                     # Guardrail telemetry (sizing/position_sizer.py) -- did any

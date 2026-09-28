@@ -725,18 +725,16 @@ def generate_signals_picks_source(output_dir: Path) -> str:
     lines.append("")
 
     # ------------------------------------------------------------------
-    # 4. Sizing Guardrails & ETF Transmission Impact -- same gate again.
-    #    `etf_transmission_multiplier` is ORCHESTRATOR-ONLY (written by
-    #    main_orchestrator.py's separate _write_state_snapshot() path) --
-    #    absent on the advisory-path snapshot is expected/correct and
-    #    renders "N/A" honestly, not a bug.
+    # 4. Sizing Guardrails -- same gate again. (The ETF-transmission
+    #    multiplier column was dropped when that feature was archived,
+    #    2026-09 step 4d.)
     # ------------------------------------------------------------------
-    lines.append("## Sizing Guardrails & ETF Transmission Impact")
+    lines.append("## Sizing Guardrails")
     if signals is None:
         lines.append("Sizing guardrail telemetry is currently unavailable.")
     else:
-        lines.append("| Symbol | Was Capped | Binding Constraint | ETF Transmission Multiplier |")
-        lines.append("|---|---|---|---|")
+        lines.append("| Symbol | Was Capped | Binding Constraint |")
+        lines.append("|---|---|---|")
         for sig in signals:
             if not isinstance(sig, dict):
                 continue
@@ -746,8 +744,7 @@ def generate_signals_picks_source(output_dir: Path) -> str:
             binding_constraint = _md_escape(
                 binding_constraint_raw if binding_constraint_raw is not None else "None"
             )
-            etf_mult = _fmt_signal_num(sig.get("etf_transmission_multiplier"))
-            lines.append(f"| {symbol} | {was_capped} | {binding_constraint} | {etf_mult} |")
+            lines.append(f"| {symbol} | {was_capped} | {binding_constraint} |")
 
     return "\n".join(lines)
 

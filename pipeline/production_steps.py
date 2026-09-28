@@ -670,8 +670,8 @@ def _record_symbol_ratings(dashboard_df: Optional[pd.DataFrame], cycle_id: str) 
     (``rating.symbol_rating.classify_tier``) to the durable
     ``rating.symbol_rating_store.SymbolRatingStore``.
 
-    A module-level function (same pattern as ``_apply_sector_heat_factor``/
-    ``_apply_etf_transmission`` above) so it's testable directly, without
+    A module-level function (same pattern as ``_apply_sector_heat_factor``
+    above) so it's testable directly, without
     going through ``StrategyEvalStep.run()``'s heavy import chain. No-ops
     when ``settings.SYMBOL_RATING_ENABLED`` is off or ``dashboard_df`` is
     empty/``None`` -- mirrors the CAP-EVENT AUDIT LOG block's own guard.
@@ -955,287 +955,30 @@ def _apply_sector_selection(dashboard_df: pd.DataFrame) -> None:
         logger.warning("Sector Selection computation failed (non-fatal): %s", exc)
 
 
+# ETF volatility transmission was archived to legacy/ (2026-09, step 4d):
+# see legacy/risk/etf_transmission.py and legacy/data/etf_holdings.py. The
+# four columns below stay in config.COLUMN_SCHEMA until the step-4f schema
+# trim, and Pandera's DashboardSchema requires every schema column, so the
+# pipeline still writes them -- always NaN, exactly what the old code wrote
+# while every ETF flag was off (the live default). Nothing reads them for
+# scoring or sizing: size_position() keeps its own 1.0 default multiplier.
 _ETF_TRANSMISSION_COLUMNS = (
     'ETF_Ownership_Pct',
     'ETF_Comovement_R2',
     'ETF_Primary_Wrapper',
+    'ETF_Transmission_Multiplier',
 )
 
 
-def _apply_etf_transmission(
-    dashboard_df: pd.DataFrame, tech_raw: dict[str, pd.DataFrame],
-) -> None:
-    """Populate the three ETF volatility-transmission MEASUREMENT columns.
+def _prefill_etf_transmission_columns(dashboard_df: pd.DataFrame) -> None:
+    """NaN-fill the four archived ETF-transmission schema columns.
 
-    Ben-David, Franzoni & Moussawi (2018), "Do ETFs Increase Volatility?",
-    *Journal of Finance* 73(6). ETF arbitrage transmits a shock in one
-    constituent to its healthy basket peers, so a heavily ETF-wrapped name
-    carries extra non-fundamental, non-diversifiable variance. The math lives
-    in ``risk/etf_transmission.py`` (pure, zero-I/O); this function owns every
-    network call and every settings gate.
-
-    **Diagnostic only.** Nothing in scoring, sizing, or execution reads these
-    columns as of this commit -- a sibling PR wires them into position sizing.
-
-    Deliberately a module-level function (not inlined in ``StrategyEvalStep.run``)
-    following the ``_apply_sector_heat_factor`` template directly above, for the
-    same two reasons: it stays importable/testable without ``main_orchestrator``'s
-    heavy top-level import chain, and it logs via this module's own plain
-    ``logger`` rather than the ``telemetry`` proxy (whose ``__getattr__`` lazily
-    imports ``main_orchestrator`` and therefore its whole engine chain on first
-    attribute access, defeating the light import footprint).
-
-    NaN-fills all three columns FIRST, before any branch, so every early-return
-    path -- disabled gate, missing market proxy, holdings-provider absent,
-    total failure -- leaves genuinely-missing cells NaN rather than a fabricated
-    default (CONSTRAINT #4). Never raises (CONSTRAINT #6).
-
-    Honesty contract -- every one of these is NaN, never 0.0: ticker in no
-    covered ETF; holdings fetch failed; gate off; ``Market Cap`` is the
-    fabricated ``0.0`` that ``FundamentalDataDTO`` defaults to; fewer than
-    ``ETF_TRANSMISSION_MIN_OBS`` overlapping bars; the composite is market-proxy-
-    only (residual identically zero); the ticker is ITSELF an ETF. The
-    fallback count is logged ONCE per cycle at INFO -- never once per name,
-    because 40 warnings a cycle is how a real signal gets ignored.
+    Byte-identical to what ``_apply_etf_transmission`` +
+    ``_apply_etf_transmission_multiplier`` wrote with their flags off. Never
+    raises: an empty frame just gets four empty float columns.
     """
     for col in _ETF_TRANSMISSION_COLUMNS:
         dashboard_df[col] = float('nan')
-
-    if not getattr(settings, "ETF_TRANSMISSION_ENABLED", False):
-        return
-    if dashboard_df.empty or 'Symbol' not in dashboard_df.columns:
-        return
-
-    try:
-        from data.etf_holdings import get_etf_holdings
-        from risk.etf_transmission import (
-            build_etf_return_composite,
-            compute_etf_ownership,
-            compute_market_residual_r2,
-            filter_holdings_as_of,
-            primary_wrapper,
-        )
-
-        market_proxy = str(getattr(settings, "ETF_HOLDINGS_MARKET_PROXY", "SPY")).upper().strip()
-        wrappers = [
-            str(s).upper().strip()
-            for s in (getattr(settings, "ETF_TRANSMISSION_WRAPPERS", None) or [])
-            if str(s).strip()
-        ]
-        if market_proxy and market_proxy not in wrappers:
-            wrappers.append(market_proxy)
-        if not wrappers:
-            return
-
-        universe = [
-            str(s).upper().strip() for s in dashboard_df['Symbol'].dropna().tolist()
-            if str(s).strip()
-        ]
-        # A ticker that is ITSELF an ETF scores 1.0/1.0 against its own basket
-        # -- maximum derate for a trivially wrong reason. Explicit exclusion.
-        excluded = set(wrappers) | {
-            str(s).upper().strip()
-            for s in (getattr(settings, "ETF_TRANSMISSION_EXCLUDED_SYMBOLS", None) or [])
-            if str(s).strip()
-        }
-        measurable = [s for s in universe if s not in excluded]
-        if not measurable:
-            return
-
-        market_df = (tech_raw or {}).get(market_proxy)
-        if market_df is None or getattr(market_df, "empty", True):
-            logger.info(
-                "ETF transmission: market proxy %s absent from tech_raw; "
-                "all %d measurable symbols degrade to NaN this cycle.",
-                market_proxy, len(measurable),
-            )
-            return
-
-        as_of = pd.Timestamp(datetime.now(timezone.utc)).date()
-        raw_holdings = get_etf_holdings(wrappers, as_of=as_of) or {}
-        # Belt-and-suspenders causality: a basket row stamped after this
-        # cycle's as-of date must never enter the measurement regardless of
-        # what the provider returned. Also collapses duplicate/multi-snapshot
-        # rows so ownership can't be double-counted.
-        holdings = filter_holdings_as_of(raw_holdings, as_of=as_of)
-        # Only the operator universe matters -- SPY alone carries ~500 rows.
-        measurable_set = set(measurable)
-        holdings = {
-            etf: [
-                row for row in rows
-                if str(getattr(row, "holding_symbol", "") or "").upper().strip() in measurable_set
-            ]
-            for etf, rows in holdings.items()
-        }
-        covered_etfs = sorted({etf for etf, rows in holdings.items() if rows})
-        if not covered_etfs:
-            logger.info(
-                "ETF transmission: no covered basket rows for any of %d measurable "
-                "symbols; all three columns stay NaN this cycle.", len(measurable),
-            )
-            return
-
-        # ── ETF_Ownership_Pct ────────────────────────────────────────────────
-        # shares_out ~= Market Cap / Price. GUARDED on both being > 0:
-        # FundamentalDataDTO.market_cap defaults to a fabricated 0.0, so a
-        # naive divide yields inf on exactly the names whose fundamentals
-        # failed. Follow-up (deliberately NOT built here):
-        # dei:EntityCommonStockSharesOutstanding is already parsed by
-        # data/edgar_fundamentals.py::extract_shares and is PIT-dated.
-        shares_out: dict = {}
-        _mcap_col = 'Market Cap' if 'Market Cap' in dashboard_df.columns else None
-        _price_col = 'Price' if 'Price' in dashboard_df.columns else None
-        if _mcap_col and _price_col:
-            for row in dashboard_df.to_dict('records'):
-                sym = str(row.get('Symbol', '') or '').upper().strip()
-                if not sym:
-                    continue
-                try:
-                    mcap = float(row.get(_mcap_col))
-                    price = float(row.get(_price_col))
-                except (TypeError, ValueError):
-                    continue
-                if mcap > 0.0 and price > 0.0:
-                    shares_out[sym] = mcap / price
-
-        ownership = compute_etf_ownership(
-            holdings, shares_out, exclude_symbols=frozenset(excluded),
-        )
-
-        # ── ETF_Comovement_R2 ────────────────────────────────────────────────
-        # ETF price bars go through the existing fetch_technical_raw_cached
-        # path (HistoricalStore-backed, incremental) -- deliberately NOT a
-        # second batched yf.download; research_engine.fetch_returns_for_clustering
-        # is the only one of those in the repo, on purpose.
-        etf_bars = {e: (tech_raw or {}).get(e) for e in covered_etfs if (tech_raw or {}).get(e) is not None}
-        missing_bars = [e for e in covered_etfs if e not in etf_bars and e != market_proxy]
-        if missing_bars:
-            from data_engine import DataEngine
-
-            fetched = DataEngine(getattr(settings, "FRED_API_KEY", "")).fetch_technical_raw_cached(
-                missing_bars
-            ) or {}
-            etf_bars.update({str(k).upper().strip(): v for k, v in fetched.items() if v is not None})
-
-        composites = build_etf_return_composite(
-            holdings, etf_bars, market_proxy=market_proxy,
-        )
-
-        window = int(getattr(settings, "ETF_TRANSMISSION_WINDOW_DAYS", 60))
-        min_obs = int(getattr(settings, "ETF_TRANSMISSION_MIN_OBS", 60))
-        r2_map: dict = {}
-        no_composite = 0
-        insufficient = 0
-        for sym in measurable:
-            composite = composites.get(sym)
-            if composite is None or len(composite) == 0:
-                no_composite += 1
-                continue
-            stock_df = (tech_raw or {}).get(sym)
-            if stock_df is None or getattr(stock_df, "empty", True):
-                insufficient += 1
-                continue
-            value = compute_market_residual_r2(
-                stock_df, composite, market_df, window=window, min_obs=min_obs,
-            )
-            if value != value:  # NaN
-                insufficient += 1
-                continue
-            r2_map[sym] = value
-
-        wrappers_map = primary_wrapper(holdings)
-
-        _upper = dashboard_df['Symbol'].astype(str).str.upper().str.strip()
-        dashboard_df['ETF_Ownership_Pct'] = _upper.map(ownership)
-        dashboard_df['ETF_Comovement_R2'] = _upper.map(r2_map)
-        dashboard_df['ETF_Primary_Wrapper'] = _upper.map(wrappers_map)
-
-        # ONE INFO line per cycle with counts -- never one warning per name.
-        logger.info(
-            "ETF transmission: %d/%d symbols measured (R2); %d with no covered "
-            "non-market wrapper, %d with insufficient/degenerate overlap; "
-            "%d ownership values, %d primary-wrapper labels; %d symbols excluded "
-            "as funds.",
-            len(r2_map), len(measurable), no_composite, insufficient,
-            sum(1 for v in ownership.values() if v == v), len(wrappers_map),
-            len(universe) - len(measurable),
-        )
-
-    except Exception as exc:
-        logger.warning("ETF transmission computation failed (non-fatal): %s", exc)
-        for col in _ETF_TRANSMISSION_COLUMNS:
-            dashboard_df[col] = float('nan')
-
-def _apply_etf_transmission_multiplier(dashboard_df: pd.DataFrame) -> None:
-    """Populate the ``ETF_Transmission_Multiplier`` column from the measured
-    ``ETF_Ownership_Pct`` / ``ETF_Comovement_R2`` columns.
-
-    NaN-fills the column FIRST (identical pattern to
-    ``_apply_sector_heat_factor`` above), so the DISABLED state is an honest
-    "never computed" rather than a fabricated 1.0 that a reader would
-    mistake for a measured "no transmission risk here" (CONSTRAINT #4).
-
-    Where the feature IS enabled, every row gets a real float and NEVER a
-    NaN -- a name with no ETF coverage this cycle gets exactly ``1.0``, the
-    no-op. That asymmetry is deliberate and load-bearing: a NaN multiplier
-    would make ``final_weight`` non-finite, and
-    ``sizing.position_sizer.apply_portfolio_gross_cap`` EXCLUDES non-finite
-    weights from its gross-exposure sum -- so a broad coverage gap would
-    shrink the gross denominator and silently LOOSEN the portfolio-wide cap
-    for every name that DID have coverage. A data outage must never relax a
-    risk limit. See ``risk/etf_transmission.py``.
-
-    Coverage-gap logging is once per cycle with a COUNT, never per name --
-    a 500-name universe with the feature newly enabled and no holdings data
-    yet would otherwise emit 500 identical log lines every refresh.
-
-    Never raises (CONSTRAINT #6): any failure degrades the whole column back
-    to NaN, which every consumer then reads as the 1.0 no-op.
-    """
-    dashboard_df['ETF_Transmission_Multiplier'] = float('nan')
-    if not settings.ETF_TRANSMISSION_SIZING_ENABLED:
-        return
-    try:
-        from risk.etf_transmission import transmission_multiplier
-
-        # Missing measurement columns (e.g. ETF holdings ingestion not
-        # configured) are treated exactly like present-but-NaN cells: every
-        # row resolves to the 1.0 no-op, never NaN.
-        ownership = (
-            dashboard_df['ETF_Ownership_Pct'] if 'ETF_Ownership_Pct' in dashboard_df.columns
-            else pd.Series(float('nan'), index=dashboard_df.index)
-        )
-        comovement = (
-            dashboard_df['ETF_Comovement_R2'] if 'ETF_Comovement_R2' in dashboard_df.columns
-            else pd.Series(float('nan'), index=dashboard_df.index)
-        )
-        multipliers = [
-            transmission_multiplier(
-                own, r2,
-                max_derate=settings.ETF_TRANSMISSION_MAX_DERATE,
-                ownership_reference=settings.ETF_TRANSMISSION_OWNERSHIP_REFERENCE,
-                floor=settings.ETF_TRANSMISSION_MIN_MULTIPLIER,
-            )
-            for own, r2 in zip(ownership, comovement)
-        ]
-        dashboard_df['ETF_Transmission_Multiplier'] = multipliers
-
-        uncovered = sum(
-            1 for own, r2 in zip(ownership, comovement)
-            if pd.isna(own) or pd.isna(r2)
-        )
-        if uncovered:
-            logger.info(
-                "ETF transmission derate: %d of %d symbol(s) had no ETF "
-                "ownership/co-movement coverage this cycle and fall back to "
-                "the 1.0 no-op multiplier (never NaN -- a NaN would exclude "
-                "them from the portfolio gross-exposure sum and loosen the "
-                "cap for every covered name).",
-                uncovered, len(dashboard_df),
-            )
-    except Exception as exc:
-        logger.warning("ETF transmission multiplier computation failed (non-fatal): %s", exc)
-        dashboard_df['ETF_Transmission_Multiplier'] = float('nan')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1666,7 +1409,7 @@ def _apply_fmp_insider(dashboard_df: pd.DataFrame, deadline: Optional[float] = N
 
     Wall-clock budget: ``settings.FMP_MAX_SECONDS_PER_CYCLE`` bounds the
     whole per-symbol loop (measured via ``time.monotonic()``, matching the
-    ``data/etf_holdings.py`` precedent). Once the budget is spent the loop
+    ``legacy/data/etf_holdings.py`` precedent). Once the budget is spent the loop
     stops outright and every symbol not yet reached that cycle stays NaN --
     an honest gap, never a fabricated value.
     """
@@ -1945,141 +1688,44 @@ def _apply_fmp_econ_calendar(dashboard_df: pd.DataFrame) -> None:
             dashboard_df[col] = float('nan')
 
 
-def _build_etf_transmission_cov_matrix(
-    symbols: list, tech_raw: dict,
-) -> Optional[pd.DataFrame]:
-    """ETF-co-ownership-inflated covariance matrix for the portfolio gross cap.
+def _apply_portfolio_gross_cap(dashboard_df: pd.DataFrame) -> None:
+    """Portfolio-level gross exposure cap (``settings.MAX_PORTFOLIO_GROSS``).
 
-    Feeds ``sizing.position_sizer.apply_portfolio_gross_cap``'s EXISTING
-    ``cov_matrix``/``target_vol`` risk-aware path (built for exactly this
-    purpose, previously unreachable from production -- see
-    ``sizing/position_sizer.py``'s "Reduction-only guarantee" section)
-    rather than building a second portfolio-cap mechanism.
+    Scales every name's ``Kelly Target`` uniformly via
+    ``sizing.position_sizer.apply_portfolio_gross_cap`` (the sum-of-|weight|
+    path, ``cov_matrix=None``) and, for each name whose weight actually
+    moved, overrides its guardrail telemetry to ``"portfolio_gross"``.
 
-    Gated on ``settings.ETF_TRANSMISSION_PORTFOLIO_ENABLED`` (default
-    ``False``): returns ``None`` immediately when off, which the caller reads
-    as "use the existing sum-of-|weight| fallback", byte-identical to
-    pre-feature behavior. Never raises (CONSTRAINT #6) -- any failure
-    degrades to ``None``, the same fallback signal as the gate being off.
+    Split out of ``StrategyEvalStep.run()`` in step 4d. It used to share a
+    ``try`` with the ETF-transmission covariance build, so any failure in
+    that ETF code (including an ImportError once the module moved to
+    legacy/) would have skipped this live risk limit. It now depends on
+    nothing but ``sizing.position_sizer`` and settings.
 
-    Deliberately does NOT return a partially-covered matrix. A symbol
-    missing from ``cov_matrix`` is not merely excluded from
-    ``portfolio_vol_target``'s risk estimate -- it is explicitly zeroed out
-    of the returned weights (that function's own documented, correct
-    behavior for an unknowable-risk name). Silently zeroing a coverage-gapped
-    name's ENTIRE position because it lacked 60 days of overlapping bars
-    would be a far harsher, more surprising outcome than the existing
-    sum-of-|weight| fallback this feature is opt-in to replace, so this
-    function insists on FULL coverage across ``symbols`` before returning
-    anything other than ``None``.
+    Failures propagate; the caller logs them. Tested directly in
+    ``tests/test_production_steps_portfolio_gross_cap.py``.
     """
-    if not getattr(settings, "ETF_TRANSMISSION_PORTFOLIO_ENABLED", False):
-        return None
-    try:
-        from data.etf_holdings import get_etf_holdings
-        from risk.etf_transmission import build_transmission_adjusted_cov, filter_holdings_as_of
+    from sizing.position_sizer import apply_portfolio_gross_cap
 
-        market_proxy = str(getattr(settings, "ETF_HOLDINGS_MARKET_PROXY", "SPY")).upper().strip()
-        wrappers = [
-            str(s).upper().strip()
-            for s in (getattr(settings, "ETF_TRANSMISSION_WRAPPERS", None) or [])
-            if str(s).strip()
-        ]
-        if market_proxy and market_proxy not in wrappers:
-            wrappers.append(market_proxy)
-        if not wrappers:
-            return None
-
-        universe = [str(s).upper().strip() for s in symbols if str(s).strip()]
-        if len(universe) < 2:
-            return None
-
-        as_of = pd.Timestamp(datetime.now(timezone.utc)).date()
-        raw_holdings = get_etf_holdings(wrappers, as_of=as_of) or {}
-        holdings = filter_holdings_as_of(raw_holdings, as_of=as_of)
-        if not any(rows for rows in holdings.values()):
-            logger.info(
-                "ETF transmission portfolio cov: no covered basket rows for "
-                "any of %d symbols; falling back to the sum-of-|weight| "
-                "gross cap this cycle.", len(universe),
-            )
-            return None
-
-        # Every symbol in `universe` needs an aligned Close series -- a
-        # partial matrix would let portfolio_vol_target zero out whichever
-        # names lack one, which is worse than just not using the cov path
-        # this cycle. Inner-join across the whole requested universe, not
-        # per-pair, so coverage is all-or-nothing and easy to reason about.
-        closes = {}
-        for sym in universe:
-            df = (tech_raw or {}).get(sym)
-            if df is None or getattr(df, "empty", True) or "Close" not in df.columns:
-                continue
-            closes[sym] = df["Close"]
-        missing = sorted(set(universe) - set(closes))
-        if missing:
-            logger.info(
-                "ETF transmission portfolio cov: %d of %d symbols lack price "
-                "bars in tech_raw (%s); falling back to the sum-of-|weight| "
-                "gross cap this cycle rather than zeroing their exposure via "
-                "a partially-covered covariance matrix.",
-                len(missing), len(universe), missing,
-            )
-            return None
-
-        window = int(getattr(settings, "ETF_TRANSMISSION_COV_WINDOW_DAYS", 60))
-        price_df = pd.concat(closes, axis=1, join="inner").sort_index()
-        returns_df = price_df.pct_change().dropna(how="any")
-        if len(returns_df) < window:
-            logger.info(
-                "ETF transmission portfolio cov: only %d overlapping return "
-                "observations across %d symbols (need >= %d); falling back "
-                "to the sum-of-|weight| gross cap this cycle rather than "
-                "estimating a covariance matrix off a short, noisy sample.",
-                len(returns_df), len(closes), window,
-            )
-            return None
-
-        inflation = float(getattr(settings, "ETF_TRANSMISSION_COV_INFLATION", 0.25))
-        cov_matrix = build_transmission_adjusted_cov(
-            returns_df, holdings, inflation=inflation, window=window,
+    per_name = dict(zip(dashboard_df["Symbol"], dashboard_df["Kelly Target"]))
+    cap_result = apply_portfolio_gross_cap(
+        per_name, max_gross=settings.MAX_PORTFOLIO_GROSS, cov_matrix=None,
+    )
+    if cap_result.was_capped:
+        telemetry.info(
+            "Portfolio gross cap bound this cycle: scale_factor=%.4f "
+            "(max_gross=%.2f, method=%s).",
+            cap_result.scale_factor, settings.MAX_PORTFOLIO_GROSS, cap_result.method,
         )
-        if cov_matrix is None:
-            logger.info(
-                "ETF transmission portfolio cov: covariance build declined "
-                "(see risk.etf_transmission.build_transmission_adjusted_cov); "
-                "falling back to the sum-of-|weight| gross cap this cycle."
-            )
-            return None
-
-        # build_transmission_adjusted_cov operates on WHATEVER frequency it's
-        # handed (its own docstring: "daily simple-return DataFrame") and
-        # returns a covariance matrix on that same daily scale. But
-        # apply_portfolio_gross_cap's cov_matrix path compares
-        # sqrt(w' Sigma w) against `target_vol`, and every other caller of
-        # target_vol/VOL_TARGET in this codebase (e.g.
-        # sizing.vol_target.volatility_target_weight, whose own docstring
-        # says "Annualized ... volatility") treats it as an ANNUALIZED
-        # figure. A daily-scale covariance handed to an annualized target is
-        # a silent units mismatch: daily portfolio vol (typically well under
-        # 5%) will almost always sit far below a ~10% annualized target, so
-        # portfolio_vol_target's scalar saturates at its ceiling regardless
-        # of the ACTUAL covariance structure -- the whole point of this
-        # feature (a risk-aware cap) would silently never bind. Annualize
-        # here, matching processing_engine.py's own convention for
-        # Realized_Vol_60D (`daily_std * sqrt(252)`): variance/covariance
-        # scales with TIME (not sqrt(time)) under the i.i.d. return
-        # assumption, so the covariance matrix annualizes by *252, not
-        # *sqrt(252). Caught and fixed via
-        # tests/test_etf_transmission_sensitivity_sweep.py -- the sweep
-        # showed IDENTICAL final_gross across every ETF_TRANSMISSION_COV_
-        # INFLATION value before this fix, because the un-annualized
-        # covariance never came close to influencing the vol-target scalar.
-        TRADING_DAYS_PER_YEAR = 252
-        return cov_matrix * TRADING_DAYS_PER_YEAR
-    except Exception as exc:
-        logger.warning("ETF transmission portfolio covariance build failed (non-fatal): %s", exc)
-        return None
+        dashboard_df["Kelly Target"] = dashboard_df["Symbol"].map(
+            lambda x: cap_result.scaled_weights.get(x, per_name.get(x, 0.0))
+        )
+        # Only mark names whose weight actually moved (a 0.0 name is
+        # trivially unaffected by a uniform scalar) -- avoids fabricating
+        # a "capped" flag on a name that never had exposure to cap.
+        _affected = dashboard_df["Symbol"].map(lambda x: abs(per_name.get(x, 0.0)) > 1e-9)
+        dashboard_df.loc[_affected, "Sizing_Was_Capped"] = "Yes"
+        dashboard_df.loc[_affected, "Sizing_Binding_Constraint"] = "portfolio_gross"
 
 
 def _compute_xsec_momentum(
@@ -2319,27 +1965,10 @@ class StrategyEvalStep(PipelineStep):
         # that keeps this from inserting duplicate rows under --interval.
         _apply_sector_selection(ctx.dashboard_df)
 
-        # ETF volatility transmission (Ben-David, Franzoni & Moussawi 2018) --
-        # three measurement columns (ETF_Ownership_Pct / ETF_Comovement_R2 /
-        # ETF_Primary_Wrapper). Placed here rather than before
-        # run_pre_compute() above deliberately: nothing in pre_compute
-        # consumes these columns, so moving a networked call earlier in the
-        # critical path buys nothing. A complete no-op (zero network calls,
-        # all three columns NaN) while settings.ETF_TRANSMISSION_ENABLED is
-        # False. See risk/etf_transmission.py and
-        # docs/signals/etf_transmission.md.
-        _apply_etf_transmission(ctx.dashboard_df, ctx.tech_raw)
-
-        # ETF-arbitrage volatility-transmission SIZING DERATE, built on the
-        # measurement columns just populated above -- must run AFTER
-        # _apply_etf_transmission() so ETF_Ownership_Pct/ETF_Comovement_R2 are
-        # already resolved for this cycle, and BEFORE the per-ticker
-        # evaluate_security loop below so each row can simply read its own
-        # already-resolved multiplier. NaN-filled (never fabricated --
-        # CONSTRAINT #4) when settings.ETF_TRANSMISSION_SIZING_ENABLED is
-        # False, which every consumer reads as the exact 1.0 no-op, making
-        # the disabled path byte-identical to the pre-feature behavior.
-        _apply_etf_transmission_multiplier(ctx.dashboard_df)
+        # ETF volatility transmission is archived (step 4d). Its four schema
+        # columns are still required by Pandera until the 4f trim, so write
+        # them as NaN, as the flag-off path always did.
+        _prefill_etf_transmission_columns(ctx.dashboard_df)
 
         # Financial Modeling Prep diagnostic feeds -- eight columns across
         # four independently-gated feeds (analyst / earnings / insider /
@@ -2619,13 +2248,6 @@ class StrategyEvalStep(PipelineStep):
                     vol_ratio=vol_ratio_val,
                     roc_5=roc_5_val,
                     roc_20=roc_20_val,
-                    # Per-name ETF volatility-transmission derate resolved by
-                    # _apply_etf_transmission_multiplier() before this loop.
-                    # Bare .get() -- a missing column / NaN cell is passed
-                    # through verbatim and sanitized to the exact 1.0 no-op
-                    # inside size_position(), the single place that decides
-                    # what "missing" means here (CONSTRAINT #7).
-                    etf_transmission_multiplier=row.get('ETF_Transmission_Multiplier'),
                     robinhood_position=rh_position,
                     precomputed_signal_tuple=vectorized_results.get(ticker)
                 )
@@ -2876,47 +2498,10 @@ class StrategyEvalStep(PipelineStep):
         # authoritative reason a position ended up smaller than its raw
         # Kelly/vol-target recommendation for this cycle.
         #
-        # ETF-transmission-adjusted covariance (settings.ETF_TRANSMISSION_
-        # PORTFOLIO_ENABLED, default False): when enabled and full-coverage
-        # data is available, routes through apply_portfolio_gross_cap's
-        # EXISTING risk-aware cov_matrix/target_vol path instead of the
-        # sum-of-|weight| fallback -- reuses settings.VOL_TARGET as
-        # target_vol (the same setting the per-name vol-target sizing
-        # fallback already uses) rather than introducing a second,
-        # redundant target-vol setting. _build_etf_transmission_cov_matrix
-        # returns None (byte-identical fallback) whenever the gate is off,
-        # holdings/bars are unavailable, or coverage across this cycle's
-        # universe is incomplete -- see that function's docstring for why a
-        # partially-covered matrix is never substituted in its place.
+        # Runs unconditionally, in its own try: it no longer shares one with
+        # any optional feature (see _apply_portfolio_gross_cap's docstring).
         try:
-            from sizing.position_sizer import apply_portfolio_gross_cap
-
-            per_name = dict(zip(ctx.dashboard_df["Symbol"], ctx.dashboard_df["Kelly Target"]))
-            cov_matrix = _build_etf_transmission_cov_matrix(
-                list(per_name.keys()), ctx.tech_raw,
-            )
-            if cov_matrix is not None:
-                cap_result = apply_portfolio_gross_cap(
-                    per_name, max_gross=settings.MAX_PORTFOLIO_GROSS,
-                    cov_matrix=cov_matrix, target_vol=settings.VOL_TARGET,
-                )
-            else:
-                cap_result = apply_portfolio_gross_cap(per_name, max_gross=settings.MAX_PORTFOLIO_GROSS)
-            if cap_result.was_capped:
-                telemetry.info(
-                    "Portfolio gross cap bound this cycle: scale_factor=%.4f "
-                    "(max_gross=%.2f, method=%s).",
-                    cap_result.scale_factor, settings.MAX_PORTFOLIO_GROSS, cap_result.method,
-                )
-                ctx.dashboard_df["Kelly Target"] = ctx.dashboard_df["Symbol"].map(
-                    lambda x: cap_result.scaled_weights.get(x, per_name.get(x, 0.0))
-                )
-                # Only mark names whose weight actually moved (a 0.0 name is
-                # trivially unaffected by a uniform scalar) -- avoids fabricating
-                # a "capped" flag on a name that never had exposure to cap.
-                _affected = ctx.dashboard_df["Symbol"].map(lambda x: abs(per_name.get(x, 0.0)) > 1e-9)
-                ctx.dashboard_df.loc[_affected, "Sizing_Was_Capped"] = "Yes"
-                ctx.dashboard_df.loc[_affected, "Sizing_Binding_Constraint"] = "portfolio_gross"
+            _apply_portfolio_gross_cap(ctx.dashboard_df)
         except Exception as portfolio_cap_exc:
             telemetry.warning(f"Portfolio gross cap application failed (non-critical): {portfolio_cap_exc}")
 
@@ -2977,7 +2562,7 @@ class StrategyEvalStep(PipelineStep):
         # run's own scoring/sizing decisions or its SUCCEEDED/FAILED state
         # (CONSTRAINT #6). The write itself lives in the module-level
         # _record_symbol_ratings() helper below (same pattern as
-        # _apply_etf_transmission/_apply_sector_heat_factor) so it can be
+        # _apply_sector_heat_factor) so it can be
         # exercised directly in tests without going through the whole of
         # StrategyEvalStep.run().
         try:

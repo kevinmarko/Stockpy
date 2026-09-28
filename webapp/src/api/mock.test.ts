@@ -258,7 +258,6 @@ describe("mock API — per-field liveness metadata parity", () => {
     "getSentimentSettings",
     "getSectorSelectionSettings",
     "getFmpSettings",
-    "getEtfTransmissionSettings",
   ] as const;
 
   async function allFields(method: string) {

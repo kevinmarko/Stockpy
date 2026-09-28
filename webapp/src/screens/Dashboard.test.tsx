@@ -6,7 +6,6 @@ import { Dashboard } from "./Dashboard";
 import { api } from "../api/client";
 import { ApiError, type ObservabilitySummary, type PilotSummary } from "../api/types";
 import {
-  mockEtfTransmissionDisabled,
   mockForecastSkillBySymbolEmpty,
   mockHeartbeatNoData,
   mockLatencyHeatmapDisabled,
@@ -49,7 +48,6 @@ const ALL_CLEAR: ObservabilitySummary = {
   },
   system_telemetry: mockSystemTelemetryUnavailable(),
   sizing_cap_audit: mockSizingCapAuditDisabled(),
-  etf_transmission: mockEtfTransmissionDisabled(),
   heartbeat: mockHeartbeatNoData(),
   strategy_pnl: mockStrategyPnlEmpty(),
 };

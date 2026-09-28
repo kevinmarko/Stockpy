@@ -1405,7 +1405,7 @@ class TestObservabilitySummary:
             "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
             "forecast_skill", "forecast_skill_by_symbol", "risk_gate_blocks",
             "circuit_breakers", "system_telemetry", "latency_heatmap",
-            "sizing_cap_audit", "etf_transmission", "heartbeat", "strategy_pnl",
+            "sizing_cap_audit", "heartbeat", "strategy_pnl",
         }
 
     def test_one_section_failure_never_blocks_the_others(self, tmp_path):
@@ -1508,55 +1508,6 @@ class TestSizingCapAuditSummary:
         assert out["count"] == 2
         assert out["capped_count"] == 1
         assert out["escalation_enabled"] is True
-        assert out["reason"] is None
-
-
-# ---------------------------------------------------------------------------
-# etf_transmission_summary — reuses shared.observability_panel_helpers
-# .etf_transmission_rows directly.
-# ---------------------------------------------------------------------------
-
-
-class TestEtfTransmissionSummary:
-    def test_measurement_disabled_is_honest_empty(self):
-        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", False):
-            out = obs.etf_transmission_summary({"signals": [{"symbol": "AAPL", "etf_ownership_pct": 0.5}]})
-        assert out["rows"] == []
-        assert out["measurement_enabled"] is False
-        assert "ETF_TRANSMISSION_ENABLED" in out["reason"]
-
-    def test_no_coverage_in_snapshot_is_honest_empty(self):
-        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", True):
-            out = obs.etf_transmission_summary({"signals": [{"symbol": "AAPL"}]})
-        assert out["rows"] == []
-        assert out["measurement_enabled"] is True
-        assert out["reason"] and "coverage" in out["reason"]
-
-    def test_none_snapshot_is_honest_empty(self):
-        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", True):
-            out = obs.etf_transmission_summary(None)
-        assert out["rows"] == []
-        assert out["reason"]
-
-    def test_warm_path_surfaces_rows_and_switches(self):
-        snapshot = {
-            "signals": [
-                {
-                    "symbol": "SPY", "etf_ownership_pct": 0.42, "etf_comovement_r2": 0.81,
-                    "etf_primary_wrapper": "SPY", "etf_transmission_multiplier": 0.75,
-                },
-                {"symbol": "ZZZZ"},  # no ETF fields -> filtered out by etf_transmission_rows
-            ]
-        }
-        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", True):
-            with mock.patch.object(settings, "ETF_TRANSMISSION_SIZING_ENABLED", True):
-                with mock.patch.object(settings, "ETF_TRANSMISSION_PORTFOLIO_ENABLED", False):
-                    out = obs.etf_transmission_summary(snapshot)
-        assert len(out["rows"]) == 1
-        assert out["rows"][0]["symbol"] == "SPY"
-        assert out["measurement_enabled"] is True
-        assert out["sizing_enabled"] is True
-        assert out["portfolio_enabled"] is False
         assert out["reason"] is None
 
 

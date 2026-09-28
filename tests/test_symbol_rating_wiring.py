@@ -8,7 +8,7 @@ advisory path) that persist ``rating.symbol_rating.classify_tier``'s
 GOOD/BAD verdict to ``rating.symbol_rating_store.SymbolRatingStore``.
 
 Deliberately targets ``_record_symbol_ratings`` directly (same pattern as
-``tests/test_production_steps_etf_transmission.py``) rather than the whole of
+``legacy/tests/test_production_steps_etf_transmission.py``) rather than the whole of
 ``StrategyEvalStep.run()``, which imports ``main_orchestrator`` and its full
 heavy engine chain and has no existing dedicated wiring test suite of its own
 (neither does the analogous CAP-EVENT AUDIT LOG block it mirrors) -- keeping

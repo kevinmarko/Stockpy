@@ -117,13 +117,8 @@ Center's "Observability / Mission Control" tab
    database-level read-only engine, matching that store's own convention.
    Degrades to an empty list + a ``reason`` when ``SIZING_CAP_AUDIT_ENABLED``
    is off or the store is unavailable — never raises.
-9. **ETF volatility transmission** — the read-only per-symbol diagnostic view
-   ported from ``gui/panels/observability.py
-   ::_render_observability_etf_transmission``. Reuses
-   ``shared.observability_panel_helpers.etf_transmission_rows`` directly (already
-   pure/Streamlit-free and unit-tested) against the current state snapshot's
-   ``signals`` list, plus the three independent master-switch states
-   (``ETF_TRANSMISSION_ENABLED``/``_SIZING_ENABLED``/``_PORTFOLIO_ENABLED``).
+9. *(removed)* — the ETF volatility-transmission view was archived with the
+   feature (2026-09, step 4d; see legacy/risk/etf_transmission.py).
 10. **Heartbeat age** — the CURRENT orchestrator heartbeat age (seconds) +
     freshness classification, via ``shared.orchestrator_runner.heartbeat_age_seconds``
     and ``shared.observability_panel_helpers.heartbeat_status`` (both already
@@ -201,7 +196,6 @@ __all__ = [
     "latency_heatmap_summary",
     "log_aggregation",
     "sizing_cap_audit_summary",
-    "etf_transmission_summary",
     "heartbeat_summary",
     "strategy_pnl_summary",
 ]
@@ -1702,65 +1696,6 @@ def sizing_cap_audit_summary(limit: int = 100) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 9. ETF volatility transmission — read-only diagnostic view.
-# Reuses shared.observability_panel_helpers.etf_transmission_rows directly — see
-# module docstring section 9.
-# ---------------------------------------------------------------------------
-
-
-def _empty_etf_transmission(reason: str) -> Dict[str, Any]:
-    return {
-        "rows": [],
-        "measurement_enabled": bool(settings.ETF_TRANSMISSION_ENABLED),
-        "sizing_enabled": bool(settings.ETF_TRANSMISSION_SIZING_ENABLED),
-        "portfolio_enabled": bool(settings.ETF_TRANSMISSION_PORTFOLIO_ENABLED),
-        "reason": reason,
-    }
-
-
-def etf_transmission_summary(snapshot: Optional[dict]) -> Dict[str, Any]:
-    """Per-symbol ETF volatility-transmission telemetry + the three
-    independent master-switch states, the PWA's port of
-    ``gui/panels/observability.py::_render_observability_etf_transmission``.
-
-    Reuses ``shared.observability_panel_helpers.etf_transmission_rows`` directly
-    (already pure/Streamlit-free and unit-tested) against ``snapshot``'s
-    ``signals`` list. Returns the honest empty shape (CONSTRAINT #4) —
-    never a table of fabricated nulls — when ``ETF_TRANSMISSION_ENABLED`` is
-    off or no symbol in the snapshot has any ETF-transmission coverage yet.
-    Never raises (CONSTRAINT #6)."""
-    measurement_on = bool(settings.ETF_TRANSMISSION_ENABLED)
-    if not measurement_on:
-        return _empty_etf_transmission(
-            "ETF_TRANSMISSION_ENABLED is False — measurement columns are not "
-            "computed this cycle."
-        )
-
-    try:
-        from shared.observability_panel_helpers import etf_transmission_rows
-    except Exception as exc:  # noqa: BLE001 — dead-letter: import failure
-        logger.debug("etf_transmission_summary import failed: %s", exc)
-        return _empty_etf_transmission("ETF transmission helper module unavailable.")
-
-    try:
-        signals = (snapshot or {}).get("signals", []) or []
-        rows = etf_transmission_rows(signals)
-    except Exception as exc:  # noqa: BLE001 — dead-letter: malformed snapshot
-        logger.debug("etf_transmission_summary: row extraction failed: %s", exc)
-        return _empty_etf_transmission("ETF transmission telemetry unreadable.")
-
-    return {
-        "rows": rows,
-        "measurement_enabled": True,
-        "sizing_enabled": bool(settings.ETF_TRANSMISSION_SIZING_ENABLED),
-        "portfolio_enabled": bool(settings.ETF_TRANSMISSION_PORTFOLIO_ENABLED),
-        "reason": None if rows else (
-            "No symbols have ETF-transmission coverage in the last snapshot yet."
-        ),
-    }
-
-
-# ---------------------------------------------------------------------------
 # 10. Heartbeat age — CURRENT sample + freshness classification only. See
 # module docstring section 10 for why no trend/history is served here.
 # ---------------------------------------------------------------------------
@@ -1933,7 +1868,6 @@ def observability_summary(
         "system_telemetry": system_telemetry_summary(),
         "latency_heatmap": latency_heatmap_summary(),
         "sizing_cap_audit": sizing_cap_audit_summary(),
-        "etf_transmission": etf_transmission_summary(snapshot),
         "heartbeat": heartbeat_summary(),
         "strategy_pnl": strategy_pnl_summary(),
     }

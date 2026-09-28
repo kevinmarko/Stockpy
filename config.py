@@ -116,7 +116,7 @@ COLUMN_SCHEMA = [
     {"header": "Symbol Rating Bad Cycles", "key": "Symbol_Rating_Consecutive_Bad_Cycles", "format": "number"},
     {"header": "Symbol Rating Excluded", "key": "Symbol_Rating_Excluded", "format": "string"},
     # ETF-arbitrage volatility-transmission derate applied to this name's
-    # sizing weight this cycle (risk/etf_transmission.py, composed in
+    # sizing weight this cycle (legacy/risk/etf_transmission.py, composed in
     # sizing/position_sizer.py::size_position step 3 alongside the HMM
     # Regime_Multiplier). 1.0 = no derating. NaN -- never a fabricated 1.0 --
     # when settings.ETF_TRANSMISSION_SIZING_ENABLED is False, i.e. the
@@ -215,7 +215,7 @@ COLUMN_SCHEMA = [
     {"header": "Google Trends ASVI", "key": "Google_Trends_ASVI", "format": "number"},
 
     # ==========================================================
-    # --- ETF VOLATILITY TRANSMISSION (risk/etf_transmission.py) ---
+    # --- ETF VOLATILITY TRANSMISSION (legacy/risk/etf_transmission.py) ---
     # Ben-David, Franzoni & Moussawi (2018) "Do ETFs Increase Volatility?".
     # DIAGNOSTIC ONLY as of this commit -- populated by
     # pipeline/production_steps.py::_apply_etf_transmission and read by

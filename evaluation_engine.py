@@ -963,7 +963,7 @@ def calculate_equity_curve_metrics(
         # to) 0.0 rather than exactly 0.0. An exact `== 0` check misses that,
         # and mean/std then explodes into an absurd, unbounded "Sharpe"
         # instead of the honest NaN (CONSTRAINT #4). 1e-12 mirrors the
-        # degenerate-std threshold already used by risk/etf_transmission.py --
+        # degenerate-std threshold already used by legacy/risk/etf_transmission.py --
         # far above float noise (~1e-16 to 1e-20) and far below any real
         # strategy's daily-return std.
         if len(returns) < 2 or pd.isna(returns.std(ddof=1)) or returns.std(ddof=1) < 1e-12:

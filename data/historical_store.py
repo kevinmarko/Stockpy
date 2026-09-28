@@ -80,10 +80,12 @@ etf_holdings        — ETF constituent basket keyed by (etf_symbol,
                        holding_symbol, as_of_date), where as_of_date is the
                        SOURCE's own report date (the PIT anchor), separate
                        from the fetched_at cache-freshness stamp. Written by
-                       data/etf_holdings.py (SEC N-PORT primary); read back
+                       the now-archived legacy/data/etf_holdings.py (SEC
+                       N-PORT primary; archived 2026-09, step 4d); read back
                        through get_etf_holdings(), whose as_of_date filter is
                        the storage-layer no-lookahead guarantee. Nothing in
-                       the platform consumes it yet.
+                       the active platform writes or reads it any more; the
+                       table and its methods stay so existing DBs keep working.
 """
 
 from __future__ import annotations
@@ -103,9 +105,6 @@ import pandas as pd
 
 if TYPE_CHECKING:
     from data.robinhood_portfolio import AccountSnapshot
-    # Type-only: data/etf_holdings.py lazily imports THIS module, so a runtime
-    # import here would be circular. save_etf_holdings duck-types its rows.
-    from data.etf_holdings import ETFHolding
 
 logger = logging.getLogger(__name__)
 
@@ -466,7 +465,7 @@ CREATE TABLE IF NOT EXISTS finbert_score_cache (
 # DDL — etf_holdings (ETF constituent-holdings cache)
 #
 # One row per (ETF, underlying, report date). Written by
-# ``data/etf_holdings.py``'s SEC N-PORT (and opt-in iShares CSV) ingestion;
+# ``legacy/data/etf_holdings.py``'s SEC N-PORT (and opt-in iShares CSV) ingestion;
 # nothing in the platform consumes it yet.
 #
 # ``as_of_date`` is the SOURCE's own report/holdings date -- the point-in-time
@@ -2405,8 +2404,8 @@ class HistoricalStore:
             return None
         return as_float
 
-    def save_etf_holdings(self, holdings: List["ETFHolding"]) -> int:
-        """Persist a batch of ``data.etf_holdings.ETFHolding`` rows.
+    def save_etf_holdings(self, holdings: List[Any]) -> int:
+        """Persist a batch of ``ETFHolding``-shaped rows (legacy/data/etf_holdings.py).
 
         Returns the number of rows written, or ``0`` on ANY failure
         (CONSTRAINT #6 — never raises; a cache-write failure must not block
@@ -2478,7 +2477,7 @@ class HistoricalStore:
 
         **Causality guarantee (has a dedicated test):** rows whose
         ``as_of_date`` is AFTER the supplied cutoff are never returned. This
-        is the storage-layer half of ``data/etf_holdings.py``'s no-lookahead
+        is the storage-layer half of ``legacy/data/etf_holdings.py``'s no-lookahead
         contract — a basket written by a later cycle cannot surface in an
         earlier-dated read.
 

@@ -39,13 +39,6 @@ vi.mock("../api/client", () => ({
         drift_keys: [],
       })
     ),
-    getEtfTransmissionSettings: vi.fn(() =>
-      Promise.resolve({
-        groups: [{ name: "ETF", fields: [] }],
-        applies_counts: { immediately: 0, next_daemon_restart: 0, no_effect: 0, env_pinned: 0 },
-        drift_keys: [],
-      })
-    ),
     getPaperBrokerSettings: vi.fn(() =>
       Promise.resolve({
         groups: [{ name: "Paper Broker", fields: [{ key: "PAPER_BROKER_ENABLED", type: "bool", value: true, default: true, description: "" }] }],

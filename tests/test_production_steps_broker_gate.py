@@ -22,7 +22,7 @@ that by exercising the exact "Alpaca keys configured" branch and showing
 the gate still wins.
 
 Targets BrokerExecutionStep.run() directly with a hand-built RunContext,
-mirroring tests/test_production_steps_etf_transmission_multiplier.py's
+mirroring legacy/tests/test_production_steps_etf_transmission_multiplier.py's
 approach of exercising a production_steps.py entry point directly rather
 than paying for the full async orchestrator's heavy engine import chain.
 Every external dependency BrokerExecutionStep.run() touches in its

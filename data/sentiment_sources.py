@@ -498,7 +498,7 @@ class YahooRSSSource(SentimentSource):
 # SAME host with the SAME undocumented courtesy budget. Two independently
 # unthrottled clients in one process is exactly how a 429 storm starts, so
 # both go through this single module-level limiter — mirroring the reason
-# ``data/etf_holdings.py`` is required to reuse
+# ``legacy/data/etf_holdings.py`` is required to reuse
 # ``data/edgar_fundamentals.py``'s ``_throttle`` rather than open a second SEC
 # client.
 #

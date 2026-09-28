@@ -18,7 +18,6 @@ import { JobStatusProvider } from "./JobStatusContext";
 import { ThemeProvider } from "../context/ThemeContext";
 import { api } from "../api/client";
 import {
-  mockEtfTransmissionDisabled,
   mockForecastSkillBySymbolEmpty,
   mockHeartbeatNoData,
   mockLatencyHeatmapDisabled,
@@ -163,7 +162,6 @@ function observabilitySummary(overrides: Partial<ObservabilitySummary> = {}): Ob
     circuit_breakers: { trips: [], counts: { critical: 0, warning: 0, total: 0 }, window_hours: 24, reason: "No trips." },
     system_telemetry: mockSystemTelemetryUnavailable(),
     sizing_cap_audit: mockSizingCapAuditDisabled(),
-    etf_transmission: mockEtfTransmissionDisabled(),
     heartbeat: mockHeartbeatNoData(),
     strategy_pnl: mockStrategyPnlEmpty(),
     ...overrides,

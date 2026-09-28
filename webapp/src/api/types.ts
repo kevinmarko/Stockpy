@@ -2543,39 +2543,6 @@ export interface SizingCapAuditTrail {
 }
 
 /**
- * One symbol's ETF volatility-transmission telemetry (Ben-David, Franzoni &
- * Moussawi 2018) -- mirrors `shared.observability_panel_helpers
- * .etf_transmission_rows`'s output shape exactly (that pure helper is reused
- * server-side, not reimplemented).
- */
-export interface EtfTransmissionRow {
-  symbol: string;
-  etf_ownership_pct: number | null;
-  etf_comovement_r2: number | null;
-  etf_primary_wrapper: string | null;
-  etf_transmission_multiplier: number | null;
-}
-
-/**
- * GET /observability/summary's `etf_transmission` key -- read-only per-symbol
- * ETF volatility-transmission diagnostic view, ported from the legacy
- * Streamlit Observability tab's "ETF Volatility Transmission" section. Three
- * INDEPENDENT master switches: `measurement_enabled` gates whether `rows` can
- * be non-empty at all; `sizing_enabled`/`portfolio_enabled` describe whether
- * the measured multiplier actually derates Kelly sizing / feeds the portfolio
- * covariance overlay elsewhere in the platform (this view never writes).
- * `rows` excludes any symbol with zero ETF-transmission fields (an
- * all-disabled cycle renders an empty list, not a wall of "--").
- */
-export interface EtfTransmissionSummary {
-  rows: EtfTransmissionRow[];
-  measurement_enabled: boolean;
-  sizing_enabled: boolean;
-  portfolio_enabled: boolean;
-  reason: string | null;
-}
-
-/**
  * GET /observability/summary's `heartbeat` key -- the CURRENT orchestrator
  * heartbeat age (seconds since `output/heartbeat.txt` was last written by
  * `main_orchestrator.py`'s async heartbeat task) + a freshness label
@@ -2633,7 +2600,6 @@ export interface ObservabilitySummary {
   circuit_breakers: CircuitBreakerSummary;
   system_telemetry: SystemTelemetry;
   sizing_cap_audit: SizingCapAuditTrail;
-  etf_transmission: EtfTransmissionSummary;
   heartbeat: HeartbeatSummary;
   strategy_pnl: StrategyPnlSummary;
 }

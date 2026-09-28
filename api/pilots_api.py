@@ -1904,9 +1904,7 @@ def get_observability_summary(
     this is an honest REPLACEMENT for, not a literal port of, the legacy
     panel's manual-trigger design), the durable **sizing
     cap-event audit trail** (``sizing_cap_audit``, reusing ``sizing
-    .cap_audit_store.CapAuditStore`` directly), the **ETF volatility
-    transmission** per-symbol diagnostic view (``etf_transmission``, reusing
-    ``shared.observability_panel_helpers.etf_transmission_rows`` directly), the
+    .cap_audit_store.CapAuditStore`` directly), the
     CURRENT **heartbeat age** + freshness classification (``heartbeat`` —
     deliberately no trend/history; see ``pilots/observability.py
     ::heartbeat_summary``'s docstring for why the legacy Streamlit sparkline
@@ -5001,55 +4999,6 @@ _FMP_INDEX = {
     for key, kind, extras in _specs
 }
 
-_ETF_TRANSMISSION_GROUPS = [
-    (
-        "Holdings Ingestion",
-        [
-            ("ETF_HOLDINGS_ENABLED", "bool", {}),
-            ("ETF_HOLDINGS_TICKERS", "json", {}),
-            ("ETF_HOLDINGS_REFRESH_DAYS", "int", {"min": 1, "max": 90, "step": 1}),
-            ("ETF_HOLDINGS_ISSUER_CSV_ENABLED", "bool", {}),
-            ("ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE", "float", {"min": 1.0, "max": 300.0, "step": 1.0}),
-            ("ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD", "int", {"min": 1, "max": 20, "step": 1}),
-        ],
-    ),
-    (
-        "Measurement & Residualization",
-        [
-            ("ETF_TRANSMISSION_ENABLED", "bool", {}),
-            ("ETF_HOLDINGS_MARKET_PROXY", "str", {}),
-            ("ETF_TRANSMISSION_WRAPPERS", "json", {}),
-            ("ETF_TRANSMISSION_EXCLUDED_SYMBOLS", "json", {}),
-            ("ETF_TRANSMISSION_WINDOW_DAYS", "int", {"min": 10, "max": 504, "step": 1}),
-            ("ETF_TRANSMISSION_MIN_OBS", "int", {"min": 5, "max": 252, "step": 1}),
-        ],
-    ),
-    (
-        "Position Sizing Derate",
-        [
-            ("ETF_TRANSMISSION_SIZING_ENABLED", "bool", {}),
-            ("ETF_TRANSMISSION_MAX_DERATE", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("ETF_TRANSMISSION_OWNERSHIP_REFERENCE", "float", {"min": 0.01, "max": 1.0, "step": 0.01}),
-            ("ETF_TRANSMISSION_MIN_MULTIPLIER", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-        ],
-    ),
-    (
-        "Portfolio Covariance Adjustment",
-        [
-            ("ETF_TRANSMISSION_PORTFOLIO_ENABLED", "bool", {}),
-            ("ETF_TRANSMISSION_COV_INFLATION", "float", {"min": 0.0, "max": 5.0, "step": 0.05}),
-            ("ETF_TRANSMISSION_COV_WINDOW_DAYS", "int", {"min": 10, "max": 504, "step": 1}),
-        ],
-    ),
-]
-
-_ETF_TRANSMISSION_INDEX = {
-    key: (kind, extras)
-    for _group, _specs in _ETF_TRANSMISSION_GROUPS
-    for key, kind, extras in _specs
-}
-
-
 @app.get("/settings/sentiment", dependencies=[Depends(require_read_token)])
 def get_settings_sentiment() -> Dict[str, Any]:
     """Get sentiment & news ingestion configuration."""
@@ -5240,38 +5189,13 @@ def put_settings_fmp(body: TunablesUpdateRequest) -> Dict[str, Any]:
     return _validate_and_write_payload(body.values, _FMP_INDEX, confirm=body.confirm)
 
 
-@app.get("/settings/etf-transmission", dependencies=[Depends(require_read_token)])
-def get_settings_etf_transmission() -> Dict[str, Any]:
-    """Get ETF volatility transmission & holdings configuration."""
-    return _settings_editor_payload(_ETF_TRANSMISSION_GROUPS, _ETF_TRANSMISSION_INDEX)
-
-
-@app.put(
-    "/settings/etf-transmission",
-    dependencies=[
-        Depends(require_command_token),
-        Depends(require_general_settings_writes_enabled),
-    ],
-)
-@app.patch(
-    "/settings/etf-transmission",
-    dependencies=[
-        Depends(require_command_token),
-        Depends(require_general_settings_writes_enabled),
-    ],
-)
-def put_settings_etf_transmission(body: TunablesUpdateRequest) -> Dict[str, Any]:
-    """Update ETF volatility transmission & holdings configuration in .env."""
-    return _validate_and_write_payload(body.values, _ETF_TRANSMISSION_INDEX, confirm=body.confirm)
-
-
 # ---------------------------------------------------------------------------
 # Settings Reference (GET /settings/reference)
 # ---------------------------------------------------------------------------
 
 
 def _build_editable_at_index() -> Dict[str, str]:
-    """Reverse-index mapping every setting key served across all 8 /settings/*
+    """Reverse-index mapping every setting key served across all 7 /settings/*
     editors to its canonical edit route. Built once at import time. Dedicated
     editors take precedence over the broader Tunables/Feature Flags screens."""
     editors: List[tuple[str, List[tuple]]] = [
@@ -5280,7 +5204,6 @@ def _build_editable_at_index() -> Dict[str, str]:
         ("/settings/cache-long-short", _CACHE_LONG_SHORT_GROUPS),
         ("/settings/paper-broker", _PAPER_BROKER_GROUPS),
         ("/settings/fmp", _FMP_GROUPS),
-        ("/settings/etf-transmission", _ETF_TRANSMISSION_GROUPS),
         ("/settings/feature-flags", _FEATURE_FLAGS_GROUPS),
         ("/settings/tunables", _TUNABLE_GROUPS),
     ]
