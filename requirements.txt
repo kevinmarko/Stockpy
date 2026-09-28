@@ -17,10 +17,12 @@ dill==0.4.1
 executing==2.2.1
 fonttools==4.63.0
 fredapi==0.5.2
+# google-auth kept: still required transitively by google-genai (Gemini
+# provider) and google-cloud-language, even though the Google Sheets
+# publisher that used to be its main direct-import reader (via gspread) was
+# retired to legacy/ in step 4e (2026-09). google-auth-oauthlib, gspread,
+# and gspread-dataframe were gspread-only and are removed with it.
 google-auth==2.55.0
-google-auth-oauthlib==1.4.0
-gspread==6.2.1
-gspread-dataframe==4.0.0
 hmmlearn==0.3.3
 lightgbm>=4.0.0
 idna==3.18

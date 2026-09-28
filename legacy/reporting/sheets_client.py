@@ -1,4 +1,8 @@
-"""Centralized Google Sheets client and Sheet constants.
+"""Centralized Google Sheets client and Sheet constants — ARCHIVED (2026-09, step 4e).
+
+No longer called by active code — the Sheet sink was retired; moved verbatim
+from ``reporting/`` to ``legacy/reporting/``. Kept so it can be restored if
+needed. See ``legacy/README.md``.
 
 Single source of truth for gspread service-account access. Previously the auth
 pattern (``gspread.service_account(filename=CREDENTIALS_FILE)``) was duplicated

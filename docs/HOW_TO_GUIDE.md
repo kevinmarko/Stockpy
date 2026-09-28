@@ -166,17 +166,28 @@ Or override programmatically in `settings.py` by changing the `DEFAULT_TICKERS` 
 - The multifactor signal (`multifactor`) excludes tickers with market cap below $300M (`MULTIFACTOR_MICROCAP_THRESHOLD`) from cross-sectional z-scoring — microcaps still get analyzed but receive a neutral 0.0 multifactor score
 - SPY is always fetched automatically (it's needed for the HMM regime detector), even if it's not in your ticker list
 
-### How `main.py` builds its universe (held ∪ watchlist ∪ Sheet2 fallback)
+### How `main.py` builds its universe (held ∪ watchlist ∪ discovered ∪ DEFAULT_TICKERS fallback)
 
-The advisory orchestrator `main.py` does **not** use `DEFAULT_TICKERS`. It assembles its universe from up to three sources, in strict priority order (`_build_universe()`):
+The advisory orchestrator `main.py` assembles its universe from held positions, the
+watchlist, and discovered scan candidates, falling back to `DEFAULT_TICKERS` only when
+that whole union is empty (`_build_universe()`, delegating most of the logic to
+`data.portfolio_sync.compute_tracked_universe()` so `main.py` and the persistent daemon
+can't silently diverge on what counts as "the tracked universe"):
 
 1. **Robinhood held positions** — every symbol in your account snapshot is always included when the snapshot is available.
 2. **`WATCHLIST` env var or `watchlist.txt`** — merged in whenever present. The env var (comma-separated) takes precedence over the file; the file is one ticker per line with `#` for comments.
-3. **Google Sheet → "Sheet2" column A** — consulted **only as a last-resort fallback** when sources 1 and 2 are both empty (e.g. Robinhood is unreachable and you have no watchlist configured). This reads column A of the "Sheet2" tab via `credentials.json`. If the credential, spreadsheet, or tab is missing — or any API error occurs — it logs a warning and returns an empty list rather than crashing.
+3. **Discovered scan candidates** (`output/scan_candidates.json`, from the agentic-discovery skill) — merged in whenever present.
+4. **`settings.DEFAULT_TICKERS`** — used **only as a fallback** when sources 1-3 are all empty (or rating-exclusion emptied them).
+5. **Recently-closed positions** (`settings.CLOSED_POSITION_RETENTION_DAYS`) — a symbol you recently sold stays in the universe for a bounded window; unioned in last.
 
-If all three are empty, `main.py` logs a warning that names all four remediation paths (RH_* env vars, `WATCHLIST`, `watchlist.txt`, Sheet2 column A) and exits the cycle cleanly. SPY is still fetched automatically by the macro/HMM layer regardless.
+If the whole union (including the `DEFAULT_TICKERS` fallback) is still empty, `main.py`
+logs a warning naming the remediation paths (RH_* env vars, `WATCHLIST`, `watchlist.txt`)
+and exits the cycle cleanly. SPY is still fetched automatically by the macro/HMM layer
+regardless.
 
-See [Section 18](#18-google-sheets-integration-legacy) for the Sheet setup.
+**Retired (2026-09, step 4e):** a Google Sheet "Sheet2" column-A last-resort fallback
+used to run after `DEFAULT_TICKERS`. It was removed along with the rest of the Google
+Sheet output sink — see [Section 18](#18-google-sheets-integration-legacy).
 
 ### Universe Coverage
 
@@ -306,21 +317,19 @@ The pipeline runs identically but any generated orders are logged rather than su
 
 ### Offline / mock mode
 
-If `credentials.json` (Google service account) is not present, the orchestrator automatically falls back to `MockDataEngine`, which generates deterministic synthetic data. Useful for testing code changes without network access. You will see:
+If a `FRED_API_KEY` is not configured, the orchestrator automatically falls back to `MockDataEngine`, which generates deterministic synthetic data (`data_engine.live_data_configured()` — a FRED key check, not a `credentials.json` presence check; see the note below). Useful for testing code changes without network access.
 
-```
-WARNING - credentials.json not found. Operating with deterministic MockDataEngine.
-```
+This is expected in development.
 
-This is expected in development. Your FRED key is still used in normal mode.
+**Note (2026-09):** this gate used to key off `os.path.exists("credentials.json")` (the Google Sheets service-account file). It was switched to a FRED-key check in step 4 prep, ahead of the Google Sheet publisher's retirement in step 4e (see [Section 18](#18-google-sheets-integration-legacy)) — deleting `credentials.json` no longer silently switches the daemon to fabricated data.
 
-### The legacy orchestrator (Google Sheets output)
+### The advisory orchestrator
 
 ```bash
 python3 main.py
 ```
 
-This is the original synchronous pipeline that writes results to Google Sheets. Requires `credentials.json`. Use `main_orchestrator.py` for everything new — `main.py` is kept for the Sheets integration.
+This is the original synchronous, clean advisory pipeline. Use `main_orchestrator.py` for everything that needs the full 50+ dashboard column set. `main.py` no longer writes to Google Sheets — that sink was retired in step 4e (2026-09); see [Section 18](#18-google-sheets-integration-legacy).
 
 ---
 
@@ -1027,26 +1036,23 @@ You must include all modules in the dict (or it falls back to the defaults). The
 
 ## 18. Google Sheets Integration (Legacy)
 
-`main.py` writes results to a Google Sheet. This is the original workflow, still functional.
+**Retired in step 4e (2026-09).** The Pilots PWA (`webapp/`) is the platform's only
+frontend, and nothing reads or writes the Google Sheet anymore. `main.py` no longer has
+a Sheet write path or a Sheet2-column-A universe fallback (see
+[Section 4](#4-choosing-your-ticker-universe)).
 
-### Setup
+The old code (`reporting/sheet_publisher.py`, `reporting/sheets_client.py`) was moved
+to `legacy/reporting/` rather than deleted, so it can be restored if needed — see
+`legacy/README.md`. `credentials.json` (the Google service-account key this integration
+used) is no longer read by any active code; it isn't tracked by git and the operator
+manages it independently of this repo.
 
-1. Go to [console.cloud.google.com](https://console.cloud.google.com)
-2. Create a project → Enable "Google Sheets API" and "Google Drive API"
-3. Create a Service Account → download the JSON key → save as `credentials.json` in the project root
-4. Share your Google Sheet with the service account email (ending in `@...gserviceaccount.com`) as Editor
-
-### Sheet structure expected
-
-- Tab named **"Sheet2"**: Column A = ticker symbols (one per row). Blank cells and any cell starting with `#` are ignored. **This tab is now wired as the last-resort universe fallback** — `main.py` reads it via `_load_tickers_from_sheet2()` only when Robinhood positions AND `WATCHLIST`/`watchlist.txt` are all empty (see [Section 4](#4-choosing-your-ticker-universe)). It is read defensively: a missing `credentials.json`, missing tab, or any API error degrades silently to "no fallback tickers", never a crash.
-- Tab named **"FidelityData_Automated"**: output destination (created/overwritten each run)
-- Tab named **"Transactions"**: optional, for realized slippage calculation
-
-### Run
-
-```bash
-python3 main.py
-```
+If you're restoring this from `legacy/`, the original setup was: create a Google Cloud
+service account with the Sheets + Drive APIs enabled, save its JSON key as
+`credentials.json` in the project root, and share the target spreadsheet with the
+service account's email as Editor. The Sheet had a "Sheet2" tab (column A = ticker
+symbols, the old universe fallback), a "FidelityData_Automated" tab (output, overwritten
+each run), and an optional "Transactions" tab.
 
 ---
 
@@ -1104,9 +1110,15 @@ pytest -x
 
 Set `FRED_API_KEY=your_key` in `.env`. Get a free key at fred.stlouisfed.org.
 
-### "credentials.json not found. Operating with deterministic MockDataEngine."
+### "FRED_API_KEY not configured. Operating with deterministic MockDataEngine."
 
-This is expected if you haven't set up Google Sheets. The pipeline still runs normally using synthetic data for testing. If you want live data without Sheets, this warning appears but is harmless — the platform uses `DataEngine` (real Yahoo Finance + FRED) not MockDataEngine when `credentials.json` is absent but `FRED_API_KEY` is set. The warning is printed regardless of data mode.
+This means no `FRED_API_KEY` is set in `.env` — `data_engine.live_data_configured()` is
+the real/mock switch (a FRED-key check). Set `FRED_API_KEY=your_key` to get real data;
+the pipeline still runs normally on synthetic data without one, which is fine for
+testing code changes. (Before 2026-09 this gate keyed off `credentials.json`, the now-
+retired Google Sheets service-account file — see
+[Section 18](#18-google-sheets-integration-legacy) — which tied real-vs-mock data to an
+unrelated integration; deleting that file no longer has any effect on this choice.)
 
 ### Pipeline runs but Kelly Target is always the same value
 
