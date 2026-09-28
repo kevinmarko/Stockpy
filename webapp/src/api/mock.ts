@@ -2075,6 +2075,7 @@ const MOCK_DANGEROUS_KEYS = new Set([
   "ADVISORY_ONLY",
   "DRY_RUN",
   "ROBINHOOD_EXECUTION_MODE",
+  "DAEMON_AGENTIC_QUEUE_MODE",
   "CORS_ALLOWED_ORIGINS",
   "FMP_BARS_ENABLED",
   "FMP_BARS_ADJUSTMENT",
@@ -4379,6 +4380,16 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     options: ["off", "review", "live"],
     description:
       "Moving this to 'live' is what lets the Robinhood execution bridge place real orders.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "DAEMON_AGENTIC_QUEUE_MODE",
+    type: "enum",
+    value: "off",
+    default: "off",
+    options: ["off", "shadow", "primary"],
+    description:
+      "Which process writes the Robinhood execution queue. 'shadow' writes a comparison copy under OUTPUT_DIR/shadow/ only; 'primary' (step 5.3) hands the real queue to the daemon.",
   },
   {
     group: "Write & Execution Gates",

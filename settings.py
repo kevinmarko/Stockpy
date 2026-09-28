@@ -2435,6 +2435,30 @@ class Settings(BaseSettings):
             "pre-dedup behavior."
         ),
     )
+    # Step 5.2 of .claude/shrink_step5_retire_main_py_implementation_plan.md:
+    # whether the orchestrator daemon's AgenticQueueStep writes the Robinhood
+    # execution queue from its own advisory recommendations.
+    #   off     = (default) the step does nothing. main.py stays the only queue
+    #             writer, exactly as before this setting existed.
+    #   shadow  = writes queue_sources/advisory.json + execution_queue.json under
+    #             OUTPUT_DIR/shadow/ ONLY, never the real queue, and sends no
+    #             push notification / risk-gate alert / block-log entry. For
+    #             comparing against main.py's queue (scripts/compare_shadow_queue.py).
+    #   primary = reserved for PR 5.3 (the daemon writes the real queue). Until
+    #             then it behaves exactly like shadow and logs a warning.
+    # Unknown values collapse to "off" via the validator below.
+    DAEMON_AGENTIC_QUEUE_MODE: str = Field(
+        default="off",
+        description=(
+            "Daemon agentic-queue writer mode: off | shadow | primary (default off). "
+            "off = the daemon writes no queue (main.py is the only writer). shadow = "
+            "the daemon writes queue_sources/advisory.json and execution_queue.json "
+            "under OUTPUT_DIR/shadow/ only, with no push notification, risk-gate alert "
+            "or block-log write, for comparison with main.py's queue. primary = "
+            "reserved for step 5.3; until then it behaves like shadow and logs a "
+            "warning. Unknown values collapse to off."
+        ),
+    )
     # Number of worker threads for DataEngine.fetch_technical_raw() and
     # fetch_fundamentals_raw() (data_engine.py). Both were originally a serial
     # `for symbol in tickers:` loop making one blocking yfinance HTTP call at a
@@ -4962,6 +4986,16 @@ class Settings(BaseSettings):
         """
         v = str(value or "").strip().lower()
         return v if v in {"off", "review", "live"} else "off"
+
+    @field_validator("DAEMON_AGENTIC_QUEUE_MODE")
+    @classmethod
+    def _coerce_daemon_agentic_queue_mode(cls, value: str) -> str:
+        """Fail-safe: any value outside {off, shadow, primary} collapses to ``off``.
+
+        A typo or stale value can never make the daemon start writing a queue.
+        """
+        v = str(value or "").strip().lower()
+        return v if v in {"off", "shadow", "primary"} else "off"
 
     @field_validator("SECTOR_FORECAST_CONFIGS")
     @classmethod

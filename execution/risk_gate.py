@@ -143,6 +143,7 @@ class PreTradeRiskGate:
         hmm_risk_off_block_threshold: Optional[float] = None,
         enforce_market_hours: Optional[bool] = None,
         require_validation_report: bool = False,
+        side_effects: bool = True,
     ) -> None:
         self.max_position_size_pct = (
             max_position_size_pct
@@ -178,6 +179,13 @@ class PreTradeRiskGate:
         # When True, block a strategy that has no entry in validation_reports.
         # Default False: unknown strategy passes conservatively.
         self.require_validation_report = require_validation_report
+        # False = a read-only "what would the gate say" run (the daemon's
+        # shadow execution queue, step 5.2): the verdicts are identical, but
+        # no alert is sent and nothing is appended to risk_gate_blocks.jsonl,
+        # so a comparison run can't page the operator or inflate the block
+        # count the dashboard shows. Default True keeps every existing
+        # caller's behaviour.
+        self.side_effects = bool(side_effects)
 
         # Rolling deque of UTC timestamps for rate-limit tracking.
         # Only populated when ALL prior checks pass — blocked orders never burn budget.
@@ -247,6 +255,8 @@ class PreTradeRiskGate:
 
     def _alert_halt(self, state_str: str, reason: str, symbol: str) -> None:
         """Dispatch an alert when a kill-switch halt blocks an order."""
+        if not getattr(self, "side_effects", True):
+            return
         try:
             from observability.alerts import send_alert
             send_alert(
@@ -318,6 +328,8 @@ class PreTradeRiskGate:
         (CONSTRAINT #6) — a broken alert channel must never affect the
         already-computed risk-gate verdict.
         """
+        if not getattr(self, "side_effects", True):
+            return
         try:
             from observability.alerts import send_alert
             send_alert(
@@ -393,6 +405,8 @@ class PreTradeRiskGate:
         a broken alert channel must never affect the already-computed
         risk-gate verdict.
         """
+        if not getattr(self, "side_effects", True):
+            return
         try:
             from observability.alerts import send_alert
             send_alert(
@@ -646,6 +660,8 @@ class PreTradeRiskGate:
         for performance).  The dashboard reads the tail of this file for display.
         Errors are swallowed so a logging failure never impacts order flow.
         """
+        if not getattr(self, "side_effects", True):
+            return
         try:
             log_path: Path = settings.OUTPUT_DIR / "risk_gate_blocks.jsonl"
             entry = {

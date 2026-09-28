@@ -286,6 +286,14 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "alongside ADVISORY_ONLY and the kill switch as one of the "
         "independent execution gates that must not be weakened."
     ),
+    "DAEMON_AGENTIC_QUEUE_MODE": (
+        "off | shadow | primary. Decides which process writes the Robinhood "
+        "execution queue the robinhood-execution skill places orders from. "
+        "'primary' (step 5.3) hands the real queue to the orchestrator "
+        "daemon, so a silent flip changes where real trade proposals come "
+        "from. Same risk class as ROBINHOOD_EXECUTION_MODE, hence typed "
+        "confirmation."
+    ),
     "MACRO_REGIME_GATE_ENABLED": (
         "The recession/credit-event BUY veto. When True, "
         "MacroEconomicDTO.killSwitch (Sahm Rule >= 0.5, VIX > 30, or HY OAS "

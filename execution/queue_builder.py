@@ -446,6 +446,7 @@ def build_execution_queue(
     config: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
     macro_dto: Optional[Any] = None,
+    side_effects: bool = True,
 ) -> Dict[str, Any]:
     """Build the gated execution-queue payload from a `RunResult`.
 
@@ -460,6 +461,10 @@ def build_execution_queue(
     `.macro_dto` attribute is picked up automatically even if a caller forgets
     the kwarg, matching this function's existing `getattr(run_result,
     "snapshot", None)` idiom above.
+
+    ``side_effects=False`` (the daemon's shadow queue, step 5.2) runs the same
+    gate checks but tells the gate not to send alerts or append to
+    ``risk_gate_blocks.jsonl``. The payload is identical either way.
     """
     cfg = {**CONFIG, **(config or {})}
     resolved_mode = _resolve_mode(mode)
@@ -478,6 +483,10 @@ def build_execution_queue(
     max_notional = _max_notional()
     limit_buffer_bps = _limit_buffer_bps()
     gate = PreTradeRiskGate()
+    if not side_effects:
+        # Set after construction (not as a constructor kwarg) so test doubles
+        # that replace PreTradeRiskGate with a no-arg class keep working.
+        gate.side_effects = False
     context = _build_risk_context(snapshot, now, macro_dto=resolved_macro)
 
     intents: List[Dict[str, Any]] = []
@@ -626,6 +635,7 @@ def emit_execution_queue(
     config: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
     macro_dto: Optional[Any] = None,
+    side_effects: bool = True,
 ) -> Optional[Path]:
     """Build and atomically write `output/execution_queue.json`.
 
@@ -635,15 +645,25 @@ def emit_execution_queue(
     (CONSTRAINT #6) so a best-effort caller in the advisory loop is never
     destabilised by this bridge.  ``macro_dto`` is forwarded to
     ``build_execution_queue`` (see its docstring for the resolution order).
+
+    ``side_effects=False`` writes the queue file but skips the ntfy push and
+    its ``execution_queue_notified.json`` sidecar, and runs the risk gate
+    without alerts or block-log writes (the daemon's shadow queue, step 5.2).
     """
     resolved_mode = _resolve_mode(mode)
     if resolved_mode == "off":
         return None
 
     try:
-        payload = build_execution_queue(
-            run_result, mode=resolved_mode, config=config, now=now, macro_dto=macro_dto,
-        )
+        if side_effects:
+            payload = build_execution_queue(
+                run_result, mode=resolved_mode, config=config, now=now, macro_dto=macro_dto,
+            )
+        else:
+            payload = build_execution_queue(
+                run_result, mode=resolved_mode, config=config, now=now, macro_dto=macro_dto,
+                side_effects=False,
+            )
         if output_dir is None:
             from settings import settings
             output_dir = Path(settings.OUTPUT_DIR)
@@ -660,6 +680,9 @@ def emit_execution_queue(
     except Exception as exc:
         logger.warning("queue_builder: failed to emit execution queue (%s); skipping", exc)
         return None
+
+    if not side_effects:
+        return path
 
     try:
         _notify_new_intents(payload, output_dir)

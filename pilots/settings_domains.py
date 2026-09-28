@@ -122,6 +122,7 @@ _OVERRIDE_DOMAINS: Dict[str, str] = {
     "RUNTIME_FLAGS_REFRESH_ENABLED": "Orchestrator/Daemon/Jobs",
     "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS": "Orchestrator/Daemon/Jobs",
     "ADVISORY_REUSE_PIPELINE_COMPUTE": "Orchestrator/Daemon/Jobs",
+    "DAEMON_AGENTIC_QUEUE_MODE": "Execution/Brokers",
     "PIPELINE_STEP_TIMEOUT_SECONDS": "Orchestrator/Daemon/Jobs",
     "DAEMON_SHUTDOWN_TIMEOUT_SECONDS": "Orchestrator/Daemon/Jobs",
     "PROGRESS_POLL_SECONDS": "Orchestrator/Daemon/Jobs",

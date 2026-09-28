@@ -4950,6 +4950,7 @@ def put_settings_paper_broker(body: TunablesUpdateRequest) -> Dict[str, Any]:
 # whole registry. Every other feature-flag key is a plain bool.
 _FEATURE_FLAGS_NON_BOOL_SPECS: Dict[str, tuple] = {
     "ROBINHOOD_EXECUTION_MODE": ("enum", {"options": ["off", "review", "live"]}),
+    "DAEMON_AGENTIC_QUEUE_MODE": ("enum", {"options": ["off", "shadow", "primary"]}),
     "FMP_BARS_ADJUSTMENT": (
         "enum",
         {"options": ["dividend-adjusted", "light", "full", "non-split-adjusted"]},
