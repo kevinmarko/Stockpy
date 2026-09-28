@@ -46,11 +46,14 @@ already found by audit passes, not by the original author:
 None of these were carelessness — they're the natural failure mode of a
 codebase this large, where "I wrote it and the happy path works" quietly
 substitutes for "I verified it against the actual gate." This skill exists
-so that substitution stops happening by default. **Both of the gaps above
-are now closed** — see "Currently open, already-flagged gaps" below for
-their actual current state, and don't re-report either as still open
-without checking there first; stale claims about a fixed gap are the same
-CONSTRAINT #4-shaped failure this skill exists to prevent.
+so that substitution stops happening by default. **The 0DTE-gate and
+registry-status gaps above are no longer just "closed" — the entire
+subsystem they were about (the options desk) has since been archived to
+`legacy/`** — see "Currently open, already-flagged gaps" below for the
+actual current state, and don't re-report either as still open, or still
+live, without checking there first; stale claims about a fixed or since-
+archived gap are the same CONSTRAINT #4-shaped failure this skill exists to
+prevent.
 
 ## Quick checklist — work through this before saying something is done
 
@@ -115,8 +118,8 @@ codebase and go find it:
 | Domain | The one real implementation | Never do this |
 |---|---|---|
 | Kelly / position sizing | `sizing/kelly.py`, `sizing/vol_target.py`, `sizing/position_sizer.py::size_position()`, `StrategyEngine._calculate_kelly_sizing()` | A new win-rate/payoff/Kelly-fraction formula anywhere else |
-| Options Greeks | `pilots/options_risk.py` | A second Black-Scholes Greeks calculation |
-| IV surface / VRP | `pilots/volatility_surface.py`, `technical_options_engine.py::build_premium_directive` | A new IV-rank or VRP formula |
+| Options Greeks | **Archived.** `pilots/options_risk.py` was `git mv`'d to `legacy/pilots/options_risk.py` in the 2026-09 options-desk retirement (see `CLAUDE.md`'s step 4b bullet); no options Greeks are computed anywhere in the active codebase. Paper option marking uses `data/option_symbols.py`'s Black-Scholes pricer only | A second Black-Scholes Greeks calculation, or assuming this module is still live without checking `legacy/README.md` first |
+| IV surface / VRP | **Archived.** `pilots/volatility_surface.py` and `technical_options_engine.py::build_premium_directive` moved to `legacy/pilots/volatility_surface.py` / `legacy/technical_options_engine.py` in the same retirement; no live IV-rank/VRP computation exists | A new IV-rank or VRP formula |
 | Pairs cointegration | `pairs/cointegration.py`, `pairs/kalman_hedge.py` | A new ADF/hedge-ratio implementation |
 | News/source credibility | `signals/credibility.py`, `signals/news_catalyst.py` | A new sentiment-scoring pass over raw headlines |
 
@@ -198,32 +201,43 @@ anything touching `pilots/`, `sizing/`, `signals/`, `execution/`, or
 Don't rediscover these from scratch, and don't assume they're fixed just
 because they aren't mentioned in whatever task you're on:
 
-- **Is the 0DTE live-exit gate real?** `manage_0dte_exits()` IS actively
-  wired into `desktop/daemon_runtime.py`'s `_timer_loop`, gated on
-  `settings.OPTIONS_0DTE_ENABLED`. Do not claim it is dead code or
-  unconnected.
-- **Is the strategy registry honest?** Don't hallucinate that a strategy is
-  registered if it isn't, and don't conflate three different registry
-  states. As of 2026-08-29: `copula_stat_arb` and `vol_mispricing` are
-  registered with REAL adapters and measured numbers (`vol_mispricing`
-  fails the gate: Sharpe -0.499, DSR 0.027). `earnings_crush`,
-  `dispersion_trading`, `zero_dte_engine`, and `gamma_scalper` are
-  registered as explicit `_build_ungateable_adapter` stubs (always raise
-  `RuntimeError` with a documented `UNGATEABLE_DATA_GAP` reason) — this
-  makes the harness report their status honestly rather than silently
-  omitting them, but it is NOT a real backtest and carries no PBO/DSR/
-  Sharpe/MaxDD numbers of its own. Don't report any of these four as
-  "measured" or "validated" — they are structurally ungateable, not
-  passing. `news_catalyst`, `regime_multiplier`, and `forecast_alignment`
-  were briefly given the same ungateable-stub treatment and then reverted
-  (see `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s "2026-08-29 ... reverted"
-  entry) — none of the three is an order-submitting Pilot with its own
-  P&L, and the stub broke a deliberate `validation_strategy_id=None`
-  invariant for news-catalyst. Know the difference between unregistered,
-  registered-but-ungateable-by-design, and registered-with-a-measured-fail.
+- **The entire options desk — 0DTE exits, `earnings_crush`,
+  `dispersion_trading`, `gamma_scalper`, `copula_stat_arb`,
+  `vol_mispricing`, `pilots/options_risk.py`, `pilots/volatility_surface.py`,
+  `technical_options_engine.py`, `execution/options_lifecycle.py` — was
+  archived to `legacy/` in the 2026-09 options-desk retirement** (see
+  `CLAUDE.md`'s step 3d/3d'/4a/4b/4c/4e/4f bullets and `legacy/README.md`
+  for the full module list). Confirmed directly against live code: none of
+  `manage_0dte_exits`, `OPTIONS_0DTE_ENABLED`, or `override_deployability_gate`
+  appear anywhere outside `legacy/` any more, and
+  `scripts/refresh_validations.py::STRATEGY_REGISTRY` has 20 entries with
+  none of the six options-selling names above. The previous version of this
+  bullet described a live 0DTE gate "wired into `desktop/daemon_runtime.py`'s
+  `_timer_loop`" and a mix of registered/ungateable-stub options pilots —
+  that whole subsystem no longer exists in the active codebase, so neither
+  of those claims is checkable against live code any more. Don't restate the
+  old wiring/registry details as current, and don't assume any of these
+  modules are reachable from a production path without first checking
+  `legacy/README.md`.
+- **Is the strategy registry otherwise honest?** Don't hallucinate that a
+  strategy is registered if it isn't. As of this check, the live
+  `STRATEGY_REGISTRY` (`scripts/refresh_validations.py`) has 20 entries:
+  `rsi2_mean_reversion`, `timeseries_momentum`, `macd_trend`,
+  `coppock_momentum`, `multifactor_lowvol_size`, `garch_vol_target`,
+  `cross_sectional_momentum`, `relative_strength_xsec`, `rsi14_extremes`,
+  `sortino_drawdown`, `dividend_yield_edgar_pit`, `deep_value_edgar_pit`,
+  `value_quality_edgar_pit`, `macro_regime_pit`,
+  `forecast_direction_arima_hw`, `signal_replay_balanced_blend`,
+  `sector_quality_rank`, `lgbm_ranker`, `pairs_trading`, `aroon_trend`.
+  Cross-check any deployability claim against
+  `docs/VALIDATION_STRATEGY_FIX_LOG.md` for that specific name rather than
+  trusting a remembered status — this list itself is exactly the kind of
+  fact that will go stale the next time a strategy is added, removed, or
+  archived.
 
-If a task touches any of these modules and doesn't mention fixing the gap,
-flag it in your response rather than silently working around it.
+If a task touches any of these modules and doesn't mention fixing (or
+respecting the archival of) the gap, flag it in your response rather than
+silently working around it.
 
 ## Where to go for the full picture
 
