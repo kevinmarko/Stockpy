@@ -143,7 +143,9 @@ def test_apply_portfolio_gross_cap_properties(weights_dict, max_gross):
         assert res.was_capped is False
     else:
         assert res.scale_factor < 1.0
-        assert res.was_capped is True
+        # A trim smaller than epsilon (e.g. gross one float ulp over the cap)
+        # is not reported as a cap event -- see apply_portfolio_gross_cap.
+        assert res.was_capped is (res.scale_factor < 1.0 - 1e-9)
 
     # Aggregate invariant (the plan's literal spec): total gross exposure
     # across all finite-weight scaled names must never exceed max_gross.
