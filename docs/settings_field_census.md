@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `0e88e265b7b85b18d9b2957805313e956c456381`
+- Measured at commit: `175c4b8ff4880aeba8c40f273ffa0f3f9ebc13b6`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -236,7 +236,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _guard_settings, _m
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 744 | 262 |
+| (a) `settings.KEY` | 743 | 262 |
 | (b) `getattr(settings, "KEY", default)` | 313 | 187 |
 | (c) `getattr(settings, <var>)` (dynamic) | 13 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |

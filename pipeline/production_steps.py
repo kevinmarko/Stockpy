@@ -85,32 +85,36 @@ class AsyncDataFetchStep(PipelineStep):
 
         settings.warn_if_fred_key_leaked(telemetry)
 
-        # Merge discovered candidates
-        from pilots.discovery import discovery
+        # Robinhood account snapshot first: its held symbols are one of the
+        # universe's inputs. Same call as before step 5.1 (20 h cache, then
+        # the existing ROBINHOOD_AUTO_REFRESH_ENABLED-gated live tier); it
+        # only moved up from below the data-engine setup. No new login path.
+        rh_positions = {}
+        snapshot = None
         try:
-            candidates = discovery(limit=None).get("candidates", [])
-            discovered_symbols = [c["symbol"].upper().strip() for c in candidates if c.get("symbol")]
-            if discovered_symbols:
-                telemetry.info(f"Loaded {len(discovered_symbols)} candidates from scan discovery.")
-        except Exception as exc:
-            telemetry.warning(f"Failed to load discovery candidates: {exc}")
-            discovered_symbols = []
+            snapshot = await asyncio.to_thread(main_orchestrator.fetch_account_snapshot)
+            rh_positions = main_orchestrator.account_snapshot_to_robinhood_positions(snapshot)
+        except Exception as rh_exc:
+            snapshot = None
+            telemetry.warning(
+                f"Robinhood account snapshot unavailable: {rh_exc}; "
+                "proceeding without holdings-aware overlay."
+            )
+        ctx.context_extras["robinhood_positions"] = rh_positions
 
-        # WATCHLIST env var / watchlist.txt ∪ discovered ∪ DEFAULT_TICKERS
-        # (fallback-only) — shared with main.py::_build_universe() via
-        # data.portfolio_sync so this step can no longer silently diverge
-        # from what watchlist.txt / POST /agentic/watch actually promise.
-        # Previously this line never read WATCHLIST/watchlist.txt at all and
-        # dropped DEFAULT_TICKERS outright whenever discovery had any
-        # candidate — see docs/known_issues/daemon_universe_watchlist_divergence.md.
-        from data.portfolio_sync import compute_tracked_universe, load_env_watchlist
+        # One universe builder for both orchestrators (step 5.1):
+        # held ∪ WATCHLIST/watchlist.txt ∪ discovered, rating auto-drop,
+        # DEFAULT_TICKERS only when that whole union is empty, then
+        # recently-closed retention unioned LAST. main.py calls the same
+        # pipeline.advisory_inputs.build_universe_detailed(), so the two can
+        # no longer diverge. Before 5.1 this step left held out of the union
+        # (so DEFAULT_TICKERS could fire while positions were held) and had
+        # no closed-position retention -- see
+        # docs/known_issues/daemon_universe_watchlist_divergence.md.
+        from pipeline.advisory_inputs import build_universe_detailed
 
-        watchlist_symbols = load_env_watchlist(ctx.watchlist_file)
-        base_symbols = compute_tracked_universe(
-            watchlist=watchlist_symbols,
-            discovered=discovered_symbols,
-            default_tickers=settings.DEFAULT_TICKERS,
-        )
+        build = build_universe_detailed(snapshot, watchlist_file=ctx.watchlist_file)
+        base_symbols = list(build.symbols)
 
         # Permanent universe-funnel diagnostic (see
         # docs/known_issues/universe_count_reporting_mismatch.md): records the
@@ -118,12 +122,20 @@ class AsyncDataFetchStep(PipelineStep):
         # "N-symbol universe but only M forecasted" report can be diagnosed
         # from state_snapshot.json directly instead of re-deriving it from
         # scratch. Never gates behavior -- purely additive telemetry.
+        # Since step 5.1 held symbols go into the builder's union rather than
+        # being appended afterwards, so tracked_universe_before_held now
+        # counts the universe symbols that are neither held nor retained
+        # (the ones only watchlist/discovery/DEFAULT_TICKERS contributed).
         universe_funnel: dict = {
             "configured_default_tickers": len(settings.DEFAULT_TICKERS or []),
-            "watchlist_count": len(watchlist_symbols),
-            "discovered_count": len(discovered_symbols),
-            "default_tickers_is_fallback": not (watchlist_symbols or discovered_symbols),
-            "tracked_universe_before_held": len(base_symbols),
+            "watchlist_count": len(build.watchlist),
+            "discovered_count": len(build.discovered),
+            "default_tickers_is_fallback": build.default_tickers_is_fallback,
+            "tracked_universe_before_held": len(
+                set(base_symbols) - build.held - build.recently_closed
+            ),
+            "held_positions_added": len(rh_positions),
+            "recently_closed_added": len(build.recently_closed),
         }
         ctx.context_extras["universe_funnel"] = universe_funnel
 
@@ -137,27 +149,11 @@ class AsyncDataFetchStep(PipelineStep):
             else:
                 telemetry.warning("FRED_API_KEY not configured. Operating with deterministic MockDataEngine.")
                 de = MockDataEngine()
-                ctx.symbols = ["AAPL"]
+                # Mock mode keeps its pre-5.1 universe: AAPL plus held.
+                ctx.symbols = ["AAPL"] + [tk for tk in rh_positions if tk != "AAPL"]
             ctx.market = de
         else:
             ctx.symbols = base_symbols
-
-        # Integrate Robinhood Holdings
-        rh_positions = {}
-        try:
-            snapshot = await asyncio.to_thread(main_orchestrator.fetch_account_snapshot)
-            rh_positions = main_orchestrator.account_snapshot_to_robinhood_positions(snapshot)
-            if rh_positions:
-                for tk in rh_positions.keys():
-                    if tk not in ctx.symbols:
-                        ctx.symbols.append(tk)
-        except Exception as rh_exc:
-            telemetry.warning(
-                f"Robinhood account snapshot unavailable: {rh_exc}; "
-                "proceeding without holdings-aware overlay."
-            )
-        ctx.context_extras["robinhood_positions"] = rh_positions
-        universe_funnel["held_positions_added"] = len(rh_positions)
         universe_funnel["tracked_universe_total"] = len(ctx.symbols)
 
         # 1. Asynchronous concurrent data fetching
@@ -1760,10 +1756,10 @@ def _compute_xsec_momentum(
     restricted to pipeline/production_steps.py.
 
     NOTE: this formula is actually hand-duplicated a THIRD time, in
-    main.py::_build_context_extras (its own inline copy, for the advisory
-    path -- search that file for ``SKIP_DAYS = 22``). Keep all three
+    pipeline/advisory_inputs.py::build_context_extras (its own inline copy,
+    for the advisory path -- search for ``SKIP_DAYS = 22``). Keep all three
     (main_orchestrator.py::compute_xsec_momentum_ranks, this function, and
-    main.py::_build_context_extras) in lockstep if skip_days/lookback_days
+    advisory_inputs.build_context_extras) in lockstep if skip_days/lookback_days
     ever change in any one of them. This is no longer just a hand-maintained
     comment: tests/test_xsec_momentum_advisory_parity.py numerically
     cross-checks all three at their shared default constants and will fail
