@@ -461,6 +461,11 @@ def _kelly_target_qty(kelly_weight: float, equity: float, price: float) -> float
 
 # strategy_id stamped on every order the pipeline itself submits.
 PIPELINE_STRATEGY_ID = "main_pipeline"
+# Action Signals that close an open pipeline position. strategy_engine emits
+# STRONG BUY / BUY / HOLD / RISK REDUCE (RISK REDUCE is its fail-closed
+# immediate-exit instruction); it never emits SELL or TRIM, so before
+# RISK REDUCE was added here the SELL branch could not fire on this pipeline.
+EXIT_SIGNALS = frozenset({"SELL", "TRIM", "RISK REDUCE", "AVOID"})
 
 
 async def _execute_broker_orders(
@@ -479,8 +484,9 @@ async def _execute_broker_orders(
     * Errors are logged as ERROR and never propagate — broker execution is
       best-effort; the analysis pipeline's value must never be held hostage
       to broker connectivity.
-    * Only BUY signals with Kelly Target > 0 generate new orders; SELL/TRIM
-      signals close existing positions.
+    * Only BUY signals with Kelly Target > 0 generate new orders (on the paper
+      ledger, PAPER_PIPELINE_PROBE_WEIGHT stands in for a zero Kelly Target);
+      EXIT_SIGNALS (SELL/TRIM/RISK REDUCE/AVOID) close existing positions.
     * Kill-switch active → ``KillSwitchActiveError`` is raised inside
       ``submit_order_with_idempotency``; caught here and logged as CRITICAL.
     * ``dry_run=True`` logs intent but never reaches the broker network.
@@ -627,6 +633,11 @@ async def _execute_broker_orders(
             )
             log_fn(result)
 
+        probe_weight = (
+            float(getattr(settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.0) or 0.0)
+            if is_paper_ledger else 0.0
+        )
+
         now = datetime.now(timezone.utc)
         for _, row in final_df.iterrows():
             symbol = str(row.get("Symbol", "")).upper()
@@ -635,6 +646,13 @@ async def _execute_broker_orders(
 
             if not symbol:
                 continue
+
+            # Paper-only cold-start probe (settings.PAPER_PIPELINE_PROBE_WEIGHT):
+            # with no closed pipeline trades Kelly scales every target to 0,
+            # which would stop the pipeline ever collecting the closed trades
+            # Kelly needs. A positive Kelly Target always wins.
+            if is_paper_ledger and "BUY" in signal and kelly <= 0 and probe_weight > 0:
+                kelly = probe_weight
 
             try:
                 if "BUY" in signal and kelly > 0 and symbol not in open_symbols:
@@ -698,7 +716,7 @@ async def _execute_broker_orders(
                     else:
                         await _submit_and_log(intent, _log_buy)
 
-                elif signal in ("SELL", "TRIM") and symbol in open_symbols:
+                elif signal in EXIT_SIGNALS and symbol in open_symbols:
                     sell_qty = abs(open_symbols[symbol])
                     # target_qty intentionally equals qty here, not a remaining gap:
                     # a full position close has no distinct "target" size to diverge

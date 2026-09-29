@@ -739,3 +739,82 @@ def test_fmp_paper_does_not_rebuy_its_own_open_position(monkeypatch):
     asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
 
     assert broker.submitted == []
+
+
+# ---------------------------------------------------------------------------
+# (i) paper cold-start probe sizing + RISK REDUCE exits
+# ---------------------------------------------------------------------------
+
+def test_fmp_paper_probe_sizes_a_zero_kelly_buy(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.01, raising=False)
+    df = _df([
+        {"Symbol": "AGNC", "Action Signal": "STRONG BUY", "Kelly Target": 0.0,
+         "Kelly_Target_Post_Regime": 0.0, "Price": 10.0},
+        {"Symbol": "SPY", "Action Signal": "HOLD", "Kelly Target": 0.0, "Price": 500.0},
+    ])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    buy = broker.submitted[0]
+    assert (buy.symbol, buy.side) == ("AGNC", OrderSide.BUY)
+    assert buy.qty == pytest.approx(100.0)  # 1% of $100k at $10
+
+
+def test_fmp_paper_positive_kelly_beats_the_probe(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.01, raising=False)
+    df = _df([{"Symbol": "AGNC", "Action Signal": "BUY", "Kelly Target": 0.03, "Price": 10.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert broker.submitted[0].qty == pytest.approx(300.0)
+
+
+def test_probe_is_off_by_default(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.0, raising=False)
+    df = _df([{"Symbol": "AGNC", "Action Signal": "BUY", "Kelly Target": 0.0, "Price": 10.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert broker.submitted == []
+
+
+def test_probe_never_applies_to_the_alpaca_path(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=_make_ts_store(), kill_switch=_FakeKillSwitch(active=False)
+    )
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.01, raising=False)
+    df = _df([{"Symbol": "AGNC", "Action Signal": "BUY", "Kelly Target": 0.0, "Price": 10.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert broker.submitted == []
+
+
+def test_risk_reduce_closes_the_pipeline_position(monkeypatch):
+    broker = MockBroker(positions=[
+        _tagged_pos("AGNC", 100.0, main_orchestrator.PIPELINE_STRATEGY_ID),
+        _tagged_pos("ABR", 95.0, "Manual Trade"),
+    ])
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    df = _df([
+        {"Symbol": "AGNC", "Action Signal": "RISK REDUCE", "Kelly Target": 0.0, "Price": 10.0},
+        {"Symbol": "ABR", "Action Signal": "RISK REDUCE", "Kelly Target": 0.0, "Price": 10.0},
+    ])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert [(i.symbol, i.side, i.qty) for i in broker.submitted] == [("AGNC", OrderSide.SELL, 100.0)]
+
+
+def test_exit_signals_match_strategy_engine_vocabulary():
+    # strategy_engine emits RISK REDUCE as its exit instruction; it must close.
+    assert "RISK REDUCE" in main_orchestrator.EXIT_SIGNALS
+    assert "HOLD" not in main_orchestrator.EXIT_SIGNALS
