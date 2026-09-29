@@ -103,8 +103,8 @@ function HeadlineProbabilityBar({ p }: { p: HeadlineSentimentItem["probabilities
 }
 
 /**
- * The real scored-headline feed backing `sentiment_score` (FMP-primary,
- * Finnhub-fallback — `signals/news_catalyst.py`). Publisher/title/url/date
+ * The real scored-headline feed backing `sentiment_score` (FMP-only —
+ * `signals/news_catalyst.py`). Publisher/title/url/date
  * come straight from `headlines`; `provider_used` is surfaced as a small
  * badge when a real provider actually served this request. Honest empty
  * states: "News provider not configured" when neither is set up at all,

@@ -258,8 +258,7 @@ def test_alerting_mcp_credentials_mirror_secret_siblings(temp_env):
         assert env_io.get_value(key) == "587"
 
 
-def test_reddit_user_agent_mirrors_edgar_user_agent_precedent():
-    assert env_io.is_secret("REDDIT_USER_AGENT") is True
+def test_edgar_user_agent_is_secret():
     assert env_io.is_secret("EDGAR_USER_AGENT") is True
 
 

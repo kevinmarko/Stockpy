@@ -9,8 +9,6 @@ All network I/O is monkeypatched.  The suite verifies:
   - AlpacaProvider shapes the bar DataFrame to the expected OHLCV contract
   - YFinanceProvider marks quotes is_stale=True unconditionally
   - YFinanceProvider raises MarketDataError on empty bar response
-  - FinnhubProvider maps metric names to yfinance .info keys
-  - FinnhubProvider degrades gracefully (empty dict) when key is absent
   - CompositeProvider selects Alpaca when keys are set
   - CompositeProvider selects yfinance when Alpaca keys are absent
   - CompositeProvider raises RuntimeError on unknown MARKET_DATA_PROVIDER value
@@ -542,64 +540,6 @@ class TestYFinanceProvider:
 
 
 # ---------------------------------------------------------------------------
-# 5. FinnhubProvider
-# ---------------------------------------------------------------------------
-
-class TestFinnhubProvider:
-    def _mock_client(self, metrics: Dict[str, Any] = None, profile: Dict[str, Any] = None):
-        client = MagicMock()
-        client.company_basic_financials.return_value = {
-            "metric": metrics or {"peBasicExclExtraTTM": 25.0, "pbQuarterly": 3.5}
-        }
-        client.company_profile2.return_value = profile or {
-            "name": "Apple Inc.", "finnhubIndustry": "Technology"
-        }
-        client.quote.return_value = {"c": 175.0}
-        return client
-
-    def test_degrades_when_key_absent(self):
-        from data.market_data import FinnhubProvider
-        provider = FinnhubProvider(api_key=None)
-        result = provider.get_fundamentals("AAPL")
-        assert result == {}
-
-    def test_maps_finnhub_to_yfinance_keys(self):
-        from data.market_data import FinnhubProvider
-        provider = FinnhubProvider.__new__(FinnhubProvider)
-        provider._api_key = "test_key"
-        provider._client = self._mock_client(
-            metrics={"peBasicExclExtraTTM": 28.5, "pbQuarterly": 3.5,
-                     "dividendYieldIndicatedAnnual": 0.52}
-        )
-        fund = provider.get_fundamentals("AAPL")
-        assert "trailingPE" in fund
-        assert fund["trailingPE"] == pytest.approx(28.5, abs=1e-6)
-        # Dividend yield should be converted from percent to fraction
-        assert fund["dividendYield"] == pytest.approx(0.0052, abs=1e-6)
-
-    def test_returns_empty_on_network_error(self):
-        from data.market_data import FinnhubProvider
-        provider = FinnhubProvider.__new__(FinnhubProvider)
-        provider._api_key = "key"
-        provider._client = MagicMock(
-            company_basic_financials=MagicMock(side_effect=RuntimeError("API error"))
-        )
-        result = provider.get_fundamentals("AAPL")
-        assert result == {}
-
-    def test_includes_company_name_and_sector(self):
-        from data.market_data import FinnhubProvider
-        provider = FinnhubProvider.__new__(FinnhubProvider)
-        provider._api_key = "key"
-        provider._client = self._mock_client(
-            profile={"name": "Apple Inc.", "finnhubIndustry": "Technology"}
-        )
-        fund = provider.get_fundamentals("AAPL")
-        assert fund.get("shortName") == "Apple Inc."
-        assert fund.get("sector") == "Technology"
-
-
-# ---------------------------------------------------------------------------
 # 5b. YahooFundamentalsProvider (primary fundamentals source)
 # ---------------------------------------------------------------------------
 
@@ -724,13 +664,13 @@ class TestCompositeProviderSelection:
     only mutates ``os.environ`` would pass even if ``CompositeProvider``
     regressed back to reading ``os.environ.get(...)`` directly. See the
     2026-07 ``os.environ`` -> ``settings.settings`` fix (mirrors the
-    ``signals/news_catalyst.py::build_finnhub_client`` precedent).
+    the ``os.environ``-vs-settings precedent).
     """
 
     def _patched(self, **overrides):
         base = dict(
             ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
-            MARKET_DATA_PROVIDER=None, FINNHUB_API_KEY=None,
+            MARKET_DATA_PROVIDER=None,
             FUNDAMENTALS_SOURCE="yahoo",
         )
         base.update(overrides)
@@ -830,7 +770,7 @@ class TestProviderProvenanceAttributes:
     def _patched(self, **overrides):
         base = dict(
             ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
-            MARKET_DATA_PROVIDER=None, FINNHUB_API_KEY=None,
+            MARKET_DATA_PROVIDER=None,
             FUNDAMENTALS_SOURCE="yahoo",
         )
         base.update(overrides)
@@ -892,7 +832,7 @@ class TestCompositeProviderCache:
         """Return a CompositeProvider with a mocked YFinanceProvider."""
         from data.market_data import CompositeProvider, Quote, YFinanceProvider
         cp = CompositeProvider.__new__(CompositeProvider)
-        from data.market_data import _QuoteCache, FinnhubProvider
+        from data.market_data import _QuoteCache
         cp._cache = _QuoteCache(ttl_seconds=quote_ttl)
 
         mock_provider = MagicMock(spec=YFinanceProvider)
@@ -911,7 +851,7 @@ class TestCompositeProviderCache:
         )
         mock_provider.get_fundamentals = MagicMock(return_value={})
         cp._quote_provider = mock_provider
-        # Fundamentals now route to YahooFundamentalsProvider (primary), not Finnhub.
+        # Fundamentals now route to YahooFundamentalsProvider (primary), not a vendor SDK.
         from data.market_data import YahooFundamentalsProvider
         cp._fundamentals_provider = MagicMock(spec=YahooFundamentalsProvider)
         cp._fundamentals_provider.get_fundamentals.return_value = {}
@@ -1124,32 +1064,8 @@ class TestSingleton:
 
 
 # ---------------------------------------------------------------------------
-# 9. Rate limiter + fundamentals cache (2026-06 Finnhub 429 mitigation)
+# 9. Fundamentals cache
 # ---------------------------------------------------------------------------
-
-class TestSlidingWindowRateLimiter:
-    """Verifies the rate limiter blocks once the per-window budget is exhausted."""
-
-    def test_first_n_calls_do_not_sleep(self, monkeypatch):
-        from data.market_data import _SlidingWindowRateLimiter
-        slept: list[float] = []
-        monkeypatch.setattr("data.market_data.time.sleep", lambda s: slept.append(s))
-        rl = _SlidingWindowRateLimiter(max_calls=3, window_seconds=60.0)
-        for _ in range(3):
-            rl.acquire()
-        assert slept == []  # No sleep within budget
-
-    def test_exceeds_budget_triggers_sleep(self, monkeypatch):
-        from data.market_data import _SlidingWindowRateLimiter
-        slept: list[float] = []
-        monkeypatch.setattr("data.market_data.time.sleep", lambda s: slept.append(s))
-        rl = _SlidingWindowRateLimiter(max_calls=2, window_seconds=60.0)
-        rl.acquire()
-        rl.acquire()
-        rl.acquire()  # Should trigger a sleep
-        assert len(slept) == 1
-        assert slept[0] > 0
-
 
 class TestFundamentalsCache:
     """Verifies positive AND empty fundamentals are cached with TTL semantics."""
@@ -1187,77 +1103,11 @@ class TestFundamentalsCache:
         assert c.get("AAPL") is None
 
 
-class TestFinnhubRateLimitAndCache:
-    """End-to-end: FinnhubProvider must cache and rate-limit per 2026-06 fix."""
-
-    def _make_mock_client(self, *, raise_429: bool = False):
-        client = MagicMock()
-        if raise_429:
-            # Mimic finnhub.exceptions.FinnhubAPIException's status_code attr
-            exc = Exception("Too many requests.")
-            exc.status_code = 429
-            client.company_basic_financials.side_effect = exc
-            client.quote.side_effect = exc
-            client.company_profile2.side_effect = exc
-        else:
-            client.company_basic_financials.return_value = {
-                "metric": {"peBasicExclExtraTTM": 28.5}
-            }
-            client.quote.return_value = {"c": 150.0}
-            client.company_profile2.return_value = {
-                "name": "Apple Inc", "finnhubIndustry": "Tech"
-            }
-        return client
-
-    def test_repeated_calls_hit_cache_not_network(self, monkeypatch):
-        from data.market_data import FinnhubProvider
-        provider = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
-        provider._client = self._make_mock_client()
-
-        provider.get_fundamentals("AAPL")
-        provider.get_fundamentals("AAPL")
-        provider.get_fundamentals("AAPL")
-
-        # Only the FIRST call should reach the network.
-        assert provider._client.company_basic_financials.call_count == 1
-
-    def test_429_is_caught_and_negative_cached(self, monkeypatch):
-        """A 429 should be swallowed, return {}, and prevent re-hammer next call."""
-        from data.market_data import FinnhubProvider
-        monkeypatch.setattr("data.market_data.time.sleep", lambda s: None)
-
-        provider = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
-        provider._client = self._make_mock_client(raise_429=True)
-
-        result = provider.get_fundamentals("BAC")
-        assert result == {}  # Empty, never raises
-
-        # Second call hits negative cache — zero additional network calls.
-        first_call_count = provider._client.company_basic_financials.call_count
-        provider.get_fundamentals("BAC")
-        assert provider._client.company_basic_financials.call_count == first_call_count
-
-    def test_rate_limiter_blocks_when_budget_exhausted(self, monkeypatch):
-        """Verify the limiter is wired into FinnhubProvider, not just a free function."""
-        from data.market_data import FinnhubProvider
-        slept: list[float] = []
-        monkeypatch.setattr("data.market_data.time.sleep", lambda s: slept.append(s))
-
-        # 2 calls/min budget; each get_fundamentals makes up to 3 internal calls.
-        provider = FinnhubProvider(api_key="key", cache_ttl_seconds=3600,
-                                   rate_limit_per_min=2)
-        provider._client = self._make_mock_client()
-
-        provider.get_fundamentals("AAPL")
-        # The third internal call within the window should have triggered a sleep.
-        assert len(slept) >= 1
-
-
 class TestCompositeProviderFundamentalsCache:
     """The composite-level cache prevents the fundamentals provider re-hammering.
 
     Fundamentals now come from ``YahooFundamentalsProvider`` (primary), not
-    Finnhub. This test injects a call-counting fake onto the composite's
+    a vendor SDK. This test injects a call-counting fake onto the composite's
     ``_fundamentals_provider`` so it stays fully offline (no yfinance network)
     and proves the composite TTL cache deduplicates repeat lookups.
     """
@@ -1266,7 +1116,7 @@ class TestCompositeProviderFundamentalsCache:
         from data.market_data import CompositeProvider
         with patch.multiple(
             "settings.settings",
-            FINNHUB_API_KEY=None, ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
+            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
             MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo",
         ):
             cp = CompositeProvider()
@@ -1326,7 +1176,7 @@ class TestRobinhoodOutputSuppression:
 
 # ---------------------------------------------------------------------------
 # 11. CompositeProvider config sourced from settings.settings, not os.environ
-#     (2026-07 fix -- mirrors signals/news_catalyst.py::build_finnhub_client
+#     (2026-07 fix -- mirrors the settings-not-os.environ convention
 #     and prompt_registry/registry.py's precedent: pydantic-settings'
 #     env_file=".env" loading populates settings.settings directly, NOT the
 #     real os.environ, so every knob CompositeProvider reads must come from

@@ -1400,7 +1400,7 @@ def evaluate(
         "xsec_12_1m": _safe_float(_xsec_12_1m_map.get(symbol), nan),
         "xsec_momentum_rank": _safe_float(_xsec_rank_map.get(symbol), nan),
         # Per-symbol news sentiment (signals/news_catalyst.py FinBERT). NaN when
-        # the module didn't run (no FINNHUB_API_KEY) — never fabricated.
+        # the module didn't run (news provider not configured) — never fabricated.
         "news_sentiment": _safe_float(_news_map.get(symbol), nan),
         # Portfolio-wide CoVaR tail-dependency proxy (research_engine Topic 30),
         # broadcast to every symbol. NaN when <2 symbols had returns this cycle.

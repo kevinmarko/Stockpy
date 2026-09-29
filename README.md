@@ -61,7 +61,6 @@ Copy [`.env.example`](.env.example) to `.env` and fill in the values. **Never co
 | `ALPACA_API_KEY` | Optional | Broker execution (no-op while `ADVISORY_ONLY=true`) |
 | `ALPACA_SECRET_KEY` | Optional | — |
 | `ALPACA_PAPER` | Optional | `true` (default) = paper trading. Has no effect while `ADVISORY_ONLY=true` |
-| `FINNHUB_API_KEY` | Optional | Company news / earnings headlines for the `news_catalyst` signal only. **Not** a fundamentals source — fundamentals are Yahoo statement-derived (free, `data/yahoo_fundamentals.py`). Absent = news_catalyst signal disabled |
 | `NTFY_TOPIC` | Optional | Phone push alerts via ntfy.sh — set a random string, subscribe in the ntfy app |
 | `WATCHLIST` | Optional | Comma-separated tickers (alternatives: `watchlist.txt` one per line, or Sheet2 column A — see "Ticker universe" below) |
 | `DISCORD_WEBHOOK_URL` | Optional | Discord channel alerts |
@@ -104,8 +103,8 @@ interchangeable without touching calculation code:
 - **Fundamentals** are a separate, independent choice —
   `FUNDAMENTALS_SOURCE=yahoo` (default, statement-derived,
   `data/yahoo_fundamentals.py`) or `FUNDAMENTALS_SOURCE=yfinance_info` (raw
-  `.info` fallback). Finnhub is **not** a fundamentals source; `FINNHUB_API_KEY`
-  only powers the `news_catalyst` signal.
+  `.info` fallback). Company news for the `news_catalyst` signal comes from FMP
+  (`FMP_NEWS_ENABLED` + `FMP_API_KEY`); Finnhub was removed 2026-09.
 
 This split (market data provider vs. fundamentals source vs. broker execution
 credentials) means `ALPACA_*` keys can be present purely for broker execution

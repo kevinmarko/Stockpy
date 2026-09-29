@@ -79,8 +79,8 @@ classified news-vs-comment by `data.sentiment_source_class.classify_source`.
 ## Honest degradation — the Review term (CONSTRAINT #4)
 
 The comment/investor-forum ("Review") volume term has no genuinely active
-data source in this repository today (Reddit requires credentials that are
-typically unset; StockTwits doesn't exist yet). `compute_spec_sector_heat`
+data source in this repository today (Reddit was removed 2026-09; StockTwits
+is opt-in and off by default). `compute_spec_sector_heat`
 checks whether the comment channel has **ever** produced a single document
 (via `HistoricalStore.get_sentiment_archive_depth_by_source`, an
 all-time, not per-window, check). If it never has:
@@ -96,7 +96,7 @@ the cross-sector min-max normalization rather than folded in as a zero
 (an unknown quantity cannot be compared against known ones).
 
 Once the comment channel has produced at least one real document (see
-Sentiment Source Class Phase 4/5's Reddit-enablement and StockTwits work),
+Sentiment Source Class Phase 4/5's StockTwits work and docs/RUNBOOK.md §5.3),
 `review_volume` reflects genuine per-window sums, including genuine zeros
 for a quiet window on an otherwise-active channel — `degraded_reason`
 becomes `None` for every sector with observed volume.

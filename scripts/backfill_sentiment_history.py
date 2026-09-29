@@ -2,19 +2,17 @@
 scripts/backfill_sentiment_history.py
 ======================================
 CLI backfill script that pulls HISTORICAL sentiment documents from the
-sources with genuine point-in-time archives (GDELT, SEC EDGAR, Finnhub,
-Reddit) into ``sentiment_ingestion_audit`` -- so the credibility-weighted
+sources with genuine point-in-time archives (GDELT, SEC EDGAR) into ``sentiment_ingestion_audit`` -- so the credibility-weighted
 sentiment signal's point-in-time archive doesn't have to wait for calendar
 time alone before ``settings.SENTIMENT_PIT_MIN_MONTHS`` of real depth exists.
 
 Why this is honest, not a hindsight shortcut
 ---------------------------------------------
-GDELT article tone, EDGAR filing dates, and Finnhub headlines are all
+GDELT article tone and EDGAR filing dates are both
 GENUINELY historical records -- GDELT's tone score was computed at or near
-publish time (not reconstructed today), a filing's date is permanent fact,
-and Finnhub's ``company_news`` API accepts arbitrary historical date ranges.
+publish time (not reconstructed today), a filing's date is permanent fact.
 Backfilling these is not fabricating point-in-time data (CONSTRAINT #4); it
-is ingesting real historical records that already existed. All three are
+is ingesting real historical records that already existed. Both are
 policy-trusted institutional sources (``credibility_weight=1.0`` regardless
 of when they're scored -- see ``signals/credibility.py``'s
 ``_INSTITUTIONAL_SOURCES``), so backfilling them introduces no credibility
@@ -25,16 +23,9 @@ no historical archive to query at all (see ``YahooRSSSource``'s docstring)
 -- passing ``--sources yahoo_rss`` explicitly is harmless but will
 contribute zero documents for every symbol, every time.
 
-Reddit carries a real, documented caveat (not hidden): its posts ARE
-genuinely searchable historically, but a backfilled post's credibility
-sub-scores (``S_authority``, from author follower count) can only ever
-reflect the author's CURRENT account state -- Reddit's API has no way to
-answer "what was this account's standing 5 months ago." This is included in
-the default backfill set anyway (an explicit operator choice), but
-``HistoricalStore.get_sentiment_archive_depth_by_source()`` lets a future
-validation gate weigh institutional depth separately from Reddit's, rather
-than one blended number that would overstate confidence in the weaker
-component.
+Reddit and Finnhub were removed 2026-09; historical rows they archived
+stay in ``sentiment_ingestion_audit`` (``HistoricalStore.
+get_sentiment_archive_depth_by_source()`` still reports them by name).
 
 GDELT throttling shapes what a run can achieve
 ---------------------------------------------------------------
@@ -55,7 +46,7 @@ Two consequences for anyone running this script now:
 * A throttled run ends up with a PARTIAL range, by design. Once the
   limiter's cooldown opens, ``GDELTSource`` abandons that symbol's remaining
   windows instead of grinding through certain-to-fail requests — which is
-  what leaves wall-clock for EDGAR/Finnhub/Reddit. The per-source depth
+  what leaves wall-clock for EDGAR. The per-source depth
   report printed at the end (and
   ``HistoricalStore.get_sentiment_archive_depth_by_source()``) is the honest
   record of what was actually archived; re-run to extend it.
@@ -101,7 +92,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # yahoo_rss deliberately excluded -- see module docstring.
-_DEFAULT_BACKFILL_SOURCES = "gdelt,edgar,finnhub,reddit"
+_DEFAULT_BACKFILL_SOURCES = "gdelt,edgar"
 
 
 def _process_one(
@@ -183,14 +174,6 @@ def main():
             "yahoo_rss has no historical archive to query -- it will "
             "contribute zero documents to this backfill regardless of "
             "--months (see YahooRSSSource's docstring)."
-        )
-    if "reddit" in {s.strip() for s in args.sources.split(",")}:
-        logger.warning(
-            "Reddit backfill caveat: credibility sub-scores for backfilled "
-            "posts reflect each author's CURRENT account state, not their "
-            "state at post time (Reddit's API cannot answer that). See "
-            "RedditSource's docstring. Institutional sources (GDELT/EDGAR/"
-            "Finnhub) carry no such caveat."
         )
 
     # Overrides for the duration of THIS standalone process only -- a

@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 335,
+    "live_safe": 326,
     "no_op": 4,
-    "restart_required": 85,
-    "total": 424
+    "restart_required": 84,
+    "total": 414
   },
   "dynamic_sites": [
     {
@@ -70,7 +70,7 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5178,
+      "line": 5176,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -110,7 +110,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 385,
+  "files_scanned": 384,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -191,7 +191,6 @@
     "FINBERT_BATCH_SIZE",
     "FINBERT_ENABLED",
     "FINBERT_SCORE_CACHE_ENABLED",
-    "FINNHUB_API_KEY",
     "FLATTEN_ON_KILL",
     "FMP_ANALYST_ENABLED",
     "FMP_ANALYST_REFRESH_HOURS",
@@ -369,10 +368,6 @@
     "RAG_QUERY_API_ENABLED",
     "RAG_RETRIEVAL_TOP_K",
     "RATIONALE_VERBOSITY",
-    "REDDIT_BACKFILL_MAX_PAGES",
-    "REDDIT_CLIENT_ID",
-    "REDDIT_CLIENT_SECRET",
-    "REDDIT_USER_AGENT",
     "RH_LOGIN_DEADLINE_SECONDS",
     "RH_LOGIN_GRACE_SECONDS",
     "RH_LOGIN_STARTUP_SECONDS",
@@ -420,10 +415,6 @@
     "SENTIMENT_LLM_VERIFICATION_PROVIDER",
     "SENTIMENT_MAX_DOCUMENTS_PER_CYCLE",
     "SENTIMENT_SOCIAL_BLEND_WEIGHT",
-    "SENTRY_DSN",
-    "SENTRY_ENABLED",
-    "SENTRY_ENVIRONMENT",
-    "SENTRY_TRACES_SAMPLE_RATE",
     "SIZING_CAP_ALERT_ENABLED",
     "SIZING_CAP_ALERT_THRESHOLD_PCT",
     "SIZING_CAP_AUDIT_ENABLED",
@@ -457,13 +448,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 848,
+    "attr": 831,
     "factory_param": 4,
     "getattr_const": 319,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 268,
+    "attr": 258,
     "factory_param": 4,
     "getattr_const": 189,
     "os_environ": 2
@@ -488,9 +479,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1985",
+        "site": "data/market_data.py:1670",
         "via": [
-          1890
+          1575
         ]
       },
       {
@@ -543,9 +534,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1986",
+        "site": "data/market_data.py:1671",
         "via": [
-          1890
+          1575
         ]
       },
       {
@@ -1337,7 +1328,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4698",
+        "site": "api/pilots_api.py:4697",
         "via": []
       }
     ],
@@ -1348,27 +1339,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4697",
-        "via": []
-      }
-    ],
-    "FINNHUB_RATE_LIMIT_PER_MIN": [
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "init_body"
-        ],
-        "site": "data/market_data.py:1562",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "method_self_assign"
-        ],
-        "site": "data/market_data.py:1595",
+        "site": "api/pilots_api.py:4696",
         "via": []
       }
     ],
@@ -1379,7 +1350,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1902",
+        "site": "data/market_data.py:1587",
         "via": []
       },
       {
@@ -1388,9 +1359,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1939",
+        "site": "data/market_data.py:1624",
         "via": [
-          1877
+          1562
         ]
       }
     ],
@@ -1401,9 +1372,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1950",
+        "site": "data/market_data.py:1635",
         "via": [
-          1877
+          1562
         ]
       }
     ],
@@ -1414,7 +1385,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4839",
+        "site": "api/pilots_api.py:4837",
         "via": []
       }
     ],
@@ -1623,27 +1594,9 @@
         "discarded": false,
         "form": "attr",
         "rules": [
-          "init_body"
-        ],
-        "site": "data/market_data.py:1560",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "method_self_assign"
-        ],
-        "site": "data/market_data.py:1590",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1874",
+        "site": "data/market_data.py:1559",
         "via": []
       },
       {
@@ -1652,7 +1605,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2510",
+        "site": "data/market_data.py:2195",
         "via": []
       }
     ],
@@ -1663,25 +1616,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1444",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "init_body"
-        ],
-        "site": "data/market_data.py:1561",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "method_self_assign"
-        ],
-        "site": "data/market_data.py:1591",
+        "site": "data/market_data.py:1389",
         "via": []
       },
       {
@@ -1690,7 +1625,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1875",
+        "site": "data/market_data.py:1560",
         "via": []
       },
       {
@@ -1699,7 +1634,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2511",
+        "site": "data/market_data.py:2196",
         "via": []
       }
     ],
@@ -1710,7 +1645,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1900",
+        "site": "data/market_data.py:1585",
         "via": []
       }
     ],
@@ -1928,7 +1863,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1867",
+        "site": "data/market_data.py:1554",
         "via": []
       },
       {
@@ -1937,7 +1872,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2295",
+        "site": "data/market_data.py:1980",
         "via": []
       }
     ],
@@ -1948,9 +1883,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1930",
+        "site": "data/market_data.py:1615",
         "via": [
-          1877
+          1562
         ]
       }
     ],
@@ -1961,7 +1896,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1862",
+        "site": "data/market_data.py:1549",
         "via": []
       }
     ],
@@ -2259,7 +2194,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "desktop/orchestrator_daemon.py:610",
+        "site": "desktop/orchestrator_daemon.py:607",
         "via": []
       }
     ],
@@ -2481,7 +2416,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:10834",
+        "site": "Gravity AI Review Suite.py:10756",
         "via": []
       }
     ],
@@ -2606,7 +2541,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/sentiment_sources.py:1962",
+        "site": "data/sentiment_sources.py:1750",
         "via": []
       }
     ],
@@ -2617,9 +2552,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/sentiment_sources.py:1932",
+        "site": "data/sentiment_sources.py:1720",
         "via": [
-          1921
+          1709
         ]
       }
     ],
@@ -2719,9 +2654,9 @@
     "cross_module_init_helper": 92,
     "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 12,
-    "init_body": 12,
+    "init_body": 9,
     "init_self_assign": 44,
-    "method_self_assign": 8,
+    "method_self_assign": 5,
     "module_level": 50,
     "os_environ": 2
   },

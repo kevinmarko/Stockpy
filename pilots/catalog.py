@@ -313,7 +313,7 @@ PILOTS: List[Pilot] = [
         # adapter in scripts/refresh_validations.py). NOT a literal
         # reconstruction of the full 17-module blend above: 3 modules are
         # excluded for the whole backtest window --
-        # news_catalyst (live Finnhub calls), lgbm_ranker (always loads the
+        # news_catalyst (live news-provider calls), lgbm_ranker (always loads the
         # CURRENT persisted model regardless of historical date),
         # forecast_alignment (only backtestable within forecast_direction_arima_hw's
         # own bounded 5yr window -- excluded here to keep one consistent

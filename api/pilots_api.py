@@ -4688,10 +4688,9 @@ _SENTIMENT_GROUPS = [
         ],
     ),
     (
-        "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+        "Sources — StockTwits, EDGAR, GDELT, Google News",
         [
             ("STOCKTWITS_ENABLED", "bool", {}),
-            ("REDDIT_BACKFILL_MAX_PAGES", "int", {"min": 1, "max": 100, "step": 1}),
             ("GOOGLE_NEWS_LOOKBACK_WINDOW", "str", {}),
             ("EDGAR_FULLTEXT_ENABLED", "bool", {}),
             ("EDGAR_FULLTEXT_FORMS", "str", {}),
@@ -4710,7 +4709,6 @@ _SENTIMENT_GROUPS = [
             ("FINBERT_BATCH_SIZE", "int", {"min": 1, "max": 128, "step": 1}),
             ("FINBERT_SCORE_CACHE_ENABLED", "bool", {}),
             ("NEWS_LOOKBACK_DAYS", "int", {"min": 1, "max": 90, "step": 1}),
-            ("FINNHUB_RATE_LIMIT_PER_MIN", "int", {"min": 1, "max": 60, "step": 1}),
             ("SENTIMENT_SOCIAL_BLEND_WEIGHT", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
         ],
     ),

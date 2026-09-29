@@ -2179,10 +2179,10 @@ export interface MacroGateUpdateResult {
 }
 
 /**
- * One scored headline (`signals/news_catalyst.py`'s FMP/Finnhub-sourced
+ * One scored headline (`signals/news_catalyst.py`'s FMP-sourced
  * company news, FinBERT-scored) surfaced on the Sentiment Dynamics screen.
- * `publisher` is always a real wire/outlet name FMP or Finnhub actually
- * returned, or the literal source string ("fmp"/"finnhub") as a fallback —
+ * `publisher` is always a real wire/outlet name FMP actually
+ * returned, or the literal source string ("fmp") as a fallback —
  * NEVER "SEC EDGAR" or any other publisher this data path cannot reach (SEC
  * filings are ingested by a structurally different module for a different
  * signal). `url`/`published_at` are `null` on a genuine gap, never fabricated.
@@ -2239,7 +2239,7 @@ export interface SentimentDynamics {
   source: "antigravity_agent" | "unavailable";
   headlines: HeadlineSentimentItem[];
   earnings_catalyst: EarningsCatalystStatus | null;
-  provider_used: "fmp" | "finnhub" | "none";
+  provider_used: "fmp" | "none";
   source_breakdown: Record<string, number>;
   raw_sentiment_avg: number | null;
   dampened_sentiment_score: number | null;

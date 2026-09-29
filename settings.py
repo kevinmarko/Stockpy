@@ -159,7 +159,7 @@ class Settings(BaseSettings):
     # FIELD SECTIONS (in declaration order below)
     # -------------------------------------------------------------------------
     #   1.  Secrets / credentials .............. FRED, Alpaca, State API token
-    #   2.  Market-data layer .................. provider, Finnhub, cache TTLs
+    #   2.  Market-data layer .................. provider, cache TTLs
     #   3.  Robinhood — legacy SMS login ....... ROBINHOOD_USERNAME/PASSWORD
     #   4.  Robinhood — portfolio login ........ RH_USERNAME/PASSWORD, device-approval login timeouts
     #   5.  Order management / broker .......... DRY_RUN, ADVISORY_ONLY, webhook
@@ -532,17 +532,6 @@ class Settings(BaseSettings):
             "before full live eyeball verification against market open."
         ),
     )
-    FINNHUB_API_KEY: Optional[str] = Field(
-        default=None,
-        description=(
-            "Finnhub API key used ONLY by the news_catalyst signal "
-            "(signals/news_catalyst.py — company news / earnings headlines). "
-            "Free tier available at https://finnhub.io. Fundamentals are NO "
-            "longer sourced from Finnhub: they are Yahoo statement-derived "
-            "(data/yahoo_fundamentals.py) with a yfinance .info fallback, so "
-            "an absent key only disables the news catalyst signal (no crash)."
-        ),
-    )
     # --- Jules coding-agent API (data/jules_client.py) --------------------
     # Google's Jules (https://jules.googleapis.com) — an external, autonomous
     # coding agent that can be pointed at a connected GitHub repo and, in
@@ -735,12 +724,11 @@ class Settings(BaseSettings):
             "Manual/forced runs always bypass. 0 disables the gate."
         ),
     )
-    # TTL (seconds) for the in-process fundamentals cache in FinnhubProvider
-    # and CompositeProvider.  Fundamentals are quarterly/slow-moving, so a
-    # multi-hour TTL is safe and prevents the free Finnhub tier (60 calls/min)
-    # from being exhausted by repeated orchestrator passes.  Both positive AND
-    # empty responses are cached so 429-rate-limited symbols don't re-trigger
-    # network calls within the window.
+    # TTL (seconds) for the in-process fundamentals cache in CompositeProvider.
+    # Fundamentals are quarterly/slow-moving, so a multi-hour TTL is safe and
+    # prevents repeated orchestrator passes from exhausting vendor rate limits.
+    # Both positive AND empty responses are cached so rate-limited symbols
+    # don't re-trigger network calls within the window.
     FUNDAMENTALS_CACHE_TTL_SECONDS: int = Field(
         default=21_600,
         description="In-process fundamentals cache TTL in seconds (default 6 h).",
@@ -752,13 +740,6 @@ class Settings(BaseSettings):
     FUNDAMENTALS_NEG_CACHE_TTL_SECONDS: int = Field(
         default=900,
         description="In-process NEGATIVE (empty) fundamentals cache TTL in seconds (default 15 min).",
-    )
-    # Sliding-window call budget for FinnhubProvider (per 60 s).  Free tier is
-    # 60 calls/minute; we default to 50 to leave headroom for the two auxiliary
-    # endpoints (quote, company_profile2) that ``get_fundamentals`` invokes.
-    FINNHUB_RATE_LIMIT_PER_MIN: int = Field(
-        default=50,
-        description="Finnhub sliding-window call budget per 60 s (free tier ceiling: 60).",
     )
     BETA_LOOKBACK_DAYS: int = Field(
         default=504,
@@ -772,7 +753,7 @@ class Settings(BaseSettings):
         description=(
             "Primary fundamentals backend: 'fmp' (Financial Modeling Prep, default by "
             "explicit operator decision), 'yahoo' (statement-derived), or 'yfinance_info' "
-            "(raw .info fallback). Finnhub is no longer a fundamentals source. "
+            "(raw .info fallback). "
             "'fmp' requires FMP_FUNDAMENTALS_ENABLED=true; with either half missing "
             "the Yahoo path is used as fallback when FMP_FALLBACK_ENABLED is True. "
             "Note: operator accepted risk of switching primary fundamentals provider to FMP "
@@ -939,7 +920,7 @@ class Settings(BaseSettings):
         description=(
             "Master switch for the FMP earnings calendar/surprise feed. Defaults "
             "True by explicit operator decision. When on, FMP becomes a SECOND "
-            "source for the existing Earnings_Date column and, unlike Finnhub, "
+            "source for the existing Earnings_Date column and "
             "is not limited to a 30-day forward window. Single gate."
         ),
     )
@@ -950,11 +931,9 @@ class Settings(BaseSettings):
             "stock_news, wrapping /news/stock). Defaults True by explicit "
             "operator decision. When True AND FMP_API_KEY is set, FMP becomes "
             "the PRIMARY provider for company headlines (signals/news_catalyst.py::"
-            "fetch_company_headlines dispatches FMP-first, falling back to "
-            "Finnhub only on an FMP failure) and 'fmp_news' becomes eligible "
-            "for SENTIMENT_SOURCES. Verified live 2026-08 against a real FMP "
-            "key: /news/stock returns >=6 months of real history (vs. "
-            "Finnhub's free-tier ~3-month cap) with working from/to date-"
+            "fetch_company_headlines is FMP-only; Finnhub was removed 2026-09) "
+            "and 'fmp_news' becomes eligible for SENTIMENT_SOURCES. Verified live 2026-08 against a real FMP "
+            "key: /news/stock returns >=6 months of real history with working from/to date-"
             "window + page/limit pagination -- the one FMP data-fetch flag "
             "with genuine live verification behind it, not just a probe. "
             "Deliberately does NOT touch /news/press-releases -- that "
@@ -1536,37 +1515,6 @@ class Settings(BaseSettings):
         description="Webhook URL for CRITICAL drift alerts (Slack/Discord incoming webhook).",
     )
 
-    # --- Sentry Error Tracking ---
-    SENTRY_ENABLED: bool = Field(
-        default=True,
-        description=(
-            "Enable Sentry error reporting for background daemons. "
-            "Safe to default True because it degrades to a no-op if "
-            "SENTRY_DSN is absent."
-        ),
-    )
-    SENTRY_DSN: Optional[str] = Field(
-        default=None,
-        description=(
-            "The Sentry project DSN. SECRET — never GUI-writable, never "
-            "logged (env_io.py's SECRET_KEYS), same treatment as "
-            "ALERT_WEBHOOK_URL/DISCORD_WEBHOOK_URL/SLACK_WEBHOOK_URL. Empty/"
-            "unset is a safe no-op even when SENTRY_ENABLED=True — no "
-            "sentry_sdk import is attempted without it."
-        ),
-    )
-    SENTRY_ENVIRONMENT: str = Field(
-        default="development",
-        description="Environment tag sent with Sentry events (e.g., 'production', 'development').",
-    )
-    SENTRY_TRACES_SAMPLE_RATE: float = Field(
-        default=0.0,
-        description=(
-            "Fraction of transactions to trace for performance monitoring. "
-            "Default 0.0 (errors-only) to avoid unexpected event volume."
-        ),
-    )
-
     # --- Pre-trade risk gate (execution/risk_gate.py) ---
     MAX_CORRELATION: float = Field(
         default=0.85,
@@ -1731,7 +1679,7 @@ class Settings(BaseSettings):
     # observability/alerts.py). The notifier used to read these via a bare
     # os.getenv() call -- the same "pydantic-settings loads .env into Settings
     # only, never into the real process environment" bug class documented
-    # throughout CLAUDE.md for Finnhub/EDGAR/Reddit/etc. -- and was fixed to
+    # throughout CLAUDE.md for EDGAR/etc. -- and was fixed to
     # import the real settings singleton like every other subsystem here.
     ALERT_NTFY_TOPIC: Optional[str] = Field(
         default=None,
@@ -3048,14 +2996,14 @@ class Settings(BaseSettings):
         description=(
             "Master switch for NewsCatalystSignal.pre_compute()'s multi-source "
             "ingestion step (data/sentiment_sources.py's CompositeSentimentSource "
-            "-- Yahoo RSS/GDELT/Reddit/EDGAR). False (the default) is a complete "
+            "-- Yahoo RSS/GDELT/EDGAR). False (the default) is a complete "
             "no-op: no network call is attempted for any symbol, matching this "
             "codebase's convention for opt-in networked features "
             "(ORCHESTRATOR_DAEMON_ENABLED, GRAVITY_AI_RUNNER_ENABLED "
             "default False the same way). This exists "
-            "because two of the four sources (Yahoo RSS, GDELT) need no API key "
+            "because two of the three sources (Yahoo RSS, GDELT) need no API key "
             "and so have no other way to stay quiet by default -- unlike "
-            "Finnhub/Reddit/EDGAR, which already degrade to a no-op when their "
+            "EDGAR, which already degrades to a no-op when its "
             "credentials are absent. Set True in .env to actually start "
             "accumulating sentiment_ingestion_audit history; until then, "
             "SENTIMENT_PIT_MIN_MONTHS never starts counting."
@@ -3086,9 +3034,9 @@ class Settings(BaseSettings):
             "the validation gating check, never re-typed as a literal "
             "elsewhere. A future gating check should apply this PER SOURCE "
             "GROUP via HistoricalStore.get_sentiment_archive_depth_by_source() "
-            "-- institutional sources (gdelt/edgar/finnhub, backfillable via "
+            "-- institutional sources (gdelt/edgar, backfillable via "
             "scripts/backfill_sentiment_history.py with zero credibility bias) "
-            "can honestly satisfy this bar much sooner than Reddit/live-only "
+            "can honestly satisfy this bar much sooner than live-only "
             "accumulation; one blended check across all sources would "
             "overstate confidence in whichever source is actually shallowest."
         ),
@@ -3096,27 +3044,23 @@ class Settings(BaseSettings):
 
     # --- Multi-source sentiment ingestion (Sentiment Pipeline Phase 3,
     # data/sentiment_sources.py) ---
-    # Free-first sources by default (Yahoo RSS, GDELT, Reddit, SEC/EDGAR,
-    # existing Finnhub). Each source is independently try/excepted in
+    # Free-first sources by default (Yahoo RSS, GDELT, SEC/EDGAR; Reddit and
+    # Finnhub were removed 2026-09). Each source is independently try/excepted in
     # CompositeSentimentSource -- one source's outage or missing credentials
     # never blocks the others (CONSTRAINT #6). A paid feed can be added later
     # as a SentimentSource subclass without changing this list's shape.
     SENTIMENT_SOURCES: str = Field(
-        default="yahoo_rss,gdelt,reddit,edgar",
+        default="yahoo_rss,gdelt,edgar",
         description=(
             "Comma-separated list of enabled data/sentiment_sources.py "
             "provider names. Mirrors the MARKET_DATA_PROVIDER selection "
             "pattern in data/market_data.py, but as a fan-out set rather "
             "than a mutually-exclusive choice -- every listed source "
             "contributes documents each cycle. Removing a name disables "
-            "that source without touching code. 'finnhub' is EXCLUDED from "
-            "the default: NewsCatalystSignal.pre_compute() already fetches "
-            "and scores Finnhub headlines directly every cycle (writing to "
-            "news_history); adding 'finnhub' here too would double-fetch the "
-            "same API per symbol per cycle. Add it explicitly only if the "
-            "direct Finnhub path is ever retired in favor of this composite. "
+            "that source without touching code. An unknown name (e.g. the "
+            "removed 'reddit'/'finnhub') is logged and skipped. "
             "'fmp_news' (data/sentiment_sources.py's FMPNewsSource) is "
-            "EXCLUDED from the default for the IDENTICAL reason, even though "
+            "EXCLUDED from the default, even though "
             "FMP is this codebase's primary market-data/fundamentals/news "
             "provider (MARKET_DATA_PROVIDER='fmp', FUNDAMENTALS_SOURCE='fmp', "
             "FMP_NEWS_ENABLED default True): NewsCatalystSignal.pre_compute()'s "
@@ -3132,7 +3076,7 @@ class Settings(BaseSettings):
             "path's SENTIMENT_INGESTION_LOOKBACK_DAYS vs. the direct path's "
             "NEWS_LOOKBACK_DAYS). Add it explicitly only if the direct FMP "
             "headline path in news_catalyst.py is ever retired in favor of "
-            "this composite, mirroring the 'finnhub' guidance above."
+            "this composite."
         ),
     )
     SENTIMENT_COMMENT_SOURCES: str = Field(
@@ -3143,7 +3087,8 @@ class Settings(BaseSettings):
             "retail-authored) rather than NEWS sources (objective, "
             "editorially-published) -- see data/sentiment_source_class.py's "
             "classify_source(). Every source_name NOT listed here is treated "
-            "as news. 'stocktwits' is a real source (data.sentiment_sources."
+            "as news. 'reddit' stays listed only so historical audit rows from "
+            "the removed RedditSource still classify as comments. 'stocktwits' is a real source (data.sentiment_sources."
             "StockTwitsSource) but is not itself in SENTIMENT_SOURCES' "
             "default fan-out and requires STOCKTWITS_ENABLED to actually "
             "fetch anything -- listing it here only pre-classifies it, it "
@@ -3166,9 +3111,9 @@ class Settings(BaseSettings):
         default=1,
         description=(
             "Calendar days of lookback each CompositeSentimentSource.fetch_all() "
-            "cycle requests from every enabled source (Yahoo RSS/GDELT/Reddit/"
-            "EDGAR/Finnhub). Deliberately shorter than NEWS_LOOKBACK_DAYS "
-            "(the Finnhub-only headline signal's own 7-day window): these are "
+            "cycle requests from every enabled source (Yahoo RSS/GDELT/"
+            "EDGAR). Deliberately shorter than NEWS_LOOKBACK_DAYS "
+            "(the FMP headline signal's own 7-day window): these are "
             "higher-velocity sources meant to be polled frequently, with the "
             "rolling dedup hash absorbing any overlap between cycles rather "
             "than relying on a wide backward window."
@@ -3253,41 +3198,11 @@ class Settings(BaseSettings):
             "before enabling."
         ),
     )
-    REDDIT_CLIENT_ID: str = Field(
-        default="",
-        description="Reddit API OAuth2 script-app client ID. Empty disables RedditSource.",
-    )
-    REDDIT_CLIENT_SECRET: str = Field(
-        default="",
-        description="Reddit API OAuth2 script-app client secret. Empty disables RedditSource.",
-    )
-    REDDIT_USER_AGENT: str = Field(
-        default="stockpy-sentiment-ingestion/0.1",
-        description=(
-            "User-Agent header sent with every Reddit API request, per "
-            "Reddit's API rules (a generic/missing User-Agent is rate-limited "
-            "more aggressively). Operators should set this to something "
-            "identifying their own deployment."
-        ),
-    )
-    REDDIT_BACKFILL_MAX_PAGES: int = Field(
-        default=10,
-        description=(
-            "Max pages RedditSource.fetch() will paginate through (via the "
-            "'after' cursor, 100 posts/page) when `since` is far enough in "
-            "the past that a single day/week 't=' bucket wouldn't cover it. "
-            "Bounds a historical-backfill request from paginating unbounded; "
-            "a live per-cycle call with a recent `since` typically stops "
-            "after 1 page. Backfilled posts' credibility sub-scores still "
-            "reflect the author's CURRENT account state, not their state at "
-            "post time -- see RedditSource's docstring."
-        ),
-    )
     STOCKTWITS_ENABLED: bool = Field(
         default=False,
         description=(
             "Master switch for data/sentiment_sources.py's StockTwitsSource "
-            "(free, uncredentialed -- unlike RedditSource, no OAuth "
+            "(free, uncredentialed -- no OAuth "
             "registration needed). False (the default) is a complete "
             "no-op: no StockTwits request is attempted. Also requires "
             "'stocktwits' to be added to SENTIMENT_SOURCES -- this flag "
@@ -3296,9 +3211,7 @@ class Settings(BaseSettings):
             "flag plus a source/form membership check). StockTwits' "
             "public endpoint has tightened over time and may rate-limit "
             "or require auth in some deployments; a failed request "
-            "degrades to no documents this cycle, exactly like a missing "
-            "Reddit credential -- Reddit remains the primary comment "
-            "source (see docs/RUNBOOK.md)."
+            "degrades to no documents this cycle."
         ),
     )
     EDGAR_USER_AGENT: str = Field(
@@ -3345,7 +3258,7 @@ class Settings(BaseSettings):
             "this pipeline runs locally instead of a distributed queue. Once "
             "reached, lower-priority sources (social feeds) are skipped for "
             "the remainder of the cycle while higher-priority sources "
-            "(Finnhub, EDGAR) keep running; never touches order/broker code "
+            "(EDGAR) keep running; never touches order/broker code "
             "under any pressure condition."
         ),
     )
@@ -3378,7 +3291,7 @@ class Settings(BaseSettings):
     # budget-bounded LLM check for documents whose HEURISTIC credibility
     # composite (S_authority + S_humanity) falls in a borderline band --
     # clearly-trusted or clearly-bot-flagged documents never pay the LLM
-    # cost, and institutional sources (finnhub/yahoo_rss/gdelt/edgar) are
+    # cost, and institutional sources (fmp_news/yahoo_rss/gdelt/edgar) are
     # skipped entirely. Opt-in, default False -- preserves today's exact
     # S_verification=1.0-for-everyone behavior, matching the
     # FORECAST_USE_GARCH_SIGMA opt-in convention.
@@ -4275,7 +4188,7 @@ class Settings(BaseSettings):
     )
 
     # --- News Catalyst Signal (Tier 2.4, signals/news_catalyst.py) ---
-    # Controls how far back to pull Finnhub company_news headlines and
+    # Controls how far back to pull FMP company-news headlines and
     # whether to use the FinBERT neural sentiment scorer (requires
     # `pip install transformers` and either PyTorch or TensorFlow).
     # When FINBERT_ENABLED=false or transformers is unavailable, a curated
@@ -4284,9 +4197,8 @@ class Settings(BaseSettings):
     NEWS_LOOKBACK_DAYS: int = Field(
         default=7,
         description=(
-            "Calendar days of Finnhub company_news headlines to score per "
-            "symbol per pre_compute cycle. Longer windows add latency; the "
-            "free Finnhub tier provides ~3 months of history."
+            "Calendar days of FMP company-news headlines to score per "
+            "symbol per pre_compute cycle. Longer windows add latency."
         ),
     )
     FINBERT_ENABLED: bool = Field(
@@ -4585,7 +4497,7 @@ class Settings(BaseSettings):
         description=(
             "Weight in [0, 1] on the multi-source credibility-weighted social "
             "sentiment component of NewsCatalystSignal.compute()'s blended "
-            "score; the Finnhub-headline component gets (1 - this weight) -- "
+            "score; the news-headline component gets (1 - this weight) -- "
             "the two always sum to 1.0 by construction (fixes the reviewed "
             "plan's M6 finding: unnormalized w1=0.4/w2=0.1 weights). Applied "
             "only when multi-source social documents exist for a symbol this "

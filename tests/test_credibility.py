@@ -32,7 +32,7 @@ def _doc(**overrides) -> SentimentDocument:
 
 
 class TestInstitutionalSources:
-    @pytest.mark.parametrize("source", ["finnhub", "yahoo_rss", "gdelt", "edgar"])
+    @pytest.mark.parametrize("source", ["fmp_news", "yahoo_rss", "gdelt", "edgar"])
     def test_institutional_source_fully_trusted(self, source):
         doc = _doc(source_name=source, author_handle=None)
         score = score_document(doc)
@@ -134,7 +134,7 @@ class TestScoreDocumentsBatch:
 
     def test_mixed_institutional_and_social_batch(self):
         docs = [
-            _doc(source_name="finnhub", author_handle=None),
+            _doc(source_name="fmp_news", author_handle=None),
             _doc(source_name="reddit", author_handle="user1", author_followers=10),
         ]
         scores = score_documents(docs)
@@ -160,7 +160,7 @@ class TestScoreDocumentLLMVerificationParam:
         assert score.verification_method == "llm"
 
     def test_institutional_source_ignores_llm_verification(self):
-        doc = _doc(source_name="finnhub", author_handle=None)
+        doc = _doc(source_name="fmp_news", author_handle=None)
         score = score_document(doc, llm_verification=0.1)
         assert score.s_verification == 1.0
         assert score.verification_method == "placeholder"
@@ -178,7 +178,7 @@ class TestLLMVerificationDefaultOff:
 
     def test_s_verification_always_one_by_default(self):
         docs = [
-            _doc(source_name="finnhub", author_handle=None, text_content="a"),
+            _doc(source_name="fmp_news", author_handle=None, text_content="a"),
             _doc(source_name="reddit", author_handle=None, author_followers=10, text_content="b"),
             _doc(source_name="reddit", author_handle=None, author_followers=100_000, text_content="c"),
         ]
@@ -206,7 +206,7 @@ class TestLLMVerificationEnabled:
         now = datetime(2026, 7, 21, 14, 0, tzinfo=timezone.utc)
         docs = [
             # Institutional -- always skipped, never a verification candidate.
-            _doc(source_name="finnhub", author_handle=None, text_content="institutional"),
+            _doc(source_name="fmp_news", author_handle=None, text_content="institutional"),
             # Clearly high-trust (high followers, no cadence signal) -- heuristic
             # (1.0 + 0.7) / 2 = 0.85, above the 0.7 borderline ceiling.
             _doc(source_name="reddit", author_handle=None, author_followers=100_000, text_content="trusted"),

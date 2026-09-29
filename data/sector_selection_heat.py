@@ -33,8 +33,8 @@ Class Phase 0) -- NOT a new ingestion source, NOT a new table.
 Honest degradation (CONSTRAINT #4) -- the Review term
 -------------------------------------------------------
 The comment/investor-forum ("Review") volume term has no genuinely active
-data source in this repository as of this feature's introduction (Reddit
-credentials are typically unset; StockTwits doesn't exist yet -- see
+data source in this repository as of this feature's introduction (Reddit was
+removed 2026-09; StockTwits is opt-in -- see
 Sentiment Source Class Phase 4/5). ``HistoricalStore.
 get_sentiment_daily_by_source_class`` honestly zero-fills a class's count
 for a day that WAS observed via the other class -- but that zero-fill

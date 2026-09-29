@@ -15,7 +15,7 @@ Phase 2 — account_snapshots / account_positions
     ``data/robinhood_portfolio.fetch_account_snapshot``: DB → JSON cache → live.
 
 Phase 3 — fundamentals_history + macro_history
-    Persist Finnhub/yfinance fundamentals snapshots (daily) and FRED macro series
+    Persist FMP/Yahoo fundamentals snapshots (daily) and FRED macro series
     (incremental by date) so the pipeline avoids redundant provider calls on every
     run.  ``get_fundamentals()`` caches typed columns + raw_json for PIT replay.
     ``get_macro()`` tops up only the missing date range from FRED.
@@ -105,8 +105,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Fundamentals key mapping: yfinance .info key → typed DB column name.
-# Finnhub keys are already mapped to yfinance-style keys by FinnhubProvider
-# before arriving at this layer (see data/market_data.py FinnhubProvider._METRIC_MAP).
+# Provider payloads are already mapped to yfinance-style keys before arriving
+# at this layer (Yahoo/FMP fundamentals providers in data/market_data.py).
 _FUND_KEY_MAP: Dict[str, str] = {
     "trailingPE":         "pe_ratio",
     "priceToBook":        "pb_ratio",
@@ -426,11 +426,11 @@ CREATE TABLE IF NOT EXISTS sentiment_llm_verification_cache (
 # Caches a headline's FinBERT (or lexicon-fallback) 3-class softmax score by
 # a SHA-256 content hash of the headline text
 # (signals.news_catalyst._content_hash), so a headline seen again in a later
-# cycle's Finnhub lookback window is not re-scored. Deliberately a SEPARATE
+# cycle's news lookback window is not re-scored. Deliberately a SEPARATE
 # table from sentiment_llm_verification_cache above -- that table caches an
 # LLM's credibility VERIFICATION verdict for a social-sentiment document
 # (Sentiment Pipeline Phase 2 PR2); this table caches a FinBERT/lexicon
-# SENTIMENT score for a news headline (Finnhub-sourced). Same content-hash
+# SENTIMENT score for a news headline (FMP-sourced). Same content-hash
 # pattern, unrelated purpose and unrelated callers.
 #
 # Content-hash, NOT date/cycle-keyed -- and this is NOT a lookahead risk.
@@ -440,7 +440,7 @@ CREATE TABLE IF NOT EXISTS sentiment_llm_verification_cache (
 # which trading cycle reads the cache. A lookahead bug would require a
 # cache READ to surface information from a cycle that hasn't happened yet;
 # here a cycle can only ever look up a hash for a headline it has ALREADY
-# fetched (Finnhub-sourced) THIS cycle, so there is no channel through
+# fetched (FMP-sourced) THIS cycle, so there is no channel through
 # which a future cycle's headline could leak into an earlier cycle's read.
 # See tests/test_news_catalyst.py::TestFinbertScoreCacheLookaheadSafety for
 # the explicit proof.
@@ -1979,7 +1979,7 @@ class HistoricalStore:
         ``data/`` and ``validation/``) so the date-recovery logic lives in
         exactly one place. Returns ``None`` (never fabricated) when the
         payload carries no usable date field — this is the expected,
-        common case for Finnhub-sourced payloads and is NOT an error.
+        common case for vendor payloads that carry no report date and is NOT an error.
         """
         try:
             from validation.pit_fundamentals import _extract_report_date
@@ -3033,7 +3033,7 @@ class HistoricalStore:
         ``source_name``, ``text_content``, ``raw_sentiment_score``. Optional
         credibility keys (``author_handle``, ``s_authority``, ``s_humanity``,
         ``s_verification``, ``credibility_weight``, ``is_bot``) default to
-        ``None``/``0`` for sources with no credibility signal (e.g. Finnhub
+        ``None``/``0`` for sources with no credibility signal (e.g. FMP
         headlines) -- never fabricated (CONSTRAINT #4). ``final_weighted_score``
         defaults to ``raw_sentiment_score`` when no ``credibility_weight`` is
         supplied. ``verification_method`` (``'placeholder'`` | ``'heuristic'``
@@ -3363,9 +3363,9 @@ class HistoricalStore:
         grouped by ``source_name``.
 
         Lets a future validation gate check institutional-source depth
-        (GDELT/EDGAR/Finnhub -- policy-trusted, genuinely backfillable, zero
-        credibility bias) SEPARATELY from social-source depth (Reddit --
-        backfillable but with degraded historical credibility, since a
+        (GDELT/EDGAR -- policy-trusted, genuinely backfillable, zero
+        credibility bias) SEPARATELY from social-source depth (comment sources --
+        backfillable only with degraded historical credibility, since a
         backfilled post's ``S_authority`` can only reflect the author's
         CURRENT account state; Yahoo RSS -- not backfillable at all, live-
         only) rather than one blended ``settings.SENTIMENT_PIT_MIN_MONTHS``

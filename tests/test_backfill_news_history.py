@@ -3,7 +3,7 @@
 Covers: the pure historical-headline/earnings parsing helpers
 (_fetch_headlines/_fetch_earnings_dates/_next_earnings_on), the per-symbol
 trailing-window reconstruction (_backfill_symbol — honest NaN vs real-score
-days, [-1, 1] clipping), and main()'s dead-letter resilience / no-client
+days, [-1, 1] clipping), and main()'s dead-letter resilience / no-provider
 guard. The repo-root import shim and the empty-universe guard are covered by
 tests/test_backfill_scripts_invocation.py, shared with
 backfill_news_history_from_audit.py's byte-identical versions of both tests.
@@ -17,98 +17,103 @@ from unittest import mock
 from scripts import backfill_news_history as backfill
 
 
+_START = datetime(2026, 1, 1, tzinfo=timezone.utc)
+_END = datetime(2026, 4, 1, tzinfo=timezone.utc)
+
+
 class TestFetchHeadlines:
+    """FMP-only (Finnhub removed 2026-09): paginated ``stock_news`` gated on
+    FMP_NEWS_ENABLED + FMP_API_KEY."""
+
     def test_parses_valid_items(self):
-        client = mock.MagicMock()
-        ts = int(datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp())
-        client.company_news.return_value = [
-            {"headline": "Widgets beat estimates", "datetime": ts},
+        articles = [
+            {"title": "Widgets beat estimates", "publishedDate": "2026-03-01 09:30:00"},
         ]
-        out = backfill._fetch_headlines(
-            client, "AAPL",
-            datetime(2026, 1, 1, tzinfo=timezone.utc),
-            datetime(2026, 4, 1, tzinfo=timezone.utc),
-        )
+        with mock.patch("scripts.backfill_news_history.settings.FMP_NEWS_ENABLED", True), \
+             mock.patch("scripts.backfill_news_history.settings.FMP_API_KEY", "k"), \
+             mock.patch("data.fmp_client.stock_news", return_value=articles):
+            out = backfill._fetch_headlines("AAPL", _START, _END)
         assert len(out) == 1
         as_of, headline = out[0]
         assert headline == "Widgets beat estimates"
-        assert as_of == datetime(2026, 3, 1, tzinfo=timezone.utc)
+        assert as_of.year == 2026 and as_of.month == 3
 
-    def test_skips_items_missing_headline_or_datetime(self):
-        client = mock.MagicMock()
-        client.company_news.return_value = [
-            {"headline": "", "datetime": 123456},
-            {"headline": "No timestamp"},
-            {"headline": "Fine", "datetime": None},
+    def test_skips_items_missing_title_or_unparseable_date(self):
+        articles = [
+            {"title": "", "publishedDate": "2026-03-01 09:30:00"},
+            {"title": "No timestamp"},
+            {"title": "Bad stamp", "publishedDate": "not-a-date"},
         ]
-        out = backfill._fetch_headlines(
-            client, "AAPL",
-            datetime(2026, 1, 1, tzinfo=timezone.utc),
-            datetime(2026, 4, 1, tzinfo=timezone.utc),
-        )
+        with mock.patch("scripts.backfill_news_history.settings.FMP_NEWS_ENABLED", True), \
+             mock.patch("scripts.backfill_news_history.settings.FMP_API_KEY", "k"), \
+             mock.patch("data.fmp_client.stock_news", return_value=articles):
+            out = backfill._fetch_headlines("AAPL", _START, _END)
         assert out == []
 
-    def test_non_list_result_returns_empty(self):
-        client = mock.MagicMock()
-        client.company_news.return_value = {"error": "rate limited"}
-        out = backfill._fetch_headlines(
-            client, "AAPL",
-            datetime(2026, 1, 1, tzinfo=timezone.utc),
-            datetime(2026, 4, 1, tzinfo=timezone.utc),
-        )
-        assert out == []
+    def test_disabled_or_unkeyed_makes_no_network_call(self):
+        with mock.patch("scripts.backfill_news_history.settings.FMP_NEWS_ENABLED", False), \
+             mock.patch("data.fmp_client.stock_news") as stock_news:
+            assert backfill._fetch_headlines("AAPL", _START, _END) == []
+        stock_news.assert_not_called()
+        with mock.patch("scripts.backfill_news_history.settings.FMP_NEWS_ENABLED", True), \
+             mock.patch("scripts.backfill_news_history.settings.FMP_API_KEY", None), \
+             mock.patch("data.fmp_client.stock_news") as stock_news:
+            assert backfill._fetch_headlines("AAPL", _START, _END) == []
+        stock_news.assert_not_called()
 
-    def test_client_exception_never_raises(self):
-        client = mock.MagicMock()
-        client.company_news.side_effect = RuntimeError("network down")
-        out = backfill._fetch_headlines(
-            client, "AAPL",
-            datetime(2026, 1, 1, tzinfo=timezone.utc),
-            datetime(2026, 4, 1, tzinfo=timezone.utc),
-        )
+    def test_fmp_unavailable_never_raises(self):
+        from data.fmp_client import FMPUnavailable
+
+        with mock.patch("scripts.backfill_news_history.settings.FMP_NEWS_ENABLED", True), \
+             mock.patch("scripts.backfill_news_history.settings.FMP_API_KEY", "k"), \
+             mock.patch("data.fmp_client.stock_news", side_effect=FMPUnavailable("down")):
+            out = backfill._fetch_headlines("AAPL", _START, _END)
         assert out == []
 
 
 class TestFetchEarningsDates:
-    def test_parses_and_sorts(self):
-        client = mock.MagicMock()
-        client.earnings_calendar.return_value = {
-            "earningsCalendar": [
-                {"date": "2026-06-01"},
-                {"date": "2026-02-01"},
-            ]
-        }
-        out = backfill._fetch_earnings_dates(
-            client, "AAPL",
-            datetime(2026, 1, 1, tzinfo=timezone.utc),
-            datetime(2026, 7, 1, tzinfo=timezone.utc),
-        )
+    def test_parses_filters_and_sorts(self):
+        rows = [
+            {"event_date": "2026-06-01"},
+            {"event_date": "2026-02-01"},
+            {"event_date": "2025-01-01"},  # outside [start, end]
+        ]
+        with mock.patch("scripts.backfill_news_history.settings.FMP_NEWS_ENABLED", True), \
+             mock.patch("scripts.backfill_news_history.settings.FMP_API_KEY", "k"), \
+             mock.patch("data.fmp_feeds_company.fetch_earnings_rows", return_value=rows):
+            out = backfill._fetch_earnings_dates(
+                "AAPL", _START, datetime(2026, 7, 1, tzinfo=timezone.utc),
+            )
         assert out == [
             datetime(2026, 2, 1, tzinfo=timezone.utc),
             datetime(2026, 6, 1, tzinfo=timezone.utc),
         ]
 
     def test_skips_malformed_dates(self):
-        client = mock.MagicMock()
-        client.earnings_calendar.return_value = {
-            "earningsCalendar": [{"date": ""}, {"date": "not-a-date"}]
-        }
-        out = backfill._fetch_earnings_dates(
-            client, "AAPL",
-            datetime(2026, 1, 1, tzinfo=timezone.utc),
-            datetime(2026, 7, 1, tzinfo=timezone.utc),
-        )
+        rows = [{"event_date": ""}, {"event_date": "not-a-date"}]
+        with mock.patch("scripts.backfill_news_history.settings.FMP_NEWS_ENABLED", True), \
+             mock.patch("scripts.backfill_news_history.settings.FMP_API_KEY", "k"), \
+             mock.patch("data.fmp_feeds_company.fetch_earnings_rows", return_value=rows):
+            out = backfill._fetch_earnings_dates(
+                "AAPL", _START, datetime(2026, 7, 1, tzinfo=timezone.utc),
+            )
         assert out == []
 
-    def test_client_exception_never_raises(self):
-        client = mock.MagicMock()
-        client.earnings_calendar.side_effect = RuntimeError("network down")
-        out = backfill._fetch_earnings_dates(
-            client, "AAPL",
-            datetime(2026, 1, 1, tzinfo=timezone.utc),
-            datetime(2026, 7, 1, tzinfo=timezone.utc),
-        )
+    def test_fetch_exception_never_raises(self):
+        with mock.patch("scripts.backfill_news_history.settings.FMP_NEWS_ENABLED", True), \
+             mock.patch("scripts.backfill_news_history.settings.FMP_API_KEY", "k"), \
+             mock.patch("data.fmp_feeds_company.fetch_earnings_rows",
+                        side_effect=RuntimeError("network down")):
+            out = backfill._fetch_earnings_dates(
+                "AAPL", _START, datetime(2026, 7, 1, tzinfo=timezone.utc),
+            )
         assert out == []
+
+    def test_disabled_makes_no_call(self):
+        with mock.patch("scripts.backfill_news_history.settings.FMP_NEWS_ENABLED", False), \
+             mock.patch("data.fmp_feeds_company.fetch_earnings_rows") as rows:
+            assert backfill._fetch_earnings_dates("AAPL", _START, _END) == []
+        rows.assert_not_called()
 
 
 class TestNextEarningsOn:
@@ -136,11 +141,10 @@ class TestNextEarningsOn:
 
 class TestBackfillSymbol:
     def _run(self, headlines, earnings=None, **kwargs):
-        client = mock.MagicMock()
         with mock.patch.object(backfill, "_fetch_headlines", return_value=headlines), \
              mock.patch.object(backfill, "_fetch_earnings_dates", return_value=earnings or []):
             defaults = dict(
-                symbol="AAPL", client=client, pipeline=None,
+                symbol="AAPL", pipeline=None,
                 start_date=datetime(2026, 3, 2, tzinfo=timezone.utc),  # Monday
                 end_date=datetime(2026, 3, 6, tzinfo=timezone.utc),    # Friday
                 lookback_days=7, suppress_hours=48.0, dampen_days=7.0,
@@ -192,17 +196,17 @@ class TestMainGuards:
     # tests/test_backfill_scripts_invocation.py (shared, byte-identical
     # with backfill_news_history_from_audit.py's version of this test).
 
-    def test_no_finnhub_client_logs_error_and_returns(self, caplog):
+    def test_no_provider_logs_error_and_returns(self, caplog):
         with mock.patch.object(backfill, "resolve_universe", return_value=["AAPL"]):
-            with mock.patch.object(backfill, "build_finnhub_client", return_value=None):
+            with mock.patch("scripts.backfill_news_history.settings.FMP_NEWS_ENABLED", False):
                 with mock.patch.object(sys, "argv", ["backfill_news_history.py"]):
                     with caplog.at_level("ERROR"):
                         backfill.main()  # must not raise
-        assert any("FINNHUB_API_KEY" in r.message for r in caplog.records)
+        assert any("FMP_API_KEY" in r.message for r in caplog.records)
 
     def test_per_symbol_failure_is_dead_lettered(self, caplog):
         with mock.patch.object(backfill, "resolve_universe", return_value=["AAPL", "MSFT"]):
-            with mock.patch.object(backfill, "build_finnhub_client", return_value=mock.MagicMock()):
+            with mock.patch.object(backfill, "_fmp_configured", return_value=True):
                 with mock.patch.object(backfill, "_get_finbert_pipeline", return_value=None):
                     with mock.patch.object(
                         backfill, "_backfill_symbol",
@@ -216,7 +220,7 @@ class TestMainGuards:
 
     def test_happy_path_writes_one_call_per_day_with_backfill_source(self):
         with mock.patch.object(backfill, "resolve_universe", return_value=["AAPL"]):
-            with mock.patch.object(backfill, "build_finnhub_client", return_value=mock.MagicMock()):
+            with mock.patch.object(backfill, "_fmp_configured", return_value=True):
                 with mock.patch.object(backfill, "_get_finbert_pipeline", return_value=None):
                     with mock.patch.object(
                         backfill, "_backfill_symbol",

@@ -103,5 +103,5 @@ def test_disallowed_key_still_raises(temp_env):
 def test_secret_key_still_raises(temp_env):
     # A real secret must still be rejected.
     with pytest.raises(SecretWriteError):
-        env_io.write_setting("FINNHUB_API_KEY", "should-never-write")
-    assert "FINNHUB_API_KEY" not in temp_env.read_text(encoding="utf-8")
+        env_io.write_setting("FMP_API_KEY", "should-never-write")
+    assert "FMP_API_KEY" not in temp_env.read_text(encoding="utf-8")

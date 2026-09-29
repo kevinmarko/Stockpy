@@ -15,7 +15,7 @@ Sub-scores
 ----------
 ``S_authority``
     Source/account-age/follower-count based. Institutional/editorial
-    sources (Finnhub, Yahoo RSS, GDELT, EDGAR) carry no author metadata by
+    sources (FMP news, Yahoo RSS, GDELT, EDGAR) carry no author metadata by
     design — they are a deliberate MODELING CHOICE of full trust (1.0), not
     a fabricated per-document measurement (CONSTRAINT #4): we are not
     inventing a follower count for a Reuters-style headline, we are stating
@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 # Sources with no author/follower/account-age concept at all — editorial or
 # regulatory copy, treated as fully trusted by policy (see module docstring).
-_INSTITUTIONAL_SOURCES = frozenset({"finnhub", "fmp_news", "yahoo_rss", "gdelt", "edgar"})
+_INSTITUTIONAL_SOURCES = frozenset({"fmp_news", "yahoo_rss", "gdelt", "edgar"})
 
 # --- Tunables (calibrate on real ingested data before relying on these) ---
 _AUTHORITY_FOLLOWER_FLOOR = 50
