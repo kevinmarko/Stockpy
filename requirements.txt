@@ -51,7 +51,7 @@ numba==0.61.2
 # first upgrading numba to a release that supports it, or the JIT paths in
 # vectorbt/pandas-ta will break at runtime.
 numpy>=2.0,<2.3
-oauthlib==3.3.1
+oauthlib==4.0.0
 packaging==26.0
 pandas==2.3.3
 pandas-ta-classic==0.6.20
