@@ -44,9 +44,7 @@ Before writing a single line of test code:
 - **Numeric drift tolerance.** Per CLAUDE.md: "numeric drift on existing
   indicators must stay below 1e-5" — use `pytest.approx(..., abs=1e-5)` (or
   tighter, if the module warrants it) rather than a loose default tolerance.
-- **No-lookahead-bias check.** Per CLAUDE.md: "Every indicator and
-  forecaster must be verified to have zero lookahead bias using the
-  perturbation tests in `tests/`." If the target module computes an
+- **No-lookahead-bias check.** Per CLAUDE.md: "Every indicator, forecaster and feature must be lookahead-free, proven with a perturbation test" If the target module computes an
   indicator, forecast, or any value that could leak future information, read
   `tests/lookahead_check.py` first to see the existing perturbation-test
   utility this repo already has, and reuse its pattern rather than

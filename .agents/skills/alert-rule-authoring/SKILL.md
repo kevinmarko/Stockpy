@@ -91,8 +91,7 @@ here.
   `ALERT_SLACK_WEBHOOK_URL`, `ALERT_CHANNELS`) rather than `settings.X` — be
   aware this means a value that exists only in `.env` (never exported to the
   real shell environment) will not be seen here unless something upstream
-  calls `load_dotenv()` first (see CLAUDE.md's ".env resolution fix" bullet
-  for the general shape of this bug class; this module has not been
+  calls `load_dotenv()` first (see CLAUDE.md's Settings rule "Read config via `settings.X`, never `os.environ`" and the ".env resolution fix" entry in `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section for the general shape of this bug class; this module has not been
   confirmed migrated to `settings.X`, so verify against the current source
   before assuming it has been fixed). `get_alert_config()`/
   `save_alert_config(config)` persist the event-subscription config
@@ -107,7 +106,7 @@ here.
 
 ## 2. `ALERT_WEBHOOK_URL` (the legacy reconciliation webhook)
 
-This is CLAUDE.md's documented one: *"Set `ALERT_WEBHOOK_URL` in `.env` to a
+This is the documented one (the "Reconciliation alerts" entry in `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section): *"Set `ALERT_WEBHOOK_URL` in `.env` to a
 Slack/Discord incoming-webhook URL; `reconcile_state` fires it on any
 position drift."* Concretely, this lives in `execution/order_manager.py`
 (NOT `alerting.py`) — `OrderManager.__init__` reads
@@ -120,8 +119,7 @@ then (2) if `self._alert_url` is set, POSTs `{"text": message}` via
 `urllib.request` (stdlib, not `requests` — this repo avoids the extra
 dependency for a single POST call) with a 5-second timeout, kept purely for
 backward compatibility. Both paths independently catch and log failures —
-"failures logged but never swallowed silently in a bare except" per
-CLAUDE.md, meaning every failure path has an explicit `logger.warning(...)`
+"failures logged but never swallowed silently in a bare except" per that same entry, meaning every failure path has an explicit `logger.warning(...)`
 call, not a bare `except: pass`.
 
 ## 3. Testing an alert

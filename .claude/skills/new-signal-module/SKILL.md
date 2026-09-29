@@ -34,8 +34,7 @@ Two methods matter:
 - **`compute_vectorized(self, df: pd.DataFrame, context: SignalContext) -> pd.DataFrame`**
   (`signals/base.py:168`) — the base implementation just calls `compute()`
   row-by-row via `df.apply`, which is O(n) Python-loop-equivalent. Per
-  CLAUDE.md's "Technical/fundamental math is vectorized" convention and the
-  "Signal Engine Vectorization" note (Phase 4 — the whole `SignalAggregator`
+  CLAUDE.md's "Technical/fundamental math is vectorized" convention and the "Signal Engine Vectorization" note (relocated to `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section; Phase 4 — the whole `SignalAggregator`
   path is natively vectorized), **override `compute_vectorized` directly with
   real pandas/numpy ops** rather than relying on the fallback. See
   `signals/rsi_extremes.py:16` (`RSIExtremesSignal.compute_vectorized`) for
@@ -185,8 +184,7 @@ Backtest columns, `—` for Pilot/Backtest until those exist.
 
 ## 5. Write the mandatory no-lookahead-bias perturbation test
 
-CLAUDE.md: *"Every indicator and forecaster must be verified to have zero
-lookahead bias using the perturbation tests in `tests/`."* The shared harness
+CLAUDE.md: *"Every indicator, forecaster and feature must be lookahead-free, proven with a perturbation test"* The shared harness
 is `tests/lookahead_check.py::verify_no_lookahead(func, data, t)` — it runs
 `func(data, t)`, then perturbs every column of `data` at indices `> t` to an
 extreme sentinel value, re-runs `func(data, t)`, and asserts the two outputs
@@ -245,8 +243,7 @@ or tighter, not a loose `pytest.approx()` default.
 
 ## 6. Add a `pilots/catalog.py` entry
 
-CLAUDE.md: *"Each module also has an entry in `pilots/catalog.py` (a
-Pilot)"* — this is what makes your module a standalone, copyable strategy in
+`docs/signals/README.md` (Module Index, Pilot column): every module has a matching entry in `pilots/catalog.py` (a Pilot) — this is what makes your module a standalone, copyable strategy in
 the Pilots PWA. `pilots/catalog.py`'s own header docstring (`pilots/catalog.py:1`)
 spells out the constraints: dependency-light (only `settings` + stdlib —
 never a heavy engine, since this is imported on the API read path), and

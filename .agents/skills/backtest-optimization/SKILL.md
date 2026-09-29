@@ -89,8 +89,7 @@ commands above answer genuinely different questions.
 ## When you're actually optimizing parameters
 
 "Optimize a strategy's parameters" in this repo does **not** mean grid-search
-the gate metrics until something clears threshold — CLAUDE.md is explicit
-that thresholds are never loosened and filters are never date-snooped to a
+the gate metrics until something clears threshold — `docs/VALIDATION_STRATEGY_FIX_LOG.md` is explicit that thresholds are never loosened and filters are never date-snooped to a
 specific crash window. Two other repo-wide constraints bind here too:
 
 - Any new trading rule must be optimized in `vectorbt` and validated in

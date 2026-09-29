@@ -118,7 +118,7 @@ codebase and go find it:
 | Domain | The one real implementation | Never do this |
 |---|---|---|
 | Kelly / position sizing | `sizing/kelly.py`, `sizing/vol_target.py`, `sizing/position_sizer.py::size_position()`, `StrategyEngine._calculate_kelly_sizing()` | A new win-rate/payoff/Kelly-fraction formula anywhere else |
-| Options Greeks | **Archived.** `pilots/options_risk.py` was `git mv`'d to `legacy/pilots/options_risk.py` in the 2026-09 options-desk retirement (see `CLAUDE.md`'s step 4b bullet); no options Greeks are computed anywhere in the active codebase. Paper option marking uses `data/option_symbols.py`'s Black-Scholes pricer only | A second Black-Scholes Greeks calculation, or assuming this module is still live without checking `legacy/README.md` first |
+| Options Greeks | **Archived.** `pilots/options_risk.py` was `git mv`'d to `legacy/pilots/options_risk.py` in the 2026-09 options-desk retirement (see the step 4b entry in `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section and `.claude/shrink_step4b_options_archive_walkthrough.md`); no options Greeks are computed anywhere in the active codebase. Paper option marking uses `data/option_symbols.py`'s Black-Scholes pricer only | A second Black-Scholes Greeks calculation, or assuming this module is still live without checking `legacy/README.md` first |
 | IV surface / VRP | **Archived.** `pilots/volatility_surface.py` and `technical_options_engine.py::build_premium_directive` moved to `legacy/pilots/volatility_surface.py` / `legacy/technical_options_engine.py` in the same retirement; no live IV-rank/VRP computation exists | A new IV-rank or VRP formula |
 | Pairs cointegration | `pairs/cointegration.py`, `pairs/kalman_hedge.py` | A new ADF/hedge-ratio implementation |
 | News/source credibility | `signals/credibility.py`, `signals/news_catalyst.py` | A new sentiment-scoring pass over raw headlines |
@@ -206,7 +206,7 @@ because they aren't mentioned in whatever task you're on:
   `vol_mispricing`, `pilots/options_risk.py`, `pilots/volatility_surface.py`,
   `technical_options_engine.py`, `execution/options_lifecycle.py` — was
   archived to `legacy/` in the 2026-09 options-desk retirement** (see
-  `CLAUDE.md`'s step 3d/3d'/4a/4b/4c/4e/4f bullets and `legacy/README.md`
+  the step 3d/3d'/4a/4b/4c/4e/4f entries in `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section and `legacy/README.md`
   for the full module list). Confirmed directly against live code: none of
   `manage_0dte_exits`, `OPTIONS_0DTE_ENABLED`, or `override_deployability_gate`
   appear anywhere outside `legacy/` any more, and
@@ -253,5 +253,4 @@ directly) before touching a domain for the first time:
   signals/ package, pairs
 - `docs/architecture/observability-and-apis.md` — `investyo_mcp_server.py`
   and the other API surfaces
-- `CLAUDE.md` — branch workflow, PR artifact rules, the full constraint
-  numbering this skill draws from
+- `CLAUDE.md` — branch workflow, PR artifact rules, and its Conventions section (CONSTRAINT #4/#6, degenerate-std guard, deployability gate) this skill draws from

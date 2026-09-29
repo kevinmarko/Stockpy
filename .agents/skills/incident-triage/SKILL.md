@@ -20,7 +20,7 @@ description: >-
 # Incident triage
 
 This platform is **advisory-only by default** (`ADVISORY_ONLY`, see
-CLAUDE.md/AGENTS.md's safety posture) — most of `docs/RUNBOOK.md`'s §3
+`docs/RUNBOOK.md`'s opening note on advisory mode) — most of `docs/RUNBOOK.md`'s §3
 incident playbooks are written for that mode: "emergency shutdown" means
 **pausing signal generation**, not halting live orders, unless you've
 confirmed live execution is actually enabled (`ROBINHOOD_EXECUTION_MODE` /
@@ -166,14 +166,13 @@ against.
 daemon can never write its own "stopped" state, so `state: "running"` in
 that file can be stale. Check `pid_alive` in the same file/`GET
 /automation/status` response before trusting the `state` string alone (see
-CLAUDE.md's "`output/daemon.json` staleness fix" bullet for why the file's
+the "`output/daemon.json` staleness fix" entry in `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section for why the file's
 self-reported `state` is not externally verified but `pid_alive` is).
 
 **Split-brain / double-submitted orders (live execution only — N/A in pure
 advisory mode).** Confirm only one `main_orchestrator.py`/daemon process is
 running (`ps aux | grep orchestrator`), and check for a stale process
-holding `ORCHESTRATOR_API_PORT` (default 8601) per CLAUDE.md's
-"Operational note" under the persistent orchestrator daemon bullet — a
+holding `ORCHESTRATOR_API_PORT` (default 8601) per the "Operational note" in the persistent-orchestrator-daemon entry of `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section — a
 stale daemon holding the port doesn't crash a new one, it just delays its
 `output/daemon.json` write up to 5s while it polls, which can look like a
 hang.
