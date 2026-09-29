@@ -706,6 +706,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # stay because paper option marking still reads them.
     "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED",
     "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",
+    "PAPER_PIPELINE_PROBE_WEIGHT",
     "PAPER_OPTION_MARK_CACHE_SECONDS",
     "OPTIONS_RISK_FREE_RATE",
     # --- Weekly Digest (pilots/weekly_digest.py, desktop/daemon_runtime.py::

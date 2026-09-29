@@ -3251,13 +3251,27 @@ class BrokerExecutionStep(PipelineStep):
                 "execution is disabled for this run.",
                 0 if ctx.dashboard_df is None else len(ctx.dashboard_df),
             )
-        elif not ctx.dashboard_df.empty and settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY:
+        elif not ctx.dashboard_df.empty and (
+            _uses_local_paper_ledger()
+            or (settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY)
+        ):
             await main_orchestrator._execute_broker_orders(ctx.dashboard_df, effective_dry_run, macro_dto=ctx.macro_dto)
         elif not ctx.dashboard_df.empty:
             telemetry.info(
                 "ALPACA_API_KEY/SECRET_KEY not configured; skipping broker execution. "
                 "Set them in .env to enable live/paper order submission."
             )
+
+
+def _uses_local_paper_ledger() -> bool:
+    """True when orders go to the local FMP paper ledger, which needs no
+    Alpaca credentials. Mirrors ``execution.broker_selection.
+    resolve_broker_backend()`` without its side effect: a going-live run with
+    BROKER_BACKEND='fmp_paper' is forced to Alpaca there, so it does NOT
+    count as the paper ledger here and still needs Alpaca keys."""
+    from execution.broker_selection import is_going_live
+
+    return getattr(settings, "BROKER_BACKEND", "alpaca") == "fmp_paper" and not is_going_live()
 
 
 class StateSnapshotStep(PipelineStep):

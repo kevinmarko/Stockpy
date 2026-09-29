@@ -287,6 +287,21 @@ class Settings(BaseSettings):
             "notes ('Paper bridge, ...'). Set False to stop feeding paper outcomes to the models."
         ),
     )
+    PAPER_PIPELINE_PROBE_WEIGHT: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=0.05,
+        description=(
+            "Paper-only cold-start sizing for the pipeline's own paper orders "
+            "(BROKER_BACKEND='fmp_paper'). Kelly sizing scales in by closed trades / 30, "
+            "so with no closed pipeline trades every Kelly Target is 0 and the pipeline "
+            "would never place a paper order -- and so never collect the closed trades "
+            "Kelly needs. When > 0, a BUY/STRONG BUY whose Kelly Target is 0 buys this "
+            "fraction of paper equity instead (e.g. 0.01 = 1%). A positive Kelly Target "
+            "always wins. Never applies to the Alpaca path or the Robinhood queue. "
+            "0 (default) = today's behavior."
+        ),
+    )
     PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES: list[str] = Field(
         default_factory=lambda: ["Manual Trade", "Delta Hedge", "untagged"],
         description=(
