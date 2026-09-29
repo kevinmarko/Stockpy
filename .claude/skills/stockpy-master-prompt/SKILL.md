@@ -96,7 +96,7 @@ credibility-scoring logic, assume it already exists and go find it:
 | Domain | The one real implementation | Never do this |
 |---|---|---|
 | Kelly / position sizing | `sizing/kelly.py`, `sizing/vol_target.py`, `sizing/position_sizer.py::size_position()`, `StrategyEngine._calculate_kelly_sizing()` | A new win-rate/payoff/Kelly formula anywhere else |
-| Options Greeks | **Archived.** `pilots/options_risk.py` was `git mv`'d to `legacy/pilots/options_risk.py` in the 2026-09 options-desk retirement (see `CLAUDE.md`'s step 4b bullet); no options Greeks are computed anywhere in the active codebase. Paper option marking uses `data/option_symbols.py`'s Black-Scholes pricer only | A second Black-Scholes calculation, or assuming this module is still live without checking `legacy/README.md` first |
+| Options Greeks | **Archived.** `pilots/options_risk.py` was `git mv`'d to `legacy/pilots/options_risk.py` in the 2026-09 options-desk retirement (see the step 4b entry in `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section and `.claude/shrink_step4b_options_archive_walkthrough.md`); no options Greeks are computed anywhere in the active codebase. Paper option marking uses `data/option_symbols.py`'s Black-Scholes pricer only | A second Black-Scholes calculation, or assuming this module is still live without checking `legacy/README.md` first |
 | IV surface / VRP | **Archived.** `pilots/volatility_surface.py` and `technical_options_engine.py::build_premium_directive` moved to `legacy/pilots/volatility_surface.py` / `legacy/technical_options_engine.py` in the same retirement; no live IV-rank/VRP computation exists | A new IV-rank or VRP formula |
 | Pairs cointegration | `pairs/cointegration.py`, `pairs/kalman_hedge.py` | A new ADF/hedge-ratio implementation |
 | News/source credibility | `signals/credibility.py`, `signals/news_catalyst.py` | A new sentiment-scoring pass |
@@ -214,7 +214,7 @@ recently the underlying subsystem itself is gone: the entire options desk
 (0DTE exits, `earnings_crush`, `dispersion_trading`, `gamma_scalper`,
 `copula_stat_arb`, `vol_mispricing`, and their options Greeks/IV-surface
 analytics) was archived to `legacy/` in the 2026-09 options-desk retirement
-(`CLAUDE.md`'s step 3d/3d'/4a/4b/4c/4e/4f bullets; see `legacy/README.md`
+(the step 3d/3d'/4a/4b/4c/4e/4f entries in `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section; see `legacy/README.md`
 for the full module list). `scripts/refresh_validations.py::STRATEGY_REGISTRY`
 has 20 entries today and none of those six names. A claim about that
 subsystem's daemon wiring or registry status is therefore not checkable
