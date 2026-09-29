@@ -538,6 +538,26 @@ class TestDeadEndpoint:
                 _fmp_get("institutional-ownership", {"symbol": "MSFT"})
         assert get.call_count == 0
 
+    def test_402_restricted_endpoint_is_latched_like_a_403(self, clock, client_settings):
+        """FMP refuses /batch-quote on Starter with HTTP 402 and a plain-text
+        "Restricted Endpoint" body. It must latch as out of plan, not surface
+        as an unparseable-body error that is retried every call."""
+        from data.fmp_client import is_endpoint_out_of_plan
+
+        resp = _resp(402)
+        resp.json.side_effect = ValueError("Expecting value")
+        with patch("data.fmp_client.requests.get", return_value=resp) as get:
+            with pytest.raises(FMPUnavailable, match="HTTP 402"):
+                _fmp_get("batch-quote", {"symbols": "AAPL,MSFT"})
+        assert get.call_count == 1
+        assert is_endpoint_out_of_plan("batch-quote")
+        assert not is_endpoint_out_of_plan("quote")
+
+        with patch("data.fmp_client.requests.get", return_value=_resp(200)) as get:
+            with pytest.raises(FMPUnavailable):
+                _fmp_get("batch-quote", {"symbols": "AAPL"})
+        assert get.call_count == 0
+
     def test_a_dead_endpoint_does_not_disable_the_others(self, clock, client_settings):
         """Starter serves /quote perfectly well while refusing Form 13F. One
         refusal must not take the working feeds down with it."""
