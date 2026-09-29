@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `bdf4aef759e20bab06f0832a15b145744581fe05`
+- Measured at commit: `31ccdd4ce3caf0ea6d1c7c2e3933a9c72ae49dad`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 

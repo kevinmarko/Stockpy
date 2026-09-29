@@ -2294,6 +2294,38 @@ class TestFMPProviderGetQuotesBatch:
         )
         assert provider.get_quotes_batch([]) == {}
 
+    def test_out_of_plan_batch_endpoint_falls_back_to_per_symbol_quotes(self, monkeypatch):
+        """Starter refuses /batch-quote (HTTP 402) but serves /quote. Once the
+        endpoint is latched out of plan, resolve per symbol instead of
+        returning an empty batch every cycle."""
+        from data import fmp_client
+        from data.market_data import FMPProvider, MarketDataError
+
+        provider = FMPProvider(api_key="test-key-abc123")
+        batch_calls = []
+
+        def _refused(symbols):
+            batch_calls.append(list(symbols))
+            fmp_client._mark_endpoint_dead("batch-quote", "HTTP 402")
+            raise fmp_client.FMPUnavailable("FMP endpoint 'batch-quote' returned HTTP 402.")
+
+        def _single(self, symbol):
+            if symbol.upper() == "BAD":
+                raise MarketDataError("no quote")
+            return _make_fake_quote(symbol.upper(), "fmp")
+
+        monkeypatch.setattr("data.fmp_client.batch_quote", _refused)
+        monkeypatch.setattr(FMPProvider, "get_latest_quote", _single)
+        try:
+            first = provider.get_quotes_batch(["AAPL", "BAD", "MSFT"])
+            second = provider.get_quotes_batch(["AAPL"])
+        finally:
+            fmp_client.reset_fmp_rate_limiter()
+
+        assert set(first) == {"AAPL", "MSFT"}  # BAD dead-lettered, never fabricated
+        assert set(second) == {"AAPL"}
+        assert len(batch_calls) == 1  # latched: the refused endpoint is not re-asked
+
 
 class TestCompositeProviderGetQuotesBatch:
     """CompositeProvider's override -- cache-first per symbol, then one
