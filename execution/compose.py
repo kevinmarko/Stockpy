@@ -56,7 +56,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, ContextManager, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +194,7 @@ def write_source(
     *,
     output_dir: Optional[Any] = None,
     now: Optional[datetime] = None,
+    commit_guard: Optional[Callable[[], ContextManager[bool]]] = None,
 ) -> Optional[Path]:
     """Atomically write one ``queue_sources/<source_id>.json`` file
     (write-then-rename, matching ``execution/kill_switch.py``'s idiom).
@@ -202,6 +203,11 @@ def write_source(
     ``None`` (CONSTRAINT #6) -- a source-write failure must not crash the
     caller (``main.py``), it just means this source stays at its previous
     state (or absent) until the next successful write.
+
+    ``commit_guard`` (the daemon's primary-mode run-ownership check, step
+    5.3; see ``pipeline.agentic_queue``) wraps the final rename: when it
+    yields False the temp file is removed, nothing is replaced, and ``None``
+    is returned. ``None`` (every other caller) renames unconditionally.
     """
     now = now or datetime.now(timezone.utc)
     try:
@@ -216,8 +222,19 @@ def write_source(
         }
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        tmp.replace(path)
-        return path
+        if commit_guard is None:
+            tmp.replace(path)
+            return path
+        with commit_guard() as allowed:
+            if allowed:
+                tmp.replace(path)
+                return path
+        tmp.unlink(missing_ok=True)
+        logger.warning(
+            "compose: source %s not written -- the writing run no longer owns the queue",
+            source_id,
+        )
+        return None
     except Exception as exc:
         logger.warning("compose: failed to write source %s (%s)", source_id, exc)
         return None
@@ -228,6 +245,7 @@ def write_advisory_source(
     *,
     output_dir: Optional[Any] = None,
     now: Optional[datetime] = None,
+    commit_guard: Optional[Callable[[], ContextManager[bool]]] = None,
 ) -> Optional[Path]:
     """Write the advisory source from ``main.py``'s ``RunResult.recommendations``.
 
@@ -254,7 +272,9 @@ def write_advisory_source(
             })
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("compose: skipping advisory rec for %s (%s)", getattr(rec, "symbol", "?"), exc)
-    return write_source(ADVISORY_SOURCE_ID, targets, output_dir=output_dir, now=now)
+    return write_source(
+        ADVISORY_SOURCE_ID, targets, output_dir=output_dir, now=now, commit_guard=commit_guard,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +395,7 @@ def compose_and_emit(
     max_age_seconds: Optional[float] = None,
     macro_dto: Optional[Any] = None,
     side_effects: bool = True,
+    commit_guard: Optional[Callable[[], ContextManager[bool]]] = None,
 ) -> Optional[Path]:
     """Read the advisory source, compose, gate, and emit ONE
     ``execution_queue.json``. ``main.py`` calls this right after
@@ -399,6 +420,12 @@ def compose_and_emit(
     same queue file under ``output_dir`` but sends no push notification and
     makes the risk gate skip its alerts and block-log writes. See
     ``queue_builder.emit_execution_queue``.
+
+    ``commit_guard`` (the daemon's primary-mode run-ownership check, step
+    5.3; see ``pipeline.agentic_queue``) is passed to
+    ``emit_execution_queue``, which then refuses to build or replace the
+    queue once the writing run no longer owns it. ``None`` for every other
+    caller.
     """
     now = now or datetime.now(timezone.utc)
     if output_dir is None:
@@ -456,6 +483,12 @@ def compose_and_emit(
                 run_result, mode=mode, output_dir=output_dir,
                 config={"strategy_id": "composed", "min_conviction": 0.0}, now=now,
                 macro_dto=resolved_macro, side_effects=False,
+            )
+        if commit_guard is not None:
+            return emit_execution_queue(
+                run_result, mode=mode, output_dir=output_dir,
+                config={"strategy_id": "composed", "min_conviction": 0.0}, now=now,
+                macro_dto=resolved_macro, commit_guard=commit_guard,
             )
         return emit_execution_queue(
             run_result, mode=mode, output_dir=output_dir,

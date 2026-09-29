@@ -287,16 +287,16 @@ class TestAgenticQueueStepModes:
         payload = json.loads(path.read_text())
         assert payload["mode"] == "review" and payload["n_intents"] == 1
 
-    def test_primary_behaves_like_shadow_and_warns(self, queue_env, caplog):
+    def test_shadow_does_not_touch_the_real_queue(self, queue_env):
+        # (5.2's "primary behaves like shadow" test is gone: primary writes
+        # the real queue since 5.3, see tests/test_daemon_agentic_queue_primary.py.)
         from pipeline.production_steps import AgenticQueueStep
 
         out, _ = queue_env
         (out / "execution_queue.json").write_text("REAL QUEUE", encoding="utf-8")
-        with caplog.at_level("WARNING"):
-            path = _write(AgenticQueueStep(clock=lambda: _NOW), _queue_ctx(), out, mode="primary")
+        path = _write(AgenticQueueStep(clock=lambda: _NOW), _queue_ctx(), out, mode="shadow")
         assert path == out / "shadow" / "execution_queue.json"
         assert (out / "execution_queue.json").read_text(encoding="utf-8") == "REAL QUEUE"
-        assert "not implemented until step 5.3" in caplog.text
 
     def test_execution_mode_off_writes_source_but_no_queue(self, queue_env):
         from pipeline.production_steps import AgenticQueueStep
@@ -338,6 +338,7 @@ class TestAgenticQueueStepRun:
         spy.assert_called_once()
         assert spy.call_args.kwargs == {
             "mode": "shadow", "execution_mode": "review", "output_dir": out,
+            "owner_token": None,
         }
         assert (out / "shadow" / "execution_queue.json").exists()
 
@@ -383,8 +384,8 @@ class TestShadowCannotClobberTheRealQueue:
         (out / "queue_sources" / "advisory.json").write_text("REAL SOURCE", encoding="utf-8")
         os.symlink(out, out / "shadow", target_is_directory=True)
         with caplog.at_level("ERROR"):
-            for mode in ("shadow", "primary"):
-                assert _write(AgenticQueueStep(clock=lambda: _NOW), _queue_ctx(), out, mode=mode) is None
+            # Shadow only: primary writes the real queue by design (step 5.3).
+            assert _write(AgenticQueueStep(clock=lambda: _NOW), _queue_ctx(), out, mode="shadow") is None
         assert "refused" in caplog.text
         assert (out / "execution_queue.json").read_text(encoding="utf-8") == "REAL QUEUE"
         assert (out / "queue_sources" / "advisory.json").read_text(encoding="utf-8") == "REAL SOURCE"

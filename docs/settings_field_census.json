@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "b7af3a9cf337462ee60467056b40eae2a40bea08",
+    "git_commit": "49bd42de86ed8e1ee1af70e1060c3f2652983d54",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3227,7 +3227,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 383,
+    "files_scanned": 384,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3256,10 +3256,10 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 753,
+      "total_reads": 756,
       "distinct_fields": 265,
       "counts": {
-        "OUTPUT_DIR": 118,
+        "OUTPUT_DIR": 119,
         "LOCAL_DATA_ROOT": 24,
         "SIGNAL_WEIGHTS": 18,
         "FRED_API_KEY": 13,
@@ -3305,6 +3305,7 @@
         "SIZING_CAP_ESCALATION_FACTOR": 4,
         "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES": 4,
         "WATCHLIST": 4,
+        "WATCH_RULES_FILE": 4,
         "ALERT_EMAIL_FROM": 3,
         "ALERT_EMAIL_TO": 3,
         "ALERT_NTFY_TOPIC": 3,
@@ -3322,6 +3323,7 @@
         "MULTIFACTOR_MICROCAP_THRESHOLD": 3,
         "NEWS_EARNINGS_DAMPEN_DAYS": 3,
         "NEWS_EARNINGS_SUPPRESS_HOURS": 3,
+        "NTFY_DASHBOARD_URL": 3,
         "RISK_FREE_RATE": 3,
         "ROBINHOOD_AUTO_REFRESH_ENABLED": 3,
         "RUNTIME_FLAGS_REFRESH_ENABLED": 3,
@@ -3331,7 +3333,6 @@
         "SIZING_CAP_AUDIT_ENABLED": 3,
         "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 3,
         "SYMBOL_RATING_ENABLED": 3,
-        "WATCH_RULES_FILE": 3,
         "WEEKLY_DIGEST_ENABLED": 3,
         "AGENTIC_DISCOVERY_ENABLED": 2,
         "AGENTIC_MAX_CANDIDATES": 2,
@@ -3382,7 +3383,6 @@
         "MCP_OAUTH_PASSWORD": 2,
         "NEWS_HISTORY_CAPTURE_ENABLED": 2,
         "NEWS_LOOKBACK_DAYS": 2,
-        "NTFY_DASHBOARD_URL": 2,
         "OPAL_RESEARCH_ENABLED": 2,
         "ORCHESTRATOR_DAEMON_TOKEN": 2,
         "ORCHESTRATOR_INTERVAL_SECONDS": 2,
@@ -3527,7 +3527,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 315,
+      "total_reads": 317,
       "distinct_fields": 188,
       "counts": {
         "FMP_API_KEY": 13,
@@ -3546,6 +3546,7 @@
         "FORECAST_NAIVE_GATE_ENABLED": 4,
         "GRAVITY_AI_RUNNER_ENABLED": 4,
         "LOCAL_LLM_BASE_URL": 4,
+        "DAEMON_AGENTIC_QUEUE_MODE": 3,
         "DATA_FETCH_MAX_CONCURRENCY": 3,
         "FMP_NEWS_MAX_PAGES": 3,
         "FMP_NEWS_PAGE_LIMIT": 3,
@@ -3605,7 +3606,6 @@
         "CNN_LSTM_PROCESS_POOL_WORKERS": 1,
         "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED": 1,
         "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS": 1,
-        "DAEMON_AGENTIC_QUEUE_MODE": 1,
         "DATABASE_URL": 1,
         "DEFAULT_TICKERS": 1,
         "EDGAR_COOLDOWN_SECONDS": 1,
