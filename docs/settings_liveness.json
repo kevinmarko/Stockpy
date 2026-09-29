@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 334,
+    "live_safe": 335,
     "no_op": 4,
     "restart_required": 85,
-    "total": 423
+    "total": 424
   },
   "dynamic_sites": [
     {
@@ -110,7 +110,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 384,
+  "files_scanned": 385,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -335,6 +335,7 @@
     "PAIRS_SNAPSHOT_MAX_PAIRS",
     "PAPER_BROKER_WRITES_ENABLED",
     "PAPER_OPTION_MARK_CACHE_SECONDS",
+    "PAPER_PIPELINE_PROBE_WEIGHT",
     "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",
     "PAPER_TRADING_START_DATE",
     "PILOTS_API_ENABLED",
@@ -458,13 +459,13 @@
   "read_forms": {
     "attr": 848,
     "factory_param": 4,
-    "getattr_const": 318,
+    "getattr_const": 319,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 268,
     "factory_param": 4,
-    "getattr_const": 188,
+    "getattr_const": 189,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
