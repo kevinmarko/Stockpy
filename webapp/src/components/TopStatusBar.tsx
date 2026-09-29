@@ -157,7 +157,8 @@ export function TopStatusBar() {
               AgenticTrading, and ExecutionQueueSection). */}
           <div style={{ display: "flex", alignItems: "center" }}>
             <Chip
-              label={`Mode: ${mode}`}
+              label={`Broker: ${mode}`}
+              title="In-app paper/Alpaca broker execution mode (ADVISORY_ONLY / ALPACA_PAPER). Separate from the Robinhood queue mode."
               tone={mode === "LIVE" ? "decline" : mode === "PAPER" ? "caution" : "muted"}
             />
           </div>

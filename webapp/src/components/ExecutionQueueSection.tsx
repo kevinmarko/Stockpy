@@ -233,7 +233,13 @@ function formatFollowType(value: string): string {
 
 export function ModeBadge({ mode }: { mode: string }) {
   const tone = mode === "live" ? "decline" : mode === "review" ? "caution" : "muted";
-  return <Chip label={`mode: ${mode}`} tone={tone} />;
+  return (
+    <Chip
+      label={`Robinhood: ${mode}`}
+      tone={tone}
+      title="Robinhood execution-queue mode (ROBINHOOD_EXECUTION_MODE): off / review / live. 'live' means queued intents that pass every gate may be placed on the real Robinhood account via the robinhood-execution skill."
+    />
+  );
 }
 
 function IntentRow({ intent, mode, queueGeneratedAt }: { intent: ExecutionQueueIntent; mode: string; queueGeneratedAt: string | null }) {
