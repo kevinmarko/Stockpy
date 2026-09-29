@@ -488,9 +488,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1977",
+        "site": "data/market_data.py:1985",
         "via": [
-          1882
+          1890
         ]
       },
       {
@@ -543,9 +543,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1978",
+        "site": "data/market_data.py:1986",
         "via": [
-          1882
+          1890
         ]
       },
       {
@@ -1359,7 +1359,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1554",
+        "site": "data/market_data.py:1562",
         "via": []
       },
       {
@@ -1368,7 +1368,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:1587",
+        "site": "data/market_data.py:1595",
         "via": []
       }
     ],
@@ -1379,7 +1379,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1894",
+        "site": "data/market_data.py:1902",
         "via": []
       },
       {
@@ -1388,9 +1388,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1931",
+        "site": "data/market_data.py:1939",
         "via": [
-          1869
+          1877
         ]
       }
     ],
@@ -1401,9 +1401,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1942",
+        "site": "data/market_data.py:1950",
         "via": [
-          1869
+          1877
         ]
       }
     ],
@@ -1625,7 +1625,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1552",
+        "site": "data/market_data.py:1560",
         "via": []
       },
       {
@@ -1634,7 +1634,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:1582",
+        "site": "data/market_data.py:1590",
         "via": []
       },
       {
@@ -1643,7 +1643,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1866",
+        "site": "data/market_data.py:1874",
         "via": []
       },
       {
@@ -1652,7 +1652,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2502",
+        "site": "data/market_data.py:2510",
         "via": []
       }
     ],
@@ -1663,7 +1663,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1436",
+        "site": "data/market_data.py:1444",
         "via": []
       },
       {
@@ -1672,7 +1672,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1553",
+        "site": "data/market_data.py:1561",
         "via": []
       },
       {
@@ -1681,7 +1681,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:1583",
+        "site": "data/market_data.py:1591",
         "via": []
       },
       {
@@ -1690,7 +1690,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1867",
+        "site": "data/market_data.py:1875",
         "via": []
       },
       {
@@ -1699,7 +1699,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2503",
+        "site": "data/market_data.py:2511",
         "via": []
       }
     ],
@@ -1710,7 +1710,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1892",
+        "site": "data/market_data.py:1900",
         "via": []
       }
     ],
@@ -1928,7 +1928,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1859",
+        "site": "data/market_data.py:1867",
         "via": []
       },
       {
@@ -1937,7 +1937,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2287",
+        "site": "data/market_data.py:2295",
         "via": []
       }
     ],
@@ -1948,9 +1948,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1922",
+        "site": "data/market_data.py:1930",
         "via": [
-          1869
+          1877
         ]
       }
     ],
@@ -1961,7 +1961,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1854",
+        "site": "data/market_data.py:1862",
         "via": []
       }
     ],

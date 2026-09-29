@@ -393,6 +393,12 @@ def _mark_endpoint_dead(path: str, reason: str) -> None:
     )
 
 
+def is_endpoint_out_of_plan(path: str) -> bool:
+    """True once ``path`` has been latched as not on this account's plan."""
+    with _fmp_state_lock:
+        return path in _fmp_dead_endpoints
+
+
 def _fmp_get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
     """Issue one throttled, retrying, breaker-guarded GET against FMP.
 
@@ -493,10 +499,13 @@ def _fmp_get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
                 )
             raise FMPUnavailable(f"FMP rejected the API key (HTTP 401) on '{path}'.")
 
-        if status == 403:
+        if status in (402, 403):
+            # FMP answers an out-of-plan endpoint with 402 "Restricted Endpoint"
+            # (plain text, e.g. /batch-quote on Starter) as well as 403. Both are
+            # plan entitlements, not host health: latch the endpoint, skip JSON.
             _bump(path, "failures")
-            _mark_endpoint_dead(path, "HTTP 403")
-            raise FMPUnavailable(f"FMP endpoint '{path}' returned HTTP 403.")
+            _mark_endpoint_dead(path, f"HTTP {status}")
+            raise FMPUnavailable(f"FMP endpoint '{path}' returned HTTP {status}.")
 
         if status == 404:
             # A bad symbol / bad query, not an unhealthy host. No retry, no

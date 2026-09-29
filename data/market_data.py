@@ -1087,10 +1087,16 @@ class FMPProvider(MarketDataProvider):
         """
         if not symbols:
             return {}
+        from data import fmp_client
+
+        # Plan fallback: some FMP plans (Starter) refuse /batch-quote with
+        # HTTP 402 while serving /quote. That is an entitlement, not an outage,
+        # so the "don't retry N single calls against a down host" rule below
+        # does not apply -- resolve per symbol via /quote instead.
+        if fmp_client.is_endpoint_out_of_plan("batch-quote"):
+            return super().get_quotes_batch(symbols)
         out: Dict[str, Quote] = {}
         try:
-            from data import fmp_client
-
             payload = fmp_client.batch_quote(list(symbols))
             rows = payload if isinstance(payload, list) else []
             for row in rows:
@@ -1115,6 +1121,8 @@ class FMPProvider(MarketDataProvider):
                     source=self.SOURCE,
                 )
         except Exception as exc:  # noqa: BLE001 -- dead-letter the whole batch, CONSTRAINT #6
+            if fmp_client.is_endpoint_out_of_plan("batch-quote"):
+                return super().get_quotes_batch(symbols)
             logger.error("FMPProvider.get_quotes_batch(%s) failed: %s", symbols, exc)
             return {}
         return out
