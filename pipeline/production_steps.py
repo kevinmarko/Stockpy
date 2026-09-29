@@ -1243,8 +1243,9 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame, deadline: Optional[float] = 
 
     ``Days_To_Earnings`` (number) and ``Last_EPS_Surprise_Pct`` (percent) are
     new; the EXISTING ``Earnings_Date`` column is ALSO written when this gate
-    is on, making FMP a SECOND source for it alongside Finnhub's news-catalyst
-    path (and unlike Finnhub, FMP is not limited to a 30-day forward window).
+    is on, making this gate a SECOND writer of it alongside the news-catalyst
+    write-back (which reads FMP's earnings calendar via
+    ``fetch_next_earnings_any``).
     That column is deliberately shared rather than duplicated -- see
     config.COLUMN_SCHEMA's FMP section.
 
@@ -1379,7 +1380,7 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame, deadline: Optional[float] = 
 
         # Rule 4 / the shared-column discipline: only overwrite 'Earnings_Date'
         # for symbols FMP actually covered (a real next-event date) this
-        # cycle -- a NaN/absent FMP row must never blank a date the Finnhub
+        # cycle -- a NaN/absent FMP row must never blank a date the
         # news-catalyst write-back already resolved earlier in this same
         # cycle. If the column doesn't exist yet (unit tests calling this
         # function standalone), there is nothing to preserve or overwrite.
@@ -1933,7 +1934,7 @@ class StrategyEvalStep(PipelineStep):
         # (-> Bot_Activity_Ratio), "aggregated_source_credibility"
         # (-> Aggregated_Source_Credibility). NaN when no multi-source social
         # documents exist for a symbol this trading day (distinct from
-        # News_Sentiment, which is Finnhub-headline-only) -- same write-back
+        # News_Sentiment, which is news-headline-only) -- same write-back
         # pattern as the Value_Z/etc multifactor columns above.
         _SENTIMENT_CREDIBILITY_COLS = {
             'Credibility_Weighted_Sentiment': 'credibility_weighted_sentiment',

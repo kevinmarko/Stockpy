@@ -218,7 +218,6 @@ def classify_field(key: str) -> str:
         or key.startswith("NEWS_")
         or key.startswith("FINBERT_")
         or key.startswith("GDELT_")
-        or key.startswith("REDDIT_")
         or key.startswith("EDGAR_")
         or key.startswith("GOOGLE_NEWS_")
         or key.startswith("GOOGLE_TRENDS_")
@@ -256,7 +255,6 @@ def classify_field(key: str) -> str:
         or key.startswith("HISTORICAL_STORE_")
         or key.startswith("FRED_")
         or key.startswith("YAHOO_")
-        or key.startswith("FINNHUB_")
         or key.startswith("DATA_")
         or key.startswith("DATABASE_")
         or key.startswith("DB_")
@@ -296,7 +294,6 @@ def classify_field(key: str) -> str:
         or key.startswith("DISCORD_")
         or key.startswith("SLACK_")
         or key.startswith("WEBHOOK_")
-        or key.startswith("SENTRY_")
         or key.startswith("STATE_API_")
         or key.startswith("OBSERVABILITY_")
     ):

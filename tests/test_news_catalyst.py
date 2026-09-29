@@ -3,7 +3,7 @@ tests/test_news_catalyst.py
 ============================
 Unit tests for ``signals.news_catalyst`` (Tier 2.4).
 
-All Finnhub and transformers network calls are monkeypatched; no real
+All FMP and transformers network calls are monkeypatched; no real
 API requests are made.
 
 Coverage
@@ -22,13 +22,14 @@ TestGracefulDegradation — API error → 0.0; all-error batch → no crash
 TestEarningsProximityEdge — boundary conditions for the proximity multiplier
 TestContextPopulation   — pre_compute writes news_sentiment_scores + earnings_dates
 TestRegimeGate          — is_active_in_regime suppression + SignalAggregator wiring
-TestProviderAgnosticDispatchers — FMP-first/Finnhub-fallback dispatcher functions
+TestFmpOnlyDispatchers — FMP-only dispatcher functions
                           (fetch_company_headlines / fetch_next_earnings_any) and
                           pre_compute()'s FMP-only gate acceptance
 """
 
 import math
 import types
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from unittest import mock
@@ -50,8 +51,6 @@ from signals.news_catalyst import (
     _lexicon_softmax,
     _score_headline,
     fetch_company_headlines,
-    fetch_company_news,
-    fetch_next_earnings,
     fetch_next_earnings_any,
     get_symbol_news_catalyst_details,
     score_headlines,
@@ -65,8 +64,8 @@ def _mock_multi_source_ingestion(monkeypatch):
     the Sentiment Pipeline Phase 3/4 multi-source ingestion path --
     NewsCatalystSignal.pre_compute() now unconditionally calls
     data.sentiment_sources.get_sentiment_source() (see
-    _run_multi_source_ingestion), independent of Finnhub configuration.
-    Without this, Yahoo RSS/GDELT/Reddit/EDGAR would all be hit for real on
+    _run_multi_source_ingestion), independent of headline-provider configuration.
+    Without this, Yahoo RSS/GDELT/EDGAR would all be hit for real on
     every pre_compute() call in this file.
     """
     monkeypatch.setattr(
@@ -100,6 +99,50 @@ def _make_context(**kwargs):
 
 def _make_universe(symbols):
     return pd.DataFrame({"Symbol": symbols})
+
+
+@contextmanager
+def _patched_news_provider(fake):
+    """Stand in for the FMP-backed dispatchers with a fake provider.
+
+    ``fake`` is a MagicMock exposing two calls this adapter translates into
+    the dispatchers' contracts:
+
+    * ``fake.company_news(symbol, lookback_days)`` -> list of
+      ``{"headline": ..., "datetime": ...}`` dicts (or raises, which the real
+      dispatcher swallows into ``[]``);
+    * ``fake.earnings_dates(symbol)`` -> list of ``YYYY-MM-DD`` strings, of
+      which the soonest one within the dispatcher's 24h grace is returned.
+
+    The FMP config gate (FMP_NEWS_ENABLED + FMP_API_KEY) is switched on so
+    ``pre_compute`` takes the provider branch. No network is reachable.
+    """
+
+    def _headlines(symbol, lookback_days):
+        try:
+            result = fake.company_news(symbol, lookback_days)
+        except Exception:
+            return []
+        return result if isinstance(result, list) else []
+
+    def _earnings(symbol):
+        try:
+            dates = fake.earnings_dates(symbol) or []
+        except Exception:
+            return None
+        now_utc = datetime.now(timezone.utc)
+        future = []
+        for d in dates:
+            dt = datetime.fromisoformat(d).replace(tzinfo=timezone.utc)
+            if dt >= now_utc - timedelta(hours=24):
+                future.append(dt)
+        return min(future) if future else None
+
+    with patch("settings.settings.FMP_NEWS_ENABLED", True), \
+         patch("settings.settings.FMP_API_KEY", "test_key"), \
+         patch("signals.news_catalyst.fetch_company_headlines", side_effect=_headlines), \
+         patch("signals.news_catalyst.fetch_next_earnings_any", side_effect=_earnings):
+        yield fake
 
 
 # ===========================================================================
@@ -872,25 +915,25 @@ class TestSignalCompute:
 
 class TestPreCompute:
     def test_no_api_key_gives_zero_scores(self):
-        """pre_compute returns 0.0 for all symbols when FINNHUB_API_KEY is absent."""
+        """pre_compute returns 0.0 for all symbols when FMP_API_KEY is absent."""
         sig = _make_signal()
         ctx = _make_context()
         universe = _make_universe(["AAPL", "MSFT"])
-        with patch("settings.settings.FINNHUB_API_KEY", ""):
+        with patch("settings.settings.FMP_API_KEY", ""):
             sig.pre_compute(universe, ctx)
         # When no key, caches should be empty (module logs info and returns)
         assert sig._news_scores == {}
 
-    def test_finnhub_api_error_per_symbol_resilient(self):
-        """per-symbol Finnhub errors do not abort the batch."""
+    def test_provider_error_per_symbol_resilient(self):
+        """per-symbol provider errors do not abort the batch."""
         sig = _make_signal()
         ctx = _make_context()
         universe = _make_universe(["AAPL", "MSFT", "GOOG"])
         mock_client = MagicMock()
         mock_client.company_news.side_effect = RuntimeError("rate limit")
-        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+        mock_client.earnings_dates.return_value = []
+        with patch("settings.settings.FMP_API_KEY", "test_key"):
+            with _patched_news_provider(mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     sig.pre_compute(universe, ctx)
         # All symbols should have 0.0 scores (error path)
@@ -906,9 +949,9 @@ class TestPreCompute:
         mock_client.company_news.return_value = [
             {"headline": "Apple beats earnings expectations"}
         ]
-        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+        mock_client.earnings_dates.return_value = []
+        with patch("settings.settings.FMP_API_KEY", "test_key"):
+            with _patched_news_provider(mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):  # skip courtesy delay
                         sig.pre_compute(universe, ctx)
@@ -923,9 +966,9 @@ class TestPreCompute:
         universe = _make_universe(["AAPL"])
         mock_client = MagicMock()
         mock_client.company_news.return_value = []
-        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+        mock_client.earnings_dates.return_value = []
+        with patch("settings.settings.FMP_API_KEY", "test_key"):
+            with _patched_news_provider(mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
                         sig.pre_compute(universe, ctx)
@@ -943,11 +986,9 @@ class TestPreCompute:
         mock_client.company_news.return_value = [
             {"headline": "Apple beats and surges"}
         ]
-        mock_client.earnings_calendar.return_value = {
-            "earningsCalendar": [{"date": soon}]
-        }
-        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+        mock_client.earnings_dates.return_value = [soon]
+        with patch("settings.settings.FMP_API_KEY", "test_key"):
+            with _patched_news_provider(mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
                         sig.pre_compute(universe, ctx)
@@ -960,8 +1001,8 @@ class TestPreCompute:
         ctx = _make_context()
         universe = pd.DataFrame({"Symbol": []})
         mock_client = MagicMock()
-        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+        with patch("settings.settings.FMP_API_KEY", "test_key"):
+            with _patched_news_provider(mock_client):
                 sig.pre_compute(universe, ctx)
         assert sig._news_scores == {}
 
@@ -979,7 +1020,7 @@ class TestNewsHistoryArchive:
         universe = _make_universe(["AAPL"])
         mock_client = MagicMock()
         mock_client.company_news.return_value = [{"headline": "Apple beats"}]
-        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
+        mock_client.earnings_dates.return_value = []
 
         mock_store_instance = MagicMock()
         # A bare, unconfigured MagicMock().get_finbert_score(...) call would
@@ -994,12 +1035,12 @@ class TestNewsHistoryArchive:
         # _build_archive_scores as truthy "real social data" (MagicMock's
         # default __float__ makes math.isnan() on it False), contaminating
         # the archived score with a Mock object instead of the pure
-        # Finnhub-headline value this test is about.
+        # headline value this test is about.
         mock_store_instance.get_sentiment_aggregate_by_symbol.return_value = {}
         mock_store_cls = MagicMock(return_value=mock_store_instance)
 
-        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+        with patch("settings.settings.FMP_API_KEY", "test_key"):
+            with _patched_news_provider(mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
                         with patch("data.historical_store.HistoricalStore", mock_store_cls):
@@ -1044,7 +1085,7 @@ class TestNewsHistoryArchive:
 # ===========================================================================
 # TestArchiveVsLiveScoreHonesty -- the fabricated-0.0 fix
 #
-# Previously, both a fetch/scoring FAILURE (an exception during Finnhub or
+# Previously, both a fetch/scoring FAILURE (an exception during the news provider or
 # FinBERT calls) and a genuinely EMPTY headline list persisted as a literal
 # 0.0 in news_history, indistinguishable from a real, computed neutral
 # score. HistoricalStore.save_news_sentiment already NaN-shapes a NaN to a
@@ -1067,9 +1108,9 @@ class TestArchiveVsLiveScoreHonesty:
         universe = _make_universe(["AAPL"])
         mock_client = MagicMock()
         mock_client.company_news.side_effect = RuntimeError("rate limit")
-        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+        mock_client.earnings_dates.return_value = []
+        with patch("settings.settings.FMP_API_KEY", "test_key"):
+            with _patched_news_provider(mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     sig.pre_compute(universe, ctx)
 
@@ -1084,9 +1125,9 @@ class TestArchiveVsLiveScoreHonesty:
         universe = _make_universe(["AAPL"])
         mock_client = MagicMock()
         mock_client.company_news.return_value = []  # zero headlines this cycle
-        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+        mock_client.earnings_dates.return_value = []
+        with patch("settings.settings.FMP_API_KEY", "test_key"):
+            with _patched_news_provider(mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
                         sig.pre_compute(universe, ctx)
@@ -1103,9 +1144,9 @@ class TestArchiveVsLiveScoreHonesty:
         universe = _make_universe(["AAPL"])
         mock_client = MagicMock()
         mock_client.company_news.return_value = [{"headline": "Apple beats and surges"}]
-        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+        mock_client.earnings_dates.return_value = []
+        with patch("settings.settings.FMP_API_KEY", "test_key"):
+            with _patched_news_provider(mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("signals.news_catalyst.time.sleep"):
                         sig.pre_compute(universe, ctx)
@@ -1121,18 +1162,18 @@ class TestArchiveVsLiveScoreHonesty:
         universe = _make_universe(["BAD", "GOOD"])
         mock_client = MagicMock()
 
-        def _company_news(client, symbol, lookback):
+        def _company_news(symbol, lookback):
             if symbol == "BAD":
                 raise RuntimeError("simulated failure")
             return [{"headline": "Great quarter"}]
 
-        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
-                with patch("signals.news_catalyst.fetch_company_news", side_effect=_company_news):
-                    with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
-                        with patch("signals.news_catalyst.time.sleep"):
-                            sig.pre_compute(universe, ctx)
+        mock_client.company_news.side_effect = _company_news
+        mock_client.earnings_dates.return_value = []
+        with patch("settings.settings.FMP_API_KEY", "test_key"):
+            with _patched_news_provider(mock_client):
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    with patch("signals.news_catalyst.time.sleep"):
+                        sig.pre_compute(universe, ctx)
 
         assert math.isnan(sig._news_archive_scores["BAD"])
         assert not math.isnan(sig._news_archive_scores["GOOD"])
@@ -1151,7 +1192,7 @@ class TestArchiveVsLiveScoreHonesty:
         universe = _make_universe(["AAPL"])
         mock_client = MagicMock()
         mock_client.company_news.side_effect = RuntimeError("rate limit")
-        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
+        mock_client.earnings_dates.return_value = []
 
         mock_store_instance = MagicMock()
         mock_store_instance.get_finbert_score.return_value = None
@@ -1161,8 +1202,8 @@ class TestArchiveVsLiveScoreHonesty:
         mock_store_instance.get_sentiment_aggregate_by_symbol.return_value = {}
         mock_store_cls = MagicMock(return_value=mock_store_instance)
 
-        with patch("settings.settings.FINNHUB_API_KEY", "test_key"):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+        with patch("settings.settings.FMP_API_KEY", "test_key"):
+            with _patched_news_provider(mock_client):
                 with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
                     with patch("data.historical_store.HistoricalStore", mock_store_cls):
                         sig.pre_compute(universe, ctx)
@@ -1175,14 +1216,14 @@ class TestArchiveVsLiveScoreHonesty:
 # TestArchiveScoresIncludeSocialBlend -- the free-source archival fix
 #
 # Before this fix, news_history (what the webapp's Sentiment Dynamics screen
-# charts) was archived ONLY from Finnhub headline scores, and the archive
-# call never even ran without a configured FINNHUB_API_KEY -- even though
+# charts) was archived ONLY from headline scores, and the archive
+# call never even ran without a configured FMP_API_KEY -- even though
 # the free multi-source pipeline (GDELT/EDGAR/Reddit/Google News, via
 # _run_multi_source_ingestion/_read_sentiment_credibility_aggregate) runs
-# every cycle independent of Finnhub and already feeds compute()'s live
+# every cycle independent of the headline provider and already feeds compute()'s live
 # trading score. _build_archive_scores() closes that gap: it archives the
 # SAME headline+social blend compute() uses, and pre_compute() now calls the
-# archive step unconditionally, not only inside the Finnhub branch.
+# archive step unconditionally, not only inside the provider branch.
 # ===========================================================================
 
 class TestArchiveScoresIncludeSocialBlend:
@@ -1194,8 +1235,8 @@ class TestArchiveScoresIncludeSocialBlend:
         assert out == {"AAPL": 0.6}
 
     def test_social_only_returns_social_value(self):
-        """No Finnhub headline score at all for this symbol (e.g. no
-        FINNHUB_API_KEY configured) but real free-source social data exists
+        """No headline score at all for this symbol (e.g. no
+        FMP_API_KEY configured) but real free-source social data exists
         -- must archive the social value, not NaN."""
         sig = _make_signal()
         sig._news_archive_scores = {}
@@ -1228,7 +1269,7 @@ class TestArchiveScoresIncludeSocialBlend:
         assert math.isnan(out["AAPL"])
 
     def test_headline_nan_but_social_real_uses_social(self):
-        """A Finnhub fetch/scoring failure for this symbol (NaN in
+        """A news-provider fetch/scoring failure for this symbol (NaN in
         _news_archive_scores) must not suppress a genuinely real social
         score for the same symbol."""
         sig = _make_signal()
@@ -1247,8 +1288,8 @@ class TestArchiveScoresIncludeSocialBlend:
         out = sig._build_archive_scores(["MSFT"])
         assert math.isnan(out["MSFT"])
 
-    def test_pre_compute_archives_without_finnhub_key_when_social_data_exists(self):
-        """The actual bug this fix closes: with no FINNHUB_API_KEY, the
+    def test_pre_compute_archives_without_provider_key_when_social_data_exists(self):
+        """The actual bug this fix closes: with no FMP_API_KEY, the
         archive call must still fire and must carry the real free-source
         social score -- not stay permanently unreached."""
         sig = _make_signal()
@@ -1260,7 +1301,7 @@ class TestArchiveScoresIncludeSocialBlend:
                      "aggregated_source_credibility": 1.0},
         }
         mock_store_cls = MagicMock(return_value=mock_store_instance)
-        with patch("settings.settings.FINNHUB_API_KEY", ""):
+        with patch("settings.settings.FMP_API_KEY", ""):
             with patch("data.historical_store.HistoricalStore", mock_store_cls):
                 sig.pre_compute(universe, ctx)
 
@@ -1268,16 +1309,16 @@ class TestArchiveScoresIncludeSocialBlend:
         archived = mock_store_instance.save_news_sentiment.call_args[0][0]
         assert archived["AAPL"] == pytest.approx(0.55)
 
-    def test_pre_compute_archives_nan_without_finnhub_key_or_social_data(self):
-        """No Finnhub, no social data -- archive still fires (proving it's
-        no longer gated on Finnhub at all) but honestly records NaN."""
+    def test_pre_compute_archives_nan_without_provider_key_or_social_data(self):
+        """No provider, no social data -- archive still fires (proving it's
+        no longer gated on the provider at all) but honestly records NaN."""
         sig = _make_signal()
         ctx = _make_context()
         universe = _make_universe(["AAPL"])
         mock_store_instance = MagicMock()
         mock_store_instance.get_sentiment_aggregate_by_symbol.return_value = {}
         mock_store_cls = MagicMock(return_value=mock_store_instance)
-        with patch("settings.settings.FINNHUB_API_KEY", ""):
+        with patch("settings.settings.FMP_API_KEY", ""):
             with patch("data.historical_store.HistoricalStore", mock_store_cls):
                 sig.pre_compute(universe, ctx)
 
@@ -1308,85 +1349,28 @@ class TestRegistration:
 
 
 # ===========================================================================
-# TestFetchHelpers (offline — monkeypatched)
-# ===========================================================================
-
-class TestFetchHelpers:
-    def test_fetch_company_news_error_returns_empty(self):
-        mock_client = MagicMock()
-        mock_client.company_news.side_effect = RuntimeError("timeout")
-        result = fetch_company_news(mock_client, "AAPL", 7)
-        assert result == []
-
-    def test_fetch_next_earnings_error_returns_none(self):
-        mock_client = MagicMock()
-        mock_client.earnings_calendar.side_effect = ValueError("bad request")
-        result = fetch_next_earnings(mock_client, "AAPL")
-        assert result is None
-
-    def test_fetch_company_news_returns_list(self):
-        mock_client = MagicMock()
-        mock_client.company_news.return_value = [
-            {"headline": "test news", "datetime": 1234567890}
-        ]
-        result = fetch_company_news(mock_client, "AAPL", 7)
-        assert isinstance(result, list)
-        assert len(result) == 1
-
-    def test_fetch_next_earnings_parses_future_date(self):
-        mock_client = MagicMock()
-        future = (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y-%m-%d")
-        mock_client.earnings_calendar.return_value = {
-            "earningsCalendar": [{"date": future}]
-        }
-        result = fetch_next_earnings(mock_client, "AAPL")
-        assert result is not None
-        assert result > datetime.now(timezone.utc)
-
-    def test_fetch_next_earnings_empty_calendar_returns_none(self):
-        mock_client = MagicMock()
-        mock_client.earnings_calendar.return_value = {"earningsCalendar": []}
-        result = fetch_next_earnings(mock_client, "AAPL")
-        assert result is None
-
-
-# ===========================================================================
-# TestProviderAgnosticDispatchers -- FMP-first, Finnhub-fallback dispatchers
+# TestFmpOnlyDispatchers -- FMP-only company-news / earnings dispatchers
 #
-# fetch_company_headlines()/fetch_next_earnings_any() (added 2026-08 so FMP
-# can become the PRIMARY company-news/earnings source) try FMP first when
-# settings.FMP_NEWS_ENABLED + settings.FMP_API_KEY are both set, falling back
-# to the existing Finnhub-specific fetch_company_news()/fetch_next_earnings()
-# path (via build_finnhub_client()) whenever FMP is unconfigured or returns
-# nothing. Both dispatchers must never raise.
+# fetch_company_headlines()/fetch_next_earnings_any() read FMP only, gated on
+# settings.FMP_NEWS_ENABLED + settings.FMP_API_KEY. (Finnhub was the unreached
+# fallback and was removed 2026-09.) When FMP is off, unconfigured, fails or
+# returns nothing, both return the same honest empty result ([] / None) and
+# never raise.
 # ===========================================================================
 
-class TestProviderAgnosticDispatchers:
+class TestFmpOnlyDispatchers:
     # -----------------------------------------------------------------
     # fetch_company_headlines
     # -----------------------------------------------------------------
 
-    def test_headlines_fmp_disabled_falls_to_finnhub(self):
-        """FMP_NEWS_ENABLED defaults False -- straight to the Finnhub path,
-        and whatever Finnhub returns comes back unchanged apart from the
-        internal "_provider" provenance tag fetch_company_headlines() now
-        stamps onto every Finnhub-sourced item (see
-        get_symbol_news_catalyst_details's provider_used)."""
-        mock_client = MagicMock()
-        mock_client.company_news.return_value = [
-            {"headline": "Finnhub headline one", "datetime": 1234567890}
-        ]
+    def test_headlines_fmp_disabled_returns_empty_without_network(self):
         with patch("settings.settings.FMP_NEWS_ENABLED", False):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+            with patch("data.fmp_client.stock_news") as mock_stock_news:
                 result = fetch_company_headlines("AAPL", 7)
-        assert result == [
-            {"headline": "Finnhub headline one", "datetime": 1234567890, "_provider": "finnhub"}
-        ]
+        mock_stock_news.assert_not_called()
+        assert result == []
 
-    def test_headlines_fmp_enabled_short_circuits_finnhub(self):
-        """FMP enabled + keyed and the FMP fetch returns real items -> those
-        items come back WITHOUT ever calling build_finnhub_client (proving
-        FMP truly short-circuits the fallback, not just 'is tried first')."""
+    def test_headlines_fmp_enabled_returns_normalized_items(self):
         fmp_articles = [
             {
                 "title": "FMP: Apple beats and raises guidance",
@@ -1399,55 +1383,29 @@ class TestProviderAgnosticDispatchers:
         with patch("settings.settings.FMP_NEWS_ENABLED", True):
             with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
                 with patch("data.fmp_client.stock_news", return_value=fmp_articles):
-                    with patch("signals.news_catalyst.build_finnhub_client") as mock_build:
-                        result = fetch_company_headlines("AAPL", 7)
-        mock_build.assert_not_called()
+                    result = fetch_company_headlines("AAPL", 7)
         assert len(result) == 1
         assert result[0]["headline"] == "FMP: Apple beats and raises guidance"
         assert result[0]["source"] == "example.com"
+        assert result[0]["_provider"] == "fmp"
 
-    def test_headlines_fmp_returns_empty_falls_through_to_finnhub(self):
-        """FMP enabled + keyed but stock_news() returns [] -> falls through
-        to Finnhub rather than returning an empty result outright."""
-        mock_client = MagicMock()
-        mock_client.company_news.return_value = [
-            {"headline": "Finnhub fallback headline", "datetime": 555}
-        ]
+    def test_headlines_fmp_returns_empty_gives_empty(self):
         with patch("settings.settings.FMP_NEWS_ENABLED", True):
             with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
                 with patch("data.fmp_client.stock_news", return_value=[]):
-                    with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
-                        result = fetch_company_headlines("AAPL", 7)
-        assert result == [
-            {"headline": "Finnhub fallback headline", "datetime": 555, "_provider": "finnhub"}
-        ]
+                    result = fetch_company_headlines("AAPL", 7)
+        assert result == []
 
-    def test_headlines_fmp_unavailable_falls_through_to_finnhub(self):
-        """FMP enabled + keyed but stock_news() raises FMPUnavailable ->
-        falls through to Finnhub rather than propagating the exception."""
+    def test_headlines_fmp_unavailable_gives_empty_never_raises(self):
         from data.fmp_client import FMPUnavailable
 
-        mock_client = MagicMock()
-        mock_client.company_news.return_value = [
-            {"headline": "Finnhub fallback after FMP outage", "datetime": 999}
-        ]
         with patch("settings.settings.FMP_NEWS_ENABLED", True):
             with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
                 with patch(
                     "data.fmp_client.stock_news",
                     side_effect=FMPUnavailable("simulated FMP outage"),
                 ):
-                    with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
-                        result = fetch_company_headlines("AAPL", 7)
-        assert result == [
-            {"headline": "Finnhub fallback after FMP outage", "datetime": 999, "_provider": "finnhub"}
-        ]
-
-    def test_headlines_neither_provider_available_returns_empty(self):
-        """FMP disabled AND no Finnhub client -> [], never raises."""
-        with patch("settings.settings.FMP_NEWS_ENABLED", False):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=None):
-                result = fetch_company_headlines("AAPL", 7)
+                    result = fetch_company_headlines("AAPL", 7)
         assert result == []
 
     def test_fmp_helper_returns_empty_when_key_missing_even_if_enabled(self):
@@ -1465,22 +1423,14 @@ class TestProviderAgnosticDispatchers:
     # fetch_next_earnings_any
     # -----------------------------------------------------------------
 
-    def test_earnings_fmp_disabled_falls_to_finnhub(self):
-        mock_client = MagicMock()
-        future = datetime.now(timezone.utc) + timedelta(days=10)
-        mock_client.earnings_calendar.return_value = {
-            "earningsCalendar": [{"date": future.strftime("%Y-%m-%d")}]
-        }
+    def test_earnings_fmp_disabled_returns_none_without_network(self):
         with patch("settings.settings.FMP_NEWS_ENABLED", False):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
+            with patch("data.fmp_feeds_company.fetch_earnings_rows") as mock_rows:
                 result = fetch_next_earnings_any("AAPL")
-        assert result is not None
-        assert result.date() == future.date()
+        mock_rows.assert_not_called()
+        assert result is None
 
-    def test_earnings_fmp_enabled_short_circuits_finnhub(self):
-        """FMP enabled + keyed and fetch_earnings_rows() returns real rows
-        -> the SOONEST future event_date is picked, and build_finnhub_client
-        is never called."""
+    def test_earnings_fmp_enabled_picks_soonest_future_date(self):
         now = datetime.now(timezone.utc)
         soon = (now + timedelta(days=5)).strftime("%Y-%m-%d")
         later = (now + timedelta(days=40)).strftime("%Y-%m-%d")
@@ -1491,51 +1441,37 @@ class TestProviderAgnosticDispatchers:
         with patch("settings.settings.FMP_NEWS_ENABLED", True):
             with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
                 with patch("data.fmp_feeds_company.fetch_earnings_rows", return_value=rows):
-                    with patch("signals.news_catalyst.build_finnhub_client") as mock_build:
-                        result = fetch_next_earnings_any("AAPL")
-        mock_build.assert_not_called()
+                    result = fetch_next_earnings_any("AAPL")
         assert result is not None
         assert result.strftime("%Y-%m-%d") == soon
 
-    def test_earnings_fmp_returns_empty_falls_through_to_finnhub(self):
-        mock_client = MagicMock()
-        future = datetime.now(timezone.utc) + timedelta(days=15)
-        mock_client.earnings_calendar.return_value = {
-            "earningsCalendar": [{"date": future.strftime("%Y-%m-%d")}]
-        }
+    def test_earnings_fmp_returns_empty_gives_none(self):
         with patch("settings.settings.FMP_NEWS_ENABLED", True):
             with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
                 with patch("data.fmp_feeds_company.fetch_earnings_rows", return_value=[]):
-                    with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
-                        result = fetch_next_earnings_any("AAPL")
-        assert result is not None
-        assert result.date() == future.date()
+                    result = fetch_next_earnings_any("AAPL")
+        assert result is None
 
-    def test_earnings_fmp_only_past_rows_falls_through_to_finnhub(self):
+    def test_earnings_fmp_only_past_rows_gives_none(self):
         """fetch_earnings_rows() can legitimately return only historical
-        rows (no future-dated event scheduled yet) -- the FMP branch's own
-        future-date filter then yields nothing, which must also fall
-        through to Finnhub rather than returning None outright."""
-        now = datetime.now(timezone.utc)
-        past = (now - timedelta(days=90)).strftime("%Y-%m-%d")
+        rows (no future-dated event scheduled yet) -- the future-date filter
+        then yields nothing, which is an honest None."""
+        past = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
         rows = [{"symbol": "AAPL", "event_date": past, "source": "fmp"}]
-        mock_client = MagicMock()
-        future = now + timedelta(days=20)
-        mock_client.earnings_calendar.return_value = {
-            "earningsCalendar": [{"date": future.strftime("%Y-%m-%d")}]
-        }
         with patch("settings.settings.FMP_NEWS_ENABLED", True):
             with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
                 with patch("data.fmp_feeds_company.fetch_earnings_rows", return_value=rows):
-                    with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
-                        result = fetch_next_earnings_any("AAPL")
-        assert result is not None
-        assert result.date() == future.date()
+                    result = fetch_next_earnings_any("AAPL")
+        assert result is None
 
-    def test_earnings_neither_provider_available_returns_none(self):
-        with patch("settings.settings.FMP_NEWS_ENABLED", False):
-            with patch("signals.news_catalyst.build_finnhub_client", return_value=None):
-                result = fetch_next_earnings_any("AAPL")
+    def test_earnings_fmp_failure_gives_none_never_raises(self):
+        with patch("settings.settings.FMP_NEWS_ENABLED", True):
+            with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
+                with patch(
+                    "data.fmp_feeds_company.fetch_earnings_rows",
+                    side_effect=RuntimeError("boom"),
+                ):
+                    result = fetch_next_earnings_any("AAPL")
         assert result is None
 
     # -----------------------------------------------------------------
@@ -1543,10 +1479,8 @@ class TestProviderAgnosticDispatchers:
     # -----------------------------------------------------------------
 
     def test_pre_compute_accepts_fmp_only_configuration(self):
-        """pre_compute()'s gate now checks fmp_available OR finnhub_available
-        -- with FMP as the SOLE configured provider (FINNHUB_API_KEY empty,
-        so build_finnhub_client() naturally returns None), pre_compute must
-        NOT take the 'no provider configured' early-return branch: _news_scores
+        """With FMP as the sole configured provider, pre_compute must NOT
+        take the 'no provider configured' early-return branch: _news_scores
         gets populated, not left {}."""
         sig = _make_signal()
         ctx = _make_context()
@@ -1562,25 +1496,23 @@ class TestProviderAgnosticDispatchers:
         ]
         with patch("settings.settings.FMP_NEWS_ENABLED", True):
             with patch("settings.settings.FMP_API_KEY", "test-fmp-key"):
-                with patch("settings.settings.FINNHUB_API_KEY", ""):
-                    with patch("data.fmp_client.stock_news", return_value=fmp_articles):
-                        with patch("data.fmp_feeds_company.fetch_earnings_rows", return_value=[]):
-                            with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
-                                with patch("signals.news_catalyst.time.sleep"):
-                                    sig.pre_compute(universe, ctx)
+                with patch("data.fmp_client.stock_news", return_value=fmp_articles):
+                    with patch("data.fmp_feeds_company.fetch_earnings_rows", return_value=[]):
+                        with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                            with patch("signals.news_catalyst.time.sleep"):
+                                sig.pre_compute(universe, ctx)
         assert sig._news_scores != {}
         assert "AAPL" in sig._news_scores
         assert ctx.news_sentiment_scores != {}
 
-    # -----------------------------------------------------------------
-    # _score_via_finnhub backward-compat alias
-    # -----------------------------------------------------------------
+    def test_removed_finnhub_surface_is_gone(self):
+        """Finnhub was removed 2026-09: no client builder, no Finnhub-only
+        fetchers, no old private alias."""
+        import signals.news_catalyst as nc
 
-    def test_score_via_finnhub_is_alias_for_score_via_provider(self):
-        """_score_via_finnhub (the old name) must remain resolvable as a
-        class-level alias for _score_via_provider -- literally the same
-        function object, not a separate wrapper that could drift."""
-        assert NewsCatalystSignal._score_via_finnhub is NewsCatalystSignal._score_via_provider
+        for name in ("build_finnhub_client", "fetch_company_news", "fetch_next_earnings"):
+            assert not hasattr(nc, name), name
+        assert not hasattr(NewsCatalystSignal, "_score_via_finnhub")
 
 
 # ===========================================================================
@@ -1657,15 +1589,15 @@ class TestMultiSourceIngestion:
                 sig._run_multi_source_ingestion([])
         mock_source.fetch_and_archive.assert_not_called()
 
-    def test_runs_regardless_of_finnhub_configuration(self):
+    def test_runs_regardless_of_provider_configuration(self):
         """pre_compute() must run multi-source ingestion even when
-        FINNHUB_API_KEY is unset (Reddit/GDELT/EDGAR/Yahoo RSS don't need it),
+        FMP_API_KEY is unset (Reddit/GDELT/EDGAR/Yahoo RSS don't need it),
         as long as SENTIMENT_INGESTION_ENABLED is explicitly turned on."""
         sig = _make_signal()
         ctx = _make_context()
         universe = _make_universe(["AAPL"])
         mock_source = MagicMock()
-        with patch("settings.settings.FINNHUB_API_KEY", ""):
+        with patch("settings.settings.FMP_API_KEY", ""):
             with patch("settings.settings.SENTIMENT_INGESTION_ENABLED", True):
                 with patch("data.sentiment_sources.get_sentiment_source", return_value=mock_source):
                     sig.pre_compute(universe, ctx)
@@ -1706,7 +1638,7 @@ class TestSentimentCredibilityBlend:
                      "aggregated_source_credibility": 1.0},
         }
         mock_store_cls = MagicMock(return_value=mock_store_instance)
-        with patch("settings.settings.FINNHUB_API_KEY", ""):
+        with patch("settings.settings.FMP_API_KEY", ""):
             with patch("data.historical_store.HistoricalStore", mock_store_cls):
                 sig.pre_compute(universe, ctx)
         assert ctx.sentiment_credibility_scores == {
@@ -1958,9 +1890,9 @@ class TestGetSymbolNewsCatalystDetails:
         """Three real headlines, max_headlines=2 -> only the two most
         recent (by "datetime") come back."""
         headlines = [
-            {"headline": "oldest", "datetime": 100, "source": "a", "_provider": "finnhub"},
-            {"headline": "newest", "datetime": 300, "source": "a", "_provider": "finnhub"},
-            {"headline": "middle", "datetime": 200, "source": "a", "_provider": "finnhub"},
+            {"headline": "oldest", "datetime": 100, "source": "a", "_provider": "fmp"},
+            {"headline": "newest", "datetime": 300, "source": "a", "_provider": "fmp"},
+            {"headline": "middle", "datetime": 200, "source": "a", "_provider": "fmp"},
         ]
         distributions = [
             {"positive": 0.5, "neutral": 0.3, "negative": 0.2},
@@ -2001,7 +1933,7 @@ class TestGetSymbolNewsCatalystDetails:
                 "headline": "Apple beats and raises guidance",
                 "datetime": 5000,
                 "source": "example.com",
-                "_provider": "finnhub",
+                "_provider": "fmp",
             },
         ]
         with patch("settings.settings.FINBERT_ENABLED", False):

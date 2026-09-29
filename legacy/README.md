@@ -175,3 +175,12 @@ the full list). One test file moved because every key it pinned is gone:
 table (its `save_etf_holdings`/`get_etf_holdings`/`latest_etf_holdings_date`
 accessors were deleted, not moved; git history has them). Nothing drops the
 table: an existing `quant_platform.db` keeps it and its rows as they were.
+
+## Vendor removal: Finnhub, Reddit, Sentry (2026-09)
+
+Operator-approved removal of unused third-party integrations. Each was dormant or an unreached fallback on the live config (`FMP_NEWS_ENABLED=true` with an FMP key, no `REDDIT_CLIENT_ID`, no `SENTRY_DSN`), so no pipeline cycle changed. Finnhub (`FinnhubProvider`, `FinnhubSentimentSource`, `build_finnhub_client`, the `FINNHUB_*` settings, `finnhub-python`) and Reddit (`RedditSource`, the `REDDIT_*` settings) were deleted rather than moved (git history has them). Only Sentry was archived:
+
+| Moved | Why |
+|---|---|
+| `observability/sentry_integration.py` -> `legacy/observability/sentry_integration.py` | `init_sentry()` was called once at daemon startup and was a no-op without `SENTRY_DSN`. The `SENTRY_*` settings, their `shared/env_io.py` entries and the `sentry-sdk` optional dependency were removed with it. |
+| `tests/test_sentry_integration.py` -> `legacy/tests/test_sentry_integration.py` | The suite for the module above (still imports `observability.sentry_integration`; put the module back first to run it). |

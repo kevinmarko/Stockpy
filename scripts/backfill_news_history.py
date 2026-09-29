@@ -9,23 +9,19 @@ FinBERT/lexicon + earnings-proximity methodology
 ``signals/news_catalyst.py``'s live ``NewsCatalystSignal.pre_compute()``
 uses.
 
-Provider-agnostic (FMP-first, Finnhub-fallback) -- 2026-08
-------------------------------------------------------------
-FMP is the PRIMARY provider when ``settings.FMP_NEWS_ENABLED`` +
-``FMP_API_KEY`` are set (``data.fmp_client.stock_news`` / paginated,
-``data.fmp_feeds_company.fetch_earnings_rows``); Finnhub
-(``FINNHUB_API_KEY``) is the fallback, used automatically when FMP is
-unconfigured or returns nothing for a symbol. Both providers are wrapped
-in the SAME real-historical-data contract described below -- see
-``_fetch_headlines``/``_fetch_headlines_fmp`` and
-``_fetch_earnings_dates``/``_fetch_earnings_dates_fmp``.
+FMP-only (Finnhub removed 2026-09)
+------------------------------------
+FMP is the sole provider (``settings.FMP_NEWS_ENABLED`` + ``FMP_API_KEY``;
+``data.fmp_client.stock_news`` / paginated,
+``data.fmp_feeds_company.fetch_earnings_rows``) -- see
+``_fetch_headlines_fmp`` and ``_fetch_earnings_dates_fmp``. Finnhub was the
+unreached fallback and is gone.
 
 Why this is honest, not a hindsight shortcut
 ---------------------------------------------
 ``news_history``'s own DDL comment (``data/historical_store.py``) documents
 it as "forward-archive only" -- the live pipeline has only been writing to
-it since 2026-07, so a fresh install has just weeks of real depth. But both
-providers' company-news and earnings-calendar endpoints accept arbitrary
+it since 2026-07, so a fresh install has just weeks of real depth. But FMP's company-news and earnings-calendar endpoints accept arbitrary
 historical date ranges and return genuinely real records: headlines that
 were actually published on that date, and earnings dates that were
 actually scheduled/reported. Scoring that real historical text with the
@@ -41,34 +37,25 @@ table can filter out backfilled rows if same-day-computed provenance turns
 out to matter -- today's display chart doesn't care about provenance and
 shows both.
 
-Real depth: FMP >= 6 months, Finnhub free tier caps at ~3 months
---------------------------------------------------------------------
+Real depth: FMP >= 6 months
+---------------------------
 Verified live 2026-08 against a real FMP key: ``/news/stock`` returns
 genuinely real articles at least 6 months back, with working date-window +
 page/limit pagination (bounded by ``settings.FMP_NEWS_MAX_PAGES`` -- see
-``_fetch_headlines_fmp``). Finnhub is more limited:
-``settings.NEWS_LOOKBACK_DAYS``'s own description says it plainly: "the
-free Finnhub tier provides ~3 months of history." Requesting further back
-than that does not error -- Finnhub just returns nothing for the older
-portion of the range. With the default ``--months 6``, an operator on the
-Finnhub-only fallback path should expect the most recent ~3 months to
-genuinely fill in and the older ~3 months to archive as honest ``NaN``
-gaps (``HistoricalStore.get_news_sentiment_history()``'s documented
+``_fetch_headlines_fmp``). Days with no real headlines archive as honest
+``NaN`` (``HistoricalStore.get_news_sentiment_history()``'s documented
 contract -- a real "no data" day, never a fabricated 0.0). This script does
-not attempt to paper over either cap; it reports what the active provider
-actually returned so the operator isn't misled about coverage.
+not attempt to paper over a provider cap; it reports what FMP actually
+returned so the operator isn't misled about coverage.
 
 One call (or a short, bounded page loop) per symbol, not per day
 ----------------------------------------------------------------------
 Unlike ``scripts/backfill_sentiment_history.py``'s GDELT windowing (needed
 because GDELT's ``artlist`` mode caps at 250 records per 7-day call), this
-script issues one wide-range fetch per symbol per provider -- an FMP page
-loop bounded by ``FMP_NEWS_MAX_PAGES``, or exactly ONE Finnhub
-``company_news``/``earnings_calendar`` call pair on the fallback path --
-mirroring ``signals/news_catalyst.py``'s existing
-``fetch_company_news``/``fetch_next_earnings`` helpers and
-``data/sentiment_sources.py``'s ``FinnhubSentimentSource``/
-``FMPNewsSource``, all of which already fetch an arbitrarily wide date
+script issues one wide-range fetch per symbol -- an FMP page
+loop bounded by ``FMP_NEWS_MAX_PAGES`` -- mirroring
+``signals/news_catalyst.py``'s ``fetch_company_headlines`` and
+``data/sentiment_sources.py``'s ``FMPNewsSource``, which already fetch an arbitrarily wide date
 range with no per-day chunking. Each historical trading day's score is
 then reconstructed LOCALLY from the one already-fetched, already-scored
 headline list by replaying ``NewsCatalystSignal.pre_compute()``'s trailing
@@ -115,60 +102,29 @@ from signals.news_catalyst import (  # noqa: E402
     _distribution_to_signed,
     _earnings_proximity_multiplier,
     _get_finbert_pipeline,
-    build_finnhub_client,
     score_headlines,
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Finnhub free-tier courtesy delay between symbols (up to 2 calls/symbol when
-# the Finnhub fallback path is used: one company_news, one earnings_calendar)
-# -- generous since this is a one-time backfill, not a latency-sensitive live
-# cycle. FMP's own throttle (data/fmp_client.py) is independent of this delay.
+# Courtesy delay between symbols -- generous since this is a one-time
+# backfill, not a latency-sensitive live cycle. FMP's own throttle
+# (data/fmp_client.py) is independent of this delay.
 _COURTESY_DELAY_SECONDS = 1.0
 
 
 def _fetch_headlines(
-    client: Optional[Any], symbol: str, start: datetime, end: datetime,
+    symbol: str, start: datetime, end: datetime,
 ) -> List[Tuple[datetime, str]]:
     """One wide-range headline fetch. Returns ``[(as_of, headline)]``, real
-    records only -- never raises (CONSTRAINT #6).
-
-    Provider-agnostic: FMP-first (paginated ``data.fmp_client.stock_news``,
-    bounded to ``settings.FMP_NEWS_MAX_PAGES`` pages) when
-    ``settings.FMP_NEWS_ENABLED`` + ``FMP_API_KEY`` are set, falling back to
-    ``client.company_news(...)`` (Finnhub) otherwise -- including when the
-    FMP attempt returns nothing, or when ``client`` is the only thing
-    available (FMP disabled). Verified live 2026-08: FMP's ``/news/stock``
-    covers >=6 months of real history, well past Finnhub's free-tier ~3
-    month cap documented in this module's own docstring.
+    records only -- never raises (CONSTRAINT #6). FMP-only: paginated
+    ``data.fmp_client.stock_news`` bounded to ``settings.FMP_NEWS_MAX_PAGES``
+    pages, when ``settings.FMP_NEWS_ENABLED`` + ``FMP_API_KEY`` are set.
+    Verified live 2026-08: FMP's ``/news/stock`` covers >=6 months of real
+    history.
     """
-    fmp_items = _fetch_headlines_fmp(symbol, start, end)
-    if fmp_items:
-        return fmp_items
-    if client is None:
-        return []
-    try:
-        result = client.company_news(
-            symbol, _from=start.strftime("%Y-%m-%d"), to=end.strftime("%Y-%m-%d"),
-        )
-    except Exception as exc:
-        logger.warning("%s: company_news fetch failed: %s", symbol, exc)
-        return []
-    items = result if isinstance(result, list) else []
-    out: List[Tuple[datetime, str]] = []
-    for item in items:
-        headline = item.get("headline", "")
-        ts = item.get("datetime")
-        if not headline or not ts:
-            continue
-        try:
-            as_of = datetime.fromtimestamp(ts, tz=timezone.utc)
-        except (OverflowError, OSError, ValueError):
-            continue
-        out.append((as_of, headline))
-    return out
+    return _fetch_headlines_fmp(symbol, start, end)
 
 
 def _fetch_headlines_fmp(
@@ -181,7 +137,7 @@ def _fetch_headlines_fmp(
     the ones not fetched (FMP pages newest-first); this is an honest,
     logged gap (CONSTRAINT #4), not silently pretended to be complete.
     Returns ``[]`` when FMP is not configured or the request fails --
-    never raises (the caller falls back to Finnhub)."""
+    never raises."""
     if not getattr(settings, "FMP_NEWS_ENABLED", False):
         return []
     if not getattr(settings, "FMP_API_KEY", None):
@@ -229,48 +185,23 @@ def _fetch_headlines_fmp(
 
 
 def _fetch_earnings_dates(
-    client: Optional[Any], symbol: str, start: datetime, end: datetime,
+    symbol: str, start: datetime, end: datetime,
 ) -> List[datetime]:
     """One wide-range earnings-date fetch. Returns sorted real
     scheduled/reported earnings dates -- never raises (CONSTRAINT #6).
 
-    Provider-agnostic: FMP-first (via
-    ``data.fmp_feeds_company.fetch_earnings_rows``, which is NOT limited to
-    Finnhub's 30-day forward window and returns full historical + future
-    rows in one call, filtered locally to ``[start, end]``) when configured,
-    falling back to ``client.earnings_calendar(...)`` (Finnhub) otherwise.
+    FMP-only, via ``data.fmp_feeds_company.fetch_earnings_rows`` (full
+    historical + future rows in one call, filtered locally to
+    ``[start, end]``) when configured.
     """
-    fmp_dates = _fetch_earnings_dates_fmp(symbol, start, end)
-    if fmp_dates:
-        return fmp_dates
-    if client is None:
-        return []
-    try:
-        data = client.earnings_calendar(
-            _from=start.strftime("%Y-%m-%d"), to=end.strftime("%Y-%m-%d"), symbol=symbol,
-        ) or {}
-    except Exception as exc:
-        logger.warning("%s: earnings_calendar fetch failed: %s", symbol, exc)
-        return []
-    entries = data.get("earningsCalendar", [])
-    dates: List[datetime] = []
-    for entry in entries:
-        date_str = entry.get("date", "")
-        if not date_str:
-            continue
-        try:
-            dates.append(datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc))
-        except ValueError:
-            continue
-    return sorted(dates)
+    return _fetch_earnings_dates_fmp(symbol, start, end)
 
 
 def _fetch_earnings_dates_fmp(
     symbol: str, start: datetime, end: datetime,
 ) -> List[datetime]:
     """FMP half of :func:`_fetch_earnings_dates`. Returns ``[]`` when FMP is
-    not configured or the request fails -- never raises (the caller falls
-    back to Finnhub)."""
+    not configured or the request fails -- never raises."""
     if not getattr(settings, "FMP_NEWS_ENABLED", False):
         return []
     if not getattr(settings, "FMP_API_KEY", None):
@@ -298,9 +229,17 @@ def _fetch_earnings_dates_fmp(
     return sorted(dates)
 
 
+def _fmp_configured() -> bool:
+    """True when FMP is the configured news provider (FMP_NEWS_ENABLED +
+    FMP_API_KEY) -- the only provider this backfill can use."""
+    return bool(
+        getattr(settings, "FMP_NEWS_ENABLED", False) and getattr(settings, "FMP_API_KEY", None)
+    )
+
+
 def _next_earnings_on(day: datetime, earnings_dates: List[datetime]) -> Optional[datetime]:
     """Earliest earnings date >= ``day`` - 24h, mirroring
-    ``fetch_next_earnings``'s own 24h look-back grace window (it keeps an
+    ``fetch_next_earnings_any``'s own 24h look-back grace window (it keeps an
     earnings date that fell within the last 24h so the post-earnings dampen
     band in ``_earnings_proximity_multiplier`` still engages)."""
     cutoff = day - timedelta(hours=24)
@@ -310,7 +249,6 @@ def _next_earnings_on(day: datetime, earnings_dates: List[datetime]) -> Optional
 
 def _backfill_symbol(
     symbol: str,
-    client: Any,
     pipeline: Optional[Any],
     start_date: datetime,
     end_date: datetime,
@@ -326,9 +264,9 @@ def _backfill_symbol(
     (CONSTRAINT #4).
     """
     fetch_start = start_date - timedelta(days=lookback_days)
-    headlines_raw = _fetch_headlines(client, symbol, fetch_start, end_date)
+    headlines_raw = _fetch_headlines(symbol, fetch_start, end_date)
     earnings_dates = _fetch_earnings_dates(
-        client, symbol, fetch_start, end_date + timedelta(days=30),
+        symbol, fetch_start, end_date + timedelta(days=30),
     )
 
     texts = [h for _, h in headlines_raw]
@@ -368,8 +306,8 @@ def main():
         "--months", type=float, default=6.0,
         help="How many months back to backfill (default: 6). See module "
              "docstring: with FMP as the provider this covers real history "
-             "(verified live 2026-08: >=6 months); Finnhub's free tier only "
-             "has ~3 months, with the remainder archiving as honest NaN gaps.",
+             "(verified live 2026-08: >=6 months); days with no real headlines "
+             "archive as honest NaN gaps.",
     )
     args = parser.parse_args()
 
@@ -390,22 +328,14 @@ def main():
         return
     logger.info("Resolved %d tickers from --tickers=%r", len(tickers), args.tickers)
 
-    fmp_available = bool(
-        getattr(settings, "FMP_NEWS_ENABLED", False) and getattr(settings, "FMP_API_KEY", None)
-    )
-    client = build_finnhub_client()
-    if client is None and not fmp_available:
+    if not _fmp_configured():
         logger.error(
             "No news provider is configured -- nothing to backfill. Set "
-            "FMP_NEWS_ENABLED=true + FMP_API_KEY in .env (recommended -- see "
-            "module docstring), or FINNHUB_API_KEY (finnhub-python must also "
-            "be installed) as a fallback, then retry."
+            "FMP_NEWS_ENABLED=true + FMP_API_KEY in .env (see module "
+            "docstring), then retry."
         )
         return
-    logger.info(
-        "News provider(s) available: FMP=%s, Finnhub=%s.",
-        fmp_available, client is not None,
-    )
+    logger.info("News provider available: FMP.")
 
     if not settings.NEWS_HISTORY_CAPTURE_ENABLED:
         logger.warning(
@@ -440,7 +370,7 @@ def main():
     for symbol in tickers:
         try:
             day_scores, n_headlines = _backfill_symbol(
-                symbol, client, pipeline, start_date, end_date,
+                symbol, pipeline, start_date, end_date,
                 lookback_days, suppress_hours, dampen_days,
             )
             total_headlines += n_headlines
@@ -468,7 +398,7 @@ def main():
     logger.info(
         "Backfill complete: %d tickers, %d trading days written, "
         "%d/%d symbol-days have a real score (rest are honest NaN gaps -- "
-        "see module docstring on Finnhub's ~3-month free-tier depth), "
+        "see module docstring), "
         "%d real headlines fetched total, %d symbols errored.",
         len(tickers), len(by_day), n_real, n_total, total_headlines, n_errors,
     )

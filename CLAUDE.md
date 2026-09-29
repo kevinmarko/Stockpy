@@ -285,8 +285,8 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   adjusted convention; FMP's `light`/`full` variants are split-only and silently corrupt every return
   series. `scripts/verify_fmp_bars.py` must PASS before it changes. See `docs/FMP_INTEGRATION.md`.
 - **Data-source policy for new features:** a new capability needing live data this codebase doesn't
-  already have may depend only on **FMP or Yahoo (yfinance)**. Alpaca and Finnhub keep their existing
-  roles but are not a basis for new features. If neither source has the data, disclose the gap
+  already have may depend only on **FMP or Yahoo (yfinance)**. Alpaca keeps its existing
+  role but is not a basis for new features. If neither source has the data, disclose the gap
   rather than build around a third provider.
 
 ### Settings, credentials and storage

@@ -6,7 +6,7 @@ Task 1.4 — Portfolio & Watchlist Synchronization Engine.
 Single-purpose module that takes the **union** of (a) every active Robinhood
 holding and (b) every user-defined Robinhood watchlist + plain-text watchlist
 files, and reconciles it against the platform's market-data feeds
-(``data.market_data`` → Alpaca quotes/bars + Finnhub fundamentals).
+(``data.market_data`` → Alpaca quotes/bars + Yahoo/FMP fundamentals).
 
 Why this exists
 ---------------
@@ -48,7 +48,7 @@ Public API
 
 CONSTRAINTS honoured
 --------------------
-* No paid dependencies — Alpaca / Finnhub / yfinance via the existing
+* No paid dependencies — Alpaca / FMP / yfinance via the existing
   ``data.market_data`` layer; no new vendors.
 * No fabricated metrics — when a quote / bar / fundamental fetch fails the
   symbol is marked ``UNCOVERED`` / ``EQUITY_ONLY`` and a NaN is propagated
@@ -451,7 +451,7 @@ def build_sync_report(
             provider = get_provider()
             provider_source = getattr(provider, "quote_source", "unknown")
             # Fundamentals now come from the Yahoo statement-computed engine
-            # (source_name "yahoo_computed"), no longer Finnhub. Read the label
+            # (source_name "yahoo_computed"), not Finnhub. Read the label
             # off the active provider so the sync-report provenance stays honest.
             fundamentals_source = getattr(provider, "source_name", "yfinance")
         except Exception as exc:  # noqa: BLE001

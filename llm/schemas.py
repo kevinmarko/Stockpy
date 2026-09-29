@@ -179,7 +179,7 @@ class ChartPatternRead(BaseModel):
 class ResearchBrief(BaseModel):
     """OpenAI/Opal grounded research brief for a single symbol (Tier 9 Scope 4).
 
-    A FRONT-OF-PIPELINE artifact: synthesized from REAL retrieved Finnhub
+    A FRONT-OF-PIPELINE artifact: synthesized from REAL retrieved FMP
     news + earnings + a macro snippet (never invented — CONSTRAINT #4), then
     threaded INTO the Claude analyst-rationale prompt as enriched context.
 
@@ -210,11 +210,11 @@ class ResearchBrief(BaseModel):
         retrieved — never fabricated to fill the list.
     data_confidence :
         Ordinal: ``"low" | "medium" | "high"`` — reflects how much real
-        grounding data was available (e.g. "low" when Finnhub returned no
+        grounding data was available (e.g. "low" when FMP returned no
         news and no earnings date). Advisory only.
     sources_note :
         One-sentence attribution of what was actually retrieved (e.g.
-        "Based on 3 Finnhub headlines from the past 7 days; no earnings
+        "Based on 3 FMP headlines from the past 7 days; no earnings
         date available."). ≤200 chars.
     """
 

@@ -270,7 +270,7 @@ describe("SymbolDetail screen (real mock API)", () => {
       expect(within(section).getByText("Catalysts")).toBeInTheDocument();
       expect(within(section).getByText("Risk factors")).toBeInTheDocument();
       expect(within(section).getByText("Recent developments")).toBeInTheDocument();
-      expect(within(section).getByText(/Finnhub headlines/)).toBeInTheDocument();
+      expect(within(section).getByText(/FMP headlines/)).toBeInTheDocument();
     });
 
     it("Opal research brief: an honest disabled reason renders the specific operator-facing message, never a generic error", async () => {

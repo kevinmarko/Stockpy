@@ -166,7 +166,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     // docs/signals/sector_heat_factor.md's "Two features, one name" section
     // for the full disambiguation. This entry describes the Sector
     // Selection screen's own SHF specifically.
-    "A Gaussian response to how much news + investor-forum volume a candidate sector is seeing, normalized against every OTHER candidate sector over a trailing 22-trading-day window — not a raw volume count. When investor-forum (Reddit/StockTwits) volume has never been observed, this degrades honestly to news-volume-only, flagged 'Investor-forum volume unavailable' rather than showing a fabricated number.",
+    "A Gaussian response to how much news + investor-forum volume a candidate sector is seeing, normalized against every OTHER candidate sector over a trailing 22-trading-day window — not a raw volume count. When investor-forum (StockTwits) volume has never been observed, this degrades honestly to news-volume-only, flagged 'Investor-forum volume unavailable' rather than showing a fabricated number.",
   "sector correlation coefficient":
     "Semantic Related Sector Selection's ranking score: cosine similarity × Sector Heat Factor. Sectors are ranked by this number and the top N are selected as the most relevant related sectors for a target stock. '—' whenever either input side is unavailable — never computed from a partial or guessed value.",
   "sentiment score":
@@ -504,7 +504,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "settings-sentiment": {
     title: "Sentiment & News Ingestion Settings",
     description:
-      "Parameters for news ingestion pipelines and sentiment scoring. Manages active news providers (FMP, StockTwits, Reddit, EDGAR, GDELT), FinBERT model batching, and attention proxy feeds.",
+      "Parameters for news ingestion pipelines and sentiment scoring. Manages active news providers (FMP, StockTwits, EDGAR, GDELT), FinBERT model batching, and attention proxy feeds.",
     keyConcepts: ["finbert classification", "news provider", "sentiment score"],
   },
   "settings-sector-selection": {

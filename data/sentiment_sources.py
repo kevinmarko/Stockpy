@@ -11,8 +11,7 @@ answers to the same question.
 Free-first by design
 ---------------------
 Default sources (``settings.SENTIMENT_SOURCES``): Yahoo Finance RSS, GDELT,
-Reddit's official API, SEC/EDGAR, and the existing Finnhub feed
-(``signals/news_catalyst.py``). This runs locally on the platform's usual
+SEC/EDGAR (Reddit and Finnhub were removed 2026-09). This runs locally on the platform's usual
 Mac-mini / free-tier footprint -- no paid feed is wired up. A future paid
 source (e.g. a licensed X/Twitter tier) can be added later as a new
 ``SentimentSource`` subclass with zero changes to ``CompositeSentimentSource``
@@ -70,10 +69,10 @@ Credibility-field honesty
 --------------------------
 ``SentimentDocument`` carries optional credibility-relevant raw inputs
 (``author_followers``, ``account_age_days``, ``posts_per_minute``). Sources
-that don't carry this metadata (Finnhub headlines, Yahoo RSS, GDELT, EDGAR
+that don't carry this metadata (FMP headlines, Yahoo RSS, GDELT, EDGAR
 filings) leave these ``None`` -- never fabricated (CONSTRAINT #4). Only
-``RedditSource`` can plausibly populate ``posts_per_minute``-adjacent
-signals; full author-account lookups (follower counts, account age) are
+Only comment-class sources (e.g. StockTwits) can plausibly populate
+``posts_per_minute``-adjacent signals; full author-account lookups (follower counts, account age) are
 deferred to Phase 4's credibility engine, which may make additional batched
 calls rather than one-per-document in the hot path (see signals/credibility.py).
 
@@ -133,15 +132,13 @@ logger = logging.getLogger(__name__)
 
 # Sources polled first when the per-cycle document budget is under pressure --
 # established/regulatory feeds outrank noisier social feeds (never orders).
-# "fmp_news" sits ahead of "finnhub" -- both are single-publisher-aggregator
-# company-news feeds with no credibility metadata, but fmp_news is the
-# opt-in PRIMARY per FMP_NEWS_ENABLED (see settings.py's description) once
-# enabled, so it should win the budget first when both are active. "google_news"
-# sits alongside yahoo_rss/gdelt (a news-aggregator tier, noisier than the
-# regulatory/single-publisher feeds ahead of it but not the social tier that
-# follows) -- ahead of reddit.
+# "fmp_news" is the opt-in PRIMARY company-news feed per FMP_NEWS_ENABLED (see
+# settings.py's description), so it wins the budget first once enabled.
+# "google_news" sits alongside yahoo_rss/gdelt (a news-aggregator tier,
+# noisier than the regulatory/single-publisher feeds ahead of it). Any source
+# not listed here (e.g. stocktwits) is appended last.
 _SOURCE_PRIORITY: List[str] = [
-    "fmp_news", "finnhub", "edgar", "yahoo_rss", "gdelt", "google_news", "reddit",
+    "fmp_news", "edgar", "yahoo_rss", "gdelt", "google_news",
 ]
 
 
@@ -281,58 +278,6 @@ class SentimentSource(ABC):
 
 
 # ---------------------------------------------------------------------------
-# Finnhub — wraps the existing signals/news_catalyst.py client helpers so
-# Finnhub participates in this abstraction rather than living outside it.
-# ---------------------------------------------------------------------------
-
-class FinnhubSentimentSource(SentimentSource):
-    """Wraps ``signals.news_catalyst``'s existing Finnhub client + scoring
-    helpers. No credibility metadata (Finnhub headlines carry no author/
-    follower data) -- ``author_followers``/``account_age_days`` stay ``None``.
-    """
-
-    name = "finnhub"
-
-    def fetch(self, symbol: str, since: datetime) -> List[SentimentDocument]:
-        try:
-            from signals.news_catalyst import (
-                build_finnhub_client,
-                fetch_company_news,
-                _score_headline,
-                _get_finbert_pipeline,
-            )
-            from settings import settings as _settings
-
-            client = build_finnhub_client()
-            if client is None:
-                return []
-            lookback_days = max(1, (datetime.now(timezone.utc) - since).days or 1)
-            pipeline = _get_finbert_pipeline() if _settings.FINBERT_ENABLED else None
-            items = fetch_company_news(client, symbol, lookback_days)
-            docs: List[SentimentDocument] = []
-            for item in items:
-                headline = item.get("headline", "")
-                if not headline:
-                    continue
-                ts = item.get("datetime")
-                as_of = (
-                    datetime.fromtimestamp(ts, tz=timezone.utc)
-                    if ts else datetime.now(timezone.utc)
-                )
-                if as_of < since:
-                    continue
-                score = _score_headline(headline, pipeline)
-                docs.append(SentimentDocument(
-                    as_of=as_of, symbol=symbol.upper(), source_name=self.name,
-                    text_content=headline, raw_sentiment_score=score,
-                ))
-            return docs
-        except Exception as exc:
-            logger.warning("FinnhubSentimentSource.fetch(%s) failed: %s", symbol, exc)
-            return []
-
-
-# ---------------------------------------------------------------------------
 # Financial Modeling Prep (FMP) — company news, opt-in primary source.
 # ---------------------------------------------------------------------------
 # ``publishedDate`` parsing (a naive US-Eastern-Time string, verified live
@@ -349,7 +294,7 @@ class FMPNewsSource(SentimentSource):
     an operator must both add ``"fmp_news"`` to ``SENTIMENT_SOURCES`` and set
     ``settings.FMP_NEWS_ENABLED=True`` (the ``FMP_API_KEY`` two-gate
     convention every other FMP feed in this codebase follows). No
-    credibility metadata (same as Finnhub -- FMP headlines carry no author/
+    credibility metadata (FMP headlines carry no author/
     follower data) -- ``author_followers``/``account_age_days`` stay
     ``None``.
 
@@ -362,8 +307,7 @@ class FMPNewsSource(SentimentSource):
     for a source that internally loops (same seam ``GDELTSource`` uses).
     Scoring goes through the batched ``score_headlines()`` path (one FinBERT
     forward pass for the whole page, not one call per headline), matching
-    ``NewsCatalystSignal.pre_compute()``'s convention rather than
-    ``FinnhubSentimentSource``'s per-headline ``_score_headline()``.
+    ``NewsCatalystSignal.pre_compute()``'s convention.
     """
 
     name = "fmp_news"
@@ -540,7 +484,7 @@ class YahooRSSSource(SentimentSource):
 #      ``GDELT_COOLDOWN_SECONDS``. Without this, a host that is refusing or
 #      ignoring us turns a long backfill into hours of guaranteed-failing
 #      requests. Skipping fast is what lets the other sources
-#      (EDGAR/Finnhub/Reddit) actually get their share of the wall-clock
+#      (EDGAR etc.) actually get their share of the wall-clock
 #      budget. Requiring CONSECUTIVE failures is what keeps a single flaky
 #      socket from opening it; one success resets the count and clears any
 #      open cooldown.
@@ -1264,160 +1208,8 @@ class GoogleNewsRSSSource(SentimentSource):
 
 
 # ---------------------------------------------------------------------------
-# Reddit — official API, OAuth2 client-credentials (script app).
-# ---------------------------------------------------------------------------
-
-class RedditSource(SentimentSource):
-    """Reddit official API (OAuth2 client-credentials grant, read-only search).
-
-    Requires ``REDDIT_CLIENT_ID``/``REDDIT_CLIENT_SECRET``; degrades to an
-    empty result (no crash) when absent, same shape as Finnhub's degrade-mode.
-    Only ``author_handle`` is populated -- ``author_followers``/
-    ``account_age_days`` require a separate per-author lookup, deferred to
-    Phase 4's credibility engine rather than fetched per-document here.
-
-    Historical backfill caveat (documented, not hidden): Reddit's search API
-    can reach posts well beyond ``t=day`` -- ``_time_bucket_for()`` picks the
-    narrowest ``t=`` bucket (hour/day/week/month/year/all) that still covers
-    ``since``, and pagination follows the ``after`` cursor up to
-    ``settings.REDDIT_BACKFILL_MAX_PAGES`` pages. But a backfilled post's
-    credibility sub-scores (``signals/credibility.py``'s ``S_authority``,
-    driven by ``author_followers``) can only ever reflect the author's
-    CURRENT account state -- Reddit's API has no way to ask "what was this
-    account's standing 5 months ago." A backfilled post is therefore scored
-    with today's credibility, not the account's credibility at post time --
-    a real degradation the sentiment-pipeline review flagged (M1), not
-    something this implementation can close. This is unlike GDELT/EDGAR/
-    Finnhub, which are institutional sources policy-trusted at 1.0
-    regardless of when they're scored (see ``signals/credibility.py``'s
-    ``_INSTITUTIONAL_SOURCES``), so backfilling them carries no such caveat.
-    """
-
-    name = "reddit"
-    _TOKEN_URL = "https://www.reddit.com/api/v1/access_token"
-    _SEARCH_URL = "https://oauth.reddit.com/search"
-
-    def __init__(self) -> None:
-        self._token: Optional[str] = None
-
-    def fetch(self, symbol: str, since: datetime) -> List[SentimentDocument]:
-        try:
-            from settings import settings as _settings
-            if not _settings.REDDIT_CLIENT_ID or not _settings.REDDIT_CLIENT_SECRET:
-                return []
-            token = self._get_token(_settings)
-            if token is None:
-                return []
-
-            docs: List[SentimentDocument] = []
-            after: Optional[str] = None
-            max_pages = int(_settings.REDDIT_BACKFILL_MAX_PAGES)
-            time_bucket = self._time_bucket_for(since)
-
-            for _page in range(max_pages):
-                params: Dict[str, Any] = {
-                    "q": f"${symbol}", "sort": "new", "limit": 100, "t": time_bucket,
-                }
-                if after:
-                    params["after"] = after
-                try:
-                    resp = requests.get(
-                        self._SEARCH_URL,
-                        headers={
-                            "Authorization": f"bearer {token}",
-                            "User-Agent": _settings.REDDIT_USER_AGENT,
-                        },
-                        params=params,
-                        timeout=10,
-                    )
-                    resp.raise_for_status()
-                    payload = resp.json()
-                except Exception as exc:
-                    logger.warning("RedditSource.fetch(%s) page failed: %s", symbol, exc)
-                    break
-
-                children = payload.get("data", {}).get("children", [])
-                if not children:
-                    break
-
-                hit_cutoff = False
-                for child in children:
-                    post = child.get("data", {})
-                    title = post.get("title", "")
-                    if not title:
-                        continue
-                    created = post.get("created_utc")
-                    as_of = (
-                        datetime.fromtimestamp(created, tz=timezone.utc)
-                        if created is not None else datetime.now(timezone.utc)
-                    )
-                    if as_of < since:
-                        # sort=new -> every subsequent post (this page and
-                        # later pages) is even older; stop entirely.
-                        hit_cutoff = True
-                        break
-                    docs.append(SentimentDocument(
-                        as_of=as_of, symbol=symbol.upper(), source_name=self.name,
-                        text_content=title, raw_sentiment_score=self._score(title),
-                        author_handle=post.get("author"),
-                    ))
-
-                if hit_cutoff:
-                    break
-                after = payload.get("data", {}).get("after")
-                if not after:
-                    break
-
-            return docs
-        except Exception as exc:
-            logger.warning("RedditSource.fetch(%s) failed: %s", symbol, exc)
-            return []
-
-    @staticmethod
-    def _time_bucket_for(since: datetime) -> str:
-        """Narrowest Reddit ``t=`` search bucket that still covers ``since``."""
-        now = datetime.now(timezone.utc)
-        delta = now - since
-        if delta <= timedelta(hours=1):
-            return "hour"
-        if delta <= timedelta(days=1):
-            return "day"
-        if delta <= timedelta(days=7):
-            return "week"
-        if delta <= timedelta(days=31):
-            return "month"
-        if delta <= timedelta(days=366):
-            return "year"
-        return "all"
-
-    def _get_token(self, settings_obj: Any) -> Optional[str]:
-        if self._token is not None:
-            return self._token
-        try:
-            resp = requests.post(
-                self._TOKEN_URL,
-                auth=(settings_obj.REDDIT_CLIENT_ID, settings_obj.REDDIT_CLIENT_SECRET),
-                data={"grant_type": "client_credentials"},
-                headers={"User-Agent": settings_obj.REDDIT_USER_AGENT},
-                timeout=10,
-            )
-            resp.raise_for_status()
-            self._token = resp.json().get("access_token")
-            return self._token
-        except Exception as exc:
-            logger.warning("RedditSource: token request failed: %s", exc)
-            return None
-
-    @staticmethod
-    def _score(text: str) -> float:
-        from signals.news_catalyst import _score_headline
-        return _score_headline(text, None)
-
-
-# ---------------------------------------------------------------------------
-# StockTwits — free, UNCREDENTIALED (unlike RedditSource, no OAuth
-# registration required). Second comment-class source, lighting up the
-# Review term's coverage alongside Reddit.
+# StockTwits — free, UNCREDENTIALED (no OAuth registration required).
+# Comment-class source feeding the Review term's coverage.
 # ---------------------------------------------------------------------------
 
 class StockTwitsSource(SentimentSource):
@@ -1425,7 +1217,7 @@ class StockTwitsSource(SentimentSource):
     credentials.
 
     Requires ``settings.STOCKTWITS_ENABLED`` (default ``False``) -- unlike
-    Reddit/EDGAR/Finnhub, there's no credential absence to gate on, so this
+    EDGAR, there's no credential absence to gate on, so this
     is the source's own explicit opt-in. NOT in ``SENTIMENT_SOURCES``'s
     default fan-out list even when this flag is on -- an operator must add
     ``"stocktwits"`` to ``SENTIMENT_SOURCES`` themselves. Deliberately
@@ -1437,9 +1229,7 @@ class StockTwitsSource(SentimentSource):
     progressively tightened its public JSON endpoint over the past several
     years and may rate-limit or require authentication in some
     deployments. A 401/403/429/timeout/malformed-response degrades to
-    ``[]`` exactly like a missing Reddit credential -- this source is never
-    load-bearing for the comment channel on its own; Reddit remains the
-    primary comment source (see ``docs/RUNBOOK.md``). Verified against a
+    ``[]`` -- this source is never load-bearing on its own. Verified against a
     captured fixture in tests, never a live call.
 
     Only ``author_handle``/``author_followers`` are populated when the
@@ -1895,12 +1685,10 @@ class EdgarSource(SentimentSource):
 # ---------------------------------------------------------------------------
 
 _SOURCE_REGISTRY: Dict[str, Type[SentimentSource]] = {
-    "finnhub": FinnhubSentimentSource,
     "fmp_news": FMPNewsSource,
     "yahoo_rss": YahooRSSSource,
     "gdelt": GDELTSource,
     "google_news": GoogleNewsRSSSource,
-    "reddit": RedditSource,
     "edgar": EdgarSource,
     "stocktwits": StockTwitsSource,
 }

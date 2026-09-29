@@ -28,9 +28,8 @@ class SentimentOutput(pydantic.BaseModel):
 def get_recent_news(ticker: str) -> str:
     """Fetches recent company news headlines for a given ticker.
 
-    Provider-agnostic: FMP-first when configured
-    (settings.FMP_NEWS_ENABLED + FMP_API_KEY), Finnhub-fallback otherwise
-    (see signals.news_catalyst.fetch_company_headlines).
+    FMP-only (settings.FMP_NEWS_ENABLED + FMP_API_KEY); see
+    signals.news_catalyst.fetch_company_headlines.
     """
     news_items = fetch_company_headlines(ticker, lookback_days=7)
     if not news_items:

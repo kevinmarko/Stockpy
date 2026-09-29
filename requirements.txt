@@ -18,7 +18,7 @@ executing==2.2.1
 fonttools==4.63.0
 fredapi==0.5.2
 # google-auth kept: still required transitively by google-genai (Gemini
-# provider) and google-cloud-language, even though the Google Sheets
+# provider), even though the Google Sheets
 # publisher that used to be its main direct-import reader (via gspread) was
 # retired to legacy/ in step 4e (2026-09). google-auth-oauthlib, gspread,
 # and gspread-dataframe were gspread-only and are removed with it.
@@ -115,7 +115,6 @@ yfinance>=1.5,<1.6
 arch>=7.0.0
 pandas-ta>=0.3.14b
 prophet>=1.1.5
-google-cloud-language>=2.14.0
 # QuantFAA>=0.1.0
 pandas-datareader>=0.10.0
 SQLAlchemy>=2.0.0,<2.1  # 2.1 switches the default postgresql:// driver to psycopg (v3); this repo ships psycopg2-binary
@@ -137,7 +136,6 @@ alpaca-py>=0.40.0
 streamlit>=1.37.0
 PyYAML>=6.0.0
 robin_stocks>=3.1.0
-finnhub-python>=2.4.0
 # Optional: install transformers for FinBERT neural headline sentiment in
 # signals/news_catalyst.py.  Requires either PyTorch or TensorFlow backend.
 # Without it, a built-in keyword lexicon is used automatically (no crash).

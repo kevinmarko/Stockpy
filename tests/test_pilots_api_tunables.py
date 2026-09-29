@@ -906,10 +906,10 @@ class TestSettingsSubroutesPut:
 
     def test_rejects_secret_key_never_written(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put_scoped("/settings/sentiment", {"FINNHUB_API_KEY": "leak"})
+            resp = _put_scoped("/settings/sentiment", {"FMP_API_KEY": "leak"})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["rejected"]["FINNHUB_API_KEY"] == "unknown_key"
+        assert body["rejected"]["FMP_API_KEY"] == "unknown_key"
         assert body["written"] == {}
         assert w.call_count == 0
 

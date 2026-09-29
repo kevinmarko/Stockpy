@@ -2055,10 +2055,6 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
   SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: ["data/sentiment_sources.py:1962"],
   EDGAR_FULLTEXT_FORMS: ["api/pilots_api.py:4839"],
   EDGAR_FULLTEXT_CHUNK_TOKENS: ["api/pilots_api.py:4840"],
-  FINNHUB_RATE_LIMIT_PER_MIN: [
-    "data/market_data.py:1554",
-    "data/market_data.py:1587",
-  ],
   FMP_QUOTES_REALTIME: ["data/market_data.py:1011"],
   FMP_BARS_ADJUSTMENT: ["data/market_data.py:1942"],
   FMP_ECON_INDICATORS: ["api/pilots_api.py:4981"],
@@ -2741,7 +2737,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     default: "yahoo",
     options: ["yahoo", "yfinance_info", "fmp"],
     description:
-      "Primary fundamentals backend: 'yahoo' (statement-derived, default), 'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling Prep — see section 25). Finnhub is no longer a fundamentals source. Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen explicitly here, so adding the key for one feed cannot silently change what every valuation metric is computed from. 'fmp' additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate convention); with either half missing the Yahoo path is used, exactly as today.",
+      "Primary fundamentals backend: 'yahoo' (statement-derived, default), 'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling Prep — see section 25). Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen explicitly here, so adding the key for one feed cannot silently change what every valuation metric is computed from. 'fmp' additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate convention); with either half missing the Yahoo path is used, exactly as today.",
   },
   {
     group: "Market Data", key: "MARKET_DATA_WS_ENABLED", type: "boolean",
@@ -3531,14 +3527,14 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
     value: false,
     default: false,
     description:
-      "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/Reddit/EDGAR). False is a complete no-op.",
+      "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/EDGAR). False is a complete no-op.",
   },
   {
     group: "Sentiment Ingestion Core",
     key: "SENTIMENT_SOURCES",
     type: "string",
-    value: "yahoo_rss,gdelt,reddit,edgar",
-    default: "yahoo_rss,gdelt,reddit,edgar",
+    value: "yahoo_rss,gdelt,edgar",
+    default: "yahoo_rss,gdelt,edgar",
     description:
       "Comma-separated list of enabled sentiment-source provider names.",
   },
@@ -3598,9 +3594,9 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
     description:
       "Consecutive failures for a single source within one cycle before it's skipped for the rest of the cycle.",
   },
-  // ---- Sources — Reddit, StockTwits, EDGAR, GDELT, Google News ----
+  // ---- Sources — StockTwits, EDGAR, GDELT, Google News ----
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "STOCKTWITS_ENABLED",
     type: "boolean",
     value: false,
@@ -3609,28 +3605,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Master switch for the free, uncredentialed StockTwits source.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
-    key: "REDDIT_USER_AGENT",
-    type: "string",
-    value: "stockpy-sentiment-ingestion/0.1",
-    default: "stockpy-sentiment-ingestion/0.1",
-    description:
-      "User-Agent header sent with every Reddit API request, per Reddit's API rules.",
-  },
-  {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
-    key: "REDDIT_BACKFILL_MAX_PAGES",
-    type: "number",
-    value: 10,
-    default: 10,
-    min: 1,
-    max: 100,
-    step: 1,
-    description:
-      "Max pages RedditSource paginates through for a historical backfill request.",
-  },
-  {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GOOGLE_NEWS_LOOKBACK_WINDOW",
     type: "string",
     value: "7d",
@@ -3639,7 +3614,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Lookback window passed as Google News RSS's `when:` query parameter.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "EDGAR_FULLTEXT_ENABLED",
     type: "boolean",
     value: false,
@@ -3648,7 +3623,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Master switch for the SEC EDGAR full-text search (10-K/10-Q) additions to EdgarSource.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "EDGAR_FULLTEXT_FORMS",
     type: "string",
     value: "8-K,10-K,10-Q",
@@ -3657,7 +3632,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Comma-separated SEC form types requested from EDGAR full-text search.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "EDGAR_FULLTEXT_CHUNK_TOKENS",
     type: "number",
     value: 512,
@@ -3668,7 +3643,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
     description: "Maximum tokens per filing-text chunk for FinBERT scoring.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GDELT_MIN_REQUEST_INTERVAL_SECONDS",
     type: "number",
     value: 5.0,
@@ -3680,7 +3655,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Minimum seconds between GDELT DOC API request issuance, shared process-wide.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GDELT_MAX_RETRIES",
     type: "number",
     value: 2,
@@ -3692,7 +3667,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Retries after a GDELT HTTP 429/5xx before the request is given up on.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GDELT_RETRY_BACKOFF_SECONDS",
     type: "number",
     value: 5.0,
@@ -3703,7 +3678,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
     description: "Base seconds for the GDELT retry backoff.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GDELT_COOLDOWN_THRESHOLD",
     type: "number",
     value: 3,
@@ -3715,7 +3690,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Consecutive failed GDELT requests after which calls are skipped outright for a cooldown period.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GDELT_COOLDOWN_SECONDS",
     type: "number",
     value: 300.0,
@@ -3767,19 +3742,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
     max: 90,
     step: 1,
     description:
-      "Calendar days of Finnhub company_news headlines scored per symbol per cycle.",
-  },
-  {
-    group: "FinBERT & Catalyst Scoring",
-    key: "FINNHUB_RATE_LIMIT_PER_MIN",
-    type: "number",
-    value: 50,
-    default: 50,
-    min: 1,
-    max: 60,
-    step: 1,
-    description:
-      "Finnhub sliding-window call budget per 60s (free tier ceiling: 60).",
+      "Calendar days of FMP company-news headlines scored per symbol per cycle.",
   },
   {
     group: "FinBERT & Catalyst Scoring",
@@ -4254,7 +4217,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   {
     group: "Diagnostic & Supplement Feeds", key: "FMP_NEWS_ENABLED", type: "boolean",
     value: false, default: false,
-    description: "Master switch for the FMP company-news feed (data.fmp_client.stock_news, wrapping /news/stock). False (the default) is a complete no-op reproducing today's exact behavior — signals/news_catalyst.py's headline fetch stays on its existing Finnhub-only path, and data/sentiment_sources.py's 'fmp_news' SentimentSource returns [] without any network call. When True AND FMP_API_KEY is set, FMP becomes the PRIMARY provider for company headlines (fetch_company_headlines dispatches FMP-first, falling back to Finnhub only on an FMP failure) and 'fmp_news' becomes eligible for SENTIMENT_SOURCES. Verified live 2026-08 against a real FMP key: /news/stock returns >=6 months of real history (vs. Finnhub's free-tier ~3-month cap). Deliberately does NOT touch /news/press-releases — that endpoint returned a plan-entitlement rejection ('Restricted Endpoint') against the account this integration was verified with.",
+    description: "Master switch for the FMP company-news feed (data.fmp_client.stock_news, wrapping /news/stock). False (the default) is a complete no-op reproducing today's exact behavior — signals/news_catalyst.py's headline fetch returns no headlines, and data/sentiment_sources.py's 'fmp_news' SentimentSource returns [] without any network call. When True AND FMP_API_KEY is set, FMP becomes the PRIMARY provider for company headlines (fetch_company_headlines is FMP-only) and 'fmp_news' becomes eligible for SENTIMENT_SOURCES. Verified live 2026-08 against a real FMP key: /news/stock returns >=6 months of real history . Deliberately does NOT touch /news/press-releases — that endpoint returned a plan-entitlement rejection ('Restricted Endpoint') against the account this integration was verified with.",
   },
   {
     group: "Diagnostic & Supplement Feeds", key: "FMP_NEWS_PAGE_LIMIT", type: "number",
@@ -4894,7 +4857,7 @@ function mockSettingsReference(): SettingsReferenceResponse {
       value: false,
       default: false,
       type: "boolean",
-      description: "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/Reddit/EDGAR).",
+      description: "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/EDGAR).",
       domain: "Sentiment/News/Attention",
       dangerous: false,
       liveness: mockLiveness("SENTIMENT_INGESTION_ENABLED"),
@@ -8115,8 +8078,8 @@ const MOCK_PROMPT_REGISTRY_WRITABLE = true;
 
 /**
  * Honest cold-start fixture for GET /metrics/sentiment/{symbol}'s news-feed
- * fields: no news provider configured (neither FMP_NEWS_ENABLED nor a
- * Finnhub client), so there are no headlines and no earnings-catalyst read
+ * fields: no news provider configured (FMP_NEWS_ENABLED is off or
+ * FMP_API_KEY is unset), so there are no headlines and no earnings-catalyst read
  * at all — never a fabricated headline list or a guessed dampening state.
  * Deliberately independent of the Antigravity-agent `source` field (a
  * different, unrelated data path — see `source: "unavailable"` covered
@@ -10209,7 +10172,7 @@ export const mockApi = {
           ],
           data_confidence: "medium",
           sources_note:
-            "Based on 4 Finnhub headlines from the past 7 days and the most recent earnings date.",
+            "Based on 4 FMP headlines from the past 7 days and the most recent earnings date.",
         },
       },
       400,
@@ -11219,7 +11182,7 @@ export const mockApi = {
       "macd_momentum",
       "rsi2_mean_reversion",
       // Honest empty row: a module that scored 0 of the requested symbols
-      // this batch (e.g. news_catalyst with no FINNHUB_API_KEY configured) —
+      // this batch (e.g. news_catalyst with no news provider configured) —
       // never a fabricated 0, and never silently absent from the list.
       "news_catalyst",
     ];
@@ -11284,9 +11247,9 @@ export const mockApi = {
     // the real endpoint can also return source: "unavailable" with all
     // three agent-derived fields null; see SentimentDynamics.test.tsx. Real
     // possible publishers only ("Reuters"/"Bloomberg"/"MarketWatch", or the
-    // literal source strings "fmp"/"finnhub") — NEVER "SEC EDGAR" or any
+    // literal source string "fmp") — NEVER "SEC EDGAR" or any
     // EDGAR/Google-News-flavored publisher, since this data path
-    // (signals/news_catalyst.py's FMP-primary/Finnhub-fallback dispatcher)
+    // (signals/news_catalyst.py's FMP-only dispatcher)
     // structurally cannot return those.
     const sym = symbol.toUpperCase();
     return delay<SentimentDynamics>({

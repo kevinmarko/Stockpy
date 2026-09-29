@@ -2698,7 +2698,7 @@ class GravityAIAuditor:
         """Step 26 — Validates data/market_data.py (swappable market-data layer).
 
         All checks are fully offline — no network calls are made.  Providers that
-        require live connectivity (AlpacaProvider, FinnhubProvider with a real key)
+        require live connectivity (AlpacaProvider, FMPProvider with a real key)
         are exercised via constructor injection or by bypassing __init__ with
         __new__, mirroring the pattern used in tests/test_market_data.py.
 
@@ -2713,11 +2713,10 @@ class GravityAIAuditor:
               TTL elapses the same lookup returns None (eviction).
           (g) CompositeProvider selects yfinance when Alpaca keys are absent.
           (h) CompositeProvider selects Alpaca when both Alpaca keys are present.
-          (i) FinnhubProvider degrades gracefully to empty dict when key is None.
           (j) Bar DataFrame contract: columns == [Open, High, Low, Close, Volume]
               and index is timezone-naive.
           (k) New settings fields exist on the Settings class
-              (MARKET_DATA_PROVIDER, FINNHUB_API_KEY, MARKET_DATA_QUOTE_TTL_SECONDS).
+              (MARKET_DATA_PROVIDER, MARKET_DATA_QUOTE_TTL_SECONDS).
         """
         audit: dict = {"status": "PENDING", "checks": {}}
         try:
@@ -2728,7 +2727,6 @@ class GravityAIAuditor:
                 Quote,
                 AlpacaProvider,
                 YFinanceProvider,
-                FinnhubProvider,
                 CompositeProvider,
                 get_provider,
                 reset_provider,
@@ -2854,15 +2852,6 @@ class GravityAIAuditor:
                 "selected_provider": selected_with_keys,
             }
 
-            # ── (i) FinnhubProvider degrades gracefully with no key ───────────
-            fh_no_key = FinnhubProvider(api_key=None)
-            result_no_key = fh_no_key.get_fundamentals("AAPL")
-            degrade_ok = isinstance(result_no_key, dict) and len(result_no_key) == 0
-            audit["checks"]["finnhub_degrades_no_key"] = {
-                "status": "PASSED" if degrade_ok else "FAILED",
-                "returned_empty_dict": degrade_ok,
-            }
-
             # ── (j) Bar DataFrame contract: OHLCV columns + tz-naive index ────
             # Build a minimal DataFrame in the expected shape and confirm both
             # YFinanceProvider._normalize_bars() (internal) accepts it and that
@@ -2891,83 +2880,16 @@ class GravityAIAuditor:
             from settings import Settings
             s = Settings()
             has_provider_field = hasattr(s, "MARKET_DATA_PROVIDER")
-            has_finnhub_field = hasattr(s, "FINNHUB_API_KEY")
             has_ttl_field = hasattr(s, "MARKET_DATA_QUOTE_TTL_SECONDS")
-            # 2026-06 Finnhub 429 mitigation — cache TTL + rate-limit settings.
             has_fund_cache_ttl = hasattr(s, "FUNDAMENTALS_CACHE_TTL_SECONDS")
-            has_finnhub_rate_limit = hasattr(s, "FINNHUB_RATE_LIMIT_PER_MIN")
             all_fields_present = (
-                has_provider_field and has_finnhub_field and has_ttl_field
-                and has_fund_cache_ttl and has_finnhub_rate_limit
+                has_provider_field and has_ttl_field and has_fund_cache_ttl
             )
             audit["checks"]["settings_fields_present"] = {
                 "status": "PASSED" if all_fields_present else "FAILED",
                 "MARKET_DATA_PROVIDER": has_provider_field,
-                "FINNHUB_API_KEY": has_finnhub_field,
                 "MARKET_DATA_QUOTE_TTL_SECONDS": has_ttl_field,
                 "FUNDAMENTALS_CACHE_TTL_SECONDS": has_fund_cache_ttl,
-                "FINNHUB_RATE_LIMIT_PER_MIN": has_finnhub_rate_limit,
-            }
-
-            # ── (l) Finnhub fundamentals cache: positive AND negative entries ─
-            # Asserts the 2026-06 fix: repeat get_fundamentals() calls within the
-            # TTL window hit the cache and never re-invoke the network client.
-            from data.market_data import FinnhubProvider, _FundamentalsCache
-            fh = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
-            fh._client = MagicMock()
-            fh._client.company_basic_financials.return_value = {
-                "metric": {"peBasicExclExtraTTM": 25.0}
-            }
-            fh._client.quote.return_value = {"c": 150.0}
-            fh._client.company_profile2.return_value = {}
-            fh.get_fundamentals("AAPL")
-            fh.get_fundamentals("AAPL")
-            fh.get_fundamentals("AAPL")
-            cache_dedupes = fh._client.company_basic_financials.call_count == 1
-            audit["checks"]["finnhub_fundamentals_cache_dedupes"] = {
-                "status": "PASSED" if cache_dedupes else "FAILED",
-                "call_count": fh._client.company_basic_financials.call_count,
-            }
-
-            # ── (m) 429 is swallowed AND negative-cached ──────────────────────
-            # A FinnhubAPIException-shaped exception (status_code=429) must NOT
-            # raise; it must return {} and prevent re-hammer on the next call.
-            fh2 = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
-            fh2._client = MagicMock()
-            mock_exc = Exception("Too many requests.")
-            mock_exc.status_code = 429
-            fh2._client.company_basic_financials.side_effect = mock_exc
-            with patch("data.market_data.time.sleep", lambda s: None):
-                first = fh2.get_fundamentals("BAC")
-                second = fh2.get_fundamentals("BAC")
-            call_count_after_two = fh2._client.company_basic_financials.call_count
-            # The FIRST get_fundamentals() call makes 2 client calls on its own
-            # (initial attempt + the documented one-shot backoff retry on 429);
-            # the SECOND call must be served entirely from the negative cache,
-            # contributing zero further client calls -- so the total after both
-            # calls is 2, not 1.
-            rate_limit_handled = (
-                first == {} and second == {} and call_count_after_two == 2
-            )
-            audit["checks"]["finnhub_429_swallowed_and_cached"] = {
-                "status": "PASSED" if rate_limit_handled else "FAILED",
-                "first": first,
-                "second": second,
-                "client_call_count": call_count_after_two,
-            }
-
-            # ── (n) Sliding-window rate limiter sleeps when budget exhausted ─
-            from data.market_data import _SlidingWindowRateLimiter
-            slept: list[float] = []
-            with patch("data.market_data.time.sleep", lambda s: slept.append(s)):
-                rl = _SlidingWindowRateLimiter(max_calls=2, window_seconds=60.0)
-                rl.acquire()
-                rl.acquire()
-                rl.acquire()  # third call MUST sleep
-            limiter_blocks = len(slept) == 1 and slept[0] > 0
-            audit["checks"]["rate_limiter_blocks_on_budget"] = {
-                "status": "PASSED" if limiter_blocks else "FAILED",
-                "sleeps": slept,
             }
 
             # ── (o) CompositeProvider-level fundamentals cache dedup ──────────
@@ -2987,7 +2909,7 @@ class GravityAIAuditor:
             with patch.multiple(
                 "settings.settings",
                 FUNDAMENTALS_SOURCE=None, MARKET_DATA_PROVIDER=None,
-                FINNHUB_API_KEY="", ALPACA_API_KEY="", ALPACA_SECRET_KEY="",
+                ALPACA_API_KEY="", ALPACA_SECRET_KEY="",
             ):
                 cp = CompositeProvider()
                 yf_calls = {"n": 0}
@@ -5751,7 +5673,7 @@ class GravityAIAuditor:
         Checks
         ------
         1.  ``classify_market_error`` returns the right category for canonical
-            yfinance / Alpaca / Finnhub error strings and ``status_code=429``.
+            yfinance / Alpaca / FMP error strings and ``status_code=429``.
         2.  ``validate_quote`` returns ok=True for a clean Quote and ok=False
             for one with a NaN price.
         3.  ``FetchHealthTracker``: empty state HEALTHY-neutral; mixed window

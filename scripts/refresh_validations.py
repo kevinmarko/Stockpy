@@ -1878,7 +1878,7 @@ def _build_forecast_direction_adapter(
 
 # Excluded for the FULL backtest window (see _build_signal_replay_adapter's
 # docstring for the full rationale of each):
-#   news_catalyst      -- its live Finnhub call lives in pre_compute(), which
+#   news_catalyst      -- its live news-provider call lives in pre_compute(), which
 #                         this adapter never calls for it (only for
 #                         multifactor/cross_sectional_momentum) -- so
 #                         including it would NOT itself trigger a network

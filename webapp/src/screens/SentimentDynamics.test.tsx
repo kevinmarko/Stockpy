@@ -158,7 +158,7 @@ describe("SentimentDynamics screen (real mock API)", () => {
     it("renders the 'No recent headlines' empty state when a provider is configured but returned nothing", async () => {
       vi.spyOn(api, "getSentimentDynamics").mockResolvedValueOnce({
         ...mockNoProviderSentimentFixture,
-        provider_used: "finnhub",
+        provider_used: "fmp",
       });
       renderScreen();
       expect(await screen.findByTestId("headline-feed-empty")).toHaveTextContent(

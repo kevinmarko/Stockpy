@@ -575,9 +575,8 @@ run it from.
 
 **Symptom**: `python3 scripts/backfill_news_history.py` (or any other `scripts/*.py`
 entry point) fails with a `ModuleNotFoundError`, or a dependency that's clearly installed
-in `.venv` behaves as if it's "not installed" (e.g. `FINNHUB_API_KEY is not set in
-settings (or finnhub-python is not installed)` even with `finnhub-python` present in
-`.venv`).
+in `.venv` behaves as if it's "not installed" (e.g. a `pandas`/`yfinance` import error
+even though it is present in `.venv`).
 
 **Root cause**: the invoking `python3` is not `.venv`'s interpreter (e.g. Homebrew or
 system Python), which lacks project-only dependencies. `main.py`/`main_orchestrator.py`
@@ -1005,43 +1004,34 @@ python scripts/track_record_status.py          # human-readable
 python scripts/track_record_status.py --json   # machine-readable
 ```
 
-### 5.3 Enabling Sentiment Comment-Channel Ingestion (Reddit / StockTwits)
+### 5.3 Enabling Sentiment Comment-Channel Ingestion (StockTwits)
 
 The "Review" (investor-forum comment volume) term feeding Sector
 Selection's Sector Heat Factor (`docs/signals/sector_selection.md`) and
 the composite sentiment index is honestly `NaN`/degraded until the
 comment channel has genuinely produced at least one document — see
 `data.sentiment_source_class.classify_source` and
-`data.sector_selection_heat._review_channel_ever_observed`. Two sources
-classify as "comment" (`settings.SENTIMENT_COMMENT_SOURCES`, default
-`"reddit,stocktwits"`):
+`data.sector_selection_heat._review_channel_ever_observed`. The Reddit
+source (`RedditSource`, `REDDIT_*` settings) was removed 2026-09; the one
+remaining comment source is StockTwits
+(`settings.SENTIMENT_COMMENT_SOURCES`, default `"reddit,stocktwits"` — `reddit`
+stays listed only so historical audit rows still classify as comments):
 
-1. **Reddit** (`data.sentiment_sources.RedditSource`) — already wired
-   into the default `SENTIMENT_SOURCES` fan-out; it silently contributes
-   zero documents until credentials are set. To activate:
-   * Set `SENTIMENT_INGESTION_ENABLED=true` (master ingestion switch).
-   * Register a Reddit "script" app at
-     <https://www.reddit.com/prefs/apps> and set `REDDIT_CLIENT_ID` /
-     `REDDIT_CLIENT_SECRET` in `.env`.
-   * Optionally set `REDDIT_USER_AGENT` to identify your deployment
-     (Reddit rate-limits a generic/missing User-Agent more aggressively).
-   * No code change and no `SENTIMENT_SOURCES` edit needed — Reddit is
-     already in the default list.
+**StockTwits** (`data.sentiment_sources.StockTwitsSource`) — free,
+uncredentialed, off by default. To activate:
+* Set `SENTIMENT_INGESTION_ENABLED=true` (master ingestion switch) and
+  `STOCKTWITS_ENABLED=true`.
+* Add `stocktwits` to `SENTIMENT_SOURCES` (e.g.
+  `SENTIMENT_SOURCES=yahoo_rss,gdelt,edgar,stocktwits`) — the
+  flag alone does not add it to the fan-out list.
+* StockTwits' public endpoint has tightened over the years and may
+  rate-limit or require auth in some deployments; a failed request
+  degrades to no documents that cycle (never a crash) — treat it as
+  supplementary coverage.
 
-2. **StockTwits** (`data.sentiment_sources.StockTwitsSource`) — free,
-   uncredentialed, off by default. To activate:
-   * Set `STOCKTWITS_ENABLED=true`.
-   * Add `stocktwits` to `SENTIMENT_SOURCES` (e.g.
-     `SENTIMENT_SOURCES=yahoo_rss,gdelt,reddit,edgar,stocktwits`) — the
-     flag alone does not add it to the fan-out list.
-   * StockTwits' public endpoint has tightened over the years and may
-     rate-limit or require auth in some deployments; a failed request
-     degrades to no documents that cycle (never a crash) — treat it as
-     supplementary coverage, not the primary comment source.
-
-**Verifying it worked**: after a few days of running with either source
+**Verifying it worked**: after a few days of running with the source
 active, `HistoricalStore.get_sentiment_archive_depth_by_source()` will
-list `reddit`/`stocktwits` with a non-zero `document_count`, and Sector
+list `stocktwits` with a non-zero `document_count`, and Sector
 Selection's `degraded_reason` will read `None` instead of
 `"review_unavailable"` for sectors with real comment coverage. No GUI
 widget exists for either flag — both are hand-set in `.env` only.
@@ -1184,13 +1174,12 @@ accuracy changes.
 
 ## Incident response: data source degraded mid-session
 
-When a data source (Alpaca market data, Finnhub, FRED, Robinhood) is reporting errors:
+When a data source (Alpaca market data, FMP, FRED, Robinhood) is reporting errors:
 
-> **Note:** Finnhub now feeds only the `news_catalyst` signal (company news / earnings
-> headlines). Fundamentals are FMP-primary (`data/fmp_fundamentals.py`) with a Yahoo statement-derived fallback (`data/yahoo_fundamentals.py`, free)
-> with a raw yfinance `.info` fallback, so a Finnhub outage no longer degrades any
-> fundamentals-dependent consumer (`processing_engine`, `multifactor`, Graham/Gordon,
-> dividend quality) — only news-catalyst sentiment is lost.
+> **Note:** Finnhub was removed 2026-09. FMP feeds company news / earnings headlines for
+> the `news_catalyst` signal (an FMP news outage loses only news-catalyst sentiment).
+> Fundamentals are FMP-primary (`data/fmp_fundamentals.py`) with a Yahoo statement-derived
+> fallback (`data/yahoo_fundamentals.py`, free) and a raw yfinance `.info` fallback.
 
 ### Financial Modeling Prep (FMP) Troubleshooting
 

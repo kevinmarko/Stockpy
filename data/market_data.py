@@ -402,7 +402,7 @@ class AlpacaProvider(MarketDataProvider):
             raise MarketDataError(f"Alpaca bars fetch failed for {symbol}: {exc}") from exc
 
     def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
-        """Alpaca does not provide fundamentals; return empty (Finnhub handles this)."""
+        """Alpaca does not provide fundamentals; return empty (Yahoo/FMP handle this)."""
         return {}
 
 
@@ -529,9 +529,9 @@ class YFinanceProvider(MarketDataProvider):
             raise MarketDataError(f"yfinance bars fetch failed for {symbol}: {exc}") from exc
 
     def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
-        """Fall back to yfinance .info for fundamentals when Finnhub is unavailable.
+        """Fall back to yfinance .info for fundamentals when the primary source is unavailable.
 
-        This is the secondary fundamentals path; ``FinnhubProvider`` is preferred.
+        This is the secondary fundamentals path.
         Returns an empty dict on failure rather than raising.
         """
         try:
@@ -540,7 +540,7 @@ class YFinanceProvider(MarketDataProvider):
 
             info = yf.Ticker(symbol).info or {}
             # yfinance returns dividendYield as a PERCENT; normalise to the
-            # fraction the platform (and the Finnhub path) use. See the helper.
+            # fraction the platform uses. See the helper.
             return normalize_yfinance_dividend_yield(dict(info))
         except Exception as exc:
             logger.warning(
@@ -560,7 +560,7 @@ class YahooFundamentalsProvider:
     Fetches yfinance financial-statement frames + a cached SPY daily-return
     series (for beta) and delegates ALL math to
     ``data.yahoo_fundamentals.compute_fundamentals`` (pure, offline-testable).
-    Replaces FinnhubProvider as the primary fundamentals source. Degrades to an
+    The primary fundamentals source (Finnhub was removed 2026-09). Degrades to an
     empty dict (never raises) on any failure — CONSTRAINT #6 dead-letter.
 
     The math module is kept strictly pure: this class is an I/O shell only. It
@@ -1347,61 +1347,6 @@ class FMPProvider(MarketDataProvider):
 
 
 # ---------------------------------------------------------------------------
-# Finnhub provider (fundamentals only)
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Sliding-window rate limiter (used by FinnhubProvider)
-# ---------------------------------------------------------------------------
-
-class _SlidingWindowRateLimiter:
-    """Crude sliding-window rate limiter: at most ``max_calls`` per ``window_seconds``.
-
-    ``acquire()`` is a synchronous, blocking call: if the budget is exhausted it
-    sleeps until the oldest call in the window expires, then records the new
-    call.  Thread-unsafe by design (the orchestrator's per-symbol loop is
-    serial); tests can monkeypatch ``time.sleep`` to avoid real waits.
-
-    Why this exists: the Finnhub free tier is 60 calls/minute and we make up
-    to 3 calls per symbol (`company_basic_financials`, `quote`, `company_profile2`).
-    On a 100-symbol watchlist sync we'd otherwise issue ~300 calls in seconds
-    and be rate-limited for the bulk of the run.
-
-    Parameters
-    ----------
-    max_calls:
-        Maximum calls permitted within ``window_seconds``.
-    window_seconds:
-        Sliding-window length in seconds.  Free-tier Finnhub uses 60 s.
-    """
-
-    def __init__(self, max_calls: int, window_seconds: float) -> None:
-        self._max_calls = max(1, int(max_calls))
-        self._window = float(window_seconds)
-        self._timestamps: list[float] = []
-
-    def acquire(self) -> None:
-        """Block until at least one call can be issued under the budget."""
-        now = time.monotonic()
-        cutoff = now - self._window
-        # Drop expired timestamps in-place; the list is bounded by max_calls.
-        self._timestamps = [t for t in self._timestamps if t > cutoff]
-        if len(self._timestamps) >= self._max_calls:
-            wait = self._window - (now - self._timestamps[0])
-            if wait > 0:
-                logger.info(
-                    "FinnhubRateLimiter: budget exhausted (%d/%d in %.0fs window); "
-                    "sleeping %.2fs",
-                    len(self._timestamps), self._max_calls, self._window, wait,
-                )
-                time.sleep(wait)
-            now = time.monotonic()
-            cutoff = now - self._window
-            self._timestamps = [t for t in self._timestamps if t > cutoff]
-        self._timestamps.append(now)
-
-
-# ---------------------------------------------------------------------------
 # In-process TTL fundamentals cache
 # ---------------------------------------------------------------------------
 
@@ -1410,7 +1355,7 @@ class _FundamentalsCache:
 
     Fundamentals are quarterly/slow-moving; caching for hours is safe.  We also
     cache "empty" responses so a symbol that returned 429 / unknown does not
-    cause another Finnhub round-trip on every cycle within the TTL — this is
+    cause another vendor round-trip on every cycle within the TTL — this is
     the key behaviour that protects the free tier across back-to-back runs.
 
     Positive and negative responses use DIFFERENT TTLs. A provider that was
@@ -1460,263 +1405,6 @@ class _FundamentalsCache:
 
     def clear(self) -> None:
         self._store.clear()
-
-
-class FinnhubProvider:
-    """Fundamentals-only provider backed by the Finnhub free tier.
-
-    DEPRECATED as a fundamentals source (2026-07): no longer wired into
-    CompositeProvider; retained for reference/manual use. news_catalyst uses its
-    own Finnhub client.
-
-    Uses ``company_basic_financials`` for balance-sheet metrics, shaped to
-    match the yfinance ``.info`` dict keys consumed by
-    ``FundamentalDataDTO.from_raw_dict()``.
-
-    Degrades gracefully (returns an empty dict + logged warning) when
-    ``FINNHUB_API_KEY`` is absent.
-
-    Rate limiting + caching (2026-06)
-    ---------------------------------
-    The free Finnhub tier is 60 calls/minute and each ``get_fundamentals``
-    invocation issues up to 3 API calls, so a 50+ symbol watchlist sync would
-    otherwise exhaust the quota in seconds and produce a flood of 429s.  This
-    class now:
-
-    * Caches every fundamentals response (positive AND empty) in a per-process
-      TTL cache (default 6 hours).  Repeat lookups within the TTL never touch
-      the network, so back-to-back runs don't re-rate-limit themselves.
-    * Throttles outbound calls via a sliding-window rate limiter (default 50
-      calls / 60 s — under the 60/min ceiling to leave headroom for the two
-      auxiliary endpoints).
-    * On a 429 response, sleeps with exponential backoff (1 retry) and falls
-      back to an empty dict on persistent failure.
-
-    Parameters
-    ----------
-    api_key:
-        Finnhub API key.  None → degrade-mode (empty dict responses).
-    cache_ttl_seconds:
-        TTL for the fundamentals cache.  Defaults to
-        ``FUNDAMENTALS_CACHE_TTL_SECONDS`` env-var (int) or 21600 (6 h).
-    rate_limit_per_min:
-        Sliding-window call budget per 60 s.  Defaults to
-        ``FINNHUB_RATE_LIMIT_PER_MIN`` env-var (int) or 50.
-    """
-
-    # Provenance attributes for completeness — this class is deprecated and
-    # unwired (nothing constructs it inside CompositeProvider), so neither is
-    # read in production today. Declared so a future re-wiring inherits the
-    # same attribute contract every other provider follows.
-    SOURCE = "finnhub"
-    IS_REALTIME = False
-
-    # Mapping from Finnhub metric names to yfinance .info key names so that
-    # FundamentalDataDTO.from_raw_dict() doesn't need to know the source.
-    _METRIC_MAP: Dict[str, str] = {
-        "peBasicExclExtraTTM": "trailingPE",
-        "pbQuarterly": "priceToBook",
-        "bookValuePerShareQuarterly": "bookValue",
-        "epsBasicExclExtraItemsTTM": "trailingEps",
-        "dividendYieldIndicatedAnnual": "dividendYield",
-        "payoutRatioTTM": "payoutRatio",
-        "marketCapitalization": "marketCap",
-        "betaWeekly": "beta",
-        "roe5Y": "returnOnEquity",
-        "roeTTM": "returnOnEquity",
-        "debtToEquityQuarterly": "debtToEquity",
-        "grossMarginTTM": "grossMargins",
-        "operatingMarginTTM": "operatingMargins",
-        "heldPercentInstitutions": "heldPercentInstitutions",
-        "currentRatioQuarterly": "currentRatio",
-    }
-
-    def __init__(
-        self,
-        api_key: Optional[str],
-        cache_ttl_seconds: Optional[int] = None,
-        rate_limit_per_min: Optional[int] = None,
-        neg_cache_ttl_seconds: Optional[int] = None,
-    ) -> None:
-        self._api_key = api_key
-        self._client: Optional[Any] = None
-        if api_key:
-            self._client = self._build_client(api_key)
-
-        # Per-process fundamentals cache (positive + negative responses).
-        # Defaults can be overridden via env vars to make ad-hoc tuning trivial
-        # without touching code (e.g. raise to 24h on a stale-tolerant machine).
-        # Negative (empty-dict) responses use a much shorter TTL so a symbol
-        # that was rate-limited or briefly down recovers quickly instead of
-        # staying "no data" for the full positive TTL.
-        ttl = cache_ttl_seconds if cache_ttl_seconds is not None else settings.FUNDAMENTALS_CACHE_TTL_SECONDS
-        neg_ttl = neg_cache_ttl_seconds if neg_cache_ttl_seconds is not None else settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS
-        rpm = rate_limit_per_min if rate_limit_per_min is not None else settings.FINNHUB_RATE_LIMIT_PER_MIN
-        self._cache = _FundamentalsCache(ttl_seconds=ttl, neg_ttl_seconds=neg_ttl)
-        self._rate_limiter = _SlidingWindowRateLimiter(
-            max_calls=rpm, window_seconds=60.0
-        )
-
-    def _build_client(self, api_key: str) -> Optional[Any]:
-        """Lazily import finnhub-python and return a client instance."""
-        try:
-            import finnhub  # type: ignore
-            return finnhub.Client(api_key=api_key)
-        except ImportError:
-            logger.warning(
-                "FinnhubProvider: finnhub-python not installed — "
-                "pip install finnhub-python.  Fundamentals will be empty."
-            )
-            return None
-
-    def _ensure_init(self) -> None:
-        """Lazily initialise cache + rate limiter if the instance was built via
-        ``__new__`` (as in some test fixtures) and ``__init__`` was skipped.
-
-        Defensive: tests that construct ``FinnhubProvider.__new__(...)`` and
-        only assign ``_api_key`` + ``_client`` must continue to work without
-        every test needing to know about the cache/limiter internals.
-        """
-        if not hasattr(self, "_cache"):
-            self._cache = _FundamentalsCache(
-                ttl_seconds=settings.FUNDAMENTALS_CACHE_TTL_SECONDS,
-                neg_ttl_seconds=settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS,
-            )
-        if not hasattr(self, "_rate_limiter"):
-            self._rate_limiter = _SlidingWindowRateLimiter(
-                max_calls=settings.FINNHUB_RATE_LIMIT_PER_MIN,
-                window_seconds=60.0,
-            )
-
-    def _is_rate_limit_exc(self, exc: BaseException) -> bool:
-        """Return True if ``exc`` represents a Finnhub 429 (rate-limit) response.
-
-        Detection is duck-typed against ``FinnhubAPIException.status_code`` so
-        this module never has to import ``finnhub`` eagerly (which would break
-        the optional-dependency contract).
-        """
-        return getattr(exc, "status_code", None) == 429
-
-    def _call_with_rate_limit(self, fn, *args, **kwargs):
-        """Invoke a Finnhub client method under the sliding-window budget.
-
-        On a 429 response, sleep with one-shot exponential backoff and retry
-        once.  Persistent failure raises so the caller can decide whether to
-        return empty / log / cache the failure.
-        """
-        self._rate_limiter.acquire()
-        try:
-            return fn(*args, **kwargs)
-        except Exception as exc:  # noqa: BLE001 — re-raised after one backoff retry
-            if self._is_rate_limit_exc(exc):
-                backoff = 2.0
-                logger.warning(
-                    "FinnhubProvider: 429 from %s — backing off %.1fs and retrying once",
-                    getattr(fn, "__name__", "<call>"), backoff,
-                )
-                time.sleep(backoff)
-                self._rate_limiter.acquire()
-                return fn(*args, **kwargs)
-            raise
-
-    def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
-        """Return fundamentals shaped as a yfinance .info dict.
-
-        Returns an empty dict when the key is absent or the call fails.
-
-        Caching: every response — positive OR empty — is cached for
-        ``FUNDAMENTALS_CACHE_TTL_SECONDS`` (default 6 h).  Negative caching is
-        deliberate: a symbol that returned 429 or "unknown ticker" should not
-        cause another network call in the same hour, because that is exactly
-        what blows the free-tier budget on repeated orchestrator passes.
-        """
-        self._ensure_init()
-        sym = symbol.upper()
-
-        cached = self._cache.get(sym)
-        if cached is not None:
-            return cached
-
-        if self._client is None:
-            logger.warning(
-                "FinnhubProvider: FINNHUB_API_KEY not configured — "
-                "returning empty fundamentals for %s.  "
-                "Set FINNHUB_API_KEY in .env for fundamental data.",
-                symbol,
-            )
-            # Negative cache so we don't repeat the warning every loop.
-            self._cache.put(sym, {})
-            return {}
-
-        try:
-            resp = self._call_with_rate_limit(
-                self._client.company_basic_financials, symbol, "all"
-            )
-            metrics: Dict[str, Any] = resp.get("metric", {}) or {}
-
-            # Shape Finnhub metrics to match yfinance .info key names
-            info: Dict[str, Any] = {}
-            for fh_key, yf_key in self._METRIC_MAP.items():
-                val = metrics.get(fh_key)
-                if val is not None:
-                    # Finnhub returns dividendYield as percent (e.g. 0.52 = 0.52%);
-                    # normalise to the fraction the platform expects. (yfinance ALSO
-                    # returns percent now and is normalised at its own ingestion
-                    # path via dto_models.normalize_yfinance_dividend_yield.)
-                    if yf_key == "dividendYield" and isinstance(val, (int, float)):
-                        val = val / 100.0
-                    info[yf_key] = val
-
-            # Fetch quote for currentPrice if not already present
-            if "currentPrice" not in info:
-                try:
-                    q_resp = self._call_with_rate_limit(self._client.quote, symbol)
-                    if q_resp and q_resp.get("c"):
-                        info["currentPrice"] = float(q_resp["c"])
-                except Exception as exc:  # noqa: BLE001 — auxiliary call, optional
-                    logger.debug(
-                        "FinnhubProvider: quote(%s) failed: %s — skipping currentPrice",
-                        symbol, exc,
-                    )
-
-            # Pull company profile for name/sector
-            try:
-                profile = self._call_with_rate_limit(
-                    self._client.company_profile2, symbol=symbol
-                ) or {}
-                if profile.get("name"):
-                    info["shortName"] = profile["name"]
-                if profile.get("finnhubIndustry"):
-                    info["sector"] = profile["finnhubIndustry"]
-                if profile.get("shareOutstanding"):
-                    shares = float(profile["shareOutstanding"]) * 1e6
-                    if "marketCap" not in info and "currentPrice" in info:
-                        info["marketCap"] = shares * info["currentPrice"]
-            except Exception as exc:  # noqa: BLE001 — auxiliary call, optional
-                logger.debug(
-                    "FinnhubProvider: company_profile2(%s) failed: %s — skipping",
-                    symbol, exc,
-                )
-
-            self._cache.put(sym, info)
-            return info
-
-        except Exception as exc:
-            # Downgrade 429 to INFO (expected, recoverable next cycle); keep
-            # other failures at WARNING so unexpected errors stay visible.
-            if self._is_rate_limit_exc(exc):
-                logger.info(
-                    "FinnhubProvider.get_fundamentals(%s) rate-limited after retry — "
-                    "caching empty dict for TTL window",
-                    symbol,
-                )
-            else:
-                logger.warning(
-                    "FinnhubProvider.get_fundamentals(%s) failed: %s — returning empty dict",
-                    symbol, exc,
-                )
-            self._cache.put(sym, {})
-            return {}
 
 
 # ---------------------------------------------------------------------------
@@ -1841,7 +1529,6 @@ class CompositeProvider(MarketDataProvider):
     returns nothing. ``FUNDAMENTALS_SOURCE=yfinance_info`` forces the raw
     ``.info`` provider as primary; ``FUNDAMENTALS_SOURCE=fmp`` routes through
     its own ordered fallback chain (``_get_fundamentals_via_fmp_chain``).
-    Finnhub is no longer wired in.
 
     Parameters
     ----------
@@ -1857,11 +1544,9 @@ class CompositeProvider(MarketDataProvider):
         # a small default safely de-duplicates the back-to-back fetches a
         # single refresh cycle issues per symbol.
         self._bars_cache = _BarsCache(ttl_seconds=int(settings.MARKET_DATA_BARS_TTL_SECONDS))
-        # Composite-level fundamentals cache wraps Finnhub-then-yfinance so
-        # neither backend is re-hammered within the TTL window, regardless of
-        # which source produced the final dict.  Defense in depth: the
-        # FinnhubProvider has its own cache for direct callers; this one
-        # protects the yfinance fallback path too.
+        # Composite-level fundamentals cache wraps the primary-then-yfinance
+        # chain so neither backend is re-hammered within the TTL window,
+        # regardless of which source produced the final dict.
         self._fundamentals_cache = _FundamentalsCache(
             ttl_seconds=int(settings.FUNDAMENTALS_CACHE_TTL_SECONDS),
             neg_ttl_seconds=int(settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS),
@@ -2622,8 +2307,8 @@ class CompositeProvider(MarketDataProvider):
             self._fundamentals_cache.clear()
         # Also reset the inner provider's caches so a forced refresh actually
         # re-issues the network calls. Both are guarded — harmless when the
-        # active provider doesn't expose them (e.g. the legacy Finnhub
-        # ``_cache`` or the Yahoo provider's SPY market-return cache).
+        # active provider doesn't expose them (e.g. the Yahoo provider's
+        # SPY market-return cache).
         provider = getattr(self, "_fundamentals_provider", None)
         inner_cache = getattr(provider, "_cache", None)
         if inner_cache is not None:
