@@ -99,7 +99,7 @@ table). Exit code is `1` if any strategy errored or failed to deploy, `0` if
 all passed — usable as a CI/preflight gate.
 
 Note the repo has no live-market network access in this sandboxed dev/CI
-environment (documented repeatedly across CLAUDE.md's fix entries) — a real
+environment (documented repeatedly across `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s fix entries) — a real
 re-run against fresh data requires an environment with that access. Don't
 claim a re-verification happened if it didn't; say so honestly in the
 documentation step (§4) exactly as the existing entries do (e.g. the ETF
@@ -171,10 +171,7 @@ category" section) map fairly directly to *which* gate is failing:
 ## 4. Mandatory documentation — two places, every time
 
 Whether the outcome is a successful fix or an honest, evidence-backed
-`deployable=False`, both of the following are required (CLAUDE.md: *"When a
-`STRATEGY_REGISTRY` adapter is changed... add a Backtest Validation
-section... and append an entry to
-`docs/VALIDATION_STRATEGY_FIX_LOG.md`"*). Skipping either for a "the fix
+`deployable=False`, both of the following are required (CLAUDE.md: *"A gate change (fix or honest FAIL) is documented in both `docs/signals/<name>.md` (Backtest Validation section) and `docs/VALIDATION_STRATEGY_FIX_LOG.md`."*). Skipping either for a "the fix
 didn't work" outcome is the one mistake this rule exists to prevent — an
 honest failure is not a reason to skip documenting it.
 

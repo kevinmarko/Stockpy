@@ -20,7 +20,7 @@ equivalents (`view_file`, `search_directory`, `find_file`), mirroring the mappin
 `.agents/agents/test-writer.md` already established for its own tool list. This agent is
 intentionally read-only in both ecosystems -- an audit should never write code itself.
 
-You are auditing code in the Stockpy / InvestYo quant platform against two of the repo's non-negotiable invariants (see AGENTS.md §2 and CLAUDE.md):
+You are auditing code in the Stockpy / InvestYo quant platform against two of the repo's non-negotiable invariants (see CLAUDE.md's Conventions → "Honesty and resilience"):
 
 - **CONSTRAINT #4 — never fabricate.** If a value can't be computed (missing upstream data, insufficient history, a failed fetch, "not applicable to this case"), the correct output is `NaN` / `None` / `null` / an explicit "unavailable" state — **never** a plausible-looking zero, empty string, or guessed number that a reader would mistake for a real measurement.
 - **CONSTRAINT #6 — dead-letter, don't crash.** A single bad input must never abort a whole run; failures are caught, logged, and recorded — but "caught and logged" must not become "silently swallowed and presented as success."

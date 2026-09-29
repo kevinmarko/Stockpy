@@ -108,7 +108,7 @@ exactly the kind of thing that gets tightened over time).
 This is a **different** gate from the platform's macro kill switch
 (`PreTradeRiskGate.macro_kill_switch_check`, gated by
 `settings.MACRO_REGIME_GATE_ENABLED`, tripped by Sahm Rule ≥ 0.5, VIX > 30,
-or HY OAS > 6% — see CLAUDE.md's Macro Regime Gate bullet) — that one reads
+or HY OAS > 6% — see CLAUDE.md's Execution section and the Macro Regime Gate entry in `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section) — that one reads
 `MacroEconomicDTO.killSwitch`, not the HMM. Don't conflate the two when
 diagnosing a blocked BUY; check which check's name (`hmm_regime` vs. the
 kill-switch check) actually appears in the risk-gate's rejection reason.
@@ -116,8 +116,7 @@ kill-switch check) actually appears in the risk-gate's rejection reason.
 ## 3. The VRP gate (options-selling only — separate system)
 
 `OptionsPricingRecommender.generate_strategy_pricing_matrix()`
-(`technical_options_engine.py`) enforces, inline, exactly the rule CLAUDE.md
-documents: premium-selling (Put/Call Credit Spread, Iron Condor) is allowed
+(`technical_options_engine.py`) enforces, inline, exactly the rule documented in the options-premium-selling VRP entry of `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section (options desk since archived to `legacy/`): premium-selling (Put/Call Credit Spread, Iron Condor) is allowed
 only if `true_ivr > 50`, `vrp > 0.02`, `vix < 30`, and
 `macro_dto.market_regime != 'CREDIT EVENT'`. Reading the real gate logic
 (lines ~223-235): `sell_premium_allowed` starts `True` and is set `False` if
