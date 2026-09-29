@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `49bd42de86ed8e1ee1af70e1060c3f2652983d54`
+- Measured at commit: `25256977457e95b368d8760c5ad4b12929ab978b`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -237,7 +237,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _guard_settings, _m
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 756 | 265 |
-| (b) `getattr(settings, "KEY", default)` | 317 | 188 |
+| (b) `getattr(settings, "KEY", default)` | 318 | 188 |
 | (c) `getattr(settings, <var>)` (dynamic) | 13 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
@@ -284,7 +284,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `BERT_LLA_ENABLED` | b | 2 | 0 |
 | `BERT_LLA_MIN_SENTIMENT_COVERAGE` | b | 1 | 0 |
 | `BERT_LLA_WINDOW_SIZE` | b | 1 | 0 |
-| `BROKER_BACKEND` | b | 2 | 0 |
+| `BROKER_BACKEND` | b | 3 | 0 |
 | `CLOSED_POSITION_RETENTION_DAYS` | b | 2 | 0 |
 | `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` | b | 1 | 0 |
 | `DAEMON_AGENTIC_QUEUE_MODE` | b | 3 | 0 |
