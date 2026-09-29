@@ -142,8 +142,48 @@ class TestRealDataPathIsUnaffected:
         works unmodified when the synthetic marker is absent."""
         ctx = _make_ctx(data_is_synthetic=False)
         with mock.patch("settings.settings.ADVISORY_ONLY", False), \
+             mock.patch("settings.settings.BROKER_BACKEND", "alpaca"), \
              mock.patch("settings.settings.ALPACA_API_KEY", None), \
              mock.patch("settings.settings.ALPACA_SECRET_KEY", None):
+            m_exec = _run_step(ctx)
+
+        m_exec.assert_not_called()
+
+
+class TestFmpPaperLedgerNeedsNoAlpacaKeys:
+    """The local FMP paper ledger (BROKER_BACKEND='fmp_paper') needs no Alpaca
+    credentials. Before this fix the step skipped whenever Alpaca keys were
+    missing, so the pipeline never placed a single automated paper order."""
+
+    def test_fmp_paper_without_alpaca_keys_runs_broker_execution(self):
+        ctx = _make_ctx(data_is_synthetic=False)
+        with mock.patch("settings.settings.ADVISORY_ONLY", False), \
+             mock.patch("settings.settings.ALPACA_PAPER", True), \
+             mock.patch("settings.settings.BROKER_BACKEND", "fmp_paper"), \
+             mock.patch("settings.settings.ALPACA_API_KEY", None), \
+             mock.patch("settings.settings.ALPACA_SECRET_KEY", None):
+            m_exec = _run_step(ctx)
+
+        m_exec.assert_called_once()
+
+    def test_fmp_paper_going_live_still_needs_alpaca_keys(self):
+        """A going-live run (ALPACA_PAPER=False) is forced onto Alpaca by
+        resolve_broker_backend(), so it must still require Alpaca keys."""
+        ctx = _make_ctx(data_is_synthetic=False)
+        with mock.patch("settings.settings.ADVISORY_ONLY", False), \
+             mock.patch("settings.settings.ALPACA_PAPER", False), \
+             mock.patch("settings.settings.BROKER_BACKEND", "fmp_paper"), \
+             mock.patch("settings.settings.ALPACA_API_KEY", None), \
+             mock.patch("settings.settings.ALPACA_SECRET_KEY", None):
+            m_exec = _run_step(ctx)
+
+        m_exec.assert_not_called()
+
+    def test_synthetic_marker_still_wins_for_fmp_paper(self):
+        ctx = _make_ctx(data_is_synthetic=True)
+        with mock.patch("settings.settings.ADVISORY_ONLY", False), \
+             mock.patch("settings.settings.ALPACA_PAPER", True), \
+             mock.patch("settings.settings.BROKER_BACKEND", "fmp_paper"):
             m_exec = _run_step(ctx)
 
         m_exec.assert_not_called()

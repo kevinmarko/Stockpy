@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "49bd42de86ed8e1ee1af70e1060c3f2652983d54",
+    "git_commit": "25256977457e95b368d8760c5ad4b12929ab978b",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3527,7 +3527,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 317,
+      "total_reads": 318,
       "distinct_fields": 188,
       "counts": {
         "FMP_API_KEY": 13,
@@ -3546,6 +3546,7 @@
         "FORECAST_NAIVE_GATE_ENABLED": 4,
         "GRAVITY_AI_RUNNER_ENABLED": 4,
         "LOCAL_LLM_BASE_URL": 4,
+        "BROKER_BACKEND": 3,
         "DAEMON_AGENTIC_QUEUE_MODE": 3,
         "DATA_FETCH_MAX_CONCURRENCY": 3,
         "FMP_NEWS_MAX_PAGES": 3,
@@ -3561,7 +3562,6 @@
         "ALPACA_API_KEY": 2,
         "BARS_BACKFILL_DAYS": 2,
         "BERT_LLA_ENABLED": 2,
-        "BROKER_BACKEND": 2,
         "CLOSED_POSITION_RETENTION_DAYS": 2,
         "DB_MAX_OVERFLOW": 2,
         "DB_POOL_SIZE": 2,

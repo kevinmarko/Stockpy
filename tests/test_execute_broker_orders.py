@@ -637,3 +637,105 @@ def test_execute_broker_orders_fmp_paper_live_fallback():
         settings.BROKER_BACKEND = original_broker
         settings.ADVISORY_ONLY = original_advisory
         settings.ALPACA_PAPER = original_paper
+
+
+# ---------------------------------------------------------------------------
+# (h) fmp_paper local ledger: RTH-only, no reconciliation, own positions only
+# ---------------------------------------------------------------------------
+
+def _install_fmp_paper_stack(monkeypatch, *, broker, ts_store, market_open: bool):
+    telemetry_mock = _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store,
+        kill_switch=_FakeKillSwitch(active=False),
+    )
+    import engine.advisory_agent as agent_mod
+    import execution.fmp_paper_broker as fmp_mod
+
+    monkeypatch.setattr(main_orchestrator.settings, "BROKER_BACKEND", "fmp_paper", raising=False)
+    monkeypatch.setattr(main_orchestrator.settings, "ALPACA_PAPER", True, raising=False)
+    monkeypatch.setattr(agent_mod, "is_us_market_open", lambda now: market_open)
+    monkeypatch.setattr(fmp_mod, "FMPPaperBroker", lambda *a, **k: broker)
+    return telemetry_mock
+
+
+def _tagged_pos(symbol: str, qty: float, strategy_id: str) -> PositionSnapshot:
+    return PositionSnapshot(
+        symbol=symbol, qty=qty, avg_entry_price=100.0,
+        market_value=qty * 100.0, unrealized_pl=0.0, strategy_id=strategy_id,
+    )
+
+
+def test_fmp_paper_outside_market_hours_submits_nothing(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    ts_store = _make_ts_store()
+    telemetry_mock = _install_fmp_paper_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, market_open=False
+    )
+    df = _df([{"Symbol": "AAPL", "Action Signal": "BUY", "Kelly Target": 0.1, "Price": 100.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert broker.submitted == []
+    assert broker.get_positions_calls == 0, "broker must not even be queried outside RTH"
+    logged = " ".join(str(c.args[0]) for c in telemetry_mock.info.call_args_list if c.args)
+    assert "outside regular US market hours" in logged
+
+
+def test_fmp_paper_skips_reconciliation(monkeypatch):
+    # A manual position the trades ledger doesn't know about would read as
+    # drift on the Alpaca path; on the paper ledger reconciliation is skipped.
+    broker = MockBroker(positions=[_tagged_pos("ABR", 95.0, "Manual Trade")])
+    ts_store = _make_ts_store()
+    telemetry_mock = _install_fmp_paper_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, market_open=True
+    )
+
+    asyncio.run(main_orchestrator._execute_broker_orders(_df([]), dry_run=False))
+
+    ts_store.open_trades_df.assert_not_called()
+    assert not telemetry_mock.critical.called
+
+
+def test_fmp_paper_sell_never_closes_a_manual_position(monkeypatch):
+    broker = MockBroker(positions=[
+        _tagged_pos("ABR", 95.0, "Manual Trade"),
+        _tagged_pos("MSFT", 5.0, main_orchestrator.PIPELINE_STRATEGY_ID),
+    ])
+    ts_store = _make_ts_store()
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=ts_store, market_open=True)
+    df = _df([
+        {"Symbol": "ABR", "Action Signal": "SELL", "Kelly Target": 0.0, "Price": 10.0},
+        {"Symbol": "MSFT", "Action Signal": "SELL", "Kelly Target": 0.0, "Price": 200.0},
+    ])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert [(i.symbol, i.side, i.qty) for i in broker.submitted] == [
+        ("MSFT", OrderSide.SELL, 5.0)
+    ]
+    assert broker.submitted[0].strategy_id == main_orchestrator.PIPELINE_STRATEGY_ID
+
+
+def test_fmp_paper_manual_holding_does_not_block_pipeline_buy(monkeypatch):
+    broker = MockBroker(positions=[_tagged_pos("ABR", 95.0, "Manual Trade")], equity=100_000.0)
+    ts_store = _make_ts_store()
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=ts_store, market_open=True)
+    df = _df([{"Symbol": "ABR", "Action Signal": "BUY", "Kelly Target": 0.05, "Price": 10.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    buy = broker.submitted[0]
+    assert (buy.symbol, buy.side) == ("ABR", OrderSide.BUY)
+    assert buy.qty == pytest.approx(main_orchestrator._kelly_target_qty(0.05, 100_000.0, 10.0))
+
+
+def test_fmp_paper_does_not_rebuy_its_own_open_position(monkeypatch):
+    broker = MockBroker(positions=[_tagged_pos("AAPL", 3.0, main_orchestrator.PIPELINE_STRATEGY_ID)])
+    ts_store = _make_ts_store()
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=ts_store, market_open=True)
+    df = _df([{"Symbol": "AAPL", "Action Signal": "BUY", "Kelly Target": 0.1, "Price": 100.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert broker.submitted == []

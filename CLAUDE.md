@@ -130,7 +130,9 @@ reads a gated execution queue the pipeline writes.
   `AsyncDataFetchStep` → `RunPipelineStep` (inner `MacroStep` → `TrendVolatilityStep` →
   `ProcessingStep` → `ForecastingStep` → `StrategyEvalStep`) → `AdvisoryOverlayStep` (runs
   `engine/advisory.py::evaluate()` per symbol and keeps the `Recommendation`s) → `AgenticQueueStep`
-  → `BrokerExecutionStep` (paper/Alpaca orders only) → `StateSnapshotStep`.
+  → `BrokerExecutionStep` (paper/Alpaca orders only; on `fmp_paper` it needs no Alpaca keys, trades
+  only in regular US hours, skips reconciliation and acts only on `main_pipeline` positions) →
+  `StateSnapshotStep`.
 - **`settings.DAEMON_AGENTIC_QUEUE_MODE`** (`off` | `shadow` | `primary`, default `off`, a
   `DANGEROUS_KEYS` member) controls `AgenticQueueStep`. `shadow` writes the advisory source and
   `execution_queue.json` under `OUTPUT_DIR/shadow/` with no side effects; `primary` makes the daemon
