@@ -15,9 +15,9 @@ import hashlib
 import logging
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import Field, ValidationInfo, field_validator, model_validator
+from pydantic import AliasChoices, Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -213,26 +213,17 @@ class Settings(BaseSettings):
             "8x this value."
         ),
     )
-    ALPACA_API_KEY: Optional[str] = Field(default=None, description="Alpaca API key (optional).")
-    ALPACA_SECRET_KEY: Optional[str] = Field(default=None, description="Alpaca secret key (optional).")
-    ALPACA_PAPER: bool = Field(default=True, description="Use Alpaca paper-trading endpoint.")
-    ALPACA_REQUEST_TIMEOUT_SECONDS: float = Field(
-        default=15.0,
+    PAPER_TRADING: bool = Field(
+        default=True,
+        # ALPACA_PAPER is the pre-2026-09-30 name (Alpaca was removed); an
+        # existing .env keeps working. PAPER_TRADING wins when both are set.
+        validation_alias=AliasChoices("PAPER_TRADING", "ALPACA_PAPER"),
         description=(
-            "Per-request HTTP timeout (seconds) for every alpaca-py REST call "
-            "(execution/alpaca_broker.py::AlpacaBroker and "
-            "data/market_data.py::AlpacaProvider). Neither alpaca-py's "
-            "RESTClient constructor nor its per-call kwargs expose a timeout "
-            "parameter -- confirmed against the installed library source, "
-            "RESTClient._one_request()'s self._session.request(...) call "
-            "never receives a 'timeout' key, so a stalled connection used to "
-            "block forever (worse than the FRED incident this mirrors: these "
-            "calls run synchronously on the calling coroutine's own event "
-            "loop, not even offloaded to a background thread). Applied via "
-            "data/alpaca_http.py::mount_timeout_adapter(), which mounts a "
-            "custom requests.HTTPAdapter on the RESTClient's own "
-            "self._session -- the only lever available short of vendoring "
-            "alpaca-py. See docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md."
+            "Platform-wide paper/live posture. True = paper. When False (going "
+            "live), the automated pipeline places NO orders "
+            "(execution/broker_selection.py::is_going_live); real money moves "
+            "only through the Robinhood execution queue with per-trade "
+            "confirmation. Also read as ALPACA_PAPER for older .env files."
         ),
     )
 
@@ -242,22 +233,13 @@ class Settings(BaseSettings):
         "virtual account (data/paper_account_store.py) the first time it's "
         "constructed. Only takes effect when BROKER_BACKEND='fmp_paper'.",
     )
-    BROKER_BACKEND: str = Field(
+    BROKER_BACKEND: Literal["fmp_paper"] = Field(
         default="fmp_paper",
-        description="Selects the active broker backend in main_orchestrator.py's "
-        "_execute_broker_orders ('alpaca' or 'fmp_paper' — see "
-        "execution/fmp_paper_broker.py). Defaults to 'fmp_paper'. "
-        "main_orchestrator.py includes a runtime force-fallback guard "
-        "(execution/broker_selection.py::resolve_broker_backend) that forces "
-        "'alpaca' if 'fmp_paper' is used while the run is genuinely going live "
-        "(ADVISORY_ONLY=False and ALPACA_PAPER=False), and "
-        "check_broker_backend_matches_live_intent in scripts/preflight_check.py "
-        "blocks starting the pipeline in that same configuration. 'robinhood' is "
-        "a documented-but-not-yet-implemented future value reserved for an "
-        "eventual RobinhoodBroker — any unrecognized value (including "
-        "'robinhood' today) falls through to 'alpaca'; see "
-        "docs/architecture/execution.md's 'Future extension point — automated "
-        "Robinhood execution (not implemented)' section.",
+        description="The automated pipeline's broker backend. 'fmp_paper' "
+        "(execution/fmp_paper_broker.py: fills at live FMP quotes into the local "
+        "paper ledger) is the only value; Alpaca was removed 2026-09-30. Any "
+        "other value is a validation error rather than a silent fallback. Real "
+        "money moves only through the Robinhood execution queue.",
     )
     PAPER_BROKER_WRITES_ENABLED: bool = Field(
         default=True,

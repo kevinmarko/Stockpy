@@ -4,17 +4,15 @@ execution/broker_selection.py
 Single source of truth for "which broker backend should actually be used
 this cycle."
 
-``settings.BROKER_BACKEND`` selects between the real Alpaca broker and
-``FMPPaperBroker`` (a local SQLite paper ledger — see CLAUDE.md's "FMP-based
-paper trading engine" bullet). Two independent call sites resolve this
-setting into an actual broker construction: ``main_orchestrator.py``'s
-``_execute_broker_orders`` and ``robinhood_execution_mcp.py``'s
-``_get_broker()``. Both MUST go through ``resolve_broker_backend()`` below
-instead of re-implementing the "is this run genuinely going live" safety
-check independently — a prior review found the two had drifted, with only
-one of the two carrying the guard that force-falls-back to Alpaca when
-``BROKER_BACKEND=='fmp_paper'`` while the run is configured to place real
-orders.
+The automated pipeline has exactly one broker: ``FMPPaperBroker`` (a local
+SQLite paper ledger that fills at live FMP quotes). Alpaca was removed on
+2026-09-30. Real money moves only through the Robinhood execution queue,
+with per-trade human confirmation — never through this module.
+
+Two call sites resolve a broker here: ``main_orchestrator.py``'s
+``_execute_broker_orders`` and ``broker_live_execution_mcp.py``'s
+``_get_broker()``. Both MUST go through ``resolve_broker_backend()`` so the
+"is this run going live" safety check can never drift between them.
 
 This is a separate module (not ``execution/broker_base.py``, which is a
 minimal, dependency-light ABC/dataclass file imported very broadly,
@@ -25,55 +23,47 @@ interface types.
 
 from __future__ import annotations
 
+from typing import Optional
+
 
 def is_going_live() -> bool:
-    """True when this process is configured to submit real, live orders.
+    """True when this process is configured for live (real-money) trading.
 
-    ``ADVISORY_ONLY`` is the Tier 5.1 execution quarantine; ``ALPACA_PAPER``
-    is the paper-vs-live sandbox flag. A run is "going live" only when
-    neither safety net is engaged. Read via ``getattr`` with the same
-    defensive defaults used throughout this codebase (e.g.
-    ``main_orchestrator.py``'s ``_execute_broker_orders``) so a stripped-down
-    ``Settings`` stub in a test never raises.
+    ``ADVISORY_ONLY`` is the Tier 5.1 execution quarantine; ``PAPER_TRADING``
+    is the paper-vs-live posture. A run is "going live" only when neither
+    safety net is engaged. Read via ``getattr`` with the same defensive
+    defaults used throughout this codebase so a stripped-down ``Settings``
+    stub in a test never raises.
     """
     from settings import settings
 
     advisory_only = getattr(settings, "ADVISORY_ONLY", True)
-    alpaca_paper = getattr(settings, "ALPACA_PAPER", True)
-    return not advisory_only and not alpaca_paper
+    paper_trading = getattr(settings, "PAPER_TRADING", True)
+    return not advisory_only and not paper_trading
 
 
-def resolve_broker_backend() -> str:
-    """Resolve ``settings.BROKER_BACKEND`` to the backend that should
-    actually be constructed this cycle.
+def resolve_broker_backend() -> Optional[str]:
+    """Return the broker backend the automated pipeline may use this cycle,
+    or ``None`` when it must place no orders at all.
 
-    This is the single source of truth for "which broker should actually be
-    used" — both ``main_orchestrator.py``'s ``_execute_broker_orders`` and
-    ``robinhood_execution_mcp.py``'s ``_get_broker()`` call this instead of
-    each re-implementing the fmp_paper/live-trading safety check
-    independently, so the two call sites can never drift again.
-
-    ``BROKER_BACKEND='fmp_paper'`` routes orders to a local SQLite paper
-    ledger (``execution/fmp_paper_broker.py``) rather than a real broker. If
-    the run is genuinely going live (see ``is_going_live()``) while
-    ``BROKER_BACKEND`` is still ``'fmp_paper'``, that is almost certainly an
-    operator misconfiguration — silently paper-trading instead of placing
-    real orders is a worse failure mode than falling back to Alpaca, so this
-    logs CRITICAL, fires an alert, and forces ``'alpaca'``.
+    Paper posture → ``'fmp_paper'``. Going live (see ``is_going_live()``) →
+    ``None``: the automated pipeline has no live broker, and silently paper-
+    trading while the operator believes they are live would be a worse
+    failure mode than trading nothing. That case logs CRITICAL and fires an
+    alert so the misconfiguration is visible; real orders go through the
+    Robinhood queue instead.
     """
-    from settings import settings
-
-    broker_backend = getattr(settings, "BROKER_BACKEND", "alpaca")
-    if broker_backend == "fmp_paper" and is_going_live():
+    if is_going_live():
         from diagnostics_and_visuals import telemetry
         from observability.alerts import send_alert
 
         msg = (
-            "BROKER_BACKEND='fmp_paper' is invalid for live trading. "
-            "Forcing 'alpaca' fallback."
+            "PAPER_TRADING=False with ADVISORY_ONLY=False: the automated "
+            "pipeline has no live broker (Alpaca was removed), so it places no "
+            "orders. Real-money trades go through the Robinhood execution queue."
         )
         telemetry.error(msg)
         send_alert(level="CRITICAL", message=msg)
-        return "alpaca"
+        return None
 
-    return broker_backend
+    return "fmp_paper"

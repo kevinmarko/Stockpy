@@ -99,31 +99,10 @@ from pilots.symbols import _clean_str, find_signal
 
 logger = logging.getLogger(__name__)
 
-from contextlib import asynccontextmanager
-
-
-@asynccontextmanager
-async def _lifespan(app):
-    """Start/stop the WebSocket streamer with the FastAPI process."""
-    try:
-        from data.websocket_streamer import start_streamer, stop_streamer
-        if getattr(settings, "ALPACA_API_KEY", None):
-            start_streamer()
-    except Exception as _e:
-        logger.warning("WebSocketStreamer startup skipped: %s", _e)
-    yield
-    try:
-        from data.websocket_streamer import stop_streamer
-        stop_streamer()
-    except Exception:
-        pass
-
-
 app = FastAPI(
     title="InvestYo Data API",
     description="Data ingestion and market-data endpoints for the Web App.",
     version="0.1.0",
-    lifespan=_lifespan,
 )
 
 app.add_middleware(
