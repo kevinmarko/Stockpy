@@ -1,7 +1,7 @@
 """Tests for scripts/backfill_sentiment_history.py.
 
 Covers: per-symbol dead-letter resilience (_process_one never raises),
-resolve_universe wiring, the yahoo_rss/reddit caveat warnings, and the
+resolve_universe wiring, the yahoo_rss caveat warning, and the
 settings overrides applied for the run. The repo-root import shim
 (direct-path subprocess invocation) is covered by
 tests/test_backfill_scripts_invocation.py, shared with
@@ -97,26 +97,6 @@ class TestMainOverridesSettings:
                     ):
                         backfill.main()  # must not raise
         assert any("yahoo_rss has no historical archive" in r.message for r in caplog.records)
-
-    def test_reddit_caveat_warning_logged(self, caplog, monkeypatch):
-        monkeypatch.setattr(backfill.settings, "SENTIMENT_SOURCES", backfill.settings.SENTIMENT_SOURCES)
-        monkeypatch.setattr(
-            backfill.settings, "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE",
-            backfill.settings.SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE,
-        )
-        with mock.patch.object(backfill, "resolve_universe", return_value=["AAPL"]):
-            with mock.patch.object(backfill, "CompositeSentimentSource") as mock_composite_cls:
-                mock_source = mock.MagicMock()
-                mock_source.fetch_and_archive.return_value = []
-                mock_composite_cls.return_value = mock_source
-                with mock.patch.object(backfill, "HistoricalStore") as mock_store_cls:
-                    mock_store_cls.return_value.get_sentiment_archive_depth_by_source.return_value = {}
-                    with mock.patch.object(
-                        sys, "argv",
-                        ["backfill_sentiment_history.py", "--sources", "reddit"],
-                    ):
-                        backfill.main()
-        assert any("Reddit backfill caveat" in r.message for r in caplog.records)
 
 
 class TestPrintDepthReport:

@@ -704,7 +704,7 @@ def build_context_extras(
 
         # news_catalyst.pre_compute() (run inside run_pre_compute above) wrote
         # per-symbol FinBERT scores onto shared_ctx.news_sentiment_scores. Empty /
-        # absent when the module didn't run (no FINNHUB_API_KEY, unregistered) — a
+        # absent when the module didn't run (news provider not configured, unregistered) — a
         # symbol absent then degrades to null downstream, never fabricated.
         _news = getattr(shared_ctx, "news_sentiment_scores", None)
         if isinstance(_news, dict) and _news:

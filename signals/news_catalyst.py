@@ -8,11 +8,11 @@ directional score in [-1, +1].
 
 Data sources
 ------------
-* **Finnhub company_news** (`/api/v1/company-news`) — last
-  ``NEWS_LOOKBACK_DAYS`` calendar days of headlines (free tier).
-* **Finnhub earnings calendar** (`/api/v1/calendar/earnings`) — next 30
-  calendar days, used to detect the 48h suppression and 7-day dampening
-  windows (free tier).
+* **FMP stock news** (``data.fmp_client.stock_news``, gated by
+  ``settings.FMP_NEWS_ENABLED`` + ``FMP_API_KEY``) — last
+  ``NEWS_LOOKBACK_DAYS`` calendar days of headlines.
+* **FMP earnings calendar** (``data.fmp_feeds_company.fetch_earnings_rows``)
+  — used to detect the 48h suppression and 7-day dampening windows.
 
 Sentiment scorer
 ----------------
@@ -168,7 +168,7 @@ def _content_hash(headline: str) -> str:
     cycle reads it. A lookahead bug would require a cache read to surface
     information from a cycle that hasn't happened yet; a content-hash
     lookup can only ever return a score for text THIS cycle already fetched
-    from Finnhub, so there is no channel through which a future cycle's
+    from the news provider, so there is no channel through which a future cycle's
     headline could leak into an earlier cycle's read. See
     tests/test_news_catalyst.py::TestFinbertScoreCacheLookaheadSafety.
     """
@@ -398,124 +398,19 @@ def _earnings_proximity_multiplier(
 
 
 # ---------------------------------------------------------------------------
-# Finnhub client helpers
+# Company-news / earnings dispatchers (FMP-only)
 # ---------------------------------------------------------------------------
-
-def build_finnhub_client() -> Optional[Any]:
-    """Return a finnhub.Client or None if not configured / not installed.
-
-    Public API (promoted alongside :func:`fetch_company_news` /
-    :func:`fetch_next_earnings` in Tier 9 Scope 4) so ``llm/research.py``
-    can obtain a Finnhub client without reaching into a private surface.
-
-    Reads the key from ``settings.FINNHUB_API_KEY`` -- NOT
-    ``os.environ.get("FINNHUB_API_KEY")``, which this function used until it
-    was fixed here. Pydantic-settings' ``env_file=".env"`` loads a value from
-    ``.env`` into the ``Settings`` model directly; it does not also copy it
-    into the process's real ``os.environ``. An operator whose ONLY source for
-    this key is `.env` (the documented, normal case -- see CLAUDE.md's
-    `gui/env_io.py` convention, and every other credential-gated source in
-    ``data/sentiment_sources.py``: ``RedditSource``/``EdgarSource`` both read
-    ``settings.REDDIT_CLIENT_ID``/``settings.EDGAR_USER_AGENT``, never
-    ``os.environ`` directly) therefore got a silent ``None`` here forever --
-    Finnhub contributed zero documents to every live cycle and to
-    ``scripts/backfill_sentiment_history.py``, with no error or warning,
-    because a missing key and a present-but-unreachable key look identical to
-    this function's caller. Confirmed live 2026-07-29: a real 6-month, 33-
-    symbol backfill run against a real Finnhub key configured only in `.env`
-    archived zero Finnhub documents.
-    """
-    from settings import settings as _settings
-
-    api_key = _settings.FINNHUB_API_KEY or ""
-    if not api_key:
-        return None
-    try:
-        import finnhub  # type: ignore
-        return finnhub.Client(api_key=api_key)
-    except ImportError:
-        logger.debug(
-            "NewsCatalystSignal: finnhub-python not installed "
-            "(pip install finnhub-python)."
-        )
-        return None
-
-
-def fetch_company_news(
-    client: Any, symbol: str, lookback_days: int
-) -> List[Dict[str, Any]]:
-    """Fetch recent company news; returns [] on any error.
-
-    Public API (promoted from ``_fetch_company_news`` in Tier 9 Scope 4) so
-    ``llm/research.py`` can reuse this exact grounding call for Opal's
-    research briefs without reaching into a private module surface.
-    """
-    try:
-        now_utc = datetime.now(timezone.utc)
-        start = (now_utc - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-        end = now_utc.strftime("%Y-%m-%d")
-        result = client.company_news(symbol, _from=start, to=end)
-        return result if isinstance(result, list) else []
-    except Exception as exc:
-        logger.debug(
-            "NewsCatalystSignal: company_news(%s) failed: %s", symbol, exc
-        )
-        return []
-
-
-def fetch_next_earnings(client: Any, symbol: str) -> Optional[datetime]:
-    """Return the soonest upcoming earnings datetime (UTC-aware) or None.
-
-    Public API (promoted from ``_fetch_next_earnings`` in Tier 9 Scope 4) —
-    see :func:`fetch_company_news`.
-    """
-    try:
-        now_utc = datetime.now(timezone.utc)
-        start = now_utc.strftime("%Y-%m-%d")
-        end = (now_utc + timedelta(days=30)).strftime("%Y-%m-%d")
-        data = client.earnings_calendar(_from=start, to=end, symbol=symbol) or {}
-        entries = data.get("earningsCalendar", [])
-        future: List[datetime] = []
-        for entry in entries:
-            date_str = entry.get("date", "")
-            if not date_str:
-                continue
-            try:
-                dt = datetime.fromisoformat(date_str).replace(tzinfo=timezone.utc)
-                if dt >= now_utc - timedelta(hours=24):
-                    future.append(dt)
-            except ValueError:
-                continue
-        return min(future) if future else None
-    except Exception as exc:
-        logger.debug(
-            "NewsCatalystSignal: earnings_calendar(%s) failed: %s", symbol, exc
-        )
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Provider-agnostic dispatchers (FMP-first, Finnhub-fallback)
-# ---------------------------------------------------------------------------
-# The two functions above (build_finnhub_client / fetch_company_news /
-# fetch_next_earnings) stay Finnhub-specific and unchanged -- they have
-# existing callers (data/sentiment_sources.py's FinnhubSentimentSource,
-# llm/research.py, engine/agent_sentiment.py) that explicitly want Finnhub.
-# These two dispatchers are the provider-agnostic entry points added
-# 2026-08 so FMP can become the PRIMARY company-news/earnings source
-# (settings.FMP_NEWS_ENABLED) without touching those explicit-Finnhub call
-# sites: FMP first when configured, Finnhub as the fallback (or the sole
-# source when FMP_NEWS_ENABLED is False, reproducing today's exact
-# behavior). Both degrade to [] / None on any failure -- never raise.
+# FMP is the sole company-news/earnings source (settings.FMP_NEWS_ENABLED +
+# FMP_API_KEY). Finnhub was removed 2026-09 (it was only ever the unreached
+# fallback on the live config). When FMP is off, unconfigured or returns
+# nothing, both functions degrade to [] / None -- never raise, never fabricate.
 
 def _fetch_company_headlines_fmp(symbol: str, lookback_days: int) -> List[Dict[str, Any]]:
     """FMP half of :func:`fetch_company_headlines`. Paginates up to
-    ``settings.FMP_NEWS_MAX_PAGES`` pages, normalizing each article into
-    Finnhub's own ``company_news()`` shape (``headline``/``datetime``/
-    ``url``/``source``/``summary`` keys) so every existing caller written
-    against that contract works unchanged regardless of which provider
-    actually served the data. Returns ``[]`` on any failure or when FMP is
-    not configured -- never raises (the caller falls back to Finnhub)."""
+    ``settings.FMP_NEWS_MAX_PAGES`` pages, normalizing each article into the
+    ``headline``/``datetime``/``url``/``source``/``summary`` dict shape every
+    caller consumes. Returns ``[]`` on any failure or when FMP is not
+    configured -- never raises."""
     from settings import settings as _settings
 
     if not getattr(_settings, "FMP_NEWS_ENABLED", False):
@@ -566,49 +461,30 @@ def _fetch_company_headlines_fmp(symbol: str, lookback_days: int) -> List[Dict[s
 
 
 def fetch_company_headlines(symbol: str, lookback_days: int) -> List[Dict[str, Any]]:
-    """Provider-agnostic company-headline fetch: FMP-first (when
-    ``settings.FMP_NEWS_ENABLED`` and ``settings.FMP_API_KEY`` are set),
-    Finnhub-fallback otherwise (or when the FMP attempt returns nothing).
+    """Company-headline fetch via FMP (when ``settings.FMP_NEWS_ENABLED`` and
+    ``settings.FMP_API_KEY`` are set).
 
-    Returns the SAME shape :func:`fetch_company_news` does (a list of dicts
-    with at least ``headline``/``datetime`` keys) regardless of which
-    provider actually served the data, so callers do not need to know or
-    care which one ran. Never raises; ``[]`` when neither provider has
-    anything (or neither is configured).
+    Returns a list of dicts with at least ``headline``/``datetime`` keys.
+    Never raises; ``[]`` when FMP is off, unconfigured, or has nothing.
 
-    Each returned item carries an internal ``"_provider"`` key (``"fmp"`` or
-    ``"finnhub"``) tagging which provider actually served it -- consumed by
-    :func:`get_symbol_news_catalyst_details` to report ``provider_used``
-    without a second, separately-maintained notion of which provider ran.
-    Purely additive: existing callers that only read ``headline``/
-    ``datetime``/``url``/``source``/``summary`` are unaffected.
+    Each returned item carries an internal ``"_provider"`` key (``"fmp"``)
+    tagging which provider served it -- consumed by
+    :func:`get_symbol_news_catalyst_details` to report ``provider_used``.
+    Purely additive: callers that only read ``headline``/``datetime``/
+    ``url``/``source``/``summary`` are unaffected.
     """
     try:
-        fmp_items = _fetch_company_headlines_fmp(symbol, lookback_days)
-        if fmp_items:
-            return fmp_items
+        return _fetch_company_headlines_fmp(symbol, lookback_days)
     except Exception as exc:  # pragma: no cover -- defensive, FMP path already guards itself
         logger.debug("fetch_company_headlines: FMP dispatch failed for %s: %s", symbol, exc)
-
-    client = build_finnhub_client()
-    if client is None:
         return []
-    finnhub_items = fetch_company_news(client, symbol, lookback_days)
-    for item in finnhub_items:
-        if isinstance(item, dict):
-            item["_provider"] = "finnhub"
-    return finnhub_items
 
 
 def fetch_next_earnings_any(symbol: str) -> Optional[datetime]:
-    """Provider-agnostic next-earnings-date fetch: FMP-first (via
-    ``data.fmp_feeds_company.fetch_earnings_rows``, which is NOT limited to
-    Finnhub's 30-day forward window), Finnhub-fallback otherwise.
-
-    Mirrors :func:`fetch_next_earnings`'s contract (a UTC-aware ``datetime``
-    of the soonest future earnings date, or ``None``) but never requires an
-    explicit Finnhub ``client`` argument. Never raises; ``None`` when
-    neither provider has an upcoming date (or neither is configured).
+    """Next-earnings-date fetch via FMP (``data.fmp_feeds_company.
+    fetch_earnings_rows``): a UTC-aware ``datetime`` of the soonest future
+    earnings date, or ``None``. Never raises; ``None`` when FMP is off,
+    unconfigured or has no upcoming date.
     """
     from settings import settings as _settings
 
@@ -636,10 +512,7 @@ def fetch_next_earnings_any(symbol: str) -> Optional[datetime]:
                 "fetch_next_earnings_any: FMP earnings fetch failed for %s: %s", symbol, exc
             )
 
-    client = build_finnhub_client()
-    if client is None:
-        return None
-    return fetch_next_earnings(client, symbol)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -825,7 +698,7 @@ class NewsCatalystSignal(SignalModule):
     ``NEWS_LOOKBACK_DAYS`` calendar days, multiplied by an earnings-proximity
     gate (0 within 48 h of earnings, 0.5 within 7 days, 1 otherwise).
 
-    ``pre_compute`` batch-fetches Finnhub data for the full symbol universe
+    ``pre_compute`` batch-fetches FMP news/earnings data for the full symbol universe
     once per cycle and caches results so ``compute`` is a pure dict lookup
     (no per-symbol network calls in the hot loop).
     """
@@ -868,8 +741,8 @@ class NewsCatalystSignal(SignalModule):
 
     def _run_multi_source_ingestion(self, symbols: List[str]) -> None:
         """Fetch, credibility-score, and archive multi-source documents
-        (Sentiment Pipeline Phase 3/4: Yahoo RSS/GDELT/Reddit/EDGAR, and
-        Finnhub too if an operator opts it into ``settings.SENTIMENT_SOURCES``)
+        (Sentiment Pipeline Phase 3/4: Yahoo RSS/GDELT/EDGAR/StockTwits/...
+        per ``settings.SENTIMENT_SOURCES``)
         for every symbol in the universe, once per cycle.
 
         This is the ONLY call site that invokes
@@ -883,7 +756,7 @@ class NewsCatalystSignal(SignalModule):
         ``False``) -- a complete no-op, no network call attempted, until an
         operator opts in. Two of the four sources (Yahoo RSS, GDELT) need no
         API key, so this is the only way they stay quiet by default the same
-        way Finnhub/Reddit/EDGAR already do via absent credentials.
+        way EDGAR already does via absent credentials.
         """
         try:
             from settings import settings as _settings
@@ -939,8 +812,8 @@ class NewsCatalystSignal(SignalModule):
         writeback to ``dashboard_df``, AND in instance attributes for
         ``compute()`` to read.
 
-        If NEITHER a news provider is configured (``settings.FMP_NEWS_ENABLED``
-        + ``FMP_API_KEY``, or ``FINNHUB_API_KEY``), ``_news_scores``/
+        If the news provider is not configured (``settings.FMP_NEWS_ENABLED``
+        + ``FMP_API_KEY``), ``_news_scores``/
         ``_news_archive_scores`` stay empty (no crash, no fabricated
         per-symbol 0.0 either) -- but ``news_history`` archival still runs
         off the free multi-source social aggregate alone (see
@@ -963,7 +836,7 @@ class NewsCatalystSignal(SignalModule):
 
         # Multi-source ingestion + credibility scoring + archive (Sentiment
         # Pipeline Phase 3/4) -- runs every cycle, independent of any
-        # headline-provider configuration, so Reddit/GDELT/EDGAR/Yahoo RSS
+        # headline-provider configuration, so StockTwits/GDELT/EDGAR/Yahoo RSS
         # documents accumulate in sentiment_ingestion_audit even when no
         # provider is configured. This is the write side;
         # _read_sentiment_credibility_aggregate() right after is the
@@ -980,12 +853,11 @@ class NewsCatalystSignal(SignalModule):
             getattr(_settings, "FMP_NEWS_ENABLED", False)
             and getattr(_settings, "FMP_API_KEY", None)
         )
-        finnhub_available = build_finnhub_client() is not None
         pipeline: Optional[Any] = None
-        if not fmp_available and not finnhub_available:
+        if not fmp_available:
             logger.info(
                 "NewsCatalystSignal: no headline provider configured "
-                "(FMP_NEWS_ENABLED+FMP_API_KEY, or FINNHUB_API_KEY) — "
+                "(FMP_NEWS_ENABLED+FMP_API_KEY) — "
                 "headline scores will be 0.0; free multi-source social "
                 "sentiment (if any) still archives to news_history and "
                 "contributes via the live blend (see compute())."
@@ -1018,7 +890,7 @@ class NewsCatalystSignal(SignalModule):
     ) -> Optional[Any]:
         """Batch-score headlines for every symbol via the provider-agnostic
         :func:`fetch_company_headlines` / :func:`fetch_next_earnings_any`
-        dispatchers (FMP-first when configured, Finnhub-fallback otherwise),
+        dispatchers (FMP-only),
         populating ``self._news_scores``/``self._news_archive_scores``/
         ``self._earnings_dt`` and the context writeback fields.
 
@@ -1026,10 +898,6 @@ class NewsCatalystSignal(SignalModule):
         the caller can log it. Only called when at least one provider is
         available -- see ``pre_compute``.
 
-        Named ``_score_via_provider`` (renamed from ``_score_via_finnhub``
-        2026-08 when FMP became a second provider) -- ``_score_via_finnhub``
-        remains a class-level alias below for any external reference to the
-        old name.
         """
         from settings import settings as _settings
 
@@ -1052,7 +920,7 @@ class NewsCatalystSignal(SignalModule):
                 # Batched (+ content-hash cached) FinBERT/lexicon scoring --
                 # replaces the old one-headline-at-a-time _score_headline loop.
                 # Scoring is local (no network call), so it is never subject
-                # to the Finnhub rate-limit courtesy delay below.
+                # to the courtesy delay below.
                 distributions = score_headlines(headlines, pipeline=pipeline)
                 scores = [_distribution_to_signed(d) for d in distributions]
                 raw = float(sum(scores) / len(scores)) if scores else 0.0
@@ -1069,11 +937,10 @@ class NewsCatalystSignal(SignalModule):
                 # comment on why it must stay a safe finite float).
                 self._news_archive_scores[symbol] = live_score if scores else float("nan")
 
-                # Courtesy delay -- fetch_company_headlines/fetch_next_earnings_any
-                # may fall through to Finnhub internally (free-tier rate limit),
-                # so this stays unconditional even when FMP served this symbol;
-                # a fixed per-symbol delay is a small, already-accepted cost
-                # either way. Unrelated to the (local, unthrottled) scoring above.
+                # Courtesy delay between symbols (kept from the pre-FMP-only
+                # code so cycle pacing is unchanged); FMP also has its own
+                # shared throttle in data/fmp_client.py. Unrelated to the
+                # (local, unthrottled) scoring above.
                 time.sleep(0.12)
             except Exception as exc:
                 logger.warning(
@@ -1094,22 +961,17 @@ class NewsCatalystSignal(SignalModule):
         }
         return pipeline
 
-    # Backward-compat alias for the pre-2026-08 name (see _score_via_provider's
-    # own docstring). No current caller uses it, but external/private code
-    # written against the old name still resolves.
-    _score_via_finnhub = _score_via_provider
-
     def _build_archive_scores(self, symbols: List[str]) -> Dict[str, float]:
         """Build the score actually written to ``news_history`` for each
         symbol -- the SAME headline+social blend ``compute()`` returns for
-        the live trading signal (not just the raw Finnhub headline score),
+        the live trading signal (not just the raw headline score),
         so the archived/charted history matches what was actually traded on.
 
         Runs off ``self._sentiment_credibility`` (populated by
         ``_read_sentiment_credibility_aggregate()`` every cycle, independent
-        of Finnhub configuration) even when ``self._news_archive_scores`` is
+        of headline-provider configuration) even when ``self._news_archive_scores`` is
         empty -- a symbol with real free multi-source social data but no
-        Finnhub headline still gets a real archived value, not a forced
+        news headline still gets a real archived value, not a forced
         NaN. ``NaN`` only when BOTH sides genuinely have nothing for that
         symbol this cycle (CONSTRAINT #4).
         """
@@ -1155,7 +1017,7 @@ class NewsCatalystSignal(SignalModule):
             logger.warning("NewsCatalystSignal: news_history archive failed: %s", exc)
 
     def compute(self, row: pd.Series, context: SignalContext) -> SignalOutput:
-        """Return the credibility-weighted blend of the Finnhub-headline
+        """Return the credibility-weighted blend of the FMP-headline
         score and the multi-source social sentiment aggregate for this symbol.
 
         Gracefully degrades to headline-only (``News_Sentiment``'s own

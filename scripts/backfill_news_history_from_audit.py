@@ -4,7 +4,7 @@ scripts/backfill_news_history_from_audit.py
 Backfills ``HistoricalStore``'s ``news_history`` table (the daily
 per-symbol series the webapp's Sentiment Dynamics screen charts) from the
 platform's FREE multi-source sentiment pipeline's own historical archive --
-``sentiment_ingestion_audit`` (GDELT / SEC EDGAR / Reddit / Google News,
+``sentiment_ingestion_audit`` (GDELT / SEC EDGAR / Google News,
 populated by ``scripts/backfill_sentiment_history.py``) -- rather than a
 paid/keyed source.
 
@@ -12,12 +12,10 @@ Prerequisite
 ------------
 Run ``scripts/backfill_sentiment_history.py`` FIRST to populate
 ``sentiment_ingestion_audit`` with real historical documents. No API key
-is required for the gdelt/edgar/google_news sources (Reddit needs
-``REDDIT_CLIENT_ID``/``REDDIT_CLIENT_SECRET``; Finnhub is optional and can
-be dropped)::
+is required for the gdelt/edgar/google_news sources::
 
     python3 scripts/backfill_sentiment_history.py --months 6 \\
-        --sources gdelt,edgar,reddit,google_news
+        --sources gdelt,edgar,google_news
 
 This script then does a SECOND pass over the same date range: pure local DB
 aggregation, zero network calls, zero API keys required. For each trading
@@ -32,8 +30,7 @@ Why this is honest, not a hindsight shortcut
 The ``credibility_weight``/``final_weighted_score`` values already stored
 in ``sentiment_ingestion_audit`` were computed by ``signals/credibility.py``
 at ingestion time from each document's OWN metadata (source type, and for
-Reddit, author state AT INGESTION TIME -- see
-``scripts/backfill_sentiment_history.py``'s own Reddit caveat). This script
+comment sources, author state AT INGESTION TIME). This script
 performs no new scoring of its own -- it only re-runs the SAME aggregation
 query the live pipeline already runs every cycle, against real historical
 documents. A trading day with zero archived documents (GDELT was
@@ -43,15 +40,15 @@ rate-limited that day, EDGAR had nothing, etc.) archives as an honest
 
 Complements, does not replace, scripts/backfill_news_history.py
 ------------------------------------------------------------------
-That script backfills the SAME ``news_history`` table from Finnhub headline
-sentiment specifically (requires ``FINNHUB_API_KEY``). THIS script
+That script backfills the SAME ``news_history`` table from FMP headline
+sentiment specifically (requires ``FMP_NEWS_ENABLED`` + ``FMP_API_KEY``). THIS script
 backfills it from the free multi-source credibility-weighted aggregate
 instead. Running both is fine -- ``news_history``'s primary key is
 ``(symbol, as_of)``, so for a given symbol+day whichever backfill runs LAST
 wins that row; there is no blending across separate script invocations
 (``signals/news_catalyst.py``'s LIVE pipeline blend, by contrast, DOES
 blend both within a single cycle -- see ``NewsCatalystSignal.
-_build_archive_scores``). An operator with no Finnhub key still gets real
+_build_archive_scores``). An operator with no FMP key still gets real
 ``news_history`` coverage entirely from free sources via this script alone.
 """
 
@@ -151,7 +148,7 @@ def main():
             "sentiment_ingestion_audit is empty -- nothing to aggregate. Run "
             "`python3 scripts/backfill_sentiment_history.py --months %.1f` "
             "first to populate real historical documents from GDELT/EDGAR/"
-            "Reddit/Google News.", args.months,
+            "Google News.", args.months,
         )
         return
     logger.info("sentiment_ingestion_audit depth by source: %s", depth)

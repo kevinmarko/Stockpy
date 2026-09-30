@@ -1084,7 +1084,7 @@ TAB_HELP: Dict[str, TabHelp] = {
         "Two DISTINCT, independent sentiment signals for a chosen symbol — "
         "never conflated. (1) News Catalyst Sentiment: the always-on "
         "pipeline's real `news_sentiment` field (FinBERT / keyword-lexicon "
-        "over recent Finnhub headlines), read straight from the latest "
+        "over recent FMP headlines), read straight from the latest "
         "state snapshot. (2) Antigravity Agent + GJR-GARCH: an on-demand "
         "LLM-agent news read (sentiment / intensity / credibility) plus a "
         "real per-request GJR-GARCH(1,1,1) fit measuring the asymmetric "
@@ -1151,7 +1151,7 @@ TAB_HELP: Dict[str, TabHelp] = {
         "🪄 AI Insights",
         "Per-symbol AI reads layered on top of the pipeline's own signals: an "
         "Opal research brief (thesis/catalysts/risk factors grounded in real "
-        "Finnhub news), a Claude analyst rationale note, a Gemini chart-pattern "
+        "FMP news), a Claude analyst rationale note, a Gemini chart-pattern "
         "read, and a Claude-vs-Gemini disagreement view.  Every section is "
         "button-gated — nothing calls an AI provider until you click it — and "
         "purely informational: no AI output here places or modifies an order.",
@@ -1241,7 +1241,7 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     ),
     "dependency_map": (
         "Shows which GUI panels and reports are affected when a data source "
-        "(Alpaca, Finnhub, FRED, Robinhood) degrades or becomes unavailable."
+        "(Alpaca, FMP, FRED, Robinhood) degrades or becomes unavailable."
     ),
     "strategy_version_registry": (
         "SHA-256 prefix and file mtime for each registered signal module.  "
@@ -1363,7 +1363,7 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     ),
     "sentiment_dynamics.news_catalyst": (
         "The always-on pipeline's real `news_sentiment` field for this symbol "
-        "(FinBERT / keyword-lexicon over recent Finnhub headlines), read from "
+        "(FinBERT / keyword-lexicon over recent FMP headlines), read from "
         "the latest state snapshot — not the on-demand Antigravity section below."
     ),
     "sentiment_dynamics.antigravity_agent": (
@@ -1681,7 +1681,7 @@ METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     # ── Sentiment Dynamics tab ────────────────────────────────────────────
     "sentiment_dynamics.news_sentiment": (
         "The pipeline's real `news_sentiment` field for this symbol, roughly "
-        "in [-1, +1] (FinBERT / keyword-lexicon over recent Finnhub headlines). "
+        "in [-1, +1] (FinBERT / keyword-lexicon over recent FMP headlines). "
         "This section is omitted entirely when the symbol has no scored news — "
         "never shown as a fabricated neutral 0."
     ),

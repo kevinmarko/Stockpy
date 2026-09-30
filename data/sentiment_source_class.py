@@ -2,7 +2,8 @@
 data/sentiment_source_class.py — News vs. Comment Source Taxonomy
 ============================================================================
 A single, pure classifier deciding whether a ``sentiment_ingestion_audit``
-row's ``source_name`` (Yahoo RSS, GDELT, Reddit, EDGAR, Finnhub, ...) counts
+row's ``source_name`` (Yahoo RSS, GDELT, EDGAR, StockTwits, ... -- plus the removed
+Reddit/Finnhub names, kept so historical audit rows still classify) counts
 as an objective NEWS source or a subjective investor-forum COMMENT source.
 
 This is the shared substrate for two downstream features that both need the
@@ -56,7 +57,7 @@ def classify_source(source_name: str) -> SourceClass:
 
     news_names = _parse_names(settings.SENTIMENT_SOURCES)
     # Sources that exist in data/sentiment_sources.py but are excluded from
-    # the default SENTIMENT_SOURCES fan-out (e.g. 'finnhub', 'google_news')
+    # the default SENTIMENT_SOURCES fan-out (e.g. 'google_news')
     # are still legitimate news sources if an operator's audit table
     # happens to carry them (e.g. after changing the setting). Recognize
     # the full known-source vocabulary here, not just what's active today.
@@ -75,5 +76,6 @@ def _parse_names(csv: str) -> set[str]:
 # comment/forum source, whether or not it's in today's SENTIMENT_SOURCES
 # default. Kept in sync manually (small, stable list) rather than importing
 # data/sentiment_sources.py, which would pull in network client construction
-# for a pure taxonomy check.
+# for a pure taxonomy check. "finnhub" is retained (its ingestion source was
+# removed 2026-09) purely so historical audit rows still classify as news.
 _KNOWN_NEWS_SOURCES = {"yahoo_rss", "gdelt", "edgar", "finnhub", "google_news"}

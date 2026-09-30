@@ -23,7 +23,7 @@ def normalize_yfinance_dividend_yield(info: Dict[str, Any]) -> Dict[str, Any]:
 
     yfinance (the pinned 1.5.1, verified against ``dividendRate / price``)
     returns ``dividendYield`` as a **percent** — e.g. ``2.57`` for a 2.57%
-    yield. Every other ingestion path produces a **fraction**: ``FinnhubProvider``
+    yield. Every other ingestion path produces a **fraction**: the FMP path
     divides by 100 explicitly, ``BaseDTO._to_float("2.57%")`` yields ``0.0257``,
     and the mock engines use fractions (``0.02``). Without this normalization a
     yfinance-sourced holding's yield is ~100× too large, which:

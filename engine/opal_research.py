@@ -96,8 +96,8 @@ def main(argv: Optional[list] = None) -> int:
         parser.error("symbol must not be empty")
 
     # Lazy import — keeps this CLI's own import-time surface free of any
-    # LLM SDK reach; llm.research itself lazy-imports openai + the Finnhub
-    # client, so importing it here does not import openai either.
+    # LLM SDK reach; llm.research itself lazy-imports openai + the news
+    # dispatchers, so importing it here does not import openai either.
     from llm.research import generate_research_brief  # noqa: PLC0415
 
     try:

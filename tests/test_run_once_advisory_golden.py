@@ -270,7 +270,6 @@ def _install_frozen_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
         "SYMBOL_RATING_AUTO_DROP_ENABLED": False,
         "SYMBOL_RATING_ENABLED": False,
         "FMP_API_KEY": "",
-        "FINNHUB_API_KEY": "",
         "FMP_NEWS_ENABLED": False,
         "ROBINHOOD_EXECUTION_MODE": "review",
         "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 0.0,

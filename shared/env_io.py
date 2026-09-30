@@ -276,7 +276,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "MARKET_DATA_WS_STALE_SECONDS",
     "MARKET_DATA_WS_SYMBOLS",
     # Forecasting / fundamentals tunables (non-secret; see forecasting_engine.py
-    # + data/market_data.py). FINNHUB_API_KEY stays in SECRET_KEYS below.
+    # + data/market_data.py).
     "FORECAST_USE_GARCH_SIGMA",   # bool — GJR-GARCH sigma into Monte Carlo (rollback lever)
     "FORECAST_PROPHET_WEIGHT",    # float [0,1] — Prophet ensemble overlay weight
     # Math-calibration audit additions (docs/known_issues/forecast_ito_double_
@@ -509,7 +509,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "SENTIMENT_LLM_VERIFICATION_BORDERLINE_LOW",
     "SENTIMENT_LLM_VERIFICATION_BORDERLINE_HIGH",
     "STOCKTWITS_ENABLED",
-    "REDDIT_BACKFILL_MAX_PAGES",
     "EDGAR_MAX_CONCURRENCY",
     "EDGAR_COOLDOWN_THRESHOLD",
     "EDGAR_COOLDOWN_SECONDS",
@@ -522,7 +521,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FINBERT_ENABLED",
     "FINBERT_BATCH_SIZE",
     "FINBERT_SCORE_CACHE_ENABLED",
-    "FINNHUB_RATE_LIMIT_PER_MIN",
     "NEWS_EARNINGS_SUPPRESS_HOURS",
     "NEWS_EARNINGS_DAMPEN_DAYS",
     "GOOGLE_NEWS_LOOKBACK_WINDOW",
@@ -708,15 +706,9 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # stay because paper option marking still reads them.
     "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED",
     "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",
+    "PAPER_PIPELINE_PROBE_WEIGHT",
     "PAPER_OPTION_MARK_CACHE_SECONDS",
     "OPTIONS_RISK_FREE_RATE",
-    # --- Sentry error-tracking instrumentation (observability/sentry_integration.py) ---
-    # Non-secret tunables only -- SENTRY_DSN is the one credential-shaped field
-    # here and lives in SECRET_KEYS below (masked, never GUI-writable), same
-    # treatment as ALERT_WEBHOOK_URL/DISCORD_WEBHOOK_URL/SLACK_WEBHOOK_URL.
-    "SENTRY_ENABLED",
-    "SENTRY_ENVIRONMENT",
-    "SENTRY_TRACES_SAMPLE_RATE",
     # --- Weekly Digest (pilots/weekly_digest.py, desktop/daemon_runtime.py::
     # maybe_dispatch_weekly_digest) --- Both non-secret tunables; no
     # credential material. WEEKLY_DIGEST_ENABLED only takes effect while the
@@ -733,7 +725,6 @@ SECRET_KEYS: tuple[str, ...] = (
     "FRED_API_KEY",
     "ALPACA_API_KEY",
     "ALPACA_SECRET_KEY",
-    "FINNHUB_API_KEY",
     "ROBINHOOD_USERNAME",
     "ROBINHOOD_PASSWORD",
     "RH_USERNAME",
@@ -746,7 +737,6 @@ SECRET_KEYS: tuple[str, ...] = (
     # DATABASE_URL — may embed credentials, never logged, never GUI-writable.
     "MCP_DATABASE_URL_RO",
     "ALERT_WEBHOOK_URL",
-    "SENTRY_DSN",
     # Bearer token for the read-only State API (api/state_api.py). Treated like a
     # webhook/token secret — masked, never GUI-writable (CONSTRAINT #3).
     "STATE_API_TOKEN",
@@ -810,10 +800,6 @@ SECRET_KEYS: tuple[str, ...] = (
     "OPENAI_API_KEY",
     # Optional API key for local or self-hosted OpenAI-compatible server (OpenRouter, vLLM).
     "LOCAL_LLM_API_KEY",
-    # data/sentiment_sources.py's RedditSource OAuth2 script-app credentials
-    # (Sentiment Pipeline Phase 3). CONSTRAINT #3 — never GUI-writable.
-    "REDDIT_CLIENT_ID",
-    "REDDIT_CLIENT_SECRET",
     # SEC EDGAR requires this to identify the requester per its fair-access
     # policy — not a credential in the auth sense, but a per-operator value
     # that shouldn't be GUI-editable any more than the other source configs
@@ -839,11 +825,6 @@ SECRET_KEYS: tuple[str, ...] = (
     "ALERT_NTFY_TOPIC",
     "ALERT_SLACK_WEBHOOK_URL",  # description literally says "Secret"
     "OPTIONS_ALERT_WEBHOOK_URL",
-    # Reddit API User-Agent header. Not a credential in the auth sense (REDDIT_
-    # CLIENT_ID/SECRET already cover that), but a per-operator identifying value
-    # for a third-party API — classified here for the exact same reason
-    # EDGAR_USER_AGENT is (see that key's own comment above), not ALLOWED_KEYS.
-    "REDDIT_USER_AGENT",
 )
 
 # ---------------------------------------------------------------------------

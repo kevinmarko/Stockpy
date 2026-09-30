@@ -306,7 +306,9 @@ class TestExistingEditorsAreNotBootstrap:
             # and OPTIONS_MATRIX_ENABLED/OPTIONS_TRUE_IVR_ENABLED ("Options &
             # Pairs Snapshots", renamed "Pairs Snapshot") were retired.
             "_TUNABLE_INDEX": 92,
-            "_SENTIMENT_INDEX": 33,
+            # 33 -> 31 (2026-09 vendor removal): REDDIT_BACKFILL_MAX_PAGES and
+            # FINNHUB_RATE_LIMIT_PER_MIN retired with Reddit/Finnhub.
+            "_SENTIMENT_INDEX": 31,
             "_SECTOR_SELECTION_INDEX": 11,
             # 32 -> 30 (step 4f): FMP_OPTIONS_HEALTH_ENABLED /
             # FMP_OPTIONS_CONTEXT_ENABLED retired (read only by archived code).
@@ -315,7 +317,8 @@ class TestExistingEditorsAreNotBootstrap:
         # 203 -> 184 (2026-09, step 4d): the 19-key /settings/etf-transmission
         # editor was removed when ETF volatility transmission was archived.
         # 184 -> 166 (step 4f): the 16 tunables + 2 FMP keys above.
-        assert len(ALL_EDITOR_KEYS) == 166
+        # 166 -> 164 (2026-09 vendor removal): the 2 sentiment keys above.
+        assert len(ALL_EDITOR_KEYS) == 164
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

@@ -17,11 +17,9 @@ import data.sentiment_sources as sentiment_sources_mod
 from data.sentiment_sources import (
     CompositeSentimentSource,
     EdgarSource,
-    FinnhubSentimentSource,
     GDELTSource,
     GDELTVolumeSource,
     GoogleNewsRSSSource,
-    RedditSource,
     SentimentDocument,
     YahooRSSSource,
     _SOURCE_PRIORITY,
@@ -39,7 +37,7 @@ def _doc(**overrides) -> SentimentDocument:
     base = dict(
         as_of=datetime(2026, 7, 21, 14, 0, tzinfo=timezone.utc),
         symbol="AAPL",
-        source_name="finnhub",
+        source_name="fmp_news",
         text_content="Apple beats earnings expectations",
         raw_sentiment_score=0.6,
     )
@@ -52,7 +50,7 @@ class TestSentimentDocument:
         doc = _doc(author_handle="someone")
         row = doc.to_audit_row()
         assert row["symbol"] == "AAPL"
-        assert row["source_name"] == "finnhub"
+        assert row["source_name"] == "fmp_news"
         assert row["author_handle"] == "someone"
         assert row["raw_sentiment_score"] == pytest.approx(0.6)
 
@@ -91,34 +89,6 @@ class TestDesentencize:
     def test_multiple_decimals_all_preserved(self):
         result = desentencize("Price moved from $4.50 to $5.25. Big move.")
         assert "$4.50" in result and "$5.25" in result
-
-
-class TestFinnhubSentimentSource:
-    def test_no_client_returns_empty(self):
-        src = FinnhubSentimentSource()
-        with patch("signals.news_catalyst.build_finnhub_client", return_value=None):
-            docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
-        assert docs == []
-
-    def test_fetch_returns_documents(self):
-        src = FinnhubSentimentSource()
-        mock_client = MagicMock()
-        now = datetime.now(timezone.utc)
-        mock_client.company_news.return_value = [
-            {"headline": "Apple beats earnings", "datetime": int(now.timestamp())}
-        ]
-        with patch("signals.news_catalyst.build_finnhub_client", return_value=mock_client):
-            with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
-                docs = src.fetch("AAPL", now - timedelta(days=1))
-        assert len(docs) == 1
-        assert docs[0].symbol == "AAPL"
-        assert docs[0].source_name == "finnhub"
-
-    def test_error_returns_empty(self):
-        src = FinnhubSentimentSource()
-        with patch("signals.news_catalyst.build_finnhub_client", side_effect=RuntimeError("boom")):
-            docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
-        assert docs == []
 
 
 class TestYahooRSSSource:
@@ -508,165 +478,6 @@ class TestGoogleNewsRSSSource:
         assert "google_news" not in default_sources
 
 
-class TestRedditSource:
-    def test_no_credentials_returns_empty(self):
-        src = RedditSource()
-        with patch("settings.settings.REDDIT_CLIENT_ID", ""):
-            docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
-        assert docs == []
-
-    def test_fetch_with_credentials(self):
-        src = RedditSource()
-        now = datetime.now(timezone.utc)
-        mock_token_resp = MagicMock()
-        mock_token_resp.raise_for_status = MagicMock()
-        mock_token_resp.json.return_value = {"access_token": "tok123"}
-
-        mock_search_resp = MagicMock()
-        mock_search_resp.raise_for_status = MagicMock()
-        mock_search_resp.json.return_value = {
-            "data": {"children": [
-                {"data": {
-                    "title": "AAPL to the moon",
-                    "created_utc": now.timestamp(),
-                    "author": "some_redditor",
-                }}
-            ]}
-        }
-
-        with patch("settings.settings.REDDIT_CLIENT_ID", "cid"):
-            with patch("settings.settings.REDDIT_CLIENT_SECRET", "csecret"):
-                with patch("data.sentiment_sources.requests.post", return_value=mock_token_resp):
-                    with patch("data.sentiment_sources.requests.get", return_value=mock_search_resp):
-                        docs = src.fetch("AAPL", now - timedelta(days=1))
-        assert len(docs) == 1
-        assert docs[0].author_handle == "some_redditor"
-        assert docs[0].author_followers is None  # never fabricated
-
-    def test_token_failure_returns_empty(self):
-        src = RedditSource()
-        with patch("settings.settings.REDDIT_CLIENT_ID", "cid"):
-            with patch("settings.settings.REDDIT_CLIENT_SECRET", "csecret"):
-                with patch("data.sentiment_sources.requests.post", side_effect=RuntimeError("boom")):
-                    docs = src.fetch("AAPL", datetime.now(timezone.utc) - timedelta(days=1))
-        assert docs == []
-
-    def test_time_bucket_selection(self):
-        now = datetime.now(timezone.utc)
-        assert RedditSource._time_bucket_for(now - timedelta(minutes=30)) == "hour"
-        assert RedditSource._time_bucket_for(now - timedelta(hours=12)) == "day"
-        assert RedditSource._time_bucket_for(now - timedelta(days=5)) == "week"
-        assert RedditSource._time_bucket_for(now - timedelta(days=20)) == "month"
-        assert RedditSource._time_bucket_for(now - timedelta(days=150)) == "year"  # ~5-month backfill
-        assert RedditSource._time_bucket_for(now - timedelta(days=1000)) == "all"
-
-    def test_pagination_follows_after_cursor_for_backfill(self):
-        """A 5-month-old `since` with more posts than fit on one page must
-        paginate via the `after` cursor, not silently stop at page 1."""
-        src = RedditSource()
-        now = datetime.now(timezone.utc)
-        mock_token_resp = MagicMock()
-        mock_token_resp.raise_for_status = MagicMock()
-        mock_token_resp.json.return_value = {"access_token": "tok123"}
-
-        page1 = MagicMock()
-        page1.raise_for_status = MagicMock()
-        page1.json.return_value = {
-            "data": {
-                "after": "t3_page2cursor",
-                "children": [
-                    {"data": {"title": "Recent post", "created_utc": (now - timedelta(days=10)).timestamp(), "author": "u1"}},
-                ],
-            }
-        }
-        page2 = MagicMock()
-        page2.raise_for_status = MagicMock()
-        page2.json.return_value = {
-            "data": {
-                "after": None,  # no more pages
-                "children": [
-                    {"data": {"title": "Older post", "created_utc": (now - timedelta(days=100)).timestamp(), "author": "u2"}},
-                ],
-            }
-        }
-
-        with patch("settings.settings.REDDIT_CLIENT_ID", "cid"):
-            with patch("settings.settings.REDDIT_CLIENT_SECRET", "csecret"):
-                with patch("data.sentiment_sources.requests.post", return_value=mock_token_resp):
-                    with patch(
-                        "data.sentiment_sources.requests.get", side_effect=[page1, page2],
-                    ) as mock_get:
-                        docs = src.fetch("AAPL", now - timedelta(days=150))
-        assert len(docs) == 2
-        # Second call must carry the `after` cursor from the first page.
-        assert mock_get.call_args_list[1].kwargs["params"]["after"] == "t3_page2cursor"
-
-    def test_pagination_stops_at_cutoff(self):
-        """Once a page contains a post older than `since`, pagination must
-        stop entirely (sort=new -> everything further is even older) rather
-        than keep requesting pages unnecessarily."""
-        src = RedditSource()
-        now = datetime.now(timezone.utc)
-        mock_token_resp = MagicMock()
-        mock_token_resp.raise_for_status = MagicMock()
-        mock_token_resp.json.return_value = {"access_token": "tok123"}
-
-        page1 = MagicMock()
-        page1.raise_for_status = MagicMock()
-        page1.json.return_value = {
-            "data": {
-                "after": "t3_would_be_page2",
-                "children": [
-                    {"data": {"title": "Within window", "created_utc": (now - timedelta(days=2)).timestamp(), "author": "u1"}},
-                    {"data": {"title": "Too old", "created_utc": (now - timedelta(days=20)).timestamp(), "author": "u2"}},
-                ],
-            }
-        }
-
-        with patch("settings.settings.REDDIT_CLIENT_ID", "cid"):
-            with patch("settings.settings.REDDIT_CLIENT_SECRET", "csecret"):
-                with patch("data.sentiment_sources.requests.post", return_value=mock_token_resp):
-                    with patch(
-                        "data.sentiment_sources.requests.get", return_value=page1,
-                    ) as mock_get:
-                        docs = src.fetch("AAPL", now - timedelta(days=10))
-        assert len(docs) == 1
-        assert docs[0].text_content == "Within window"
-        assert mock_get.call_count == 1  # never fetched a 2nd page
-
-    def test_pagination_bounded_by_max_pages(self):
-        src = RedditSource()
-        now = datetime.now(timezone.utc)
-        mock_token_resp = MagicMock()
-        mock_token_resp.raise_for_status = MagicMock()
-        mock_token_resp.json.return_value = {"access_token": "tok123"}
-
-        def _make_page(cursor):
-            page = MagicMock()
-            page.raise_for_status = MagicMock()
-            page.json.return_value = {
-                "data": {
-                    "after": cursor,
-                    "children": [
-                        {"data": {"title": "Post", "created_utc": (now - timedelta(days=1)).timestamp(), "author": "u"}},
-                    ],
-                }
-            }
-            return page
-
-        # Always returns a next cursor -- would paginate forever without the cap.
-        with patch("settings.settings.REDDIT_CLIENT_ID", "cid"):
-            with patch("settings.settings.REDDIT_CLIENT_SECRET", "csecret"):
-                with patch("settings.settings.REDDIT_BACKFILL_MAX_PAGES", 3):
-                    with patch("data.sentiment_sources.requests.post", return_value=mock_token_resp):
-                        with patch(
-                            "data.sentiment_sources.requests.get",
-                            side_effect=lambda *a, **kw: _make_page("t3_next"),
-                        ) as mock_get:
-                            src.fetch("AAPL", now - timedelta(days=200))
-        assert mock_get.call_count == 3
-
-
 class TestEdgarSource:
     def test_no_user_agent_returns_empty(self):
         src = EdgarSource()
@@ -993,14 +804,14 @@ class TestEdgarFullTextSearch:
 
 class TestCompositeSentimentSource:
     def test_build_enabled_sources_respects_setting(self):
-        with patch("settings.settings.SENTIMENT_SOURCES", "finnhub,gdelt"):
+        with patch("settings.settings.SENTIMENT_SOURCES", "fmp_news,gdelt"):
             composite = CompositeSentimentSource()
-        assert set(composite._sources.keys()) == {"finnhub", "gdelt"}
+        assert set(composite._sources.keys()) == {"fmp_news", "gdelt"}
 
     def test_unknown_source_name_skipped(self):
-        with patch("settings.settings.SENTIMENT_SOURCES", "finnhub,not_a_real_source"):
+        with patch("settings.settings.SENTIMENT_SOURCES", "fmp_news,not_a_real_source"):
             composite = CompositeSentimentSource()
-        assert set(composite._sources.keys()) == {"finnhub"}
+        assert set(composite._sources.keys()) == {"fmp_news"}
 
     def test_fetch_all_merges_and_dedups(self):
         source_a = MagicMock()
@@ -1023,24 +834,24 @@ class TestCompositeSentimentSource:
         assert len(docs) == 1
 
     def test_backpressure_sheds_lower_priority_sources(self):
-        finnhub_mock = MagicMock()
-        finnhub_mock.fetch.return_value = [_doc(source_name="finnhub")]
-        reddit_mock = MagicMock()
-        reddit_mock.fetch.return_value = [_doc(source_name="reddit")]
+        fmp_news_mock = MagicMock()
+        fmp_news_mock.fetch.return_value = [_doc(source_name="fmp_news")]
+        gnews_mock = MagicMock()
+        gnews_mock.fetch.return_value = [_doc(source_name="google_news")]
 
-        composite = CompositeSentimentSource(sources={"finnhub": finnhub_mock, "reddit": reddit_mock})
+        composite = CompositeSentimentSource(sources={"fmp_news": fmp_news_mock, "google_news": gnews_mock})
         with patch("settings.settings.SENTIMENT_MAX_DOCUMENTS_PER_CYCLE", 1):
             docs = composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
-        # finnhub (higher priority) fills the budget; reddit is shed.
+        # fmp_news (higher priority) fills the budget; google_news is shed.
         assert len(docs) == 1
-        assert docs[0].source_name == "finnhub"
-        reddit_mock.fetch.assert_not_called()
+        assert docs[0].source_name == "fmp_news"
+        gnews_mock.fetch.assert_not_called()
 
     def test_reset_cycle_clears_budget_counter(self):
-        finnhub_mock = MagicMock()
-        finnhub_mock.fetch.return_value = [_doc(source_name="finnhub")]
+        fmp_news_mock = MagicMock()
+        fmp_news_mock.fetch.return_value = [_doc(source_name="fmp_news")]
 
-        composite = CompositeSentimentSource(sources={"finnhub": finnhub_mock})
+        composite = CompositeSentimentSource(sources={"fmp_news": fmp_news_mock})
         with patch("settings.settings.SENTIMENT_MAX_DOCUMENTS_PER_CYCLE", 1):
             composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))
             assert composite._documents_this_cycle == 1
@@ -1048,9 +859,9 @@ class TestCompositeSentimentSource:
             assert composite._documents_this_cycle == 0
 
     def test_fetch_and_archive_writes_when_enabled(self):
-        finnhub_mock = MagicMock()
-        finnhub_mock.fetch.return_value = [_doc()]
-        composite = CompositeSentimentSource(sources={"finnhub": finnhub_mock})
+        fmp_news_mock = MagicMock()
+        fmp_news_mock.fetch.return_value = [_doc()]
+        composite = CompositeSentimentSource(sources={"fmp_news": fmp_news_mock})
 
         mock_store_instance = MagicMock()
         mock_store_cls = MagicMock(return_value=mock_store_instance)
@@ -1060,9 +871,9 @@ class TestCompositeSentimentSource:
         mock_store_instance.save_sentiment_documents.assert_called_once()
 
     def test_fetch_and_archive_skips_when_disabled(self):
-        finnhub_mock = MagicMock()
-        finnhub_mock.fetch.return_value = [_doc()]
-        composite = CompositeSentimentSource(sources={"finnhub": finnhub_mock})
+        fmp_news_mock = MagicMock()
+        fmp_news_mock.fetch.return_value = [_doc()]
+        composite = CompositeSentimentSource(sources={"fmp_news": fmp_news_mock})
 
         mock_store_cls = MagicMock()
         with patch("settings.settings.SENTIMENT_AUDIT_ENABLED", False):
@@ -1106,9 +917,9 @@ class TestCompositeSentimentSource:
         """fetch_and_archive() must compute remaining_seconds from the
         instance's own _cycle_deadline (set by reset_cycle()) rather than
         always passing None."""
-        finnhub_mock = MagicMock()
-        finnhub_mock.fetch.return_value = [_doc()]
-        composite = CompositeSentimentSource(sources={"finnhub": finnhub_mock})
+        fmp_news_mock = MagicMock()
+        fmp_news_mock.fetch.return_value = [_doc()]
+        composite = CompositeSentimentSource(sources={"fmp_news": fmp_news_mock})
         composite.reset_cycle()  # sets _cycle_deadline in the future
 
         captured = {}
@@ -1126,9 +937,9 @@ class TestCompositeSentimentSource:
         """No reset_cycle() call -> no _cycle_deadline -> remaining_seconds
         stays None (the LLM-verification step then only bounds itself by
         the max-calls budget)."""
-        finnhub_mock = MagicMock()
-        finnhub_mock.fetch.return_value = [_doc()]
-        composite = CompositeSentimentSource(sources={"finnhub": finnhub_mock})
+        fmp_news_mock = MagicMock()
+        fmp_news_mock.fetch.return_value = [_doc()]
+        composite = CompositeSentimentSource(sources={"fmp_news": fmp_news_mock})
 
         captured = {}
 
@@ -1232,13 +1043,13 @@ class TestCrossSourceDedup:
         """A detected cross-source duplicate must not count against the
         per-cycle document budget -- otherwise it could wrongly crowd out a
         genuinely distinct document from a later, lower-priority source."""
-        finnhub_mock = MagicMock()
-        finnhub_mock.fetch.return_value = [
-            _doc(source_name="finnhub", text_content="Apple beats Q3 earnings expectations")
+        fmp_news_mock = MagicMock()
+        fmp_news_mock.fetch.return_value = [
+            _doc(source_name="fmp_news", text_content="Apple beats Q3 earnings expectations")
         ]
         edgar_mock = MagicMock()
         edgar_mock.fetch.return_value = [
-            # Same story as finnhub's, different source -- a cross-source dup.
+            # Same story as fmp_news's, different source -- a cross-source dup.
             _doc(source_name="edgar", text_content="Apple beats Q3 earnings expectations")
         ]
         yahoo_mock = MagicMock()
@@ -1249,7 +1060,7 @@ class TestCrossSourceDedup:
             )
         ]
         composite = CompositeSentimentSource(
-            sources={"finnhub": finnhub_mock, "edgar": edgar_mock, "yahoo_rss": yahoo_mock}
+            sources={"fmp_news": fmp_news_mock, "edgar": edgar_mock, "yahoo_rss": yahoo_mock}
         )
         with patch("settings.settings.SENTIMENT_MAX_DOCUMENTS_PER_CYCLE", 2):
             docs = composite.fetch_all("AAPL", since=datetime(2026, 7, 1, tzinfo=timezone.utc))

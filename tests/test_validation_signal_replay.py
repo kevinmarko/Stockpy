@@ -8,7 +8,7 @@ This is the largest and most novel adapter in the module: it replays the
 REAL SignalAggregator/SignalRegistry code path over history, rather than
 hand-rolling a standalone formula. The most important test in this file is
 TestLookaheadSafety -- a regression guard proving the filtered replay
-registry genuinely never touches news_catalyst's live Finnhub calls or
+registry genuinely never touches news_catalyst's live news-provider calls or
 lgbm_ranker's current-model load, both of which would be a real lookahead
 bug (and, for news_catalyst, an unwanted live network side effect) if the
 module-exclusion filter ever regressed.
@@ -328,14 +328,14 @@ class TestBuildSignalReplayAdapter:
 # ---------------------------------------------------------------------------
 
 class TestLookaheadSafety:
-    """Guards against the adapter ever making a live Finnhub call or loading
+    """Guards against the adapter ever making a live news-provider call or loading
     the CURRENT LGBM model from inside an offline historical replay.
 
     IMPORTANT NUANCE (found while writing this test, kept documented rather
     than silently glossed over): both ``NewsCatalystSignal.compute()`` and
     ``LGBMRankerSignal.compute()`` are pure dict lookups against
     ``context.news_sentiment_scores``/``context.lgbm_scores`` -- the actual
-    live Finnhub call / ``LGBMCrossSectionalRanker.load_latest()`` only ever
+    live news-provider call / ``LGBMCrossSectionalRanker.load_latest()`` only ever
     happens inside their respective ``pre_compute()`` methods. Since this
     adapter's daily loop calls ONLY ``MultifactorSignal.pre_compute()`` and
     ``CrossSectionalMomentumSignal.pre_compute()`` (hardcoded, never a batch
@@ -343,7 +343,7 @@ class TestLookaheadSafety:
     tests below pass TODAY even independent of ``_REPLAY_EXCLUDED_MODULES``
     -- they guard against a plausible FUTURE regression (e.g. a refactor
     that switches to calling ``replay_registry.run_pre_compute()`` for
-    convenience, which WOULD trigger a real Finnhub call / stale-model load
+    convenience, which WOULD trigger a real news-provider call / stale-model load
     if the exclusion set were removed at the same time).
 
     The genuinely load-bearing reason ``_REPLAY_EXCLUDED_MODULES`` matters
@@ -356,12 +356,12 @@ class TestLookaheadSafety:
     test_excluded_modules_weight_mass_is_redistributed_not_wasted below.
     """
 
-    def test_finnhub_never_called(self) -> None:
+    def test_news_provider_never_called(self) -> None:
         closes = _synthetic_closes(["SPY", "AAPL", "JNJ"], n_days=600)
-        finnhub_mock = MagicMock(name="build_finnhub_client")
-        with patch("signals.news_catalyst.build_finnhub_client", finnhub_mock):
+        headlines_mock = MagicMock(name="fetch_company_headlines")
+        with patch("signals.news_catalyst.fetch_company_headlines", headlines_mock):
             _run_adapter(closes)
-        finnhub_mock.assert_not_called()
+        headlines_mock.assert_not_called()
 
     def test_lgbm_load_latest_never_called(self) -> None:
         closes = _synthetic_closes(["SPY", "AAPL", "JNJ"], n_days=600)

@@ -459,6 +459,15 @@ def _kelly_target_qty(kelly_weight: float, equity: float, price: float) -> float
     return round((kelly_weight * equity) / price, 6)
 
 
+# strategy_id stamped on every order the pipeline itself submits.
+PIPELINE_STRATEGY_ID = "main_pipeline"
+# Action Signals that close an open pipeline position. strategy_engine emits
+# STRONG BUY / BUY / HOLD / RISK REDUCE (RISK REDUCE is its fail-closed
+# immediate-exit instruction); it never emits SELL or TRIM, so before
+# RISK REDUCE was added here the SELL branch could not fire on this pipeline.
+EXIT_SIGNALS = frozenset({"SELL", "TRIM", "RISK REDUCE", "AVOID"})
+
+
 async def _execute_broker_orders(
     final_df: "pd.DataFrame",
     dry_run: bool,
@@ -470,12 +479,14 @@ async def _execute_broker_orders(
 
     Design constraints
     ------------------
-    * Never called when Alpaca credentials are absent (checked by caller).
+    * With the Alpaca backend, never called when Alpaca credentials are
+      absent (checked by caller). The fmp_paper backend needs no Alpaca keys.
     * Errors are logged as ERROR and never propagate — broker execution is
       best-effort; the analysis pipeline's value must never be held hostage
       to broker connectivity.
-    * Only BUY signals with Kelly Target > 0 generate new orders; SELL/TRIM
-      signals close existing positions.
+    * Only BUY signals with Kelly Target > 0 generate new orders (on the paper
+      ledger, PAPER_PIPELINE_PROBE_WEIGHT stands in for a zero Kelly Target);
+      EXIT_SIGNALS (SELL/TRIM/RISK REDUCE/AVOID) close existing positions.
     * Kill-switch active → ``KillSwitchActiveError`` is raised inside
       ``submit_order_with_idempotency``; caught here and logged as CRITICAL.
     * ``dry_run=True`` logs intent but never reaches the broker network.
@@ -509,8 +520,25 @@ async def _execute_broker_orders(
         # when BROKER_BACKEND='fmp_paper' while this run is genuinely going
         # live (ADVISORY_ONLY=False and ALPACA_PAPER=False).
         broker_backend = resolve_broker_backend()
+        # The local FMP paper ledger (BROKER_BACKEND='fmp_paper') is not an
+        # external broker: it has no market hours of its own, it IS the
+        # position ledger, and it also holds the operator's manual Quick
+        # Trade positions. Three paper-only rules follow from that (see
+        # below); the Alpaca path is unchanged.
+        is_paper_ledger = broker_backend == "fmp_paper"
 
-        if broker_backend == "fmp_paper":
+        if is_paper_ledger:
+            # Rule 1: only trade during regular US market hours. The paper
+            # broker fills market orders at whatever quote is current, so an
+            # hourly daemon cycle at 06:00 or 19:00 ET would otherwise fill
+            # at thin pre/after-market quotes no real market order would get.
+            from engine.advisory_agent import is_us_market_open
+            if not is_us_market_open(datetime.now(timezone.utc)):
+                telemetry.info(
+                    "fmp_paper: outside regular US market hours; skipping "
+                    "pipeline paper-order submission this cycle."
+                )
+                return
             from execution.fmp_paper_broker import FMPPaperBroker
             broker = FMPPaperBroker()
         else:
@@ -520,16 +548,36 @@ async def _execute_broker_orders(
         om = OrderManager(broker, dry_run=dry_run, risk_gate=risk_gate)
 
         # --- Reconcile before submitting new orders ---
-        recon_report = await om.reconcile_state(ts_store)
-        if recon_report.has_drift:
-            telemetry.critical(
-                "Broker state drift detected before order submission — "
-                "review reconciliation report before trusting signals."
+        # Rule 2: reconciliation compares an EXTERNAL broker against the
+        # internal trades ledger. For the local paper ledger there is no
+        # external truth to drift from, and the trades ledger only receives
+        # paper rows at close (via the bridge), so every open paper position
+        # would read as "drift" and fire an alert every cycle.
+        if is_paper_ledger:
+            telemetry.info(
+                "fmp_paper: skipping broker reconciliation (the paper store "
+                "is the position ledger; there is no external broker)."
             )
+        else:
+            recon_report = await om.reconcile_state(ts_store)
+            if recon_report.has_drift:
+                telemetry.critical(
+                    "Broker state drift detected before order submission — "
+                    "review reconciliation report before trusting signals."
+                )
 
         # --- Fetch live positions + account for risk-gate context ---
         open_pos = await broker.get_open_positions()
-        open_symbols = {p.symbol: p.qty for p in open_pos}
+        # Rule 3: on the paper ledger, the pipeline only buys/sells against
+        # its OWN positions (strategy_id == PIPELINE_STRATEGY_ID). Manual
+        # Quick Trade positions share the ledger; a SELL signal must never
+        # close them, and holding one manually must not block the pipeline
+        # from opening its own. The risk gate still sees every position.
+        own_pos = (
+            [p for p in open_pos if p.strategy_id == PIPELINE_STRATEGY_ID]
+            if is_paper_ledger else open_pos
+        )
+        open_symbols = {p.symbol: p.qty for p in own_pos}
         try:
             account = await broker.get_account()
         except Exception:
@@ -585,6 +633,11 @@ async def _execute_broker_orders(
             )
             log_fn(result)
 
+        probe_weight = (
+            float(getattr(settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.0) or 0.0)
+            if is_paper_ledger else 0.0
+        )
+
         now = datetime.now(timezone.utc)
         for _, row in final_df.iterrows():
             symbol = str(row.get("Symbol", "")).upper()
@@ -593,6 +646,13 @@ async def _execute_broker_orders(
 
             if not symbol:
                 continue
+
+            # Paper-only cold-start probe (settings.PAPER_PIPELINE_PROBE_WEIGHT):
+            # with no closed pipeline trades Kelly scales every target to 0,
+            # which would stop the pipeline ever collecting the closed trades
+            # Kelly needs. A positive Kelly Target always wins.
+            if is_paper_ledger and "BUY" in signal and kelly <= 0 and probe_weight > 0:
+                kelly = probe_weight
 
             try:
                 if "BUY" in signal and kelly > 0 and symbol not in open_symbols:
@@ -633,7 +693,7 @@ async def _execute_broker_orders(
                     target_weight = float(row.get("Kelly_Target_Post_Regime", kelly) or kelly)
                     target_qty_value = _kelly_target_qty(target_weight, equity, price)
                     intent = OrderIntent(
-                        strategy_id="main_pipeline",
+                        strategy_id=PIPELINE_STRATEGY_ID,
                         symbol=symbol,
                         side=OrderSide.BUY,
                         qty=buy_qty,
@@ -656,7 +716,7 @@ async def _execute_broker_orders(
                     else:
                         await _submit_and_log(intent, _log_buy)
 
-                elif signal in ("SELL", "TRIM") and symbol in open_symbols:
+                elif signal in EXIT_SIGNALS and symbol in open_symbols:
                     sell_qty = abs(open_symbols[symbol])
                     # target_qty intentionally equals qty here, not a remaining gap:
                     # a full position close has no distinct "target" size to diverge
@@ -664,7 +724,7 @@ async def _execute_broker_orders(
                     # unlike the BUY case above which now has a genuine pre-cap
                     # (Kelly_Target_Post_Regime) vs. post-cap (Kelly Target) distinction.
                     intent = OrderIntent(
-                        strategy_id="main_pipeline",
+                        strategy_id=PIPELINE_STRATEGY_ID,
                         symbol=symbol,
                         side=OrderSide.SELL,
                         qty=sell_qty,

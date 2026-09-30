@@ -130,7 +130,10 @@ reads a gated execution queue the pipeline writes.
   `AsyncDataFetchStep` → `RunPipelineStep` (inner `MacroStep` → `TrendVolatilityStep` →
   `ProcessingStep` → `ForecastingStep` → `StrategyEvalStep`) → `AdvisoryOverlayStep` (runs
   `engine/advisory.py::evaluate()` per symbol and keeps the `Recommendation`s) → `AgenticQueueStep`
-  → `BrokerExecutionStep` (paper/Alpaca orders only) → `StateSnapshotStep`.
+  → `BrokerExecutionStep` (paper/Alpaca orders only; on `fmp_paper` it needs no Alpaca keys, trades
+  only in regular US hours, skips reconciliation, acts only on `main_pipeline` positions, sizes
+  zero-Kelly buys with `PAPER_PIPELINE_PROBE_WEIGHT`, and closes on `RISK REDUCE`) →
+  `StateSnapshotStep`.
 - **`settings.DAEMON_AGENTIC_QUEUE_MODE`** (`off` | `shadow` | `primary`, default `off`, a
   `DANGEROUS_KEYS` member) controls `AgenticQueueStep`. `shadow` writes the advisory source and
   `execution_queue.json` under `OUTPUT_DIR/shadow/` with no side effects; `primary` makes the daemon
@@ -167,6 +170,23 @@ reads a gated execution queue the pipeline writes.
 | `docs/JULES_INTEGRATION.md` | Jules coding-agent dispatch: gates, approval tokens, disclosed limits |
 | `docs/BUG_HUNTING_PROCESS.md` | Bug-hunting SOP, severity model, domain checklists |
 | `docs/test_coverage_analysis.md` | Test-suite inventory and coverage-gap roadmap |
+
+## Feature freeze (step 7, since 2026-09-29)
+
+The platform is in a **feature freeze** until the pipeline has closed **30** of its own paper trades
+(target 50), so the next decisions rest on measured outcomes instead of more features. Only
+`paper_closed_trades` rows with `strategy_id == "main_pipeline"` count — manual Quick Trades, delta
+hedges and untagged rows never do. Check progress with `python scripts/feature_freeze_status.py`
+(exit 0 = the minimum is reached, 2 = still frozen; `--json` for machine output). Ending the freeze
+is the operator's call once the count is reached.
+
+- **Allowed:** bug fixes; security and dependency fixes; tests; docs; measurement or observability
+  of existing behavior; removing or archiving code; and the already-approved plans — shrink steps
+  5.4–5.6 (`.claude/shrink_step5_retire_main_py_implementation_plan.md`) and the forecasting
+  rebuild (`.claude/forecasting_rebuild_implementation_plan.md`).
+- **Needs the operator's explicit OK first:** new signal modules, strategies, Pilots, webapp
+  screens, data sources, ML models, or new settings flags for new capabilities.
+- If a request looks like new-feature work, say that the freeze is on and ask before building.
 
 ## Frontend strategy: web app only
 
@@ -285,8 +305,8 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   adjusted convention; FMP's `light`/`full` variants are split-only and silently corrupt every return
   series. `scripts/verify_fmp_bars.py` must PASS before it changes. See `docs/FMP_INTEGRATION.md`.
 - **Data-source policy for new features:** a new capability needing live data this codebase doesn't
-  already have may depend only on **FMP or Yahoo (yfinance)**. Alpaca and Finnhub keep their existing
-  roles but are not a basis for new features. If neither source has the data, disclose the gap
+  already have may depend only on **FMP or Yahoo (yfinance)**. Alpaca keeps its existing
+  role but is not a basis for new features. If neither source has the data, disclose the gap
   rather than build around a third provider.
 
 ### Settings, credentials and storage

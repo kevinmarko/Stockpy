@@ -164,7 +164,7 @@ COLUMN_SCHEMA = [
     # ==========================================================
     # --- NEWS CATALYST (Tier 2.4, signals/news_catalyst.py) ---
     # Populated by NewsCatalystSignal.pre_compute() via orchestrator
-    # writeback; NaN / "" when Finnhub is not configured or the
+    # writeback; NaN / "" when the news provider is not configured or the
     # module hasn't run for a symbol this cycle.
     # ==========================================================
     {"header": "News Sentiment", "key": "News_Sentiment", "format": "number"},
@@ -176,7 +176,7 @@ COLUMN_SCHEMA = [
     # aggregating the current trading day's sentiment_ingestion_audit rows
     # (data/sentiment_sources.py, data/historical_store.py). NaN when no
     # multi-source social documents exist for a symbol this cycle -- distinct
-    # from News_Sentiment (Finnhub-headline-only), never a fabricated 0.0.
+    # from News_Sentiment (news-headline-only), never a fabricated 0.0.
     # ==========================================================
     {"header": "Credibility Weighted Sentiment", "key": "Credibility_Weighted_Sentiment", "format": "number"},
     {"header": "Bot Activity Ratio", "key": "Bot_Activity_Ratio", "format": "percent"},
@@ -223,7 +223,7 @@ COLUMN_SCHEMA = [
     #
     # NOTE: the earnings feed deliberately does NOT add an "Earnings Date"
     # column -- it becomes a SECOND source for the existing news-catalyst
-    # "Earnings Date" key above (unlike Finnhub it is not limited to a 30-day
+    # "Earnings Date" key above (FMP is not limited to a 30-day
     # forward window).
     # ==========================================================
     # --- Analyst (FMP_ANALYST_ENABLED) ---

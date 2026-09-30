@@ -421,10 +421,11 @@ class TestFMPNewsRegistration:
     def test_registered_in_source_registry(self):
         assert _SOURCE_REGISTRY["fmp_news"] is FMPNewsSource
 
-    def test_priority_ordered_before_finnhub(self):
+    def test_priority_ordered_first(self):
         assert "fmp_news" in _SOURCE_PRIORITY
-        assert "finnhub" in _SOURCE_PRIORITY
-        assert _SOURCE_PRIORITY.index("fmp_news") < _SOURCE_PRIORITY.index("finnhub")
+        assert _SOURCE_PRIORITY.index("fmp_news") == 0
+        assert "finnhub" not in _SOURCE_PRIORITY
+        assert "reddit" not in _SOURCE_PRIORITY
 
     def test_treated_as_an_institutional_source_for_credibility(self):
         assert "fmp_news" in _INSTITUTIONAL_SOURCES

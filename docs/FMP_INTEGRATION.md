@@ -204,15 +204,15 @@ Added in response to an operator report of two related failures — a `RH_USERNA
 resolution bug (fixed separately, see `CLAUDE.md`'s `.env`-resolution notes) and a
 `FINNHUB_API_KEY is not set ... (or finnhub-python is not installed)` error from
 `scripts/backfill_news_history.py` — that prompted the decision to make FMP the
-PRIMARY company-news source, with Finnhub kept as an opt-in fallback rather than
-removed outright.
+PRIMARY company-news source. Finnhub was kept as a fallback at first and was
+then removed outright in 2026-09 (vendor-removal PR: it was unreached on the live
+config), so FMP is now the ONLY company-news / earnings-date provider.
 
 **Endpoint used:** `data/fmp_client.py::stock_news` wraps `GET /news/stock`
 (`symbols`, `from`, `to`, `page`, `limit` params). Verified live 2026-08 against a
 real FMP key: a single 10-day window returned 99 and 93 articles across two pages,
 and a query 6 months in the past still returned genuinely real, dated articles —
-well past Finnhub's free-tier ~3 month cap (`settings.NEWS_LOOKBACK_DAYS`'s own
-description). **Deliberately does NOT wrap `/news/press-releases`** — that endpoint
+well past the ~3 month cap Finnhub's free tier used to impose. **Deliberately does NOT wrap `/news/press-releases`** — that endpoint
 returned `"Restricted Endpoint... please visit our subscription page to upgrade
 your plan"` (a plan-entitlement rejection, not a bug) against the Starter-tier
 account this integration was verified with.
@@ -232,29 +232,26 @@ silently — exactly the class of "fails plausibly, not loudly" risk §6 above w
 about for the bars-adjustment setting; the same discipline (verify against a real,
 independently-dated record) was applied here.
 
-**Consumers, all provider-agnostic (FMP-first, Finnhub-fallback):**
+**Consumers (FMP-only):**
 - `data/sentiment_sources.py::FMPNewsSource` (`name = "fmp_news"`) — a new,
-  separately-selectable entry in `_SOURCE_REGISTRY`/`_SOURCE_PRIORITY` (ahead of
-  `"finnhub"`). Opt-in: an operator must add `"fmp_news"` to `SENTIMENT_SOURCES`
+  separately-selectable entry in `_SOURCE_REGISTRY`/`_SOURCE_PRIORITY` (first in
+  the priority order). Opt-in: an operator must add `"fmp_news"` to `SENTIMENT_SOURCES`
   *and* set `FMP_NEWS_ENABLED=True` for it to run. Paginates, scores via the
   batched `score_headlines()` path, and is bounded by `deadline_exceeded()` like
   every other multi-request source in this module (the `GDELTSource` pattern).
 - `signals/news_catalyst.py::fetch_company_headlines(symbol, lookback_days)` and
-  `fetch_next_earnings_any(symbol)` — new top-level dispatcher functions. Each
-  tries FMP first (when `FMP_NEWS_ENABLED` + `FMP_API_KEY`), falling back to the
-  existing Finnhub-specific `build_finnhub_client()`/`fetch_company_news()`/
-  `fetch_next_earnings()` otherwise (those three functions are UNCHANGED and stay
-  exported, since `FMPNewsSource`'s Finnhub sibling `FinnhubSentimentSource` and
-  other explicit-Finnhub callers still use them directly). `NewsCatalystSignal`'s
-  `pre_compute()` (renamed internal method `_score_via_provider`, aliased from the
-  old `_score_via_finnhub` name), `llm/research.py`'s Opal grounding packet, and
-  `engine/agent_sentiment.py`'s Antigravity agent tool were all re-pointed at
-  these two dispatchers — the earnings-date gate that used to require a Finnhub
-  client now also accepts FMP-only configuration.
+  `fetch_next_earnings_any(symbol)` — the top-level dispatcher functions. Each reads
+  FMP only (`FMP_NEWS_ENABLED` + `FMP_API_KEY`) and returns the honest empty result
+  (`[]` / `None`) when FMP is off, unconfigured, failing or has nothing — never
+  raises, never fabricates. `NewsCatalystSignal`'s `pre_compute()` (internal method
+  `_score_via_provider`), `llm/research.py`'s Opal grounding packet, and
+  `engine/agent_sentiment.py`'s Antigravity agent tool all call these two
+  dispatchers. (`build_finnhub_client()`/`fetch_company_news()`/
+  `fetch_next_earnings()` and `FinnhubSentimentSource` were deleted.)
 - `scripts/backfill_news_history.py` — `_fetch_headlines`/`_fetch_earnings_dates`
-  each gained an FMP-first half (`_fetch_headlines_fmp`/`_fetch_earnings_dates_fmp`)
-  using the same wide-date-range-in-one-call-then-reconstruct-locally approach the
-  Finnhub path already used, so a 6-month backfill still costs a small, bounded
+  are FMP-only (`_fetch_headlines_fmp`/`_fetch_earnings_dates_fmp`) and use a
+  wide-date-range-in-one-call-then-reconstruct-locally approach, so a 6-month
+  backfill still costs a small, bounded
   number of provider calls, not thousands. The pagination ceiling
   (`FMP_NEWS_MAX_PAGES`) is logged, not silently absorbed, when it's hit.
 
@@ -268,10 +265,9 @@ with FMP as the sole configured provider; the full `backfill_news_history.py`
 triggered with a low `FMP_NEWS_MAX_PAGES` to confirm the log fires and coverage
 degrades honestly rather than silently).
 
-**Not changed:** `FinnhubSentimentSource` (`data/sentiment_sources.py`) stays
-Finnhub-specific and is not re-pointed at the dispatchers — it remains a
-separately-selectable `SENTIMENT_SOURCES` entry for an operator who wants Finnhub
-specifically, alongside (or instead of) `fmp_news`.
+**Removed 2026-09:** `FinnhubSentimentSource`, `FinnhubProvider`, the `FINNHUB_*`
+settings and the `finnhub-python` dependency. A leftover `FINNHUB_API_KEY` line in
+`.env` is ignored (`Settings` uses `extra="ignore"`).
 
 ---
 

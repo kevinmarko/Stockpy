@@ -13,7 +13,7 @@ Why declarative
 Inferring this graph from imports would over-couple it to the call sites
 (half the consumers only use a source on a code path that's gated by a
 config flag). A short, hand-curated table is more honest about what the
-operator actually loses when (say) Finnhub is rate-limited mid-run, AND it
+operator actually loses when (say) FMP is rate-limited mid-run, AND it
 puts the map on every reviewer's screen during code review.
 
 Add a new consumer of an existing source: append to ``CONSUMERS`` for that
@@ -55,7 +55,7 @@ class DataSource(str, Enum):
 
     # Paid-tier-but-free APIs we already use
     ALPACA = "alpaca"              # real-time IEX quotes/bars (free tier)
-    FINNHUB = "finnhub"            # company news / earnings headlines (news_catalyst signal)
+    FMP = "fmp"                    # company news / earnings headlines (news_catalyst signal)
 
     # Account state
     ROBINHOOD = "robinhood"        # holdings, cost basis, dividends (read-only)
@@ -75,7 +75,7 @@ _LABELS: Dict[DataSource, str] = {
     DataSource.YFINANCE:         "yfinance (delayed quotes/bars + Yahoo statement-derived fundamentals)",
     DataSource.FRED:             "FRED (macro series)",
     DataSource.ALPACA:           "Alpaca IEX (real-time quotes/bars)",
-    DataSource.FINNHUB:          "Finnhub (news catalyst headlines)",
+    DataSource.FMP:              "FMP (news catalyst headlines)",
     DataSource.ROBINHOOD:        "Robinhood (account snapshot, dividends)",
     DataSource.TRANSACTIONS_DB:  "TransactionsStore (closed-trade ledger)",
     DataSource.STATE_SNAPSHOT:   "state_snapshot.json (last orchestrator run)",
@@ -146,7 +146,7 @@ _FUNDAMENTALS_CONSUMERS: tuple[Consumer, ...] = (
 
 _NEWS_CONSUMERS: tuple[Consumer, ...] = (
     Consumer("news_catalyst signal", "strategy",
-             "Company news / earnings headline sentiment (Finnhub company_news)."),
+             "Company news / earnings headline sentiment (FMP company news)."),
 )
 
 _MACRO_CONSUMERS: tuple[Consumer, ...] = (
@@ -198,10 +198,10 @@ CONSUMERS: Dict[DataSource, tuple[Consumer, ...]] = {
     # yfinance now backs BOTH quotes/bars AND fundamentals: the primary
     # Yahoo statement-derived engine (data/yahoo_fundamentals.py) and the raw
     # .info fallback both draw on yfinance, so every fundamentals consumer maps
-    # here. Finnhub is no longer a fundamentals source — it feeds news only.
+    # here. FMP feeds the news catalyst only here.
     DataSource.YFINANCE:        _QUOTE_CONSUMERS + _FUNDAMENTALS_CONSUMERS,
     DataSource.ALPACA:          _QUOTE_CONSUMERS,
-    DataSource.FINNHUB:         _NEWS_CONSUMERS,
+    DataSource.FMP:             _NEWS_CONSUMERS,
     DataSource.FRED:            _MACRO_CONSUMERS,
     DataSource.ROBINHOOD:       _ACCOUNT_CONSUMERS,
     DataSource.TRANSACTIONS_DB: _TXN_CONSUMERS,
