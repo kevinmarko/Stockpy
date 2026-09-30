@@ -8,6 +8,8 @@ file is the **archival "why does X exist and what shipped in the PR that added i
 record** — read it when you need the full backstory, test surface, or Gravity-audit-step
 details for a specific subsystem named below.
 
+**2026-09-30 — Alpaca removed.** The automated pipeline's only broker is `FMPPaperBroker`; market data is FMP then yfinance; `ALPACA_PAPER` became `PAPER_TRADING` (alias kept); going live places no automated orders. Alpaca code archived to `legacy/`. Walkthrough: `.claude/vendor_removal_alpaca_walkthrough.md`. Entries below that mention Alpaca are historical.
+
 Sections in this file (search for the `##` heading):
 - Autopilot "Pilots" makeover — consumer-style marketplace over Stockpy's own strategies: `pilots/` (Phase 1), `api/pilots_api.py` (Phase 2), `pilots/mirror.py` gated follow-mirror (Phase 3), the `webapp/` PWA, decisions D1/D2/D3 (2026-07-12/13)
 - Gravity split-brain consolidation — delete dead `gravity/__init__.py`, migrate its steps into the single launcher as step_76–86 (2026-07-10)

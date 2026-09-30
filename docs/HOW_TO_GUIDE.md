@@ -41,10 +41,10 @@ InvestYo is an **automated quantitative analysis pipeline**. Every time you run 
 4. **Detects the macro regime** — classifies the current environment as RISK ON / NEUTRAL / RECESSION / CREDIT EVENT using yield curve, credit spreads, VIX, and a Hidden Markov Model (HMM) second opinion
 5. **Generates signals** — for each ticker: STRONG BUY / BUY / HOLD / RISK REDUCE, plus an options overlay recommendation
 6. **Sizes positions** — calculates a Kelly Target (% of capital to allocate) based on your actual trade history
-7. **Submits orders** — if Alpaca is configured, sends buy/sell orders to your paper or live account
+7. **Submits paper orders** — when `ADVISORY_ONLY=false`, sends buy/sell orders to the local FMP paper ledger (never when going live; real orders go only through the Robinhood queue)
 8. **Produces reports** — an HTML dashboard, an interactive Plotly volatility chart, and a JSON payload
 
-You can use the output purely as research (read the HTML report, decide manually), or connect Alpaca to automate order submission.
+You can use the output purely as research (read the HTML report, decide manually), or lift `ADVISORY_ONLY` to let the pipeline paper-trade on the FMP paper ledger.
 
 ---
 
@@ -101,22 +101,20 @@ All settings live in `.env`. The platform reads it automatically on startup via 
 |---------|--------------|
 | `FRED_API_KEY` | Free at [fred.stlouisfed.org/docs/api/api_key.html](https://fred.stlouisfed.org/docs/api/api_key.html) — create an account, request a key |
 
-### Broker settings (needed only for automated order submission)
+### Broker settings (needed only for automated paper order submission)
 
 | Setting | Notes |
 |---------|-------|
-| `ALPACA_API_KEY` | From your Alpaca dashboard under "API Keys" |
-| `ALPACA_SECRET_KEY` | Shown once when you create the key — save it immediately |
-| `ALPACA_PAPER` | `true` (default) = paper trading endpoint. Change to `false` only for live trading |
+| `PAPER_TRADING` | `true` (default) = paper trading on the local FMP paper ledger (no broker keys needed; an old `ALPACA_PAPER` in `.env` still works as an alias). With `false` and `ADVISORY_ONLY=false` the automated pipeline places **no orders** (CRITICAL log + alert) — real orders go only through the Robinhood queue |
 
-If you omit `ALPACA_API_KEY` / `ALPACA_SECRET_KEY`, the pipeline still runs fully — it just skips order submission and prints `"skipping broker execution"`.
+There are no broker API keys to configure: Alpaca was removed 2026-09-30 and the paper ledger fills at live FMP quotes.
 
 ### Settings with safe defaults (you can ignore these initially)
 
 | Setting | Default | What it controls |
 |---------|---------|-----------------|
-| `DRY_RUN` | `false` | When `true`, orders are logged but never sent to Alpaca |
-| `ALPACA_PAPER` | `true` | Paper vs live account |
+| `DRY_RUN` | `false` | When `true`, orders are logged but never placed on the paper ledger |
+| `PAPER_TRADING` | `true` | Paper vs live posture (live = the automated pipeline places no orders) |
 | `MAX_CORRELATION` | `0.85` | Blocks a new position if it's too correlated with an existing one |
 | `DAILY_LOSS_LIMIT_PCT` | `0.02` | Halts new buys if you're down 2% on the day |
 | `MAX_ORDER_RATE_PER_MIN` | `10` | Rate limiter on order submissions |
@@ -302,7 +300,7 @@ web app equivalent yet.
 python3 main_orchestrator.py
 ```
 
-This runs the full async pipeline: data fetch → macro regime → options analysis → processing → forecasting → strategy signals → HTML report → broker orders (if Alpaca configured).
+This runs the full async pipeline: data fetch → macro regime → options analysis → processing → forecasting → strategy signals → HTML report → paper broker orders (if `ADVISORY_ONLY=false`).
 
 It auto-activates the `.venv` virtual environment if you haven't done so manually.
 
@@ -312,7 +310,7 @@ It auto-activates the `.venv` virtual environment if you haven't done so manuall
 python3 main_orchestrator.py --dry-run
 ```
 
-The pipeline runs identically but any generated orders are logged rather than submitted to Alpaca. Use this to verify the setup before enabling live order flow.
+The pipeline runs identically but any generated orders are logged rather than placed on the paper ledger. Use this to verify the setup before enabling live order flow.
 
 ### Offline / mock mode
 
@@ -611,19 +609,18 @@ Paper trading = running with real market data and real logic, but simulated mone
 
 ### Start paper trading
 
-1. Get Alpaca paper trading credentials from [alpaca.markets](https://alpaca.markets) — click "Create Account" → paper account → "API Keys"
+1. No broker credentials are needed: the automated pipeline trades on the local FMP paper ledger (Alpaca was removed 2026-09-30).
 2. Add to `.env`:
    ```
-   ALPACA_API_KEY=PK...
-   ALPACA_SECRET_KEY=...
-   ALPACA_PAPER=true
+   ADVISORY_ONLY=false
+   PAPER_TRADING=true
    PAPER_TRADING_START_DATE=2026-06-24
    ```
 3. Run the pipeline:
    ```bash
    python3 main_orchestrator.py
    ```
-4. Watch the Alpaca dashboard — you should see paper orders appear
+4. Watch the Paper Broker screen in the web app — you should see paper orders and positions appear
 
 ### Automate daily runs
 
@@ -712,31 +709,27 @@ signals are available.
 python scripts/preflight_check.py
 ```
 
-Runs 17 checks total. Behaviour depends on `ADVISORY_ONLY`:
+Runs 15 checks total. Behaviour depends on `ADVISORY_ONLY`:
 
-* **`ADVISORY_ONLY=true` (default)**: eight checks are automatically skipped (shown
-  as PASS with a per-check advisory-mode note): four broker-stack checks
-  (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`,
-  `paper_trading_duration`), one key-rotation check (`alpaca_key_rotation_recent` —
-  Alpaca keys have no blast-radius risk while the broker surface is quarantined), and
+* **`ADVISORY_ONLY=true` (default)**: six checks are automatically skipped
+  (shown as PASS with a per-check advisory-mode note): three broker-stack checks
+  (`paper_trading_mode`, `dry_run_disabled`, `paper_trading_duration`) and
   three runtime-state checks that are false-positives for advisory runs
   (`heartbeat_fresh`, `validation_reports`, `no_unexpected_risk_blocks`).
   `advisory_only_active` always passes loudly, and `robinhood_execution_mode` /
   `state_snapshot_fresh` are **never** auto-skipped (see below — they're the
   advisory-relevant liveness/safety checks). Exit 0 when the remaining checks pass.
-* **`ADVISORY_ONLY=false`**: all 17 checks run. Exit 0 only when ALL pass (required
+* **`ADVISORY_ONLY=false`**: all 15 checks run. Exit 0 only when ALL pass (required
   before going live).
 
 | Check | Advisory skip? | Passes when | How to fix a failure |
 |-------|:--------------:|------------|---------------------|
 | `fred_key_configured` | No | `FRED_API_KEY` is set | Add key to `.env` |
 | `key_rotation_recent` | No | `FRED_KEY_ROTATED_DATE` set and within 90 days — warning only, never blocking | Set `FRED_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` when you rotate |
-| `alpaca_key_rotation_recent` | **Yes** | `ALPACA_KEY_ROTATED_DATE` set and within 90 days — warning only, never blocking | Set `ALPACA_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` when you rotate |
 | `advisory_only_active` | No | Always — PASS-loud when `true`, PASS-with-warning when `false` | Set `ADVISORY_ONLY=true` to return to advisory mode |
-| `robinhood_execution_mode` | No | `ROBINHOOD_EXECUTION_MODE` is `off`/`review` (always passes), or `live` with a positive `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` — independent of `ADVISORY_ONLY` since the Robinhood bridge is orthogonal to the Alpaca quarantine | Set `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` to a per-order dollar cap before setting `ROBINHOOD_EXECUTION_MODE=live` |
-| `alpaca_configured` | **Yes** | Both Alpaca keys are set | Add keys to `.env` |
+| `robinhood_execution_mode` | No | `ROBINHOOD_EXECUTION_MODE` is `off`/`review` (always passes), or `live` with a positive `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` — independent of `ADVISORY_ONLY` since the Robinhood bridge is orthogonal to the paper-broker quarantine | Set `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` to a per-order dollar cap before setting `ROBINHOOD_EXECUTION_MODE=live` |
 | `macro_regime_gate_enabled` | No | `MACRO_REGIME_GATE_ENABLED=true` (blocks in live mode when off) | Set `MACRO_REGIME_GATE_ENABLED=true` in `.env` |
-| `alpaca_paper_mode` | **Yes** | `ALPACA_PAPER=true` — warning only | Change to `false` only when ready to go live |
+| `paper_trading_mode` | **Yes** | `PAPER_TRADING=true` — warning only (renamed from `alpaca_paper_mode`) | Change to `false` only when ready to go live (the automated pipeline then places no orders) |
 | `dry_run_disabled` | **Yes** | `DRY_RUN=false` | Set `DRY_RUN=false` in `.env` |
 | `env_not_committed` | No | `.env` is not tracked by git | Add `.env` to `.gitignore` (already done in this repo) |
 | `kill_switch_inactive` | No | No `output/KILL_SWITCH` file exists | Run `python -m execution.kill_switch --deactivate` |
@@ -1091,7 +1084,7 @@ pytest -x
 
 ### Tests that require network access
 
-`tests/test_alpaca_paper_smoke.py` requires real Alpaca credentials and hits the paper endpoint. It is automatically skipped if credentials are absent. All other tests are offline.
+All tests are offline (the Alpaca smoke test moved to `legacy/tests/` on 2026-09-30).
 
 ---
 
@@ -1239,17 +1232,19 @@ account.
 # 1. Set in .env
 ADVISORY_ONLY=false
 DRY_RUN=false
-ALPACA_PAPER=true    # start with paper; change to false only for live
+PAPER_TRADING=true   # paper ledger; with false the automated pipeline places no orders
 
-# 2. Verify preflight (all 17 checks must pass)
+# 2. Verify preflight (all 15 checks must pass)
 python scripts/preflight_check.py
 
 # 3. Launch pipeline (paper mode)
 python3 main_orchestrator.py
 ```
 
-All three flags must be consistent: `ADVISORY_ONLY=false AND DRY_RUN=false AND
-ALPACA_PAPER=false` is required to reach a live submission.
+`ADVISORY_ONLY=false AND DRY_RUN=false AND PAPER_TRADING=false` is the "going live" posture:
+the automated pipeline then places **no orders** (`execution/broker_selection.py::resolve_broker_backend()`
+returns None, CRITICAL log + alert). Real-money orders go only through the Robinhood execution queue,
+with per-trade human confirmation.
 
 ---
 
@@ -1262,11 +1257,11 @@ mode selector is on **Settings → General**, with four modes:
 |---|---|---|---|
 | Advisory | true | — | No broker contact at all (project default). See [Advisory-Only Mode](#advisory-only-mode). |
 | Simulation | false | true | OrderManager intercepts every intent before any broker contact. |
-| Paper | false | false | Orders route to the paper broker (`ALPACA_PAPER=true` for Alpaca's sandbox). No real money. |
-| Live | false | false | Orders hit the live broker (`ALPACA_PAPER=false`). |
+| Paper | false | false | Orders route to the FMP paper ledger (`PAPER_TRADING=true`). No real money. |
+| Live | false | false | `PAPER_TRADING=false`: the automated pipeline places no orders; use the Robinhood queue. |
 
 Every mode change needs a typed confirmation, and the flags (`ADVISORY_ONLY`, plus
-`DRY_RUN` and `ALPACA_PAPER` for non-advisory modes) are written together so a half-state
+`DRY_RUN` and `PAPER_TRADING` for non-advisory modes) are written together so a half-state
 can't be set. **Setting takes effect on the next orchestrator/advisory launch.**
 
 Signal-module weights, enabled/disabled modules, and each module's version fingerprint
@@ -1287,7 +1282,7 @@ The project ships with **`settings.ADVISORY_ONLY=true`** as the default. In this
 **What you will see:**
 - Web app: a status banner reading "Advisory Only Mode (Live Execution Disabled)"; Settings → General shows Advisory as the current execution mode.
 - Orchestrator: an INFO log line `"ADVISORY_ONLY=True — broker execution surface is quarantined; skipping all order submission, reconciliation, and broker imports."`
-- Preflight: a new `advisory_only_active` row at position #2; the four broker-dependent rows (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`, `paper_trading_duration`) show as PASS with reason `"(skipped: ADVISORY_ONLY=True — broker check not applicable)"`.
+- Preflight: a new `advisory_only_active` row at position #2; the broker-dependent rows (`paper_trading_mode`, `dry_run_disabled`, `paper_trading_duration`; earlier versions also had the since-removed `alpaca_configured`) show as PASS with reason `"(skipped: ADVISORY_ONLY=True — broker check not applicable)"`.
 
 **To re-enable broker execution:** set `ADVISORY_ONLY=false` in `.env`, then restart the orchestrator. See §1 of `docs/RUNBOOK.md` for the paper→live switch checklist.
 
@@ -1515,7 +1510,7 @@ All thresholds live in `engine.trade_signals.CONFIG`.
 The Robinhood Execution Bridge (Tier 8) is the **opt-in, paper-first** path that
 lets the platform act on its advisory output through the Robinhood Trading MCP.
 It is **off by default** and independent of `ADVISORY_ONLY` (which governs the
-separate Alpaca surface).
+separate automated paper-broker surface).
 
 Because the MCP is consumed by a **Claude Code agent** — not the headless
 Python pipeline — the platform only writes a gated, dry-run proposed-order queue
