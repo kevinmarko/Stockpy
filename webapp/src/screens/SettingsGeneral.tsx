@@ -49,7 +49,7 @@ export function SettingsGeneral() {
       <ExecutionModeSection
         advisoryOnly={status.advisory_only}
         dryRun={status.dry_run}
-        alpacaPaper={status.alpaca_paper}
+        paperTrading={status.paper_trading}
         onChanged={reloadStatus}
       />
 
@@ -102,10 +102,9 @@ function SignalGenerationSection({
  * Every mode change writes ADVISORY_ONLY -- "the single highest-consequence
  * write in the whole settings surface" (settings_keysets.py) -- and any mode
  * other than "advisory" also writes DRY_RUN. Both are
- * `settings_keysets.DANGEROUS_KEYS` fields (ALPACA_PAPER, also written for
- * non-advisory modes, is NOT -- it's Alpaca's own paper/live account
- * selector, not a broker-agnostic quarantine, and deliberately left
- * unhardened here), and the backend now rejects this write (422, nothing
+ * `settings_keysets.DANGEROUS_KEYS` fields (PAPER_TRADING, also written for
+ * non-advisory modes, is NOT -- it's the platform-wide paper/live posture
+ * flag, not a quarantine, and deliberately left unhardened here), and the backend now rejects this write (422, nothing
  * written) unless every one of them is echoed back in `confirm` -- the SAME
  * contract `PUT /settings/tunables` enforces for ADVISORY_ONLY/DRY_RUN via
  * its own `DangerousConfirmDialog` (GenericSettingsEditor.tsx). This helper
@@ -120,12 +119,12 @@ function dangerousKeysFor(mode: "advisory" | "simulation" | "paper" | "live"): s
 function ExecutionModeSection({
   advisoryOnly,
   dryRun,
-  alpacaPaper,
+  paperTrading,
   onChanged,
 }: {
   advisoryOnly: boolean;
   dryRun: boolean;
-  alpacaPaper: boolean;
+  paperTrading: boolean;
   onChanged: () => void;
 }) {
   const [selectedMode, setSelectedMode] = useState<"advisory" | "simulation" | "paper" | "live" | null>(null);
@@ -135,7 +134,7 @@ function ExecutionModeSection({
     ? "advisory"
     : dryRun
     ? "simulation"
-    : alpacaPaper
+    : paperTrading
     ? "paper"
     : "live";
 
