@@ -242,7 +242,7 @@ describe("ExecutionQueueSection (real mock API)", () => {
       const { ExecutionModeProvider } = await import("./ExecutionModeContext");
       vi.spyOn(api, "getAutomationStatus").mockResolvedValue({
         advisory_only: false,
-        alpaca_paper: false,
+        paper_trading: false,
         dry_run: false,
         kill_switch: { active: false, reason: null },
         daemon: { alive: true },

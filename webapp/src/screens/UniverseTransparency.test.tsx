@@ -137,7 +137,7 @@ describe("UniverseTransparency screen", () => {
         positions: ["AAPL"],
         watchlists: {},
         symbols: {},
-        provider_source: "alpaca",
+        provider_source: "fmp",
         fundamentals_source: "yahoo",
       },
       default_tickers: ["AAPL", "MSFT", "NVDA"],
@@ -182,7 +182,7 @@ describe("UniverseTransparency screen", () => {
           rating_excluded: true,
         },
       },
-      provider_source: "alpaca",
+      provider_source: "fmp",
       fundamentals_source: "yahoo",
     });
 
@@ -222,7 +222,7 @@ describe("UniverseTransparency screen", () => {
           cost_basis_delta_per_share: null,
           market_value: null,
           is_stale_quote: false,
-          quote_source: "alpaca",
+          quote_source: "fmp",
           has_fundamentals: true,
           forecast_available: true,
           watchlists: ["file:watchlist.txt"],
@@ -240,7 +240,7 @@ describe("UniverseTransparency screen", () => {
           cost_basis_delta_per_share: null,
           market_value: null,
           is_stale_quote: false,
-          quote_source: "alpaca",
+          quote_source: "fmp",
           has_fundamentals: true,
           forecast_available: true,
           watchlists: ["file:watchlist.txt"],
@@ -249,7 +249,7 @@ describe("UniverseTransparency screen", () => {
           rating_excluded: false,
         },
       },
-      provider_source: "alpaca",
+      provider_source: "fmp",
       fundamentals_source: "yahoo",
     });
 
