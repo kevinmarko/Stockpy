@@ -58,7 +58,7 @@ Copy [`.env.example`](.env.example) to `.env` and fill in the values. **Never co
 | `ADVISORY_ONLY` | Optional | `true` (default) — broker execution surface is quarantined. Flip to `false` only after a deliberate readiness review (see "Advisory-only mode") |
 | `RH_USERNAME` | Optional | Robinhood read-only snapshot (held symbols always included) |
 | `RH_PASSWORD` | Optional | Robinhood login is device-approval push — after these two are set, you approve the login by tapping "approve" in the Robinhood app on your phone; no MFA/TOTP secret is configured or needed anywhere in this codebase |
-| `PAPER_TRADING` | Optional | `true` (default) = the pipeline paper-trades on the local FMP paper ledger. `false` = going live, which means the pipeline places **no** orders (real trades go only through the Robinhood queue). Has no effect while `ADVISORY_ONLY=true` |
+| `PAPER_TRADING` | Optional | `true` (default) = paper trading on the local FMP paper ledger (an old `ALPACA_PAPER` in `.env` still works as an alias). With `PAPER_TRADING=false` and `ADVISORY_ONLY=false` the automated pipeline places **no orders** (real orders go only through the Robinhood queue). Has no effect while `ADVISORY_ONLY=true` |
 | `NTFY_TOPIC` | Optional | Phone push alerts via ntfy.sh — set a random string, subscribe in the ntfy app |
 | `WATCHLIST` | Optional | Comma-separated tickers (alternatives: `watchlist.txt` one per line, or Sheet2 column A — see "Ticker universe" below) |
 | `DISCORD_WEBHOOK_URL` | Optional | Discord channel alerts |
@@ -179,7 +179,7 @@ app above.
 The platform's default mode is **advisory** (`ADVISORY_ONLY=true` in `.env`):
 
 - `main_orchestrator._execute_broker_orders()` returns immediately before any broker
-  import — no orders are submitted.
+  import — no orders are submitted regardless of `PAPER_TRADING`.
 - The web app shows an "Advisory Only Mode (Live Execution Disabled)" status banner.
 - `scripts/preflight_check.py` auto-skips broker-readiness checks
   (`paper_trading_mode`, `dry_run_disabled`, `paper_trading_duration`)

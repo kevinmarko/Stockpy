@@ -130,8 +130,8 @@ reads a gated execution queue the pipeline writes.
   `AsyncDataFetchStep` → `RunPipelineStep` (inner `MacroStep` → `TrendVolatilityStep` →
   `ProcessingStep` → `ForecastingStep` → `StrategyEvalStep`) → `AdvisoryOverlayStep` (runs
   `engine/advisory.py::evaluate()` per symbol and keeps the `Recommendation`s) → `AgenticQueueStep`
-  → `BrokerExecutionStep` (paper/Alpaca orders only; on `fmp_paper` it needs no Alpaca keys, trades
-  only in regular US hours, skips reconciliation, acts only on `main_pipeline` positions, sizes
+  → `BrokerExecutionStep` (paper orders on the FMP paper ledger only, never when going
+  live; trades only in regular US hours, skips reconciliation, acts only on `main_pipeline` positions, sizes
   zero-Kelly buys with `PAPER_PIPELINE_PROBE_WEIGHT`, and closes on `RISK REDUCE`) →
   `StateSnapshotStep`.
 - **`settings.DAEMON_AGENTIC_QUEUE_MODE`** (`off` | `shadow` | `primary`, default `off`, a
@@ -251,7 +251,7 @@ load the file(s) for what you're touching.
 | [`docs/architecture/data-layer.md`](docs/architecture/data-layer.md) | `config.py`, `dto_models.py`, `data_engine.py`, `data/market_data.py`, FMP layer, Robinhood client/portfolio/orders/login, `data/portfolio_sync.py`, `data/historical_store.py`, `data/paper_account_store.py`, `settings.LOCAL_DATA_ROOT` layout |
 | [`docs/architecture/signal-engines.md`](docs/architecture/signal-engines.md) | `processing_engine.py`, `macro_engine.py`, `regime/hmm_regime.py`, `forecasting_engine.py`, `strategy_engine.py`, `sizing/` |
 | [`docs/architecture/simulation-eval-reporting.md`](docs/architecture/simulation-eval-reporting.md) | `simulation_engine.py`, `universe_engine.py`, `research_engine.py`, `evaluation_engine.py`, `transactions_store.py`, `database_setup.py`, `diagnostics_and_visuals.py`, `reporting/` |
-| [`docs/architecture/execution.md`](docs/architecture/execution.md) | `execution/cost_model.py`, `broker_base.py`, `alpaca_broker.py`, `fmp_paper_broker.py`, `kill_switch.py`, `risk_gate.py`, `order_manager.py`, `queue_builder.py`, `compose.py` |
+| [`docs/architecture/execution.md`](docs/architecture/execution.md) | `execution/cost_model.py`, `broker_base.py`, `fmp_paper_broker.py`, `broker_selection.py`, `kill_switch.py`, `risk_gate.py`, `order_manager.py`, `queue_builder.py`, `compose.py` |
 | [`docs/architecture/execution-boundary.md`](docs/architecture/execution-boundary.md) | The explore/execute universe boundary |
 | [`docs/architecture/observability-and-apis.md`](docs/architecture/observability-and-apis.md) | `observability/*`, `api/state_api.py`, `api/control_api.py`, `api/pilots_api.py`, `investyo_mcp_server.py`, `mcp_remote_adapter.py`, `pilots/retrospective_*` |
 | [`docs/architecture/webapp-and-gui.md`](docs/architecture/webapp-and-gui.md) | `webapp/`, `api/data_api.py`, `api/metrics_api.py`, `shared/daemon_client.py`, `desktop/` (daemon runtime), `scripts/*` |
@@ -293,7 +293,7 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
 - All data crossing into calculation code goes through the DTOs in `dto_models.py`, not raw dicts.
 - Pipeline data fetching goes through `IDataProvider` implementations in `data_engine.py`; other
   quote/bar/fundamentals fetches go through `data/market_data.py`'s `CompositeProvider`
-  (`get_provider()`), which is FMP-primary with Alpaca/yfinance fallback. Never call `yfinance` or a
+  (`get_provider()`), which is FMP-primary with yfinance fallback. Never call `yfinance` or a
   vendor SDK directly from feature code.
 - Technical/fundamental math is vectorized — no per-row Python loops or `iterrows` in core engines
   (`tests/test_no_iterrows_in_core_engines.py`, which also lists signal modules still using the
@@ -305,8 +305,8 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   adjusted convention; FMP's `light`/`full` variants are split-only and silently corrupt every return
   series. `scripts/verify_fmp_bars.py` must PASS before it changes. See `docs/FMP_INTEGRATION.md`.
 - **Data-source policy for new features:** a new capability needing live data this codebase doesn't
-  already have may depend only on **FMP or Yahoo (yfinance)**. Alpaca keeps its existing
-  role but is not a basis for new features. If neither source has the data, disclose the gap
+  already have may depend only on **FMP or Yahoo (yfinance)**. Alpaca and Finnhub were
+  removed (2026-09-30 / 2026-09). If neither source has the data, disclose the gap
   rather than build around a third provider.
 
 ### Settings, credentials and storage
@@ -318,7 +318,7 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
 - **Every external call has a timeout.** `subprocess.run/call/check_call/check_output` and
   `requests.*` calls need `timeout=` (`tests/test_no_missing_call_timeouts.py`, an AST guard).
   Libraries with no timeout parameter get one another way: FRED via
-  `data_engine.py::_bounded_fred_timeout`, Alpaca via `data/alpaca_http.py::mount_timeout_adapter`.
+  `data_engine.py::_bounded_fred_timeout`.
   Pipeline steps are bounded by `PIPELINE_STEP_TIMEOUT_SECONDS`, data sub-fetches by
   `DATA_FETCH_TASK_TIMEOUT_SECONDS`, LLM chat clients by `AI_CHAT_TIMEOUT_SECONDS`. See
   `docs/known_issues/data_pipeline_fred_unbounded_timeout_stall.md`.
@@ -389,8 +389,11 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
 
 ### Execution, brokers and Robinhood
 - All order submission goes through `execution/order_manager.py::OrderManager`, typed against
-  `BrokerBase` — never a concrete broker directly. `BROKER_BACKEND` selects `fmp_paper` (default,
-  `execution/fmp_paper_broker.py` filling against real FMP quotes + `TieredCostModel`) or `alpaca`.
+  `BrokerBase` — never a concrete broker directly. `BROKER_BACKEND` is `fmp_paper` only
+  (`execution/fmp_paper_broker.py` filling against real FMP quotes + `TieredCostModel`). When going
+  live (`PAPER_TRADING=false` and `ADVISORY_ONLY=false`) `execution/broker_selection.py::resolve_broker_backend()`
+  returns None and the automated pipeline places **no orders** (CRITICAL log + alert); real money moves
+  only through the Robinhood queue below. `ALPACA_PAPER` in an old `.env` still works as an alias of `PAPER_TRADING`.
 - Every intent gets a deterministic `client_order_id` from `make_client_order_id(...)`; never build or
   reuse IDs by hand. `intent.dry_run` is enforced in `OrderManager` (the authoritative check).
 - Broker execution is best-effort: errors are logged and never crash the analysis pipeline.
@@ -453,4 +456,6 @@ Don't build on these or cite them as live. `legacy/README.md` lists every moved 
 - **Follow-a-Pilot** (step 4c): `legacy/pilots/{mirror,follows_store,portfolio_attribution}.py`. The
   Pilots catalog/marketplace stays; `FOLLOW_API_TOKEN` remains the general command token.
 - **Google Sheets publisher** (step 4e): `legacy/reporting/{sheet_publisher,sheets_client}.py`.
+- **Alpaca** (2026-09-30): `legacy/execution/alpaca_broker.py`, `legacy/data/{alpaca_http,market_data_ws,websocket_streamer,alpaca_provider}.py`
+  and their tests in `legacy/tests/`. Market data is FMP then yfinance; `/ws/ticks/{symbol}` pushes REST quotes.
 - **Streamlit desktop app**: deleted (git history only).
