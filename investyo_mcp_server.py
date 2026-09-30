@@ -555,7 +555,7 @@ def get_ticker_context(symbol: str) -> str:
     Fetches recent price history, corporate profile info, and ratios via the
     platform's own market-data layer (data.market_data.CompositeProvider --
     FMP by default per settings.MARKET_DATA_PROVIDER="fmp", with automatic
-    Alpaca/yfinance fallback on failure -- the same provider every other
+    yfinance fallback on failure -- the same provider every other
     read path in this codebase uses, via data.market_data.get_provider()).
     """
     from data.market_data import get_provider
@@ -4283,8 +4283,8 @@ def get_quote(symbol: str) -> str:
     """
     Latest live/delayed quote for one symbol via the platform's own
     market-data layer (data.market_data.CompositeProvider -- FMP by default
-    per settings.MARKET_DATA_PROVIDER="fmp", falling back to Alpaca (if
-    configured) then yfinance on failure; the SAME provider every other read
+    per settings.MARKET_DATA_PROVIDER="fmp", falling back to yfinance
+    on failure; the SAME provider every other read
     path in this codebase uses, via data.market_data.get_provider()). Honest
     about staleness: is_stale is unconditionally True for yfinance quotes by
     design, and is surfaced explicitly rather than hidden behind a plain

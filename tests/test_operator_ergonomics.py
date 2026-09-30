@@ -314,26 +314,6 @@ class TestKeyRotationCheck:
             result = check_key_rotation_recent(max_age_days=90)
         assert result.passed is True  # warning only, never fails
 
-    def test_alpaca_keys_not_checked(self):
-        """The check must not look up any settings attribute for Alpaca key rotation.
-
-        The docstring may mention ALPACA_KEY_ROTATED_DATE in a "we don't check this"
-        note, but the function logic must never access settings.ALPACA_KEY_ROTATED_DATE.
-        """
-        # Run the check with a mock settings that has NO alpaca rotation attribute —
-        # if the function tries to access it, AttributeError would propagate (since we
-        # do NOT set it).  The check should complete without error.
-        from scripts.preflight_check import check_key_rotation_recent
-
-        with mock.patch("scripts.preflight_check.settings") as mock_s:
-            mock_s.FRED_KEY_ROTATED_DATE = None
-            # If this raises AttributeError on ALPACA_KEY_ROTATED_DATE it means
-            # the check is incorrectly reading that attribute.
-            del mock_s.ALPACA_KEY_ROTATED_DATE  # ensure attribute is absent
-            result = check_key_rotation_recent()
-        # Must succeed regardless
-        assert result.passed is True
-
     def test_settings_field_exists(self):
         """settings.FRED_KEY_ROTATED_DATE must be declared in Settings."""
         from settings import Settings

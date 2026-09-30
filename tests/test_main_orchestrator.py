@@ -474,9 +474,9 @@ class TestExecuteBrokerOrders:
         monkeypatch.setattr(mo.settings, "ADVISORY_ONLY", True, raising=False)
 
         broker_ctor = mock.MagicMock(
-            side_effect=AssertionError("AlpacaBroker must NOT be constructed under ADVISORY_ONLY")
+            side_effect=AssertionError("FMPPaperBroker must NOT be constructed under ADVISORY_ONLY")
         )
-        with mock.patch("execution.alpaca_broker.AlpacaBroker", broker_ctor):
+        with mock.patch("execution.fmp_paper_broker.FMPPaperBroker", broker_ctor):
             # Must complete without raising and without touching the broker ctor.
             asyncio.run(
                 mo._execute_broker_orders(pd.DataFrame(), dry_run=True, macro_dto=None)
@@ -487,16 +487,20 @@ class TestExecuteBrokerOrders:
         # ADVISORY_ONLY=False reaches the lazy broker imports. Any failure there is
         # best-effort: logged as ERROR, never raised (analysis value not held hostage).
         monkeypatch.setattr(mo.settings, "ADVISORY_ONLY", False, raising=False)
+        monkeypatch.setattr(mo.settings, "PAPER_TRADING", True, raising=False)
 
         with mock.patch(
-            "execution.alpaca_broker.AlpacaBroker",
+            "engine.advisory_agent.is_us_market_open", return_value=True,
+        ), mock.patch(
+            "execution.fmp_paper_broker.FMPPaperBroker",
             side_effect=RuntimeError("simulated broker connectivity failure"),
-        ):
+        ) as broker_ctor:
             # Should return None cleanly despite the broker construction blowing up.
             result = asyncio.run(
                 mo._execute_broker_orders(pd.DataFrame(), dry_run=False, macro_dto=None)
             )
         assert result is None
+        broker_ctor.assert_called_once()  # the failure really was reached, then contained
 
 
 # ===========================================================================

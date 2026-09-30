@@ -21,7 +21,7 @@ Coverage
 * Every ``check_*`` function produces a ``CheckResult`` with a non-empty
   ``reason`` string for both PASS and FAIL outcomes.
 * Edge cases: missing files, stale heartbeat, expired reports, invalid ISO
-  dates, active kill switch, ``alpaca_paper_mode`` warning-vs-blocking.
+  dates, active kill switch, ``paper_trading_mode`` warning-vs-blocking.
 * ``run_checks(skip=[...])`` marks skipped checks as PASS with "(skipped)"
   reason while still including them in the result list.
 * ``main()`` returns exit code 0 when all checks pass, 1 when any fail.
@@ -63,9 +63,7 @@ def _settings(tmp_path: Path, **overrides) -> MagicMock:
     m = MagicMock()
     m.FRED_API_KEY = overrides.get("FRED_API_KEY", "valid_key_abc123")
     m.fred_key_is_leaked = overrides.get("fred_key_is_leaked", False)
-    m.ALPACA_API_KEY = overrides.get("ALPACA_API_KEY", "pk_test")
-    m.ALPACA_SECRET_KEY = overrides.get("ALPACA_SECRET_KEY", "sk_test")
-    m.ALPACA_PAPER = overrides.get("ALPACA_PAPER", True)
+    m.PAPER_TRADING = overrides.get("PAPER_TRADING", True)
     m.DRY_RUN = overrides.get("DRY_RUN", False)
     m.OUTPUT_DIR = overrides.get("OUTPUT_DIR", tmp_path)
     # LOCAL_DATA_ROOT (PR #718) — default to a private tmp_path subdirectory so
@@ -79,7 +77,6 @@ def _settings(tmp_path: Path, **overrides) -> MagicMock:
     m.MACRO_REGIME_GATE_ENABLED = overrides.get("MACRO_REGIME_GATE_ENABLED", True)
     # Key-rotation dates — default None (unset = warning-level PASS, not blocking).
     m.FRED_KEY_ROTATED_DATE = overrides.get("FRED_KEY_ROTATED_DATE", None)
-    m.ALPACA_KEY_ROTATED_DATE = overrides.get("ALPACA_KEY_ROTATED_DATE", None)
     # Robinhood execution bridge (Tier 8) — default off/no cap/MFA configured so
     # the Robinhood checks are clean-PASS unless a test overrides them.
     m.ROBINHOOD_EXECUTION_MODE = overrides.get("ROBINHOOD_EXECUTION_MODE", "off")
@@ -148,35 +145,11 @@ class TestFredKeyConfigured:
 
 
 # ---------------------------------------------------------------------------
-# alpaca_configured
+# paper_trading_mode
 # ---------------------------------------------------------------------------
 
-class TestAlpacaConfigured:
-    """Both ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for live operation."""
-
-    def test_passes_both_set(self, tmp_path):
-        """Both keys present → PASS."""
-        from scripts.preflight_check import check_alpaca_configured
-        s = _settings(tmp_path)
-        with patch("scripts.preflight_check.settings", s):
-            r = check_alpaca_configured()
-        assert r.passed
-
-    def test_fails_missing_secret(self, tmp_path):
-        """Missing secret key → FAIL; the key alone is not sufficient."""
-        from scripts.preflight_check import check_alpaca_configured
-        s = _settings(tmp_path, ALPACA_SECRET_KEY=None)
-        with patch("scripts.preflight_check.settings", s):
-            r = check_alpaca_configured()
-        assert not r.passed
-
-
-# ---------------------------------------------------------------------------
-# alpaca_paper_mode
-# ---------------------------------------------------------------------------
-
-class TestAlpacaPaperMode:
-    """ALPACA_PAPER=False is a warning, not a hard failure.
+class TestPaperTradingMode:
+    """PAPER_TRADING=False is a warning, not a hard failure.
 
     Going live is a deliberate operator decision.  The check surfaces the
     configuration prominently (warning icon in the table) without blocking
@@ -184,25 +157,25 @@ class TestAlpacaPaperMode:
     """
 
     def test_passes_and_warns_when_live(self, tmp_path):
-        """ALPACA_PAPER=False → passed=True AND warning=True.
+        """PAPER_TRADING=False → passed=True AND warning=True.
 
         The warning flag ensures the output table shows ⚠️ rather than ✅
         so the operator cannot miss it.  The exit code is still 0.
         """
-        from scripts.preflight_check import check_alpaca_paper_mode
-        s = _settings(tmp_path, ALPACA_PAPER=False)
+        from scripts.preflight_check import check_paper_trading_mode
+        s = _settings(tmp_path, PAPER_TRADING=False)
         with patch("scripts.preflight_check.settings", s):
-            r = check_alpaca_paper_mode()
+            r = check_paper_trading_mode()
         assert r.passed
         assert r.warning
         assert "LIVE TRADING" in r.reason.upper() or "live" in r.reason.lower()
 
     def test_passes_without_warning_in_paper(self, tmp_path):
-        """ALPACA_PAPER=True → passed=True AND warning=False (clean pass)."""
-        from scripts.preflight_check import check_alpaca_paper_mode
-        s = _settings(tmp_path, ALPACA_PAPER=True)
+        """PAPER_TRADING=True → passed=True AND warning=False (clean pass)."""
+        from scripts.preflight_check import check_paper_trading_mode
+        s = _settings(tmp_path, PAPER_TRADING=True)
         with patch("scripts.preflight_check.settings", s):
-            r = check_alpaca_paper_mode()
+            r = check_paper_trading_mode()
         assert r.passed
         assert not r.warning
 
@@ -1035,7 +1008,7 @@ class TestEnvNoDuplicateKeys:
         from scripts.preflight_check import check_env_no_duplicate_keys
         self._write_env(
             tmp_path,
-            "# comment\nFRED_API_KEY=abc\nALPACA_PAPER=true\n\nDRY_RUN=false\n",
+            "# comment\nFRED_API_KEY=abc\nPAPER_TRADING=true\n\nDRY_RUN=false\n",
         )
         with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
             r = check_env_no_duplicate_keys()
@@ -1069,11 +1042,11 @@ class TestEnvNoDuplicateKeys:
 # ---------------------------------------------------------------------------
 
 class TestKeyRotationChecks:
-    """Tests for check_key_rotation_recent and check_alpaca_key_rotation_recent.
+    """Tests for check_key_rotation_recent (FRED).
 
-    Both are warning-only (never blocking). Both pass with a warning when the
-    date is unset or invalid. Both fail (well, warn) when the date is stale.
-    The Alpaca check is also auto-skipped under ADVISORY_ONLY=True.
+    Warning-only (never blocking). Passes with a warning when the date is
+    unset, invalid or stale. The Alpaca twin (check_alpaca_key_rotation_recent)
+    was removed with Alpaca on 2026-09-30.
     """
 
     def test_fred_rotation_unset_warns(self, tmp_path):
@@ -1109,60 +1082,14 @@ class TestKeyRotationChecks:
         assert r.warning
         assert "100" in r.reason
 
-    def test_alpaca_rotation_unset_warns(self, tmp_path):
-        """Unset ALPACA_KEY_ROTATED_DATE → warning-level PASS."""
-        from scripts.preflight_check import check_alpaca_key_rotation_recent
-        s = _settings(tmp_path, ALPACA_KEY_ROTATED_DATE=None)
-        with patch("scripts.preflight_check.settings", s):
-            r = check_alpaca_key_rotation_recent()
-        assert r.passed
-        assert r.warning
-        assert r.name == "alpaca_key_rotation_recent"
-        assert r.reason
-
-    def test_alpaca_rotation_stale_warns(self, tmp_path):
-        """Stale Alpaca key → warning-level PASS (never blocking)."""
-        from scripts.preflight_check import check_alpaca_key_rotation_recent
-        stale = (date.today() - timedelta(days=120)).isoformat()
-        s = _settings(tmp_path, ALPACA_KEY_ROTATED_DATE=stale)
-        with patch("scripts.preflight_check.settings", s):
-            r = check_alpaca_key_rotation_recent(max_age_days=90)
-        assert r.passed  # warning-only — NEVER False
-        assert r.warning
-        assert "120" in r.reason
-
-    def test_alpaca_rotation_fresh_passes(self, tmp_path):
-        """Alpaca key rotated 30 days ago → clean PASS (no warning)."""
-        from scripts.preflight_check import check_alpaca_key_rotation_recent
-        fresh = (date.today() - timedelta(days=30)).isoformat()
-        s = _settings(tmp_path, ALPACA_KEY_ROTATED_DATE=fresh)
-        with patch("scripts.preflight_check.settings", s):
-            r = check_alpaca_key_rotation_recent(max_age_days=90)
-        assert r.passed
-        assert not r.warning
-        assert "30" in r.reason
-
-    def test_alpaca_rotation_invalid_iso_warns(self, tmp_path):
-        """Invalid ALPACA_KEY_ROTATED_DATE format → warning-level PASS (never blocking)."""
-        from scripts.preflight_check import check_alpaca_key_rotation_recent
-        s = _settings(tmp_path, ALPACA_KEY_ROTATED_DATE="not-a-date")
-        with patch("scripts.preflight_check.settings", s):
-            r = check_alpaca_key_rotation_recent()
-        assert r.passed  # warning-only — NEVER False
-        assert r.warning
-        assert "invalid" in r.reason.lower() or "format" in r.reason.lower()
-
-    def test_alpaca_rotation_auto_skipped_advisory_mode(self, tmp_path):
-        """alpaca_key_rotation_recent is auto-skipped under ADVISORY_ONLY=True."""
-        from scripts.preflight_check import run_checks
-        s = _settings(tmp_path, ADVISORY_ONLY=True)
-        with patch("scripts.preflight_check.settings", s):
-            with patch("scripts.preflight_check._REPO_ROOT", tmp_path):
-                results = run_checks()
-        result = next(r for r in results if r.name == "alpaca_key_rotation_recent")
-        assert result.passed
-        assert "skipped" in result.reason.lower()
-        assert "ADVISORY_ONLY" in result.reason
+    def test_alpaca_rotation_check_is_gone(self):
+        """Alpaca was removed 2026-09-30: no Alpaca rotation check remains in
+        the module, the registry or the advisory auto-skip map."""
+        import scripts.preflight_check as pf
+        assert not hasattr(pf, "check_alpaca_key_rotation_recent")
+        names = {fn.__name__ for fn in pf.ALL_CHECKS}
+        assert "check_alpaca_key_rotation_recent" not in names
+        assert "alpaca_key_rotation_recent" not in pf._ADVISORY_AUTO_SKIP
 
 
 # ---------------------------------------------------------------------------
@@ -1238,10 +1165,9 @@ class TestAdvisoryModeAutoSkip:
         from scripts.preflight_check import _ADVISORY_AUTO_SKIP
         reasons = list(_ADVISORY_AUTO_SKIP.values())
         assert len(reasons) == len(set(reasons)), "Every auto-skip check must have a unique reason"
-        # All eight auto-skip entries must be present
+        # All six auto-skip entries must be present
         for name in (
-            "alpaca_configured", "alpaca_paper_mode", "dry_run_disabled",
-            "paper_trading_duration", "alpaca_key_rotation_recent",
+            "paper_trading_mode", "dry_run_disabled", "paper_trading_duration",
             "heartbeat_fresh", "validation_reports", "no_unexpected_risk_blocks",
         ):
             assert name in _ADVISORY_AUTO_SKIP, f"{name} missing from _ADVISORY_AUTO_SKIP"
@@ -1268,7 +1194,7 @@ class TestAdvisoryModeAutoSkip:
 class TestRobinhoodExecutionMode:
     """check_robinhood_execution_mode — mode validity + live-mode notional cap.
 
-    Orthogonal to the Alpaca ADVISORY_ONLY quarantine: these checks are never
+    Orthogonal to the pipeline's ADVISORY_ONLY quarantine: these checks are never
     auto-skipped.
     """
 
@@ -1774,22 +1700,19 @@ class TestStateSnapshotFresh:
 # ---------------------------------------------------------------------------
 
 class TestAdvisoryAutoSkip:
-    """Verify that all 8 expected checks are in _ADVISORY_AUTO_SKIP.
+    """Verify that all 6 expected checks are in _ADVISORY_AUTO_SKIP.
 
-    Four broker-dependent checks were always there (alpaca_configured,
-    alpaca_paper_mode, dry_run_disabled, paper_trading_duration).  Stage 2
-    added three advisory false-positive checks to eliminate spurious failures
-    on a correctly-running advisory deployment.  Stage 3 added a fifth
-    broker-dependent check (alpaca_key_rotation_recent), bringing the total
-    to 8 (5 broker + 3 false-positives).
+    Three broker-dependent checks (paper_trading_mode, dry_run_disabled,
+    paper_trading_duration) plus three advisory false-positive checks added in
+    Stage 2. The Alpaca credential and key-rotation checks were removed with
+    Alpaca on 2026-09-30.
     """
 
     def test_original_broker_checks_present(self):
-        """The original four broker-dependent checks are still auto-skipped."""
+        """The broker-dependent checks are still auto-skipped."""
         from scripts.preflight_check import _ADVISORY_AUTO_SKIP
         broker_checks = {
-            "alpaca_configured",
-            "alpaca_paper_mode",
+            "paper_trading_mode",
             "dry_run_disabled",
             "paper_trading_duration",
         }
@@ -1810,10 +1733,10 @@ class TestAdvisoryAutoSkip:
         from scripts.preflight_check import _ADVISORY_AUTO_SKIP
         assert "no_unexpected_risk_blocks" in _ADVISORY_AUTO_SKIP
 
-    def test_auto_skip_has_eight_entries(self):
-        """Exactly 8 checks are in _ADVISORY_AUTO_SKIP (5 broker + 3 false-positives)."""
+    def test_auto_skip_has_six_entries(self):
+        """Exactly 6 checks are in _ADVISORY_AUTO_SKIP (3 broker + 3 false-positives)."""
         from scripts.preflight_check import _ADVISORY_AUTO_SKIP
-        assert len(_ADVISORY_AUTO_SKIP) == 8
+        assert len(_ADVISORY_AUTO_SKIP) == 6
 
     def test_state_snapshot_not_auto_skipped(self):
         """state_snapshot_fresh must remain active in advisory mode (it IS the liveness check)."""
@@ -2051,44 +1974,50 @@ class TestPromptRegistrySigningKeyConfigured:
         assert check_prompt_registry_signing_key_configured in ALL_CHECKS
 
 
-def test_check_broker_backend_matches_live_intent():
-    from scripts.preflight_check import check_broker_backend_matches_live_intent
-    from settings import settings
+# ---------------------------------------------------------------------------
+# live_order_routing (replaces broker_backend_matches_live_intent, 2026-09-30)
+# ---------------------------------------------------------------------------
 
-    original_broker = getattr(settings, "BROKER_BACKEND", "alpaca")
-    original_paper = getattr(settings, "ALPACA_PAPER", True)
-    original_advisory = getattr(settings, "ADVISORY_ONLY", True)
+class TestLiveOrderRouting:
+    """Going live is not blocked -- it means the automated pipeline places NO
+    orders (no live pipeline broker since Alpaca was removed) -- but it must
+    be loud: a warning-level PASS naming the Robinhood queue."""
 
-    try:
-        # Genuinely going live (ADVISORY_ONLY=False, ALPACA_PAPER=False) with
-        # BROKER_BACKEND='fmp_paper' -- must fail, per the shared
-        # execution.broker_selection.is_going_live() predicate.
-        settings.BROKER_BACKEND = "fmp_paper"
-        settings.ADVISORY_ONLY = False
-        settings.ALPACA_PAPER = False
-        res = check_broker_backend_matches_live_intent()
-        assert not res.passed
+    def test_going_live_passes_with_warning(self, tmp_path):
+        from scripts.preflight_check import check_live_order_routing
+        s = _settings(tmp_path, ADVISORY_ONLY=False, PAPER_TRADING=False)
+        with patch("settings.settings", s):
+            r = check_live_order_routing()
+        assert r.name == "live_order_routing"
+        assert r.passed
+        assert r.warning
+        assert "NO orders" in r.reason
+        assert "Robinhood" in r.reason
 
-        # ADVISORY_ONLY=True means the run never submits broker orders at
-        # all regardless of ALPACA_PAPER -- not "going live" -- so this must
-        # pass even with ALPACA_PAPER=False.
-        settings.ADVISORY_ONLY = True
-        res = check_broker_backend_matches_live_intent()
-        assert res.passed
+    def test_paper_passes_clean(self, tmp_path):
+        from scripts.preflight_check import check_live_order_routing
+        s = _settings(tmp_path, ADVISORY_ONLY=False, PAPER_TRADING=True)
+        with patch("settings.settings", s), patch("scripts.preflight_check.settings", s):
+            r = check_live_order_routing()
+        assert r.passed
+        assert not r.warning
+        assert "paper ledger" in r.reason
 
-        settings.ADVISORY_ONLY = False
-        settings.ALPACA_PAPER = True
-        res = check_broker_backend_matches_live_intent()
-        assert res.passed
+    def test_advisory_passes_clean_even_with_paper_off(self, tmp_path):
+        """ADVISORY_ONLY=True is never 'going live', whatever PAPER_TRADING says."""
+        from scripts.preflight_check import check_live_order_routing
+        s = _settings(tmp_path, ADVISORY_ONLY=True, PAPER_TRADING=False)
+        with patch("settings.settings", s), patch("scripts.preflight_check.settings", s):
+            r = check_live_order_routing()
+        assert r.passed
+        assert not r.warning
 
-        settings.BROKER_BACKEND = "alpaca"
-        settings.ALPACA_PAPER = False
-        res = check_broker_backend_matches_live_intent()
-        assert res.passed
-    finally:
-        settings.BROKER_BACKEND = original_broker
-        settings.ALPACA_PAPER = original_paper
-        settings.ADVISORY_ONLY = original_advisory
+    def test_registered_and_never_auto_skipped(self):
+        import scripts.preflight_check as pf
+        assert pf.check_live_order_routing in pf.ALL_CHECKS
+        assert "live_order_routing" not in pf._ADVISORY_AUTO_SKIP
+        assert not hasattr(pf, "check_broker_backend_matches_live_intent")
+        assert not hasattr(pf, "check_alpaca_configured")
 
 
 # ---------------------------------------------------------------------------

@@ -84,7 +84,7 @@ def test_get_current_price_returns_zero_with_no_fallback(mock_get_provider):
 class TestGetLatestPrices:
     """Tests for get_latest_prices -- the batched multi-symbol quote fetch.
     Routes through ``CompositeProvider.get_quotes_batch`` (one batch request
-    per cache miss, the in-process quote TTL cache, and the FMP -> Alpaca ->
+    per cache miss, the in-process quote TTL cache, and the FMP ->
     yfinance fallback chain) rather than calling ``data.fmp_client.
     batch_quote`` uncached -- the old path cost one live FMP request per tick
     per client on the 1 Hz ``/ws/risk/portfolio`` stream.

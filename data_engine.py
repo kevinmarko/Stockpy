@@ -61,7 +61,7 @@ def _bounded_fred_timeout(seconds: float):
 class IDataProvider(ABC):
     """
     Abstract contract dictating data requirements for the quantitative engine.
-    Allows easy swapping of data vendors (e.g., Yahoo, Alpaca, Bloomberg, Mock).
+    Allows easy swapping of data vendors (e.g., Yahoo, FMP, Bloomberg, Mock).
     """
     
     @abstractmethod

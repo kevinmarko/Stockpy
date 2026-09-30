@@ -158,7 +158,7 @@ class Settings(BaseSettings):
     # =========================================================================
     # FIELD SECTIONS (in declaration order below)
     # -------------------------------------------------------------------------
-    #   1.  Secrets / credentials .............. FRED, Alpaca, State API token
+    #   1.  Secrets / credentials .............. FRED, FMP, State API token
     #   2.  Market-data layer .................. provider, cache TTLs
     #   3.  Robinhood — legacy SMS login ....... ROBINHOOD_USERNAME/PASSWORD
     #   4.  Robinhood — portfolio login ........ RH_USERNAME/PASSWORD, device-approval login timeouts
@@ -166,7 +166,7 @@ class Settings(BaseSettings):
     #   6.  Pre-trade risk gate ................ correlation, loss limit, HMM
     #   7.  Kill switch ........................ FLATTEN_ON_KILL
     #   8.  Observability / alerts ............. Discord/Slack/email/SMTP, dash
-    #   9.  Key rotation / preflight dates ..... paper-start, FRED/Alpaca rotated
+    #   9.  Key rotation / preflight dates ..... paper-start, FRED rotated
     #   10. Financial constants ................ risk-free, premium, heat
     #   11. Position sizing .................... Kelly, vol-target, leverage caps
     #   12. Runtime / IO ....................... OUTPUT_DIR, tickers, log, concurrency, CORS origins
@@ -280,7 +280,7 @@ class Settings(BaseSettings):
             "would never place a paper order -- and so never collect the closed trades "
             "Kelly needs. When > 0, a BUY/STRONG BUY whose Kelly Target is 0 buys this "
             "fraction of paper equity instead (e.g. 0.01 = 1%). A positive Kelly Target "
-            "always wins. Never applies to the Alpaca path or the Robinhood queue. "
+            "always wins. Never applies to the Robinhood queue. "
             "0 (default) = today's behavior."
         ),
     )
@@ -313,7 +313,8 @@ class Settings(BaseSettings):
         description=(
             "Master switch for broker_live_execution_mcp.py's execute_live_trade/"
             "confirm_live_trade tool pair — the standalone MCP server that places "
-            "real Alpaca/FMP orders. Defaults False: this changes what the "
+            "orders through the configured broker (the FMP paper ledger only, "
+            "since Alpaca was removed 2026-09-30). Defaults False: this changes what the "
             "platform can do with real capital, so it does not follow the "
             "2026-08-03 'new admin capabilities default True' convention (which "
             "explicitly excludes anything changing trading behavior) — it "
@@ -499,14 +500,14 @@ class Settings(BaseSettings):
     )
 
     # --- Market-data layer (data/market_data.py) ---
-    # Explicit provider override.  When absent the platform auto-selects:
-    # Alpaca (if keys present) → yfinance (zero config, ~15-min delayed).
+    # Explicit provider override.  When absent the platform auto-selects
+    # yfinance (zero config, ~15-min delayed).
     # NOTE: FMP is deliberately NOT part of that auto-select ladder — see the
     # description below and section 25.
     MARKET_DATA_PROVIDER: Optional[str] = Field(
         default="fmp",
         description=(
-            "Force a specific market-data backend: 'fmp', 'alpaca' or "
+            "Force a specific market-data backend: 'fmp' or "
             "'yfinance'. Defaults to 'fmp' by explicit operator decision. "
             "When set to 'fmp', quotes and bars are routed to FMP if "
             "FMP_QUOTES_ENABLED / FMP_BARS_ENABLED are True (the two-gate convention). "
@@ -653,41 +654,6 @@ class Settings(BaseSettings):
             "daily-only behavior exactly -- matches the FORECAST_USE_GARCH_SIGMA "
             "opt-in convention."
         ),
-    )
-    MARKET_DATA_WS_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Opt-in: subscribe to Alpaca's real-time StockDataStream WebSocket for "
-            "quotes, SUPPLEMENTING (never replacing) the REST-polling "
-            "CompositeProvider -- see data/market_data_ws.py. Only takes effect "
-            "when the active quote provider is AlpacaProvider; otherwise a no-op "
-            "with an INFO log. False (default) reproduces the exact current "
-            "REST-only behavior -- matches the FORECAST_USE_GARCH_SIGMA opt-in "
-            "convention. Any WS failure (connect, subscribe, disconnect, missing "
-            "credentials) degrades to the existing REST path -- never crashes "
-            "the pipeline."
-        ),
-    )
-    MARKET_DATA_WS_STALE_SECONDS: int = Field(
-        default=10,
-        description=(
-            "Max age (seconds) of a WebSocket-delivered quote before it is "
-            "treated as stale and the REST path is used instead."
-        ),
-    )
-    MARKET_DATA_WS_SYMBOLS: Optional[str] = Field(
-        default=None,
-        description=(
-            "Comma-separated symbol override for the WS subscription. None "
-            "(default) falls back to the WATCHLIST env var, then to no "
-            "subscription (WS ingestion becomes a no-op, logged)."
-        ),
-    )
-    MARKET_DATA_WS_RECONNECT_BASE_SECONDS: float = Field(
-        default=1.0, description="Initial WS reconnect backoff (seconds)."
-    )
-    MARKET_DATA_WS_RECONNECT_MAX_SECONDS: float = Field(
-        default=30.0, description="Max WS reconnect backoff (seconds)."
     )
     # Cross-cycle data-freshness gate (persisted marker, see main_orchestrator.
     # _data_is_fresh / _mark_data_refreshed). When an INTERVAL-triggered daemon
@@ -1037,8 +1003,8 @@ class Settings(BaseSettings):
         default=True,
         description=(
             "When True (default), an FMP failure falls through to the existing "
-            "provider chain for that kind (quotes/bars: FMP -> Alpaca if keyed "
-            "-> yfinance; fundamentals: FMP -> Yahoo statement-derived -> raw "
+            "provider chain for that kind (quotes/bars: FMP -> yfinance; "
+            "fundamentals: FMP -> Yahoo statement-derived -> raw "
             "yfinance .info), logging a WARNING naming the provider, symbol "
             "and exception so a silent fallback can never masquerade as "
             "success. When False the chain is [primary] only and a failure "
@@ -1394,7 +1360,7 @@ class Settings(BaseSettings):
     # quarantined: main_orchestrator._execute_broker_orders() returns
     # immediately with an INFO log, the GUI Strategy Matrix mode toggle is
     # disabled, and preflight_check.py drops the broker-readiness checks
-    # (alpaca_configured / alpaca_paper_mode / dry_run_disabled) in favour of
+    # (paper_trading_mode / dry_run_disabled / ...) in favour of
     # a single advisory_only_active check.  This is a HARDER guarantee than
     # DRY_RUN: DRY_RUN is enforced inside OrderManager (which can be bypassed
     # by a future caller); ADVISORY_ONLY is enforced at the orchestrator-level
@@ -1403,7 +1369,9 @@ class Settings(BaseSettings):
     #
     # Set to False ONLY if you have explicitly re-enabled the broker stack
     # and intend to submit orders.  Both flags must agree (ADVISORY_ONLY=false
-    # AND DRY_RUN=false AND ALPACA_PAPER=false) to reach a live submission.
+    # AND DRY_RUN=false AND PAPER_TRADING=false) to go live -- which, since
+    # Alpaca was removed (2026-09-30), means the automated pipeline places NO
+    # orders; real trades go only through the Robinhood execution queue.
     ADVISORY_ONLY: bool = Field(
         default=True,
         description=(
@@ -1415,7 +1383,7 @@ class Settings(BaseSettings):
         ),
     )
     # --- Robinhood execution bridge (Tier 8, 2026-06) ---
-    # Independent of ADVISORY_ONLY (which gates the Alpaca surface).  The
+    # Independent of ADVISORY_ONLY (which gates the pipeline's broker surface).  The
     # Robinhood Trading MCP is consumed by a Claude Code agent, NOT the headless
     # pipeline, so this flag only governs whether `execution/queue_builder.py`
     # emits a gated, dry-run `output/execution_queue.json` for that agent.
@@ -1715,16 +1683,6 @@ class Settings(BaseSettings):
             "Unset = key-age check skipped (warning-level PASS, not blocking)."
         ),
     )
-    ALPACA_KEY_ROTATED_DATE: Optional[str] = Field(
-        default=None,
-        description=(
-            "ISO date (YYYY-MM-DD) when ALPACA_API_KEY was last rotated. "
-            "Auto-skipped by preflight when ADVISORY_ONLY=True (paper keys have "
-            "no blast-radius risk when the broker surface is quarantined). "
-            "Unset = key-age check skipped (warning-level PASS, not blocking)."
-        ),
-    )
-
     # --- Financial constants ---
     RISK_FREE_RATE: float = Field(
         default=0.045,
@@ -3659,7 +3617,7 @@ class Settings(BaseSettings):
     # WARNING: disabling this gate bypasses recession/credit-event protection.
     # The GUI Observability tab shows a persistent warning banner when it is off.
     # Always re-enable before deploying to live trading (preflight_check.py
-    # raises if MACRO_REGIME_GATE_ENABLED=false AND ALPACA_PAPER=false).
+    # raises if MACRO_REGIME_GATE_ENABLED=false AND PAPER_TRADING=false).
     MACRO_REGIME_GATE_ENABLED: bool = Field(
         default=True,
         description=(

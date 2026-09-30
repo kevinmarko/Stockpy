@@ -10,7 +10,7 @@ Why this module exists, and why it is NOT on ``CompositeProvider``
 can implement all three and ``CompositeProvider`` can pick a primary/fallback
 per symbol. A symbol search or sector/industry screener returns an
 ARBITRARY LIST of symbols matching a filter — it has no per-symbol fallback
-chain (there is no Alpaca/yfinance screener equivalent to fall back to), so
+chain (there is no yfinance screener equivalent to fall back to), so
 it doesn't fit that ABC. This mirrors the existing precedent: ``peers()``
 (also list-returning, also FMP-only, also no fallback chain) lives as a
 standalone function in ``data/fmp_feeds_market.py``, not on

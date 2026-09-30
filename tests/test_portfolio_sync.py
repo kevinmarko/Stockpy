@@ -82,13 +82,13 @@ class _FakeQuote:
     symbol: str
     price: float
     is_stale: bool
-    source: str = "alpaca"
+    source: str = "fmp"
 
 
 class _FakeProvider:
     """Mimics ``data.market_data.CompositeProvider`` for the sync probe."""
 
-    quote_source = "alpaca"
+    quote_source = "fmp"
 
     def __init__(
         self,

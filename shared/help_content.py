@@ -731,8 +731,8 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     "paper trading": _g(
         "Paper Trading",
         "Running the pipeline with real market data and real logic, but against a "
-        "simulated broker account (no real money).  Alpaca provides a free paper "
-        "account.  The preflight check requires 90 days of paper trading before "
+        "simulated broker account (no real money): the local FMP paper ledger, "
+        "which fills at live FMP quotes.  The preflight check requires 90 days of paper trading before "
         "going live.  Only relevant when `ADVISORY_ONLY=false`.",
         "#11-paper-trading-workflow",
     ),
@@ -1039,8 +1039,8 @@ TAB_HELP: Dict[str, TabHelp] = {
     "market_data": _t(
         "market_data",
         "🛰️ Market Data",
-        "Shows which data provider is active (Alpaca real-time or yfinance ~15-min "
-        "delayed), quote freshness per symbol, and a sliding-window connectivity "
+        "Shows which data provider is active (FMP or the yfinance ~15-min "
+        "delayed fallback), quote freshness per symbol, and a sliding-window connectivity "
         "health badge.  Lets you fetch a batch of quotes with per-symbol error "
         "classification (Rate Limited, Not Found, Timeout, etc.) and a validation "
         "Status column to catch malformed quotes before they reach the quant pipeline.",
@@ -1187,7 +1187,7 @@ TAB_HELP: Dict[str, TabHelp] = {
 
 SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     "strategy_matrix.mode_consistency": (
-        "ALPACA_PAPER and DRY_RUN are written together so the mode is "
+        "PAPER_TRADING and DRY_RUN are written together so the mode is "
         "fully consistent — no half-flips."
     ),
     "strategy_matrix.version_registry": (
@@ -1241,7 +1241,7 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     ),
     "dependency_map": (
         "Shows which GUI panels and reports are affected when a data source "
-        "(Alpaca, FMP, FRED, Robinhood) degrades or becomes unavailable."
+        "(FMP, yfinance, FRED, Robinhood) degrades or becomes unavailable."
     ),
     "strategy_version_registry": (
         "SHA-256 prefix and file mtime for each registered signal module.  "
@@ -1261,7 +1261,7 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     "latency_heatmap": (
         "Per-symbol quote latency (time from quote timestamp to ingestion).  "
         "Populated by the Market Data tab's 'Fetch quotes' batch.  "
-        "High latency on a real-time provider (Alpaca) suggests network issues."
+        "High latency on a real-time provider (FMP) suggests network issues."
     ),
     "preflight_panel": (
         "Runs scripts/preflight_check.py and shows pass/fail per check.  "

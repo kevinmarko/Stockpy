@@ -1,7 +1,27 @@
 """Archived 2026-09-30: AlpacaProvider, cut from data/market_data.py when Alpaca was
-removed (operator decision). Not importable as-is: it relied on market_data.py
-module globals (MarketDataProvider, Quote, MarketDataError, settings,
-_WS_STREAMER). Restore by pasting back into data/market_data.py."""
+removed (operator decision). It relied on market_data.py module globals
+(MarketDataProvider, Quote, MarketDataError, settings, _WS_STREAMER); the imports
+below name them so the file lints clean, but it still needs ``alpaca-py`` (no
+longer in requirements.txt) and the archived WebSocket streamer to do anything.
+Restore by pasting the class back into data/market_data.py."""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict
+
+import pandas as pd
+
+from data.market_data import MarketDataError, MarketDataProvider, Quote, _isnan
+from settings import settings
+
+logger = logging.getLogger(__name__)
+
+# The Alpaca WebSocket quote cache (legacy/data/websocket_streamer.py) is
+# archived too; with it absent the provider always takes the REST path.
+_WS_AVAILABLE = False
+_WS_STREAMER = None
 
 # ---------------------------------------------------------------------------
 # Alpaca provider

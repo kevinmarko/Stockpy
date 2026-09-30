@@ -1244,8 +1244,8 @@ class TestLatencyHeatmapSummary:
 
         market_data_latency.get_ring().clear()
         now = datetime.now(timezone.utc)
-        market_data_latency.record_quote_latency("AAPL", "alpaca", now - timedelta(seconds=5), False)
-        market_data_latency.record_quote_latency("MSFT", "alpaca", now - timedelta(seconds=1), True)
+        market_data_latency.record_quote_latency("AAPL", "fmp", now - timedelta(seconds=5), False)
+        market_data_latency.record_quote_latency("MSFT", "fmp", now - timedelta(seconds=1), True)
 
         with mock.patch.object(settings, "MARKET_DATA_LATENCY_TRACKING_ENABLED", True):
             out = obs.latency_heatmap_summary()
@@ -1267,7 +1267,7 @@ class TestLatencyHeatmapSummary:
         market_data_latency.get_ring().clear()
         now = datetime.now(timezone.utc)
         for i in range(5):
-            market_data_latency.record_quote_latency(f"SYM{i}", "alpaca", now - timedelta(seconds=i), False)
+            market_data_latency.record_quote_latency(f"SYM{i}", "fmp", now - timedelta(seconds=i), False)
 
         with mock.patch.object(settings, "MARKET_DATA_LATENCY_TRACKING_ENABLED", True):
             out = obs.latency_heatmap_summary(limit=2)

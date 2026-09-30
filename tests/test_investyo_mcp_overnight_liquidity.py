@@ -16,7 +16,7 @@ def test_check_overnight_liquidity_valid_data():
         ask=150.1,
         timestamp=datetime.now(timezone.utc),
         is_stale=False,
-        source="alpaca"
+        source="fmp"
     )
 
     mock_history = pd.DataFrame({
@@ -102,7 +102,7 @@ def test_check_overnight_liquidity_all_nan_volume():
         ask=10.1,
         timestamp=datetime.now(timezone.utc),
         is_stale=False,
-        source="alpaca"
+        source="fmp"
     )
 
     mock_history = pd.DataFrame({
@@ -143,7 +143,7 @@ def test_check_overnight_liquidity_genuine_zero_values():
         ask=0.0,
         timestamp=datetime.now(timezone.utc),
         is_stale=False,
-        source="alpaca"
+        source="fmp"
     )
 
     mock_history = pd.DataFrame({

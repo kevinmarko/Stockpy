@@ -253,14 +253,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # output/pairs.json for the AST-guarded Pilots API to read. Non-secret.
     "PAIRS_SNAPSHOT_ENABLED",
     "PAIRS_SNAPSHOT_MAX_PAIRS",
-    # Execution mode toggle — paper sandbox vs. live endpoint. Writeable from
-    # the Strategy Matrix tab's global Simulation/Paper/Live selector. Never a
-    # secret: the broker keys themselves are SECRET_KEYS.
-    "ALPACA_PAPER",
-    # Per-request HTTP timeout for alpaca-py REST calls (execution/alpaca_broker.py,
-    # data/market_data.py's AlpacaProvider). Non-secret; a GUI bug here can
-    # only change how soon a stalled Alpaca call is given up on.
-    "ALPACA_REQUEST_TIMEOUT_SECONDS",
+    # Execution mode toggle — pipeline paper trading (FMP paper ledger) vs.
+    # going live (no automated orders; Robinhood queue only). Writeable from
+    # the execution-mode selector. Never a secret.
+    "PAPER_TRADING",
     "MARKET_DATA_PROVIDER",
     "MARKET_DATA_QUOTE_TTL_SECONDS",
     "MARKET_DATA_BARS_TTL_SECONDS",
@@ -270,11 +266,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "MARKET_DATA_LATENCY_TRACKING_ENABLED",
     "BROWSER_DIAGNOSTICS_ENABLED",  # non-secret opt-in dependency flags, no credential material
     "BROWSER_DIAGNOSTICS_TIMEOUT_SECONDS",
-    # Opt-in real-time WS quote ingestion (data/market_data_ws.py). Non-secret
-    # tunables only; Alpaca credentials stay in SECRET_KEYS.
-    "MARKET_DATA_WS_ENABLED",
-    "MARKET_DATA_WS_STALE_SECONDS",
-    "MARKET_DATA_WS_SYMBOLS",
     # Forecasting / fundamentals tunables (non-secret; see forecasting_engine.py
     # + data/market_data.py).
     "FORECAST_USE_GARCH_SIGMA",   # bool — GJR-GARCH sigma into Monte Carlo (rollback lever)
@@ -418,7 +409,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_UNIVERSE_ENABLED",               # bool — S&P 500 historical constituent-changes primary source (universe_engine.py)
     "FMP_SCREENER_ENABLED",               # bool — symbol search + sector/industry screener (GET /data/symbol-search, /data/screener, /data/screener/filters)
     "FMP_PROFILE_ENABLED",                # bool — master switch for FMP company profile wrapper (/profile)
-    "FMP_FALLBACK_ENABLED",               # bool — fall through to Alpaca/yfinance/Yahoo
+    "FMP_FALLBACK_ENABLED",               # bool — fall through to yfinance/Yahoo
     "FMP_QUOTES_REALTIME",                # bool — label FMP quotes real-time (unverified on Starter)
     "FMP_BARS_ADJUSTMENT",                # str  — EOD variant; 'dividend-adjusted' matches yfinance
     "FMP_ANALYST_REFRESH_HOURS",          # int  — analyst cadence gate
@@ -588,7 +579,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ALERT_CHANNELS",
     "ALERT_SMTP_PORT",
     "ALERT_EMAIL_SMTP_PORT",
-    "ALPACA_KEY_ROTATED_DATE",
     "FRED_KEY_ROTATED_DATE",
     "PAPER_TRADING_START_DATE",
     "CORRELATION_CLUSTER_LOOKBACK_DAYS",
@@ -612,8 +602,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "KILLSWITCH_VIX_THRESHOLD_AGREED",
     "KILLSWITCH_SAHM_THRESHOLD_AGREED",
     "LLM_COMMENTARY_TIMEOUT_SECONDS",
-    "MARKET_DATA_WS_RECONNECT_BASE_SECONDS",
-    "MARKET_DATA_WS_RECONNECT_MAX_SECONDS",
     "META_LABELING_ENABLED",
     "MULTIFACTOR_MICROCAP_THRESHOLD",
     "OPAL_RESEARCH_TIMEOUT_SECONDS",
@@ -723,6 +711,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
 # .env outside the app (CONSTRAINT #3).
 SECRET_KEYS: tuple[str, ...] = (
     "FRED_API_KEY",
+    # Retired Alpaca broker credentials. The Settings fields were removed when
+    # Alpaca was (2026-09-30), but they stay here so a key still set in an
+    # operator's .env keeps being masked by read_settings() (same treatment as
+    # OPTIONS_ALERT_WEBHOOK_URL below) instead of being shown in cleartext.
     "ALPACA_API_KEY",
     "ALPACA_SECRET_KEY",
     "ROBINHOOD_USERNAME",

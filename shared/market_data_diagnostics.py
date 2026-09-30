@@ -13,7 +13,7 @@ GUI to provider internals:
    ``MarketDataError`` (or any unwrapped exception text) to one of five typed
    categories: rate-limit, not-found, network-timeout, malformed-response,
    unknown. The classification is pattern-based (substring match on the
-   exception chain) so it works against yfinance, Alpaca, and Finnhub error
+   exception chain) so it works against FMP and yfinance error
    strings without importing their exception types.
 
 2. ``validate_quote(quote) -> QuoteValidation`` — pure data check that flags a
@@ -403,7 +403,7 @@ class BatchQuoteFetcher:
     spacing_seconds:
         Minimum monotonic delay between two consecutive ``fetch_fn`` calls.
         Default 0.1 s (10 calls/second) — well under yfinance's known
-        throttling threshold and trivially within Alpaca's 200 calls/min limit.
+        throttling threshold; FMP calls share data/fmp_client.py's own throttle.
     health_tracker:
         Optional :class:`FetchHealthTracker` to update on each result.
     sleep_fn:

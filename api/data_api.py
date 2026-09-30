@@ -1933,8 +1933,8 @@ def get_order_book_ladder(symbol: str) -> Dict[str, Any]:
     api/ws_api.py's REST fallback uses) when available. The depth ladder
     itself (bid/ask sizes at each price level) is SYNTHETIC
     (``is_synthetic: True``) -- this platform has no Level 2 / consolidated
-    order book feed to compute real depth from (CLAUDE.md: Alpaca's free
-    IEX feed and yfinance are both top-of-book only). Never present the
+    order book feed to compute real depth from (FMP and yfinance quotes are
+    both top-of-book only). Never present the
     sizes as real liquidity.
     """
     sym = symbol.upper()

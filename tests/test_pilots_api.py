@@ -2120,6 +2120,21 @@ class TestAutomationStatus:
         assert body["last_run_source"] == "daemon_memory"
         assert body["kill_switch"] == {"active": False, "reason": None}
 
+    def test_mode_flags_expose_paper_trading_not_alpaca_paper(self, tmp_path):
+        """API contract (Alpaca removal, 2026-09-30): the paper/live flag is
+        served as ``paper_trading`` from settings.PAPER_TRADING; the old
+        ``alpaca_paper`` key is gone."""
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path), \
+             mock.patch.object(settings, "PAPER_TRADING", False), \
+             mock.patch.object(pilots_api.daemon_client, "get_status", return_value=_fake_daemon_status()), \
+             mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=_fake_run_record()), \
+             mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+            resp = client.get("/automation/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["paper_trading"] is False
+        assert "alpaca_paper" not in body
+
     def test_daemon_unreachable_falls_back_to_daemon_json(self, tmp_path):
         """The restart-honesty core: when the Control API can't be reached,
         output/daemon.json (written at startup, or with state="stopped" at
@@ -3036,7 +3051,7 @@ class TestAutomationWritesInvariants:
 
 class TestExecutionModeWrite:
     """PUT /automation/execution-mode -- 1-Click Go Live toggle. Tests stub
-    ``shared.strategy_registry.set_active_mode`` (its own DRY_RUN/ALPACA_PAPER
+    ``shared.strategy_registry.set_active_mode`` (its own DRY_RUN/PAPER_TRADING
     writes are covered by that module's own tests) and redirect
     ``env_io.ENV_PATH`` at a scratch file for the ADVISORY_ONLY write, mirroring
     ``TestAutomationIntervalWrite``.
@@ -3069,7 +3084,7 @@ class TestExecutionModeWrite:
                         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["written"] == ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"]
+        assert body["written"] == ["ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"]
         assert body["advisory_only"] is False
         assert body["mode"] == "paper"
         assert body["applies"] == "next_daemon_restart"
@@ -3077,7 +3092,7 @@ class TestExecutionModeWrite:
         mock_set_mode.assert_called_once_with("paper")
 
     def test_advisory_mode_never_calls_set_active_mode(self, tmp_path):
-        """``mode == "advisory"`` carries no DRY_RUN/ALPACA_PAPER pairing --
+        """``mode == "advisory"`` carries no DRY_RUN/PAPER_TRADING pairing --
         ``written`` must say so rather than claiming a write that never
         happened (CONSTRAINT #4). Only ADVISORY_ONLY needs confirming here."""
         env_file = tmp_path / ".env"
@@ -3237,10 +3252,10 @@ class TestExecutionModeConfirmation:
     DRY_RUN) -- see ``_require_dangerous_confirmation``. Before this gate
     existed, this endpoint wrote both with zero confirmation of any kind,
     even though the general settings editor already required one for the
-    same two fields. ``ALPACA_PAPER`` is also written by this endpoint but is
-    NOT a ``DANGEROUS_KEYS`` member (an Alpaca-specific paper/live selector,
-    not a broker-agnostic quarantine) and so needs no confirmation here
-    either -- see ``test_alpaca_paper_is_written_without_needing_confirmation``."""
+    same two fields. ``PAPER_TRADING`` is also written by this endpoint but is
+    NOT a ``DANGEROUS_KEYS`` member (a paper-vs-live selector, not a
+    broker-agnostic quarantine) and so needs no confirmation here
+    either -- see ``test_paper_trading_is_written_without_needing_confirmation``."""
 
     def _put(self, payload, tmp_path=None, set_active_mode_mock=None):
         env_file = (tmp_path or pathlib.Path("/tmp")) / ".env"
@@ -3360,12 +3375,12 @@ class TestExecutionModeConfirmation:
         assert env_file.read_text(encoding="utf-8") == ""
         set_active_mode_calls[0].assert_not_called()
 
-    def test_alpaca_paper_is_written_without_needing_confirmation(self, tmp_path):
-        """ALPACA_PAPER is written by this same call (mode != "advisory") but
-        is NOT a settings_keysets.DANGEROUS_KEYS member -- an Alpaca-specific
-        paper/live account selector, not a broker-agnostic quarantine like
+    def test_paper_trading_is_written_without_needing_confirmation(self, tmp_path):
+        """PAPER_TRADING is written by this same call (mode != "advisory") but
+        is NOT a settings_keysets.DANGEROUS_KEYS member -- a paper-vs-live
+        selector, not a broker-agnostic quarantine like
         ADVISORY_ONLY/DRY_RUN -- so confirming only those two is sufficient
-        even though ALPACA_PAPER is among the keys `written`."""
+        even though PAPER_TRADING is among the keys `written`."""
         set_active_mode_calls: list = []
         resp, env_file = self._put(
             {
@@ -3377,7 +3392,7 @@ class TestExecutionModeConfirmation:
             set_active_mode_mock=set_active_mode_calls,
         )
         assert resp.status_code == 200
-        assert resp.json()["written"] == ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"]
+        assert resp.json()["written"] == ["ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"]
         set_active_mode_calls[0].assert_called_once_with("live")
 
 

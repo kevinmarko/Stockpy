@@ -50,7 +50,7 @@ _SCANS: Dict[str, Dict[str, Any]] = {}
 # ---------------------------------------------------------------------------
 
 _FORBIDDEN_MODULES = {
-    "alpaca_broker.py",
+    "fmp_paper_broker.py",
     "order_manager.py",
     "queue_builder.py",
     "compose.py",

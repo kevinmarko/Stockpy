@@ -101,7 +101,7 @@ def make_client_order_id(
     the provided fields.  ``timestamp`` is bucketed to ``bucket_seconds``
     so the same intent re-submitted within the window yields the same ID.
 
-    Alpaca's client_order_id max length is 128 chars; 48 is safe.
+    Brokers commonly cap client_order_id at 128 chars; 48 is safe.
 
     The canonical string is a ``json.dumps`` of the field list, not a raw
     ``|``-joined f-string -- a literal ``|`` inside ``strategy_id`` or
@@ -166,7 +166,7 @@ class OrderManager:
     Parameters
     ----------
     broker : BrokerBase
-        Any BrokerBase implementation (AlpacaBroker, MockBroker, …).
+        Any BrokerBase implementation (FMPPaperBroker, MockBroker, …).
     dry_run : bool
         When True every order intent is logged but not submitted.
     risk_gate : PreTradeRiskGate | None
@@ -216,7 +216,7 @@ class OrderManager:
         # Rate-limiting queue — sheds low-priority (BUY) requests under load;
         # high-priority (SELL / stop-loss) are allowed to wait for a token.
         self._queue: LeakyBucketQueue = LeakyBucketQueue(
-            capacity=200,      # Alpaca ~200 req/min on the free IEX feed
+            capacity=200,      # ~200 req/min submission budget
             refill_rate=3.33,  # 200 tokens / 60 seconds
         )
 

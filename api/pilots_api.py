@@ -771,7 +771,7 @@ class ExecutionModeUpdateRequest(BaseModel):
     (``ADVISORY_ONLY`` always; ``DRY_RUN`` too when ``mode != "advisory"``)
     must appear here mapped to ITS OWN NAME, e.g. ``{"ADVISORY_ONLY":
     "ADVISORY_ONLY"}`` — see ``_require_dangerous_confirmation``. Absent or
-    wrong -> 422, and nothing is written. ``ALPACA_PAPER`` (also written when
+    wrong -> 422, and nothing is written. ``PAPER_TRADING`` (also written when
     ``mode != "advisory"``) is NOT a ``DANGEROUS_KEYS`` member and needs no
     confirmation."""
     mode: Literal["live", "paper", "simulation", "advisory"]
@@ -3450,7 +3450,7 @@ def get_automation_status() -> Dict[str, Any]:
         "errors": run_status.read_dead_letter(),
         "advisory_only": settings.ADVISORY_ONLY,
         "dry_run": settings.DRY_RUN,
-        "alpaca_paper": settings.ALPACA_PAPER,
+        "paper_trading": settings.PAPER_TRADING,
     }
 
 
@@ -3548,7 +3548,7 @@ def get_system_cron_status() -> Dict[str, Any]:
 #                                (persists to .env)
 #   PUT  /automation/execution-mode    -> + require_automation_writes_enabled
 #                                (same risk tier as resume -- can flip
-#                                ADVISORY_ONLY/ALPACA_PAPER toward live),
+#                                ADVISORY_ONLY/PAPER_TRADING toward live),
 #                                AND a typed field-name confirmation for every
 #                                settings_keysets.DANGEROUS_KEYS field it is
 #                                about to write (see
@@ -3840,8 +3840,8 @@ def _require_dangerous_confirmation(dangerous_keys: List[str], confirm: Dict[str
 )
 def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
     """1-Click Go Live / Execution Mode Toggle. Sets ``ADVISORY_ONLY`` and,
-    unless ``mode == "advisory"`` (which carries no ``DRY_RUN``/``ALPACA_PAPER``
-    pairing of its own), the ``DRY_RUN``/``ALPACA_PAPER`` pair via
+    unless ``mode == "advisory"`` (which carries no ``DRY_RUN``/``PAPER_TRADING``
+    pairing of its own), the ``DRY_RUN``/``PAPER_TRADING`` pair via
     ``shared.strategy_registry.set_active_mode`` (see its docstring for the
     mode -> env-var mapping). ``written`` always reflects exactly which keys
     this call touched -- never a fixed list -- so the response can't claim a
@@ -3855,10 +3855,12 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
     with zero confirmation of any kind while ``PUT /settings/tunables``
     required one for the very same fields. The check runs, and raises 422,
     BEFORE any write -- a rejected call writes nothing, not even the
-    confirmed subset. ``ALPACA_PAPER`` is written (see ``written`` below) but
+    confirmed subset. ``PAPER_TRADING`` is written (see ``written`` below) but
     NOT in ``settings_keysets.DANGEROUS_KEYS`` and so requires no
-    confirmation -- an Alpaca-specific paper/live account selector, not a
-    broker-agnostic quarantine like ``ADVISORY_ONLY``/``DRY_RUN``, and
+    confirmation -- a paper-vs-live selector (paper = the pipeline trades
+    the FMP paper ledger; live = the pipeline places no orders at all, since
+    Alpaca was removed 2026-09-30), not a broker-agnostic quarantine like
+    ``ADVISORY_ONLY``/``DRY_RUN``, and
     deliberately not hardened further here (operator decision, 2026-08-04)."""
     from shared import strategy_registry
 
@@ -3873,7 +3875,7 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
 
     if body.mode != "advisory":
         strategy_registry.set_active_mode(body.mode)
-        written += ["DRY_RUN", "ALPACA_PAPER"]
+        written += ["DRY_RUN", "PAPER_TRADING"]
 
     return {
         "written": written,
@@ -3895,7 +3897,7 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
 # deliberately EXCLUDING keys owned by other screens (SIGNAL_WEIGHTS /
 # DISABLED_SIGNAL_MODULES -> Strategy Matrix; DEFAULT_TICKERS -> Live Inventory
 # / Universe Manager per PR #357; all LLM_*/OPAL_* -> AI Control Center;
-# MACRO_REGIME_GATE_ENABLED -> Mission Control; ALPACA_PAPER + brokerage ->
+# MACRO_REGIME_GATE_ENABLED -> Mission Control; PAPER_TRADING + brokerage ->
 # execution-mode toggle). PROMPT_REGISTRY_ENABLED/PROMPT_REGISTRY_BACKEND are
 # NOT AI Control Center keys despite the "PROMPT_REGISTRY" naming overlap with
 # PROMPT_REGISTRY_PINS/credentials elsewhere — the real Streamlit tab places
@@ -4058,11 +4060,10 @@ _TUNABLE_GROUPS: List[tuple] = [
     (
         "Market Data",
         [
-            ("MARKET_DATA_PROVIDER", "enum", {"options": ["alpaca", "yfinance", "fmp"]}),
+            ("MARKET_DATA_PROVIDER", "enum", {"options": ["fmp", "yfinance"]}),
             ("MARKET_DATA_QUOTE_TTL_SECONDS", "int", {"min": 0, "max": 86400, "step": 1}),
             ("MARKET_DATA_BARS_TTL_SECONDS", "int", {"min": 0, "max": 86400, "step": 1}),
             ("FUNDAMENTALS_SOURCE", "enum", {"options": ["yahoo", "yfinance_info", "fmp"]}),
-            ("MARKET_DATA_WS_ENABLED", "bool", {}),
             ("HISTORICAL_STORE_ENABLED", "bool", {}),
         ],
     ),
@@ -4434,12 +4435,12 @@ def _validate_and_write_payload(
     **This gate is scoped to writes through THIS function, but is no longer
     the only DANGEROUS_KEYS-confirming write path.** ``PUT
     /automation/execution-mode`` writes ``ADVISORY_ONLY`` (and, via
-    ``shared.strategy_registry.set_active_mode``, ``DRY_RUN``/``ALPACA_PAPER``)
+    ``shared.strategy_registry.set_active_mode``, ``DRY_RUN``/``PAPER_TRADING``)
     directly and predates this function; it now enforces the SAME echo-the-
     name contract independently, via its own ``_require_dangerous_
     confirmation`` (below) rather than routing through this one — a
     single-purpose atomic action doesn't fit this function's per-key,
-    partial-success ``values``/``rejected`` shape. ``ALPACA_PAPER`` is
+    partial-success ``values``/``rejected`` shape. ``PAPER_TRADING`` is
     written there but is NOT a ``DANGEROUS_KEYS`` member and needs no
     confirmation on either path.
 
@@ -4743,7 +4744,7 @@ _PAPER_BROKER_GROUPS = [
     (
         "Paper Broker Configuration",
         [
-            ("BROKER_BACKEND", "str", {}),
+            ("BROKER_BACKEND", "enum", {"options": ["fmp_paper"]}),
             ("FMP_PAPER_STARTING_CASH", "float", {"min": 0.0, "max": 10000000.0, "step": 1000.0}),
             ("PAPER_BROKER_WRITES_ENABLED", "bool", {}),
         ],

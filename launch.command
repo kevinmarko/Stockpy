@@ -115,7 +115,7 @@ if [ ! -f ".env" ]; then
     echo ""
     echo "  ⚠  .env not found."
     echo "     Copy .env.example → .env and fill in your API keys."
-    echo "     Continuing — FRED macro data, Robinhood, and Alpaca will be skipped."
+    echo "     Continuing — FRED macro data and Robinhood will be skipped."
 fi
 
 echo ""

@@ -12,11 +12,11 @@ Verified invariants
 *   ``read_active_run_mode({})`` returns ``process="idle"``.
 *   Active run handle → ``process="running"``.
 *   Finished run handle → ``process="finished"``.
-*   ``(DRY_RUN=True, ALPACA_PAPER=True)`` → ``mode="Simulation"``.
-*   ``(DRY_RUN=False, ALPACA_PAPER=True)`` → ``mode="Paper"``.
-*   ``(DRY_RUN=False, ALPACA_PAPER=False)`` → ``mode="Live"``.
-*   ``(DRY_RUN=True, ALPACA_PAPER=False)`` → ``mode="Simulation"``
-    (DRY_RUN wins over ALPACA_PAPER=False).
+*   ``(DRY_RUN=True, PAPER_TRADING=True)`` → ``mode="Simulation"``.
+*   ``(DRY_RUN=False, PAPER_TRADING=True)`` → ``mode="Paper"``.
+*   ``(DRY_RUN=False, PAPER_TRADING=False)`` → ``mode="Live"``.
+*   ``(DRY_RUN=True, PAPER_TRADING=False)`` → ``mode="Simulation"``
+    (DRY_RUN wins over PAPER_TRADING=False).
 *   ``icon`` and ``color`` fields are non-empty strings.
 *   ``run_mode_label`` is non-empty and contains the mode.
 *   ``gui/app.py`` imports / references ``run_mode``.
@@ -56,7 +56,7 @@ def test_run_mode_state_frozen():
         mode="Simulation",
         process="idle",
         dry_run=True,
-        alpaca_paper=True,
+        paper_trading=True,
         icon="⚪",
         color="blue",
         pid=None,
@@ -70,10 +70,10 @@ def test_run_mode_state_frozen():
 # process derivation
 # ===========================================================================
 
-def _mock_settings(dry_run: bool, alpaca_paper: bool):
+def _mock_settings(dry_run: bool, paper_trading: bool):
     s = mock.MagicMock()
     s.DRY_RUN = dry_run
-    s.ALPACA_PAPER = alpaca_paper
+    s.PAPER_TRADING = paper_trading
     return s
 
 
@@ -121,24 +121,24 @@ def test_finished_handle_process():
 # mode derivation — truth table
 # ===========================================================================
 
-@pytest.mark.parametrize("dry_run,alpaca_paper,expected_mode", [
+@pytest.mark.parametrize("dry_run,paper_trading,expected_mode", [
     (True,  True,  "Simulation"),
     (True,  False, "Simulation"),  # DRY_RUN wins
     (False, True,  "Paper"),
     (False, False, "Live"),
 ])
-def test_mode_derivation(dry_run, alpaca_paper, expected_mode):
+def test_mode_derivation(dry_run, paper_trading, expected_mode):
     from shared.run_mode import read_active_run_mode
 
-    with mock.patch("settings.settings", _mock_settings(dry_run, alpaca_paper)):
+    with mock.patch("settings.settings", _mock_settings(dry_run, paper_trading)):
         state = read_active_run_mode(session_state={})
 
     assert state.mode == expected_mode, (
-        f"DRY_RUN={dry_run}, ALPACA_PAPER={alpaca_paper} → expected {expected_mode}, "
+        f"DRY_RUN={dry_run}, PAPER_TRADING={paper_trading} → expected {expected_mode}, "
         f"got {state.mode}"
     )
     assert state.dry_run is dry_run
-    assert state.alpaca_paper is alpaca_paper
+    assert state.paper_trading is paper_trading
 
 
 # ===========================================================================

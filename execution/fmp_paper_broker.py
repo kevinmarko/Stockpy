@@ -61,8 +61,8 @@ class FMPPaperBroker(BrokerBase):
 
         client_order_id = intent.client_order_id or "unknown"
 
-        # 1. Dry-run interception -- matches AlpacaBroker.submit_order's exact
-        # pattern (execution/alpaca_broker.py). Placed before any quote fetch
+        # 1. Dry-run interception -- the same pattern every broker adapter
+        # uses (defense in depth behind OrderManager's own check). Placed before any quote fetch
         # or store write so a dry_run=True intent never touches fmp_client or
         # PaperAccountStore, and OrderManager tests exercising both broker
         # backends see identical dry-run behavior.

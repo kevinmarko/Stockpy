@@ -5,7 +5,7 @@ Pricing provider for stock and options paper trading.
 Routes through `data.market_data.get_provider()` (the `CompositeProvider`
 `MarketDataProvider` ABC), per CLAUDE.md's data-layer convention that all
 quote fetches outside `DataEngine.fetch_technical_raw()` MUST go through it
--- this gets the FMP/Alpaca/yfinance fallback chain, the in-process TTL
+-- this gets the FMP/yfinance fallback chain, the in-process TTL
 quote cache, and `is_stale` staleness flagging for free, rather than a
 second, uncached, ungated direct FMP client.
 
@@ -73,7 +73,7 @@ def get_latest_prices(symbols: List[str]) -> Dict[str, float]:
     the same ``CompositeProvider`` every other quote in this module uses --
     so callers get (a) one ``/batch-quote`` request for every cache miss,
     (b) the in-process quote TTL cache (``MARKET_DATA_QUOTE_TTL_SECONDS``),
-    and (c) the FMP -> Alpaca -> yfinance fallback chain for symbols FMP
+    and (c) the FMP -> yfinance fallback chain for symbols FMP
     can't resolve. The cache matters for high-frequency callers such as the
     1 Hz ``/ws/risk/portfolio`` stream: previously this called
     ``data.fmp_client.batch_quote`` directly, uncached, costing one live FMP
