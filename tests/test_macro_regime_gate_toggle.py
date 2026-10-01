@@ -14,7 +14,7 @@ Coverage
 *   ``check_macro_regime_gate_enabled`` passes + warns when gate is off and
     paper-trading is on (acceptable during development).
 *   ``check_macro_regime_gate_enabled`` FAILS when gate is off AND live trading
-    (ALPACA_PAPER=False) — the unsafe combination.
+    (PAPER_TRADING=False) — the unsafe combination.
 *   ``check_macro_regime_gate_enabled`` passes silently when gate is on.
 *   ``shared.env_io.ALLOWED_KEYS`` includes ``MACRO_REGIME_GATE_ENABLED`` so the
     GUI Observability tab can write it.
@@ -194,7 +194,7 @@ class TestPreflightMacroGate:
     def test_passes_when_gate_on(self, monkeypatch):
         from settings import settings as _s
         monkeypatch.setattr(_s, "MACRO_REGIME_GATE_ENABLED", True)
-        monkeypatch.setattr(_s, "ALPACA_PAPER", True)
+        monkeypatch.setattr(_s, "PAPER_TRADING", True)
         from scripts.preflight_check import check_macro_regime_gate_enabled
         r = check_macro_regime_gate_enabled()
         assert r.passed is True
@@ -204,7 +204,7 @@ class TestPreflightMacroGate:
         """Gate disabled + paper → warning, not fail."""
         from settings import settings as _s
         monkeypatch.setattr(_s, "MACRO_REGIME_GATE_ENABLED", False)
-        monkeypatch.setattr(_s, "ALPACA_PAPER", True)
+        monkeypatch.setattr(_s, "PAPER_TRADING", True)
         from scripts.preflight_check import check_macro_regime_gate_enabled
         r = check_macro_regime_gate_enabled()
         assert r.passed is True
@@ -215,7 +215,7 @@ class TestPreflightMacroGate:
         """Gate disabled + live → blocking failure."""
         from settings import settings as _s
         monkeypatch.setattr(_s, "MACRO_REGIME_GATE_ENABLED", False)
-        monkeypatch.setattr(_s, "ALPACA_PAPER", False)
+        monkeypatch.setattr(_s, "PAPER_TRADING", False)
         from scripts.preflight_check import check_macro_regime_gate_enabled
         r = check_macro_regime_gate_enabled()
         assert r.passed is False

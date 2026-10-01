@@ -184,3 +184,27 @@ Operator-approved removal of unused third-party integrations. Each was dormant o
 |---|---|
 | `observability/sentry_integration.py` -> `legacy/observability/sentry_integration.py` | `init_sentry()` was called once at daemon startup and was a no-op without `SENTRY_DSN`. The `SENTRY_*` settings, their `shared/env_io.py` entries and the `sentry-sdk` optional dependency were removed with it. |
 | `tests/test_sentry_integration.py` -> `legacy/tests/test_sentry_integration.py` | The suite for the module above (still imports `observability.sentry_integration`; put the module back first to run it). |
+
+## Alpaca removal (2026-09-30)
+
+Operator-approved removal of Alpaca (broker and market data). The pipeline's
+only automated broker is now the local FMP paper ledger
+(`execution/fmp_paper_broker.py`); `BROKER_BACKEND` accepts only `fmp_paper`,
+and going live (`ADVISORY_ONLY=False` and `PAPER_TRADING=False`) places no
+pipeline orders at all: real trades go only through the Robinhood execution
+queue. `ALPACA_PAPER` was renamed `PAPER_TRADING` (the old name is still read
+as an alias). Quotes/bars are FMP with a yfinance fallback. The `ALPACA_*` and
+`MARKET_DATA_WS_*` settings, the two Alpaca preflight checks
+(`alpaca_configured`, `alpaca_key_rotation_recent`) and the `alpaca-py`
+dependency were removed; `shared/env_io.py` keeps `ALPACA_API_KEY` /
+`ALPACA_SECRET_KEY` in `SECRET_KEYS` only so a key left in an old `.env` stays
+masked.
+
+| Moved | Why |
+|---|---|
+| `execution/alpaca_broker.py` -> `legacy/execution/alpaca_broker.py` | `AlpacaBroker`, the only live broker. `resolve_broker_backend()` now returns `None` when going live instead of forcing Alpaca. |
+| `data/alpaca_http.py` -> `legacy/data/alpaca_http.py` | `mount_timeout_adapter` for alpaca-py's REST session; its only users were `AlpacaBroker` and `AlpacaProvider`. |
+| `data/market_data_ws.py` -> `legacy/data/market_data_ws.py` | Opt-in Alpaca `StockDataStream` quote cache (`MARKET_DATA_WS_ENABLED`, default off). |
+| `data/websocket_streamer.py` -> `legacy/data/websocket_streamer.py` | Alpaca WebSocket streamer wired into the daemon, `api/data_api.py`'s lifespan and `api/ws_api.py`'s tick fast path (`source: "alpaca-ws"`). Ticks now always come from the quote provider. |
+| `AlpacaProvider` (from `data/market_data.py`) -> `legacy/data/alpaca_provider.py` | The Alpaca quote/bar provider, cut out of `data/market_data.py`. The FMP fallback tail is now `[YFinanceProvider]` and `MARKET_DATA_PROVIDER='alpaca'` raises "unknown value". |
+| `tests/test_alpaca_broker.py`, `tests/test_alpaca_http.py`, `tests/test_alpaca_paper_smoke.py`, `tests/test_alpaca_stream.py`, `tests/test_market_data_ws.py`, `tests/test_websocket_streamer.py` -> `legacy/tests/` | The suites for the modules above (they still import the original module paths; put the module back first to run one). The `AlpacaProvider` tests in `tests/test_market_data.py` were deleted, not moved. |

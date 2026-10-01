@@ -71,7 +71,7 @@ export default function ActiveTraderLadder({
   // GET /data/ladder/{symbol} endpoint. current_price there is a real quote
   // when available; the depth itself is synthetic (is_synthetic: true) --
   // this platform has no Level 2 / consolidated order book feed to compute
-  // real depth from (Alpaca's free IEX feed and yfinance are both
+  // real depth from (the FMP and yfinance quote feeds are both
   // top-of-book only). Never presented as real liquidity: see DemoDataBadge
   // below.
   const { data: ladder, loading, error } = useApi(() => api.getOrderBookLadder(symbol), [symbol]);

@@ -1475,7 +1475,7 @@ class TestGetPortfolioSummary:
         def _fake_quote(sym):
             return md_mod.Quote(
                 symbol=sym, price=110.0, bid=109.9, ask=110.1,
-                timestamp=datetime(2026, 8, 10), is_stale=False, source="alpaca",
+                timestamp=datetime(2026, 8, 10), is_stale=False, source="fmp",
             )
 
         fake_provider = MagicMock()
@@ -3438,7 +3438,7 @@ class TestRunBacktest:
 
     def test_market_data_error_returns_no_historical_data(self, monkeypatch):
         # A MarketDataError from get_intraday_bars (unrecoverable provider
-        # failure across the whole FMP/Alpaca/yfinance fallback chain) is
+        # failure across the whole FMP/yfinance fallback chain) is
         # the "no data" case here, matching the pre-existing "empty result
         # from yfinance" -> "No historical data found" contract.
         import data.market_data as md_mod
@@ -4095,7 +4095,7 @@ class TestGetQuote:
         ts = datetime(2026, 8, 10, 14, 30, tzinfo=None)
         quote = md_mod.Quote(
             symbol="AAPL", price=150.25, bid=150.20, ask=150.30,
-            timestamp=ts, is_stale=False, source="alpaca",
+            timestamp=ts, is_stale=False, source="fmp",
         )
         fake_provider = MagicMock()
         fake_provider.get_latest_quote.return_value = quote
@@ -4106,7 +4106,7 @@ class TestGetQuote:
         assert "# Quote: AAPL" in result
         assert "$150.25" in result
         assert "🟢 Live" in result
-        assert "alpaca" in result
+        assert "fmp" in result
         assert '"is_stale": false' in result
         fake_provider.get_latest_quote.assert_called_once_with("AAPL")
 

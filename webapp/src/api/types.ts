@@ -470,7 +470,7 @@ export interface SymbolReincludeResult {
  * One symbol's latest quote from `GET /data/quotes?symbols=...`
  * (`api/data_api.py`, backed by `data.market_data.CompositeProvider`).
  * `is_stale` is `true` on every yfinance-sourced quote by design (~15 min
- * delayed feed); `false` only for a real-time source (Alpaca). Every numeric
+ * delayed feed); `false` only when the provider reports the quote as real-time. Every numeric
  * leaf is `null` when the provider didn't return it (NEVER a fabricated 0 —
  * CONSTRAINT #4).
  */
@@ -1459,7 +1459,7 @@ export interface AutomationStatus {
   errors: DeadLetterReport;
   advisory_only: boolean;
   dry_run: boolean;
-  alpaca_paper: boolean;
+  paper_trading: boolean;
 }
 
 /**

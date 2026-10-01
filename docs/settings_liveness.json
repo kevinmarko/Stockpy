@@ -12,16 +12,16 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 326,
+    "live_safe": 320,
     "no_op": 4,
-    "restart_required": 84,
-    "total": 414
+    "restart_required": 81,
+    "total": 405
   },
   "dynamic_sites": [
     {
       "expr": "getattr(_rh_settings, _MISSING_ATTR, None)",
       "file": "Gravity AI Review Suite.py",
-      "line": 2674,
+      "line": 2684,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -42,7 +42,7 @@
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 186,
+      "line": 165,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
@@ -56,21 +56,21 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4216,
+      "line": 4217,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4321,
+      "line": 4322,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5176,
+      "line": 5177,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -110,7 +110,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 384,
+  "files_scanned": 380,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -136,7 +136,6 @@
     "ALERT_SMTP_PASSWORD",
     "ALERT_SMTP_PORT",
     "ALERT_SMTP_USER",
-    "ALPACA_KEY_ROTATED_DATE",
     "ANTHROPIC_API_KEY",
     "ATTENTION_CIRCUIT_BREAKER_THRESHOLD",
     "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE",
@@ -150,7 +149,6 @@
     "BETA_LOOKBACK_DAYS",
     "BROKERAGE_CONNECT_ENABLED",
     "BROKERAGE_REFRESH_ENABLED",
-    "BROKER_BACKEND",
     "BROKER_TRADE_INGEST_ENABLED",
     "BROWSER_DIAGNOSTICS_ENABLED",
     "BROWSER_DIAGNOSTICS_TIMEOUT_SECONDS",
@@ -301,11 +299,6 @@
     "MACRO_REFRESH_HOURS",
     "MACRO_REGIME_GATE_ENABLED",
     "MARKET_DATA_LATENCY_TRACKING_ENABLED",
-    "MARKET_DATA_WS_ENABLED",
-    "MARKET_DATA_WS_RECONNECT_BASE_SECONDS",
-    "MARKET_DATA_WS_RECONNECT_MAX_SECONDS",
-    "MARKET_DATA_WS_STALE_SECONDS",
-    "MARKET_DATA_WS_SYMBOLS",
     "MAX_LEVERAGE",
     "MAX_PORTFOLIO_GROSS",
     "MCP_OAUTH_MULTI_USER_ENABLED",
@@ -336,6 +329,7 @@
     "PAPER_OPTION_MARK_CACHE_SECONDS",
     "PAPER_PIPELINE_PROBE_WEIGHT",
     "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",
+    "PAPER_TRADING",
     "PAPER_TRADING_START_DATE",
     "PILOTS_API_ENABLED",
     "PILOTS_API_PORT",
@@ -448,15 +442,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 831,
+    "attr": 814,
     "factory_param": 4,
-    "getattr_const": 319,
+    "getattr_const": 306,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 258,
+    "attr": 255,
     "factory_param": 4,
-    "getattr_const": 189,
+    "getattr_const": 180,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -472,80 +466,23 @@
         "via": []
       }
     ],
-    "ALPACA_API_KEY": [
+    "BROKER_BACKEND": [
       {
         "discarded": false,
-        "form": "attr",
+        "form": "name_literal",
         "rules": [
-          "indirect_init_helper_d1"
+          "dynamic_name_literal_unattributable"
         ],
-        "site": "data/market_data.py:1670",
-        "via": [
-          1575
-        ]
+        "site": "api/pilots_api.py:4747",
+        "via": []
       },
       {
         "discarded": false,
-        "form": "attr",
+        "form": "name_literal",
         "rules": [
-          "init_self_assign"
+          "dynamic_name_literal_unattributable"
         ],
-        "site": "execution/alpaca_broker.py:171",
-        "via": []
-      }
-    ],
-    "ALPACA_PAPER": [
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "execution/alpaca_broker.py:170",
-        "via": []
-      }
-    ],
-    "ALPACA_REQUEST_TIMEOUT_SECONDS": [
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "indirect_init_helper_d1"
-        ],
-        "site": "data/market_data.py:261",
-        "via": [
-          244
-        ]
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "init_body"
-        ],
-        "site": "execution/alpaca_broker.py:193",
-        "via": []
-      }
-    ],
-    "ALPACA_SECRET_KEY": [
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "indirect_init_helper_d1"
-        ],
-        "site": "data/market_data.py:1671",
-        "via": [
-          1575
-        ]
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "init_self_assign"
-        ],
-        "site": "execution/alpaca_broker.py:172",
+        "site": "settings_keysets.py:305",
         "via": []
       }
     ],
@@ -556,7 +493,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:3961",
+        "site": "api/pilots_api.py:3963",
         "via": []
       }
     ],
@@ -576,7 +513,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/data_api.py:131",
+        "site": "api/data_api.py:110",
         "via": []
       },
       {
@@ -625,7 +562,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4072",
+        "site": "api/pilots_api.py:4073",
         "via": []
       },
       {
@@ -1328,7 +1265,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4697",
+        "site": "api/pilots_api.py:4698",
         "via": []
       }
     ],
@@ -1339,7 +1276,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4696",
+        "site": "api/pilots_api.py:4697",
         "via": []
       }
     ],
@@ -1350,7 +1287,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1587",
+        "site": "data/market_data.py:1376",
         "via": []
       },
       {
@@ -1359,9 +1296,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1624",
+        "site": "data/market_data.py:1412",
         "via": [
-          1562
+          1351
         ]
       }
     ],
@@ -1372,9 +1309,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1635",
+        "site": "data/market_data.py:1423",
         "via": [
-          1562
+          1351
         ]
       }
     ],
@@ -1385,7 +1322,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4837",
+        "site": "api/pilots_api.py:4838",
         "via": []
       }
     ],
@@ -1409,7 +1346,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1011",
+        "site": "data/market_data.py:803",
         "via": []
       }
     ],
@@ -1596,7 +1533,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1559",
+        "site": "data/market_data.py:1348",
         "via": []
       },
       {
@@ -1605,7 +1542,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2195",
+        "site": "data/market_data.py:1923",
         "via": []
       }
     ],
@@ -1616,7 +1553,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1389",
+        "site": "data/market_data.py:1181",
         "via": []
       },
       {
@@ -1625,7 +1562,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1560",
+        "site": "data/market_data.py:1349",
         "via": []
       },
       {
@@ -1634,7 +1571,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:2196",
+        "site": "data/market_data.py:1924",
         "via": []
       }
     ],
@@ -1645,7 +1582,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1585",
+        "site": "data/market_data.py:1374",
         "via": []
       }
     ],
@@ -1863,7 +1800,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1554",
+        "site": "data/market_data.py:1343",
         "via": []
       },
       {
@@ -1872,7 +1809,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:1980",
+        "site": "data/market_data.py:1727",
         "via": []
       }
     ],
@@ -1883,9 +1820,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1615",
+        "site": "data/market_data.py:1404",
         "via": [
-          1562
+          1351
         ]
       }
     ],
@@ -1896,7 +1833,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1549",
+        "site": "data/market_data.py:1338",
         "via": []
       }
     ],
@@ -2194,7 +2131,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "desktop/orchestrator_daemon.py:607",
+        "site": "desktop/orchestrator_daemon.py:592",
         "via": []
       }
     ],
@@ -2416,7 +2353,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:10756",
+        "site": "Gravity AI Review Suite.py:10736",
         "via": []
       }
     ],
@@ -2652,15 +2589,16 @@
   ],
   "restart_required_reason_counts": {
     "cross_module_init_helper": 92,
-    "dynamic_name_literal_unattributable": 7,
-    "indirect_init_helper_d1": 12,
-    "init_body": 9,
-    "init_self_assign": 44,
+    "dynamic_name_literal_unattributable": 9,
+    "indirect_init_helper_d1": 9,
+    "init_body": 8,
+    "init_self_assign": 41,
     "method_self_assign": 5,
     "module_level": 50,
     "os_environ": 2
   },
   "restart_required_via_name_literal_only": [
+    "BROKER_BACKEND",
     "CORRELATION_CLUSTER_LOOKBACK_DAYS",
     "DASHBOARD_REFRESH_SECONDS",
     "EDGAR_FULLTEXT_CHUNK_TOKENS",

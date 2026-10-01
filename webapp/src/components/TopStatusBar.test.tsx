@@ -105,7 +105,7 @@ function automationStatus(overrides: Partial<AutomationStatus> = {}): Automation
     errors: { generated_at: null, entry_count: 0, entries: [] },
     advisory_only: true,
     dry_run: false,
-    alpaca_paper: false,
+    paper_trading: false,
     ...overrides,
   };
 }

@@ -403,7 +403,7 @@ class Recommendation:
     data_quality : Literal["OK", "STALE", "PARTIAL"]
         "OK"      — all sources returned fresh, parseable data.
         "STALE"   — price quote was flagged stale by the provider (yfinance
-                    always returns stale; Alpaca only when > 60 s old).
+                    always returns stale; real-time providers only when old).
         "PARTIAL" — one or more modules failed; recommendation is still
                     returned but with reduced conviction.
     synthetic_inputs : bool

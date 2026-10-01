@@ -1847,10 +1847,11 @@ class GravityAIAuditor:
 
     def run_broker_order_manager_audit(self):
         """
-        STEP 22 — Alpaca Broker & OrderManager Audit
+        STEP 22 — Broker selection & OrderManager Audit
         Checks:
         1. BrokerBase ABC cannot be instantiated directly.
-        2. AlpacaBroker raises RuntimeError when credentials are absent.
+        2. resolve_broker_backend() returns None (no automated orders) when
+           going live, and 'fmp_paper' otherwise (Alpaca was removed 2026-09-30).
         3. make_client_order_id is deterministic for the same inputs.
         4. make_client_order_id differs for different symbols.
         5. make_client_order_id differs for different strategy_ids.
@@ -1876,20 +1877,29 @@ class GravityAIAuditor:
             broker_report["checks"]["broker_base_abstract"] = f"ERROR: {e}"
             broker_report["status"] = "FAILED"
 
-        # Check 2: AlpacaBroker raises on missing credentials
+        # Check 2: no automated live broker -- going live resolves to None
         try:
-            from execution.alpaca_broker import AlpacaBroker
-            try:
-                AlpacaBroker(api_key=None, secret_key=None)
-                broker_report["checks"]["alpaca_missing_creds"] = "FAIL: should raise RuntimeError"
-                broker_report["status"] = "FAILED"
-            except RuntimeError:
-                broker_report["checks"]["alpaca_missing_creds"] = "PASS: raises RuntimeError when credentials absent"
-            except Exception as e:
-                broker_report["checks"]["alpaca_missing_creds"] = f"FAIL: wrong exception {type(e).__name__}: {e}"
+            from unittest.mock import patch as _patch
+            from execution import broker_selection as _bs
+            with _patch("settings.settings.ADVISORY_ONLY", False), \
+                 _patch("settings.settings.PAPER_TRADING", False), \
+                 _patch("diagnostics_and_visuals.telemetry.error"), \
+                 _patch("observability.alerts.send_alert"):
+                live_backend = _bs.resolve_broker_backend()
+            with _patch("settings.settings.ADVISORY_ONLY", False), \
+                 _patch("settings.settings.PAPER_TRADING", True):
+                paper_backend = _bs.resolve_broker_backend()
+            if live_backend is None and paper_backend == "fmp_paper":
+                broker_report["checks"]["live_resolves_to_no_broker"] = (
+                    "PASS: going live -> None (no pipeline orders); paper -> 'fmp_paper'"
+                )
+            else:
+                broker_report["checks"]["live_resolves_to_no_broker"] = (
+                    f"FAIL: live={live_backend!r} paper={paper_backend!r}"
+                )
                 broker_report["status"] = "FAILED"
         except Exception as e:
-            broker_report["checks"]["alpaca_missing_creds"] = f"ERROR importing AlpacaBroker: {e}"
+            broker_report["checks"]["live_resolves_to_no_broker"] = f"ERROR: {e}"
             broker_report["status"] = "FAILED"
 
         # Checks 3-5: make_client_order_id
@@ -2698,7 +2708,7 @@ class GravityAIAuditor:
         """Step 26 — Validates data/market_data.py (swappable market-data layer).
 
         All checks are fully offline — no network calls are made.  Providers that
-        require live connectivity (AlpacaProvider, FMPProvider with a real key)
+        require live connectivity (FMPProvider with a real key)
         are exercised via constructor injection or by bypassing __init__ with
         __new__, mirroring the pattern used in tests/test_market_data.py.
 
@@ -2711,8 +2721,9 @@ class GravityAIAuditor:
               (yfinance data is ~15-min delayed by design).
           (f) _QuoteCache respects TTL: fresh hit returns the quote; after the
               TTL elapses the same lookup returns None (eviction).
-          (g) CompositeProvider selects yfinance when Alpaca keys are absent.
-          (h) CompositeProvider selects Alpaca when both Alpaca keys are present.
+          (g) CompositeProvider selects yfinance when MARKET_DATA_PROVIDER is unset.
+          (h) MARKET_DATA_PROVIDER='alpaca' is rejected as an unknown value
+              (Alpaca was removed 2026-09-30) rather than silently degrading.
           (j) Bar DataFrame contract: columns == [Open, High, Low, Close, Volume]
               and index is timezone-naive.
           (k) New settings fields exist on the Settings class
@@ -2725,7 +2736,6 @@ class GravityAIAuditor:
                 MarketDataError,
                 MarketDataProvider,
                 Quote,
-                AlpacaProvider,
                 YFinanceProvider,
                 CompositeProvider,
                 get_provider,
@@ -2808,7 +2818,7 @@ class GravityAIAuditor:
                 "evicted_after_ttl": evicted,
             }
 
-            # ── (g) CompositeProvider selects yfinance when no Alpaca keys ────
+            # ── (g) CompositeProvider selects yfinance when provider unset ────
             # NOTE: provider selection reads settings.settings (the pydantic
             # singleton, populated once from .env at import time), never
             # os.environ directly -- see data/market_data.py's
@@ -2821,7 +2831,7 @@ class GravityAIAuditor:
             import os as _os
             with patch.multiple(
                 "settings.settings",
-                MARKET_DATA_PROVIDER=None, ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
+                MARKET_DATA_PROVIDER=None,
             ):
                 cp_no_keys = CompositeProvider.__new__(CompositeProvider)
                 cp_no_keys._quote_provider = cp_no_keys._select_quote_provider()  # type: ignore[attr-defined]
@@ -2832,24 +2842,16 @@ class GravityAIAuditor:
                 "selected_provider": selected_no_keys,
             }
 
-            # ── (h) CompositeProvider selects Alpaca when both keys present ───
-            with patch.multiple(
-                "settings.settings",
-                MARKET_DATA_PROVIDER=None, ALPACA_API_KEY="test_key", ALPACA_SECRET_KEY="test_secret",
-            ):
-                # Patch StockHistoricalDataClient so alpaca-py doesn't try to connect.
-                # Must patch the name as looked up by AlpacaProvider._build_client()'s
-                # `from alpaca.data.historical import StockHistoricalDataClient` --
-                # i.e. the attribute on alpaca.data.historical itself, not on the
-                # (possibly different) submodule it was originally defined in.
-                with patch("alpaca.data.historical.StockHistoricalDataClient"):
-                    cp_with_keys = CompositeProvider.__new__(CompositeProvider)
-                    cp_with_keys._quote_provider = cp_with_keys._select_quote_provider()  # type: ignore[attr-defined]
-                    selected_with_keys = type(cp_with_keys._quote_provider).__name__
-            alpaca_selected = selected_with_keys == "AlpacaProvider"
-            audit["checks"]["composite_selects_alpaca_with_keys"] = {
-                "status": "PASSED" if alpaca_selected else "FAILED",
-                "selected_provider": selected_with_keys,
+            # ── (h) 'alpaca' is an unknown provider value now (fails loudly) ──
+            alpaca_rejected = False
+            with patch.multiple("settings.settings", MARKET_DATA_PROVIDER="alpaca"):
+                cp_alpaca = CompositeProvider.__new__(CompositeProvider)
+                try:
+                    cp_alpaca._select_quote_provider()  # type: ignore[attr-defined]
+                except RuntimeError as _exc:
+                    alpaca_rejected = "Unknown MARKET_DATA_PROVIDER" in str(_exc)
+            audit["checks"]["composite_rejects_removed_alpaca_provider"] = {
+                "status": "PASSED" if alpaca_rejected else "FAILED",
             }
 
             # ── (j) Bar DataFrame contract: OHLCV columns + tz-naive index ────
@@ -2909,7 +2911,6 @@ class GravityAIAuditor:
             with patch.multiple(
                 "settings.settings",
                 FUNDAMENTALS_SOURCE=None, MARKET_DATA_PROVIDER=None,
-                ALPACA_API_KEY="", ALPACA_SECRET_KEY="",
             ):
                 cp = CompositeProvider()
                 yf_calls = {"n": 0}
@@ -2942,7 +2943,6 @@ class GravityAIAuditor:
             with patch.multiple(
                 "settings.settings",
                 MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE=None,
-                ALPACA_API_KEY="", ALPACA_SECRET_KEY="",
             ):
                 cp_default = CompositeProvider()
                 default_source = cp_default.source_name
@@ -4144,7 +4144,7 @@ class GravityAIAuditor:
                     )
                     secret_write_refused = False
                     try:
-                        _env_io.write_setting("ALPACA_SECRET_KEY", "nope")
+                        _env_io.write_setting("FRED_API_KEY", "nope")
                     except _env_io.SecretWriteError:
                         secret_write_refused = True
                     _chk("secret_write_refused", secret_write_refused,
@@ -4492,7 +4492,7 @@ class GravityAIAuditor:
         self.step_65_refresh_validations_audit()
         # Stage 2 — Advisory false-positive preflight fixes (state_snapshot_fresh + expanded _ADVISORY_AUTO_SKIP)
         self.step_66_advisory_false_positive_audit()
-        # Stage 3 — Alpaca key-rotation reminder check
+        # Stage 3 — key-rotation reminder check (FRED; the Alpaca check was removed with Alpaca)
         self.step_67_key_rotation_audit()
         # Stage 8 — Prompt Registry security + wiring audit
         self.step_69_prompt_registry_audit()
@@ -4580,7 +4580,7 @@ class GravityAIAuditor:
         5.  ``shared.env_io.SECRET_KEYS`` does NOT contain ``MACRO_REGIME_GATE_ENABLED``
             (it is a toggle, not a credential).
         6.  ``scripts.preflight_check.check_macro_regime_gate_enabled`` fails when
-            gate is off and ALPACA_PAPER is False (live-trading safety guard).
+            gate is off and PAPER_TRADING is False (live-trading safety guard).
         7.  ``main_orchestrator._write_state_snapshot`` surfaces ``sahm_rule``,
             ``high_yield_oas``, and ``macro_regime_gate_enabled`` keys so the GUI
             Observability tab can display recession telemetry without a live FRED call.
@@ -4727,12 +4727,12 @@ class GravityAIAuditor:
             from scripts.preflight_check import check_macro_regime_gate_enabled
             with (
                 patch.object(_settings, "MACRO_REGIME_GATE_ENABLED", False),
-                patch.object(_settings, "ALPACA_PAPER", False),
+                patch.object(_settings, "PAPER_TRADING", False),
             ):
                 result_preflight = check_macro_regime_gate_enabled()
             passed = result_preflight.passed is False
             audit["checks"].append({
-                "check": "preflight fails when gate OFF + ALPACA_PAPER=False",
+                "check": "preflight fails when gate OFF + PAPER_TRADING=False",
                 "passed": passed,
                 "detail": f"passed={result_preflight.passed}, reason={result_preflight.reason!r}",
             })
@@ -5673,7 +5673,7 @@ class GravityAIAuditor:
         Checks
         ------
         1.  ``classify_market_error`` returns the right category for canonical
-            yfinance / Alpaca / FMP error strings and ``status_code=429``.
+            yfinance / FMP error strings and ``status_code=429``.
         2.  ``validate_quote`` returns ok=True for a clean Quote and ok=False
             for one with a NaN price.
         3.  ``FetchHealthTracker``: empty state HEALTHY-neutral; mixed window
@@ -5908,7 +5908,7 @@ class GravityAIAuditor:
             store = ot.LatencySampleStore(max_samples=3)
             base = datetime(2026, 6, 26, tzinfo=timezone.utc)
             for i in range(5):
-                store.record(f"S{i}", "alpaca",
+                store.record(f"S{i}", "fmp",
                              base + timedelta(seconds=i),
                              ingested_at=base + timedelta(seconds=i + 1))
             roll_off_ok = (
@@ -5918,10 +5918,10 @@ class GravityAIAuditor:
             # Worst-symbol summary
             store2 = ot.LatencySampleStore()
             for _ in range(3):
-                store2.record("AAPL", "alpaca", base,
+                store2.record("AAPL", "fmp", base,
                               ingested_at=base + timedelta(seconds=1))
             for _ in range(3):
-                store2.record("MSFT", "alpaca", base,
+                store2.record("MSFT", "fmp", base,
                               ingested_at=base + timedelta(seconds=60))
             summary = ot.summarise_latency(store2.samples())
             worst_ok = summary["worst_symbol"] == "MSFT" and summary["count"] == 6
@@ -5996,8 +5996,8 @@ class GravityAIAuditor:
         4.  ``strategy_registry.list_strategy_versions`` returns a stable
             sha256 prefix that CHANGES when the file content changes.
         5.  ``strategy_registry.read_active_mode`` resolves the mode truth
-            table correctly (DRY_RUN > ALPACA_PAPER).
-        6.  ``shared.env_io.ALLOWED_KEYS`` includes ``ALPACA_PAPER`` so the
+            table correctly (DRY_RUN > PAPER_TRADING).
+        6.  ``shared.env_io.ALLOWED_KEYS`` includes ``PAPER_TRADING`` so the
             Strategy Matrix mode toggle can persist the flag.
         """
         audit: dict = {"step": "step_44_safety_analytics_control_audit",
@@ -6115,14 +6115,14 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and version_ok
 
-            # 5. Mode truth table (DRY_RUN wins over ALPACA_PAPER)
+            # 5. Mode truth table (DRY_RUN wins over PAPER_TRADING)
             #    Patch settings on the fly, sample, restore.
             import settings as _settings
             real_settings = _settings.settings
 
             class _Fake:
                 def __init__(self, ap, dr) -> None:
-                    self.ALPACA_PAPER = ap
+                    self.PAPER_TRADING = ap
                     self.DRY_RUN = dr
 
             cases = [
@@ -6142,7 +6142,7 @@ class GravityAIAuditor:
 
             mode_ok = all(e is g for e, g in mode_results)
             audit["checks"].append({
-                "check": "strategy_registry.read_active_mode truth table (DRY_RUN wins over ALPACA_PAPER)",
+                "check": "strategy_registry.read_active_mode truth table (DRY_RUN wins over PAPER_TRADING)",
                 "passed": mode_ok,
                 "detail": [
                     f"expected={e.value}, got={g.value}"
@@ -6153,17 +6153,17 @@ class GravityAIAuditor:
 
             # 6. env_io allowlist contract
             allowlist_ok = (
-                "ALPACA_PAPER" in env_io.ALLOWED_KEYS
+                "PAPER_TRADING" in env_io.ALLOWED_KEYS
                 and "DRY_RUN" in env_io.ALLOWED_KEYS
-                and not env_io.is_secret("ALPACA_PAPER")
+                and not env_io.is_secret("PAPER_TRADING")
             )
             audit["checks"].append({
-                "check": "env_io.ALLOWED_KEYS includes ALPACA_PAPER + DRY_RUN; ALPACA_PAPER is NOT secret",
+                "check": "env_io.ALLOWED_KEYS includes PAPER_TRADING + DRY_RUN; PAPER_TRADING is NOT secret",
                 "passed": allowlist_ok,
                 "detail": (
-                    f"ALPACA_PAPER_in_allowlist={'ALPACA_PAPER' in env_io.ALLOWED_KEYS}, "
+                    f"PAPER_TRADING_in_allowlist={'PAPER_TRADING' in env_io.ALLOWED_KEYS}, "
                     f"DRY_RUN_in_allowlist={'DRY_RUN' in env_io.ALLOWED_KEYS}, "
-                    f"ALPACA_PAPER_is_secret={env_io.is_secret('ALPACA_PAPER')}"
+                    f"PAPER_TRADING_is_secret={env_io.is_secret('PAPER_TRADING')}"
                 ),
             })
             all_pass = all_pass and allowlist_ok
@@ -7807,10 +7807,10 @@ class GravityAIAuditor:
            (no broker imports) when the flag is True.
         2. ``gui/panels._render_strategy_mode_toggle`` does NOT render the
            Simulation/Paper/Live radio + confirm button when the flag is True.
-        3. ``scripts.preflight_check.run_checks`` auto-skips eight checks when
-           ADVISORY_ONLY=True — four broker-stack checks (alpaca_configured,
-           alpaca_paper_mode, dry_run_disabled, paper_trading_duration), one
-           key-rotation check (alpaca_key_rotation_recent — Stage 3 addition),
+        3. ``scripts.preflight_check.run_checks`` auto-skips six checks when
+           ADVISORY_ONLY=True — three broker-stack checks (paper_trading_mode,
+           dry_run_disabled, paper_trading_duration; the Alpaca credential and
+           key-rotation checks were removed with Alpaca on 2026-09-30),
            and three runtime-state false-positive checks (heartbeat_fresh,
            validation_reports, no_unexpected_risk_blocks).  Each skipped check
            gets a distinct per-check reason string (Stages 2+3, 2026-06-26
@@ -7827,10 +7827,9 @@ class GravityAIAuditor:
             "ADVISORY MODE" banner string.
         5.  ``scripts.preflight_check`` exports ``check_advisory_only_active``.
         6.  ``scripts.preflight_check._ADVISORY_AUTO_SKIP`` is a dict that
-            contains all 8 expected advisory-mode auto-skip entries (5 broker-
-            dependent including alpaca_key_rotation_recent, plus 3 advisory
-            false-positives: heartbeat_fresh, validation_reports,
-            no_unexpected_risk_blocks).
+            contains all 6 expected advisory-mode auto-skip entries (3 broker-
+            dependent, plus 3 advisory false-positives: heartbeat_fresh,
+            validation_reports, no_unexpected_risk_blocks).
         7.  Functional: when ADVISORY_ONLY=True, ``run_checks`` PASSes each
             check in ``_ADVISORY_AUTO_SKIP`` with reason naming ADVISORY_ONLY.
         8.  Functional: when ADVISORY_ONLY=False, the ``advisory_only_active``
@@ -7910,13 +7909,12 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c5
 
-            # Check 6: auto-skip dict — 8 entries (5 broker-dependent including
-            # alpaca_key_rotation_recent from Stage 3, plus 3 advisory false-positives
-            # added in Stage 2).
+            # Check 6: auto-skip dict — 6 entries (3 broker-dependent, plus 3
+            # advisory false-positives added in Stage 2). The Alpaca credential
+            # and key-rotation checks were removed with Alpaca (2026-09-30).
             broker_checks = {
-                "alpaca_configured", "alpaca_paper_mode",
+                "paper_trading_mode",
                 "dry_run_disabled", "paper_trading_duration",
-                "alpaca_key_rotation_recent",
             }
             advisory_fp_checks = {
                 "heartbeat_fresh", "validation_reports", "no_unexpected_risk_blocks",
@@ -7927,7 +7925,7 @@ class GravityAIAuditor:
             # so that future additions to _ADVISORY_AUTO_SKIP don't break this check).
             c6 = broker_checks.issubset(actual_skip) and advisory_fp_checks.issubset(actual_skip)
             audit["checks"].append({
-                "check": "_ADVISORY_AUTO_SKIP contains all 8 advisory-mode auto-skip checks (5 broker-dependent + 3 false-positives)",
+                "check": "_ADVISORY_AUTO_SKIP contains all 6 advisory-mode auto-skip checks (3 broker-dependent + 3 false-positives)",
                 "passed": c6,
                 "detail": f"actual={sorted(actual_skip)}, expected_subset={sorted(expected_skip)}",
             })
@@ -10168,10 +10166,10 @@ class GravityAIAuditor:
 
         Verifies that:
         1. ``check_state_snapshot_fresh`` exists and is in ``ALL_CHECKS``.
-        2. ``_ADVISORY_AUTO_SKIP`` contains all 8 expected entries (5 broker-
-           dependent including alpaca_key_rotation_recent, plus 3 advisory
-           false-positives: heartbeat_fresh, validation_reports,
-           no_unexpected_risk_blocks).
+        2. ``_ADVISORY_AUTO_SKIP`` contains all 6 expected entries (3 broker-
+           dependent, plus 3 advisory false-positives: heartbeat_fresh,
+           validation_reports, no_unexpected_risk_blocks). The Alpaca
+           credential/key-rotation checks were removed with Alpaca (2026-09-30).
         3. ``state_snapshot_fresh`` is NOT in ``_ADVISORY_AUTO_SKIP`` — it is
            the advisory liveness indicator and must always run.
         4. ``check_state_snapshot_fresh`` passes when snapshot is fresh and
@@ -10187,9 +10185,9 @@ class GravityAIAuditor:
            check_calibration_drift + check_robinhood_kill_switch_clear +
            check_robinhood_queue_fresh + check_robinhood_session_present +
            check_macro_regime_gate_enabled + check_alert_channels_reachable +
-           check_broker_backend_matches_live_intent + check_daemon_pid_alive +
+           check_live_order_routing + check_daemon_pid_alive +
            check_no_stray_database_files + check_output_dir_matches_local_data_root
-           added since).
+           added since, minus the two Alpaca checks removed 2026-09-30).
         10. ``tests/test_preflight.py`` contains ``TestStateSnapshotFresh``
             and ``TestAdvisoryAutoSkip`` class definitions.
         """
@@ -10228,19 +10226,18 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c2
 
-            # Check 3: _ADVISORY_AUTO_SKIP contains all 8 expected entries
-            # (4 broker + alpaca_key_rotation_recent + 3 advisory false-positives)
+            # Check 3: _ADVISORY_AUTO_SKIP contains all 6 expected entries
+            # (3 broker + 3 advisory false-positives)
             actual_skip = set(getattr(preflight_check, "_ADVISORY_AUTO_SKIP", ()))
             broker_checks = {
-                "alpaca_configured", "alpaca_paper_mode",
+                "paper_trading_mode",
                 "dry_run_disabled", "paper_trading_duration",
-                "alpaca_key_rotation_recent",
             }
             fp_checks = {"heartbeat_fresh", "validation_reports", "no_unexpected_risk_blocks"}
             all_expected = broker_checks | fp_checks
             c3 = all_expected.issubset(actual_skip)
             audit["checks"].append({
-                "check": "_ADVISORY_AUTO_SKIP contains all 8 advisory-mode auto-skip entries",
+                "check": "_ADVISORY_AUTO_SKIP contains all 6 advisory-mode auto-skip entries",
                 "passed": c3,
                 "detail": f"actual={sorted(actual_skip)}, missing={sorted(all_expected - actual_skip)}",
             })
@@ -10351,9 +10348,11 @@ class GravityAIAuditor:
             all_pass = all_pass and c8
 
             # Check 9: ALL_CHECKS has at least 27 entries (23 from prior tiers +
-            # check_broker_backend_matches_live_intent + check_daemon_pid_alive +
+            # check_live_order_routing + check_daemon_pid_alive +
             # check_no_stray_database_files + check_output_dir_matches_local_data_root
-            # added since -- this count is a simple registry-size tripwire, not a
+            # added since, minus the two Alpaca checks removed 2026-09-30, plus
+            # check_feature_drift + check_prompt_registry_signing_key_configured
+            # -- this count is a simple registry-size tripwire, not a
             # semantic assertion. A floor (>=), not exact equality, so a future
             # legitimately-added preflight check no longer re-breaks this tripwire
             # (this exact literal has already been manually bumped ~6 times); only
@@ -10388,25 +10387,27 @@ class GravityAIAuditor:
         self.report["step_66_advisory_false_positive_audit"] = audit
 
     def step_67_key_rotation_audit(self) -> None:
-        """Step 67 — Alpaca key-rotation reminder check (Stage 3, 2026-06-26 cleanup).
+        """Step 67 — key-rotation reminder check (Stage 3, 2026-06-26; Alpaca
+        half removed 2026-09-30).
 
-        ``check_alpaca_key_rotation_recent`` mirrors ``check_key_rotation_recent``
-        for the Alpaca key pair, with one critical difference: it is auto-skipped
-        under ADVISORY_ONLY=True because Alpaca paper keys have no blast-radius
-        risk while the broker surface is quarantined.
+        ``check_key_rotation_recent`` reminds the operator to rotate
+        FRED_API_KEY. The Alpaca twin (``check_alpaca_key_rotation_recent`` +
+        ``ALPACA_KEY_ROTATED_DATE``) was removed along with Alpaca itself.
 
         Checks
         ------
-        1. ``check_alpaca_key_rotation_recent`` is importable and callable.
-        2. ``settings.ALPACA_KEY_ROTATED_DATE`` field exists (Optional[str]).
+        1. ``check_key_rotation_recent`` is importable and callable.
+        2. ``settings.FRED_KEY_ROTATED_DATE`` exists and
+           ``ALPACA_KEY_ROTATED_DATE`` is no longer a Settings field.
         3. Unset date → warning-level PASS (not blocking).
         4. Fresh date (30 days ago) → clean PASS, no warning.
         5. Stale date (100 days ago) → warning-level PASS (never ``passed=False``).
         6. Invalid ISO format → warning-level PASS.
-        7. ``alpaca_key_rotation_recent`` appears in ``_ADVISORY_AUTO_SKIP``.
-        8. Auto-skip fires when ADVISORY_ONLY=True (verified via run_checks).
-        9. Both key_rotation_recent and alpaca_key_rotation_recent in ALL_CHECKS in order.
-        10. ``tests/test_preflight.py`` includes ``TestKeyRotationChecks``.
+        7. ``key_rotation_recent`` is NOT auto-skipped under ADVISORY_ONLY (FRED
+           feeds the advisory pipeline too).
+        8. The Alpaca check is gone from the module, ``ALL_CHECKS`` and
+           ``_ADVISORY_AUTO_SKIP``; ``key_rotation_recent`` is in ``ALL_CHECKS``.
+        9. ``tests/test_preflight.py`` includes ``TestKeyRotationChecks``.
         """
         audit: dict = {
             "step": "step_67_key_rotation_audit",
@@ -10421,41 +10422,42 @@ class GravityAIAuditor:
             from unittest.mock import MagicMock, patch as _patch
 
             # Check 1: importable
-            c1 = hasattr(preflight_check, "check_alpaca_key_rotation_recent")
+            c1 = callable(getattr(preflight_check, "check_key_rotation_recent", None))
             audit["checks"].append({
-                "check": "check_alpaca_key_rotation_recent exists and is callable",
+                "check": "check_key_rotation_recent exists and is callable",
                 "passed": c1,
             })
             all_pass = all_pass and c1
 
-            # Check 2: settings field exists
-            from settings import settings as _s
-            c2 = hasattr(_s, "ALPACA_KEY_ROTATED_DATE")
+            # Check 2: settings fields
+            from settings import Settings as _Settings
+            c2 = ("FRED_KEY_ROTATED_DATE" in _Settings.model_fields
+                  and "ALPACA_KEY_ROTATED_DATE" not in _Settings.model_fields)
             audit["checks"].append({
-                "check": "settings.ALPACA_KEY_ROTATED_DATE field exists",
+                "check": "FRED_KEY_ROTATED_DATE exists; ALPACA_KEY_ROTATED_DATE removed",
                 "passed": c2,
             })
             all_pass = all_pass and c2
 
             def _mock_s(**kwargs):
                 m = MagicMock()
-                m.ALPACA_KEY_ROTATED_DATE = kwargs.get("ALPACA_KEY_ROTATED_DATE", None)
+                m.FRED_KEY_ROTATED_DATE = kwargs.get("FRED_KEY_ROTATED_DATE", None)
                 return m
 
             # Check 3: unset → warning PASS
-            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE=None)):
-                r3 = preflight_check.check_alpaca_key_rotation_recent()
+            with _patch("scripts.preflight_check.settings", _mock_s(FRED_KEY_ROTATED_DATE=None)):
+                r3 = preflight_check.check_key_rotation_recent()
             c3 = r3.passed and r3.warning
             audit["checks"].append({
-                "check": "Unset ALPACA_KEY_ROTATED_DATE → warning-level PASS",
+                "check": "Unset FRED_KEY_ROTATED_DATE → warning-level PASS",
                 "passed": c3,
             })
             all_pass = all_pass and c3
 
             # Check 4: fresh date → clean PASS
             fresh = (_date.today() - _td(days=30)).isoformat()
-            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE=fresh)):
-                r4 = preflight_check.check_alpaca_key_rotation_recent(max_age_days=90)
+            with _patch("scripts.preflight_check.settings", _mock_s(FRED_KEY_ROTATED_DATE=fresh)):
+                r4 = preflight_check.check_key_rotation_recent(max_age_days=90)
             c4 = r4.passed and not r4.warning
             audit["checks"].append({
                 "check": "Fresh rotation date → clean PASS without warning",
@@ -10465,8 +10467,8 @@ class GravityAIAuditor:
 
             # Check 5: stale date → warning PASS (never False)
             stale = (_date.today() - _td(days=100)).isoformat()
-            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE=stale)):
-                r5 = preflight_check.check_alpaca_key_rotation_recent(max_age_days=90)
+            with _patch("scripts.preflight_check.settings", _mock_s(FRED_KEY_ROTATED_DATE=stale)):
+                r5 = preflight_check.check_key_rotation_recent(max_age_days=90)
             c5 = r5.passed and r5.warning
             audit["checks"].append({
                 "check": "Stale rotation date → warning-level PASS (never passed=False)",
@@ -10475,8 +10477,8 @@ class GravityAIAuditor:
             all_pass = all_pass and c5
 
             # Check 6: invalid ISO format → warning PASS
-            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE="not-a-date")):
-                r6 = preflight_check.check_alpaca_key_rotation_recent()
+            with _patch("scripts.preflight_check.settings", _mock_s(FRED_KEY_ROTATED_DATE="not-a-date")):
+                r6 = preflight_check.check_key_rotation_recent()
             c6 = r6.passed and r6.warning
             audit["checks"].append({
                 "check": "Invalid ISO format → warning-level PASS",
@@ -10484,61 +10486,39 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c6
 
-            # Check 7: appears in _ADVISORY_AUTO_SKIP
+            # Check 7: FRED rotation reminder is never auto-skipped
             auto_skip = getattr(preflight_check, "_ADVISORY_AUTO_SKIP", {})
-            c7 = "alpaca_key_rotation_recent" in auto_skip
+            c7 = "key_rotation_recent" not in auto_skip
             audit["checks"].append({
-                "check": "alpaca_key_rotation_recent in _ADVISORY_AUTO_SKIP",
+                "check": "key_rotation_recent is NOT in _ADVISORY_AUTO_SKIP",
                 "passed": c7,
             })
             all_pass = all_pass and c7
 
-            # Check 8: functional auto-skip under ADVISORY_ONLY=True
-            prior = getattr(preflight_check.settings, "ADVISORY_ONLY", True)
-            try:
-                preflight_check.settings.ADVISORY_ONLY = True
-                results = preflight_check.run_checks(skip=[])
-                by_name = {r.name: r for r in results}
-                skip_r = by_name.get("alpaca_key_rotation_recent")
-                c8 = (
-                    skip_r is not None
-                    and skip_r.passed
-                    and "ADVISORY_ONLY" in skip_r.reason
-                )
-            finally:
-                try:
-                    preflight_check.settings.ADVISORY_ONLY = prior
-                except Exception:
-                    pass
+            # Check 8: Alpaca check gone everywhere; FRED check registered
+            all_check_names = [fn.__name__.replace("check_", "", 1) for fn in preflight_check.ALL_CHECKS]
+            c8 = (
+                "key_rotation_recent" in all_check_names
+                and "alpaca_key_rotation_recent" not in all_check_names
+                and "alpaca_key_rotation_recent" not in auto_skip
+                and not hasattr(preflight_check, "check_alpaca_key_rotation_recent")
+            )
             audit["checks"].append({
-                "check": "auto-skip fires for alpaca_key_rotation_recent under ADVISORY_ONLY=True",
+                "check": "Alpaca key-rotation check removed; key_rotation_recent registered",
                 "passed": c8,
+                "detail": f"order={all_check_names[:5]}",
             })
             all_pass = all_pass and c8
 
-            # Check 9: both key_rotation_recent and alpaca_key_rotation_recent in ALL_CHECKS in order
-            all_check_names = [fn.__name__.replace("check_", "") for fn in preflight_check.ALL_CHECKS]
-            has_both = ("key_rotation_recent" in all_check_names
-                        and "alpaca_key_rotation_recent" in all_check_names)
-            idx_fred = all_check_names.index("key_rotation_recent") if "key_rotation_recent" in all_check_names else -1
-            idx_alpaca = all_check_names.index("alpaca_key_rotation_recent") if "alpaca_key_rotation_recent" in all_check_names else -1
-            c9 = has_both and idx_fred < idx_alpaca
-            audit["checks"].append({
-                "check": "key_rotation_recent and alpaca_key_rotation_recent both in ALL_CHECKS (in order)",
-                "passed": c9,
-                "detail": f"order={all_check_names[:5]}",
-            })
-            all_pass = all_pass and c9
-
-            # Check 10: test file contains TestKeyRotationChecks
+            # Check 9: test file contains TestKeyRotationChecks
             from pathlib import Path as _Path
             test_src = _Path("tests/test_preflight.py").read_text(encoding="utf-8")
-            c10 = "TestKeyRotationChecks" in test_src and "check_alpaca_key_rotation_recent" in test_src
+            c9 = "TestKeyRotationChecks" in test_src and "check_key_rotation_recent" in test_src
             audit["checks"].append({
                 "check": "tests/test_preflight.py contains TestKeyRotationChecks class",
-                "passed": c10,
+                "passed": c9,
             })
-            all_pass = all_pass and c10
+            all_pass = all_pass and c9
 
             audit["overall_pass"] = all_pass
             audit["status"] = "PASSED" if all_pass else "FAILED"

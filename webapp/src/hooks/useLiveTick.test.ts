@@ -77,7 +77,7 @@ describe("useLiveTick", () => {
         price: 185.5,
         bid: 185.45,
         ask: 185.55,
-        source: "alpaca",
+        source: "fmp",
         is_stale: false,
       });
     });
@@ -86,7 +86,7 @@ describe("useLiveTick", () => {
     expect(result.current.price).toBe(185.5);
     expect(result.current.bid).toBe(185.45);
     expect(result.current.ask).toBe(185.55);
-    expect(result.current.source).toBe("alpaca");
+    expect(result.current.source).toBe("fmp");
     expect(result.current.isStale).toBe(false);
   });
 

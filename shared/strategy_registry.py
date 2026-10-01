@@ -18,16 +18,16 @@ Streamlit code stays declarative and these surfaces are unit-testable cold.
    strategy when I think I did?"
 
 2. **Global Paper / Live mode toggle.** ``read_active_mode()`` synthesises the
-   current execution mode from ``settings.ALPACA_PAPER`` and
+   current execution mode from ``settings.PAPER_TRADING`` and
    ``settings.DRY_RUN`` (the existing source of truth). ``set_active_mode``
    writes both env vars via the allowlist-bounded :mod:`shared.env_io` so the
    GUI cannot accidentally enable live trading without explicitly flipping
-   ``ALPACA_PAPER`` to ``false``. **The setting takes effect on the next
+   ``PAPER_TRADING`` to ``false``. **The setting takes effect on the next
    orchestrator launch** — we never patch a running process.
 
 Constraints honoured
 --------------------
-* CONSTRAINT #3 (env-only writes via allowlist) — ``ALPACA_PAPER`` and
+* CONSTRAINT #3 (env-only writes via allowlist) — ``PAPER_TRADING`` and
   ``DRY_RUN`` are both writable via :mod:`shared.env_io`.
 * CONSTRAINT #5 (never fabricate) — a module without a registered file path
   returns ``version=None`` rather than an empty/synthetic hash.
@@ -196,9 +196,11 @@ def list_strategy_versions(
 class ExecutionMode(str, Enum):
     """Operational mode for the platform's order pipeline.
 
-    * ``PAPER`` — ``ALPACA_PAPER=true`` (broker traffic to the paper sandbox).
-    * ``LIVE``  — ``ALPACA_PAPER=false`` (broker traffic to the live endpoint).
-    * ``SIMULATION`` — ``DRY_RUN=true`` regardless of ALPACA_PAPER.  The
+    * ``PAPER`` — ``PAPER_TRADING=true`` (the pipeline trades the FMP paper ledger).
+    * ``LIVE``  — ``PAPER_TRADING=false``. Since Alpaca was removed (2026-09-30)
+      there is no automated live broker: the pipeline places NO orders and
+      real trades go only through the Robinhood execution queue.
+    * ``SIMULATION`` — ``DRY_RUN=true`` regardless of PAPER_TRADING.  The
       OrderManager intercepts every intent before any broker contact.
     """
 
@@ -220,7 +222,7 @@ class ModeState:
     """Resolved execution mode + the underlying env-var flags."""
 
     mode: ExecutionMode
-    alpaca_paper: bool
+    paper_trading: bool
     dry_run: bool
 
     @property
@@ -234,25 +236,25 @@ def read_active_mode() -> ModeState:
     Order of precedence:
 
     1. ``DRY_RUN=true`` → :data:`ExecutionMode.SIMULATION` regardless of
-       ``ALPACA_PAPER`` (because OrderManager intercepts before broker
+       ``PAPER_TRADING`` (because OrderManager intercepts before broker
        contact).
-    2. Otherwise ``ALPACA_PAPER`` decides PAPER (``True``) vs LIVE (``False``).
+    2. Otherwise ``PAPER_TRADING`` decides PAPER (``True``) vs LIVE (``False``).
     """
     try:
         from settings import settings as _settings  # noqa: WPS433
-        alpaca_paper = bool(_settings.ALPACA_PAPER)
+        paper_trading = bool(_settings.PAPER_TRADING)
         dry_run = bool(_settings.DRY_RUN)
     except Exception as exc:  # noqa: BLE001
         logger.warning("read_active_mode: settings load failed (%s); assuming SIMULATION", exc)
-        return ModeState(ExecutionMode.SIMULATION, alpaca_paper=True, dry_run=True)
+        return ModeState(ExecutionMode.SIMULATION, paper_trading=True, dry_run=True)
 
     if dry_run:
         mode = ExecutionMode.SIMULATION
-    elif alpaca_paper:
+    elif paper_trading:
         mode = ExecutionMode.PAPER
     else:
         mode = ExecutionMode.LIVE
-    return ModeState(mode=mode, alpaca_paper=alpaca_paper, dry_run=dry_run)
+    return ModeState(mode=mode, paper_trading=paper_trading, dry_run=dry_run)
 
 
 def set_active_mode(mode: ExecutionMode | str) -> ModeState:
@@ -261,7 +263,7 @@ def set_active_mode(mode: ExecutionMode | str) -> ModeState:
     Writes the **two** env vars that together define the mode:
 
     * ``DRY_RUN``       — ``true`` only for SIMULATION.
-    * ``ALPACA_PAPER``  — ``true`` for SIMULATION + PAPER; ``false`` for LIVE.
+    * ``PAPER_TRADING``  — ``true`` for SIMULATION + PAPER; ``false`` for LIVE.
 
     The change takes effect on the next orchestrator launch — we do NOT
     monkey-patch a running ``settings.Settings`` instance, because mid-run
@@ -285,15 +287,15 @@ def set_active_mode(mode: ExecutionMode | str) -> ModeState:
             ) from exc
 
     dry_run = (mode is ExecutionMode.SIMULATION)
-    alpaca_paper = (mode is not ExecutionMode.LIVE)
+    paper_trading = (mode is not ExecutionMode.LIVE)
 
     from shared import env_io  # local import keeps the module import-light
     env_io.write_setting("DRY_RUN", dry_run)
-    env_io.write_setting("ALPACA_PAPER", alpaca_paper)
+    env_io.write_setting("PAPER_TRADING", paper_trading)
 
-    return ModeState(mode=mode, alpaca_paper=alpaca_paper, dry_run=dry_run)
+    return ModeState(mode=mode, paper_trading=paper_trading, dry_run=dry_run)
 
 
 def mode_banner_text(state: ModeState) -> str:
     """Return the one-line banner string for the Strategy Matrix tab."""
-    return f"Active mode: {state.mode.label}  •  ALPACA_PAPER={state.alpaca_paper}  •  DRY_RUN={state.dry_run}"
+    return f"Active mode: {state.mode.label}  •  PAPER_TRADING={state.paper_trading}  •  DRY_RUN={state.dry_run}"

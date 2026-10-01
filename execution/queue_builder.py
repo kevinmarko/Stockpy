@@ -15,7 +15,7 @@
 # This module NEVER contacts a broker and NEVER places an order.  It only:
 #   1. Translates actionable advisory Recommendations into `OrderIntent`s.
 #   2. Runs them through the existing `PreTradeRiskGate` + `GlobalKillSwitch`
-#      (the same decision stack the Alpaca path uses), in dry-run.
+#      (the same decision stack the pipeline's paper broker path uses), in dry-run.
 #   3. Writes the gated queue to disk — but ONLY when the execution mode is
 #      `review` or `live`.  In the default `off` mode nothing is written.
 #

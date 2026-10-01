@@ -149,7 +149,9 @@ class BrokerBase(ABC):
     Async interface every broker adapter must implement.
 
     Concrete subclasses:
-      * AlpacaBroker  — paper / live via alpaca-py AsyncTradingClient
+      * FMPPaperBroker — local SQLite paper ledger filling at live FMP quotes
+        (execution/fmp_paper_broker.py; the only broker since Alpaca was
+        removed 2026-09-30)
       * MockBroker    — shared in-memory, network-free stub for unit tests,
         defined in ``tests/conftest.py`` and exposed both as the importable
         ``MockBroker`` class and the ``mock_broker`` pytest fixture.

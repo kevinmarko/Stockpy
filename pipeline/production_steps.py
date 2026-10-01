@@ -185,9 +185,7 @@ class AsyncDataFetchStep(PipelineStep):
             # main_orchestrator._mark_data_refreshed()'s real-data-only
             # asymmetry below -- set ONLY on this fallback branch, never on
             # the real-data path. BrokerExecutionStep checks this marker
-            # before it will submit any order, regardless of which broker
-            # backend (Alpaca, FMPPaperBroker, ...) settings.BROKER_BACKEND
-            # selects one layer deeper.
+            # before it will submit any paper order.
             ctx.context_extras['data_is_synthetic'] = True
         else:
             # Real (non-mock) data landed — stamp the cross-cycle freshness
@@ -3207,7 +3205,7 @@ class AgenticQueueStep(PipelineStep):
 
 
 class BrokerExecutionStep(PipelineStep):
-    """Executes gated paper/live orders with the Alpaca-API broker surface
+    """Executes gated paper orders on the local FMP paper ledger
     (``main_orchestrator._execute_broker_orders``) from the strategy Kelly
     targets. Separate from the Robinhood queue (``AgenticQueueStep``).
 
@@ -3217,7 +3215,7 @@ class BrokerExecutionStep(PipelineStep):
     name = "execution"
 
     async def run(self, ctx: RunContext) -> None:
-        """Execute gated BUY/SELL orders through the broker (skipped without credentials)."""
+        """Execute gated BUY/SELL orders on the paper ledger (never when going live)."""
         import main_orchestrator
 
         if ctx.dashboard_df is None or ctx.dashboard_df.empty:
@@ -3234,8 +3232,7 @@ class BrokerExecutionStep(PipelineStep):
         # unconditionally without calling main_orchestrator._execute_broker_
         # orders. This never touches broker-selection code -- that selection
         # happens one layer deeper inside _execute_broker_orders, keyed off
-        # settings.BROKER_BACKEND -- so it protects AlpacaBroker and
-        # FMPPaperBroker identically.
+        # execution.broker_selection.resolve_broker_backend().
         if ctx.context_extras.get("data_is_synthetic"):
             telemetry.critical(
                 "Synthetic (MockDataEngine) data detected for this cycle -- "
@@ -3251,27 +3248,10 @@ class BrokerExecutionStep(PipelineStep):
                 "execution is disabled for this run.",
                 0 if ctx.dashboard_df is None else len(ctx.dashboard_df),
             )
-        elif not ctx.dashboard_df.empty and (
-            _uses_local_paper_ledger()
-            or (settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY)
-        ):
-            await main_orchestrator._execute_broker_orders(ctx.dashboard_df, effective_dry_run, macro_dto=ctx.macro_dto)
         elif not ctx.dashboard_df.empty:
-            telemetry.info(
-                "ALPACA_API_KEY/SECRET_KEY not configured; skipping broker execution. "
-                "Set them in .env to enable live/paper order submission."
-            )
-
-
-def _uses_local_paper_ledger() -> bool:
-    """True when orders go to the local FMP paper ledger, which needs no
-    Alpaca credentials. Mirrors ``execution.broker_selection.
-    resolve_broker_backend()`` without its side effect: a going-live run with
-    BROKER_BACKEND='fmp_paper' is forced to Alpaca there, so it does NOT
-    count as the paper ledger here and still needs Alpaca keys."""
-    from execution.broker_selection import is_going_live
-
-    return getattr(settings, "BROKER_BACKEND", "alpaca") == "fmp_paper" and not is_going_live()
+            # Going live (PAPER_TRADING=False) is handled inside:
+            # resolve_broker_backend() returns None and no order is placed.
+            await main_orchestrator._execute_broker_orders(ctx.dashboard_df, effective_dry_run, macro_dto=ctx.macro_dto)
 
 
 class StateSnapshotStep(PipelineStep):

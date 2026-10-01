@@ -5,7 +5,7 @@ Persistent execution-mode header helpers for :mod:`legacy.streamlit_command_cent
 
 The active execution mode is the most safety-critical piece of state an
 operator can accidentally ignore.  This module derives mode from the same
-``DRY_RUN`` / ``ALPACA_PAPER`` env vars that :mod:`shared.strategy_registry`
+``DRY_RUN`` / ``PAPER_TRADING`` env vars that :mod:`shared.strategy_registry`
 writes — single source of truth, no new state.
 
 Public API
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Map (dry_run, alpaca_paper) → human label.
+# Map (dry_run, paper_trading) → human label.
 _MODE_LABELS: Dict[tuple[bool, bool], str] = {
     (True,  True):  "Simulation",
     (True,  False): "Simulation",
@@ -62,7 +62,7 @@ class RunModeState:
     mode        : ``"Simulation"`` / ``"Paper"`` / ``"Live"``.
     process     : ``"idle"`` / ``"running"`` / ``"finished"``.
     dry_run     : Whether ``DRY_RUN=true``.
-    alpaca_paper: Whether ``ALPACA_PAPER=true``.
+    paper_trading: Whether ``PAPER_TRADING=true``.
     icon        : Emoji prefix for the banner.
     color       : Streamlit color class (``"blue"``, ``"orange"``, ``"red"``, ``"gray"``).
     pid         : Active subprocess PID (``None`` if idle).
@@ -72,7 +72,7 @@ class RunModeState:
     mode: str
     process: str
     dry_run: bool
-    alpaca_paper: bool
+    paper_trading: bool
     icon: str
     color: str
     pid: Optional[int]
@@ -104,17 +104,17 @@ def read_active_run_mode(
     """
     ss = session_state if session_state is not None else {}
 
-    # Derive dry_run / alpaca_paper from settings (never os.environ directly —
+    # Derive dry_run / paper_trading from settings (never os.environ directly —
     # settings has already coerced the type).
     try:
         from settings import settings as _s
         dry_run = bool(_s.DRY_RUN)
-        alpaca_paper = bool(_s.ALPACA_PAPER)
+        paper_trading = bool(_s.PAPER_TRADING)
     except Exception:
         dry_run = False
-        alpaca_paper = True  # safe default — never default to "Live"
+        paper_trading = True  # safe default — never default to "Live"
 
-    mode = _MODE_LABELS.get((dry_run, alpaca_paper), "Simulation")
+    mode = _MODE_LABELS.get((dry_run, paper_trading), "Simulation")
     icon = _MODE_ICONS.get(mode, "⚪")
     color = _MODE_COLORS.get(mode, "gray")
 
@@ -145,7 +145,7 @@ def read_active_run_mode(
         mode=mode,
         process=process,
         dry_run=dry_run,
-        alpaca_paper=alpaca_paper,
+        paper_trading=paper_trading,
         icon=icon,
         color=color,
         pid=pid,

@@ -6,7 +6,7 @@ Task 1.4 — Portfolio & Watchlist Synchronization Engine.
 Single-purpose module that takes the **union** of (a) every active Robinhood
 holding and (b) every user-defined Robinhood watchlist + plain-text watchlist
 files, and reconciles it against the platform's market-data feeds
-(``data.market_data`` → Alpaca quotes/bars + Yahoo/FMP fundamentals).
+(``data.market_data`` → FMP/yfinance quotes/bars + Yahoo/FMP fundamentals).
 
 Why this exists
 ---------------
@@ -48,7 +48,7 @@ Public API
 
 CONSTRAINTS honoured
 --------------------
-* No paid dependencies — Alpaca / FMP / yfinance via the existing
+* No new dependencies — FMP / yfinance via the existing
   ``data.market_data`` layer; no new vendors.
 * No fabricated metrics — when a quote / bar / fundamental fetch fails the
   symbol is marked ``UNCOVERED`` / ``EQUITY_ONLY`` and a NaN is propagated
@@ -132,7 +132,7 @@ class SymbolStatus:
     cost_basis_delta_per_share: float        # current_price - avg_cost (signed)
     market_value: float                      # quantity * current_price (NaN if either side NaN)
     is_stale_quote: bool                     # surfaced from MarketDataProvider.Quote.is_stale
-    quote_source: str                        # "alpaca"/"yfinance"/"" when no quote
+    quote_source: str                        # "fmp"/"yfinance"/"" when no quote
     has_fundamentals: bool
     forecast_available: bool                 # True when a Forecast_30 (or analogous) value exists
     watchlists: tuple[str, ...]              # names of RH lists containing this symbol

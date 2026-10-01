@@ -24,7 +24,7 @@ This platform is **advisory-only by default** (`ADVISORY_ONLY`, see
 incident playbooks are written for that mode: "emergency shutdown" means
 **pausing signal generation**, not halting live orders, unless you've
 confirmed live execution is actually enabled (`ROBINHOOD_EXECUTION_MODE` /
-`ALPACA_PAPER=False`) for this deployment. Check that first — several
+`PAPER_TRADING=False`) for this deployment. Check that first — several
 RUNBOOK sections are explicitly marked "⚠ N/A in Advisory Mode" (§3.8-3.10)
 and don't apply unless live execution is on.
 

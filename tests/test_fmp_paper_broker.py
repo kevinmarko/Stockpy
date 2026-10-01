@@ -1,7 +1,7 @@
 """tests/test_fmp_paper_broker.py
 
 Sync test functions driving the broker's async methods via asyncio.run() --
-matches this repo's established pattern (tests/test_alpaca_broker.py); this
+matches this repo's established pattern for broker tests; this
 codebase has no pytest-asyncio/anyio plugin registered, and pytest.ini's
 --strict-markers makes an unregistered @pytest.mark.anyio fail collection
 outright rather than silently no-op.
@@ -74,7 +74,7 @@ def test_submit_order_invalid_price_is_rejected():
 
 def test_submit_order_dry_run_never_touches_quote_or_store():
     """dry_run=True must short-circuit before any quote fetch or store write
-    -- mirrors AlpacaBroker.submit_order's exact pattern (Finding 10)."""
+    -- the dry-run pattern every broker adapter shares (Finding 10)."""
     broker = FMPPaperBroker(db_url="sqlite:///:memory:")
     intent = _intent(client_order_id="dry_run_order")
     intent.dry_run = True
@@ -264,7 +264,7 @@ def test_get_orders_returns_recorded_fill(tmp_path):
 # ---------------------------------------------------------------------------
 # Integration: dropping into OrderManager gets kill-switch/dry-run gating
 # for free, with no separate wiring -- confirms the "drop-in broker" design
-# goal actually holds for FMPPaperBroker, not just AlpacaBroker.
+# goal actually holds for FMPPaperBroker.
 # ---------------------------------------------------------------------------
 
 

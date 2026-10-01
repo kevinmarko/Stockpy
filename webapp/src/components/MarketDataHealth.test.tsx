@@ -65,7 +65,7 @@ describe("MarketDataHealth (real mock API)", () => {
         ask: 214.95,
         timestamp: new Date().toISOString(),
         is_stale: false,
-        source: "alpaca",
+        source: "fmp",
       },
     } satisfies QuotesResponse);
 
@@ -75,7 +75,7 @@ describe("MarketDataHealth (real mock API)", () => {
     const row = await screen.findByTestId("md-row-AAPL");
     expect(row.textContent).toContain("OK");
     expect(row.textContent).toMatch(/\d+ ms/);
-    expect(row.textContent).toContain("alpaca");
+    expect(row.textContent).toContain("fmp");
 
     // Rolling connection-health badge reflects the single successful check.
     await waitFor(() =>
@@ -115,7 +115,7 @@ describe("MarketDataHealth (real mock API)", () => {
   it("renders provider/mode/TTL tiles from GET /data/provider-status", async () => {
     vi.spyOn(api, "getUniverse").mockResolvedValueOnce(universeOf(["AAPL"]));
     vi.spyOn(api, "getProviderStatus").mockResolvedValueOnce({
-      provider: "alpaca",
+      provider: "fmp",
       is_realtime: true,
       mode: "real_time",
       quote_ttl_seconds: 45,
@@ -124,7 +124,7 @@ describe("MarketDataHealth (real mock API)", () => {
 
     render(<MarketDataHealth />);
     const tiles = await screen.findByTestId("md-provider-tiles");
-    expect(tiles).toHaveTextContent("alpaca");
+    expect(tiles).toHaveTextContent("fmp");
     expect(tiles).toHaveTextContent("Real-time");
     expect(tiles).toHaveTextContent("45s");
     // Real-time provider -> no "delayed" caveat note.

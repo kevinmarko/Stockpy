@@ -63,6 +63,7 @@ _OVERRIDE_DOMAINS: Dict[str, str] = {
     "FLATTEN_ON_KILL": "Execution/Brokers",
     "EXECUTION_PRIORITY_QUEUE_ENABLED": "Execution/Brokers",
     "EXECUTION_QUEUE_LEAK_RATE_PER_SEC": "Execution/Brokers",
+    "PAPER_TRADING": "Execution/Brokers",
     "PAPER_TRADING_START_DATE": "Execution/Brokers",
     "OVERNIGHT_LIQUIDITY_DEPTH_HEURISTIC": "Execution/Brokers",
     "QUEUE_SOURCE_MAX_AGE_SECONDS": "Execution/Brokers",
@@ -82,7 +83,6 @@ _OVERRIDE_DOMAINS: Dict[str, str] = {
     "BARS_BACKFILL_DAYS": "Market Data/DB",
     "DATA_FETCH_TASK_TIMEOUT_SECONDS": "Market Data/DB",
     "FRED_REQUEST_TIMEOUT_SECONDS": "Market Data/DB",
-    "ALPACA_REQUEST_TIMEOUT_SECONDS": "Market Data/DB",
     "PIT_CAPTURE_ENABLED": "Market Data/DB",
 
     # Universe / Watchlist
@@ -182,7 +182,6 @@ def classify_field(key: str) -> str:
     if (
         key.startswith("ROBINHOOD_")
         or key.startswith("RH_")
-        or key.startswith("ALPACA_")
         or key.startswith("BROKER_")
         or key.startswith("BROKERAGE_")
         or key.startswith("LIVE_TRADE_")

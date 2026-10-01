@@ -53,9 +53,8 @@ class DataSource(str, Enum):
     YFINANCE = "yfinance"          # delayed bars + Yahoo statement-derived fundamentals (+ .info fallback)
     FRED = "fred"                  # macro series (VIX, yield curve, Sahm)
 
-    # Paid-tier-but-free APIs we already use
-    ALPACA = "alpaca"              # real-time IEX quotes/bars (free tier)
-    FMP = "fmp"                    # company news / earnings headlines (news_catalyst signal)
+    # Paid APIs we already use (Alpaca was removed 2026-09-30)
+    FMP = "fmp"                    # primary quotes/bars + company news / earnings headlines
 
     # Account state
     ROBINHOOD = "robinhood"        # holdings, cost basis, dividends (read-only)
@@ -74,8 +73,7 @@ class DataSource(str, Enum):
 _LABELS: Dict[DataSource, str] = {
     DataSource.YFINANCE:         "yfinance (delayed quotes/bars + Yahoo statement-derived fundamentals)",
     DataSource.FRED:             "FRED (macro series)",
-    DataSource.ALPACA:           "Alpaca IEX (real-time quotes/bars)",
-    DataSource.FMP:              "FMP (news catalyst headlines)",
+    DataSource.FMP:              "FMP (primary quotes/bars, news catalyst headlines)",
     DataSource.ROBINHOOD:        "Robinhood (account snapshot, dividends)",
     DataSource.TRANSACTIONS_DB:  "TransactionsStore (closed-trade ledger)",
     DataSource.STATE_SNAPSHOT:   "state_snapshot.json (last orchestrator run)",
@@ -191,17 +189,17 @@ _SNAPSHOT_CONSUMERS: tuple[Consumer, ...] = (
 
 
 # Final map: source -> consumers. Sources marked with a tuple of
-# CONSUMERS share the same list (e.g. Alpaca and yfinance both feed the
+# CONSUMERS share the same list (e.g. FMP and yfinance both feed the
 # quote consumers — we record both edges so the operator sees that
-# yfinance going down still leaves a path via Alpaca, and vice versa).
+# FMP going down still leaves the yfinance fallback, and vice versa).
 CONSUMERS: Dict[DataSource, tuple[Consumer, ...]] = {
     # yfinance now backs BOTH quotes/bars AND fundamentals: the primary
     # Yahoo statement-derived engine (data/yahoo_fundamentals.py) and the raw
     # .info fallback both draw on yfinance, so every fundamentals consumer maps
-    # here. FMP feeds the news catalyst only here.
+    # here. FMP is the primary quote/bar provider (yfinance is its fallback)
+    # and also feeds the news catalyst.
     DataSource.YFINANCE:        _QUOTE_CONSUMERS + _FUNDAMENTALS_CONSUMERS,
-    DataSource.ALPACA:          _QUOTE_CONSUMERS,
-    DataSource.FMP:             _NEWS_CONSUMERS,
+    DataSource.FMP:             _QUOTE_CONSUMERS + _NEWS_CONSUMERS,
     DataSource.FRED:            _MACRO_CONSUMERS,
     DataSource.ROBINHOOD:       _ACCOUNT_CONSUMERS,
     DataSource.TRANSACTIONS_DB: _TXN_CONSUMERS,

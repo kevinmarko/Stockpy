@@ -114,7 +114,7 @@ class TestLatencySampleStore:
         store = ot.LatencySampleStore(max_samples=5)
         q_ts = datetime(2026, 6, 26, 12, 0, 0, tzinfo=timezone.utc)
         ing = datetime(2026, 6, 26, 12, 0, 5, tzinfo=timezone.utc)
-        sample = store.record("AAPL", "alpaca", q_ts, ingested_at=ing)
+        sample = store.record("AAPL", "fmp", q_ts, ingested_at=ing)
         assert sample.symbol == "AAPL"
         assert sample.latency_seconds == pytest.approx(5.0)
         assert len(store) == 1
@@ -140,7 +140,7 @@ class TestLatencySampleStore:
 
     def test_clear_empties(self) -> None:
         store = ot.LatencySampleStore()
-        store.record("AAPL", "alpaca",
+        store.record("AAPL", "fmp",
                      datetime.now(timezone.utc))
         assert len(store) == 1
         store.clear()
@@ -161,10 +161,10 @@ class TestLatencySampleStore:
         base = datetime(2026, 6, 26, tzinfo=timezone.utc)
         # AAPL: latencies 1, 1, 1; MSFT: 60, 70, 80 — MSFT should be worst.
         for lat in (1, 1, 1):
-            store.record("AAPL", "alpaca", base,
+            store.record("AAPL", "fmp", base,
                          ingested_at=base + timedelta(seconds=lat))
         for lat in (60, 70, 80):
-            store.record("MSFT", "alpaca", base,
+            store.record("MSFT", "fmp", base,
                          ingested_at=base + timedelta(seconds=lat))
         summary = ot.summarise_latency(store.samples())
         assert summary["count"] == 6

@@ -210,9 +210,9 @@ sitting in `webapp/dist`; rebuild.
 ## 1. ⚠ N/A in Advisory Mode — Paper → Live Switch
 
 > **This section is suppressed while `ADVISORY_ONLY=true`.**
-> The pre-launch readiness check (`scripts/preflight_check.py`) automatically skips eight
-> checks: four broker-readiness checks (`alpaca_configured`, `alpaca_paper_mode`,
-> `dry_run_disabled`, `paper_trading_duration`), `alpaca_key_rotation_recent`, and three
+> The pre-launch readiness check (`scripts/preflight_check.py`) automatically skips six
+> checks: three broker-readiness checks (`paper_trading_mode`,
+> `dry_run_disabled`, `paper_trading_duration`) and three
 > runtime-state checks that are false-positives in advisory mode (`heartbeat_fresh`,
 > `validation_reports`, `no_unexpected_risk_blocks`) — and instead passes a single
 > `advisory_only_active` check. `robinhood_execution_mode` and `state_snapshot_fresh` are
@@ -222,8 +222,16 @@ sitting in `webapp/dist`; rebuild.
 
 1. Set `ADVISORY_ONLY=false` in `.env`.
 2. Re-run `python scripts/preflight_check.py` — it now enforces all broker-readiness
-   checks, including `alpaca_configured` and `paper_trading_duration` (≥ 90 days).
+   checks, including `paper_trading_duration` (≥ 90 days).
 3. Follow the original paper→live procedure documented below once all checks pass.
+
+> **Alpaca was removed 2026-09-30.** The automated pipeline's only broker is the local
+> FMP paper ledger. With `PAPER_TRADING=false` and `ADVISORY_ONLY=false` (an old
+> `ALPACA_PAPER=false` in `.env` is an alias) `resolve_broker_backend()` returns None and the
+> pipeline places **no orders** — it logs CRITICAL and sends an alert. Real money moves
+> only through the Robinhood execution queue (sections below), with per-trade human
+> confirmation. The steps below therefore cover the paper posture and the going-live
+> posture check, not a live Alpaca cut-over.
 
 ### Pre-switch (T-1 day) — ⚠ BROKER EXECUTION REQUIRED
 
@@ -235,24 +243,22 @@ sitting in `webapp/dist`; rebuild.
 
 ### Day-of switch (pre-market, ≥ 30 min before open) — ⚠ BROKER EXECUTION REQUIRED
 
-1. Rotate `.env` values: **`ALPACA_PAPER=false`** and **`ADVISORY_ONLY=false`**.
-2. Verify via the Strategy Matrix → Global Execution Mode selector (or `from settings
-   import settings; assert settings.ALPACA_PAPER is False`).
-3. Start the orchestrator in **dry-run** once to confirm it reads the live endpoint:
+1. Rotate `.env` values: **`PAPER_TRADING=false`** and **`ADVISORY_ONLY=false`** (going-live posture).
+2. Verify via Settings → General (or `from settings
+   import settings; assert settings.PAPER_TRADING is False`).
+3. Start the orchestrator in **dry-run** once:
    ```
    python3 main_orchestrator.py --dry-run
    ```
-   Look for `"AlpacaBroker initialized — paper=False"` in the logs (not `paper=True`).
-4. Remove `--dry-run` for the first live run:
-   ```
-   python3 main_orchestrator.py
-   ```
-5. Confirm in Alpaca dashboard that the account shows the same positions as
-   `transactions_store`.
+   Expect the CRITICAL log and alert `no automated broker when going live` — that is the
+   correct, fail-closed behavior (no orders are placed by the automated pipeline).
+4. Place real orders only via the Robinhood execution queue (see the Robinhood Execution
+   Bridge sections), one human confirmation per trade.
+5. Confirm the Robinhood account positions against `transactions_store` after each fill.
 
-**Switching back to Paper / Simulation** works identically — pick the other mode on the
-Strategy Matrix tab, or set `ALPACA_PAPER=true`. Setting `ADVISORY_ONLY=true` returns the
-platform to the default quarantine state regardless of `ALPACA_PAPER`.
+**Switching back to Paper / Simulation** works identically — pick the other mode on
+Settings → General, or set `PAPER_TRADING=true`. Setting `ADVISORY_ONLY=true` returns the
+platform to the default quarantine state regardless of `PAPER_TRADING`.
 
 ---
 
@@ -641,7 +647,7 @@ Both GARCH tests must PASS with no `arch` warning.
 >
 > 1. Activate the kill switch: `python -m execution.kill_switch --activate --reason
 >    "reconciliation drift"`
-> 2. Log into Alpaca dashboard and compare positions manually.
+> 2. Compare the paper ledger (Paper Broker screen) with the Robinhood account manually.
 > 3. Fix the discrepancy, then deactivate: `python -m execution.kill_switch --deactivate`
 
 ---
@@ -656,13 +662,10 @@ Both GARCH tests must PASS with no `arch` warning.
 
 ### 3.10 ⚠ N/A in Advisory Mode — Broker Connection Lost
 
-> `AlpacaBroker` / `_execute_broker_orders` are not reached while `ADVISORY_ONLY=true`.
-> If you have lifted the quarantine and see Alpaca connection errors:
->
-> 1. Check https://status.alpaca.markets for planned maintenance.
-> 2. If unexpected: check for API key rotation requirement.
-> 3. Reconnect is automatic on the next orchestrator run. Run reconciliation manually
->    after reconnect.
+> `_execute_broker_orders` is not reached while `ADVISORY_ONLY=true`. The paper
+> ledger (`FMPPaperBroker`) is a local SQLite store, so there is no broker connection to
+> lose; if paper orders stop, check FMP quote availability (see the FMP troubleshooting
+> section below) instead.
 
 ---
 
@@ -878,8 +881,7 @@ freshness rule keeps it from being placed.
 | Role | Contact | Notes |
 |------|---------|-------|
 | FRED API issues | https://fred.stlouisfed.org/docs/api/ | Key rotation, rate limits |
-| Alpaca broker support _(when active)_ | support@alpaca.markets | For fill disputes, account issues |
-| Alpaca status _(when active)_ | https://status.alpaca.markets | Outages / maintenance windows |
+| FMP status | https://site.financialmodelingprep.com | Quote/data outages (paper ledger fills depend on FMP quotes) |
 
 ---
 
@@ -1174,7 +1176,7 @@ accuracy changes.
 
 ## Incident response: data source degraded mid-session
 
-When a data source (Alpaca market data, FMP, FRED, Robinhood) is reporting errors:
+When a data source (FMP, yfinance, FRED, Robinhood) is reporting errors:
 
 > **Note:** Finnhub was removed 2026-09. FMP feeds company news / earnings headlines for
 > the `news_catalyst` signal (an FMP news outage loses only news-catalyst sentiment).
@@ -1185,7 +1187,7 @@ When a data source (Alpaca market data, FMP, FRED, Robinhood) is reporting error
 
 - **Rate Limits**: The Starter tier is ~300 req/min (governed by `FMP_MIN_REQUEST_INTERVAL_SECONDS` / `FMP_MAX_RETRIES` / `FMP_COOLDOWN_THRESHOLD` in `settings.py`).
 - **Cooldown Behavior**: Consecutive errors trigger a circuit breaker for `FMP_COOLDOWN_SECONDS` once `FMP_COOLDOWN_THRESHOLD` is hit, skipping FMP calls to avoid timeouts.
-- **Fallback Behavior**: When FMP is unavailable, `CompositeProvider` transparently falls back to Alpaca/yfinance for quotes and Yahoo for fundamentals (if `FMP_FALLBACK_ENABLED=true`).
+- **Fallback Behavior**: When FMP is unavailable, `CompositeProvider` transparently falls back to yfinance for quotes and Yahoo for fundamentals (if `FMP_FALLBACK_ENABLED=true`).
 - **What to Check**: If data is stale or missing, check `$LOCAL_DATA_ROOT/logs/investyo.log` for warnings naming FMP fallbacks. Confirm `FMP_API_KEY` is set and valid.
 
 The desktop app's Safety tab → Dependency Map view was deleted in 2026-09 and the web app
@@ -1217,9 +1219,9 @@ broker surface quarantined:
    never auto-skipped — the Robinhood execution bridge is orthogonal to this quarantine.
 
 **Re-enabling broker execution** requires ALL THREE flags to be `false` simultaneously:
-`ADVISORY_ONLY=false AND DRY_RUN=false AND ALPACA_PAPER=false`. Follow the procedure in
-§1 above and ensure `preflight_check.py` exits 0 with all broker checks passing before
-any live run.
+`ADVISORY_ONLY=false AND DRY_RUN=false AND PAPER_TRADING=false`, and even then the
+automated pipeline places no orders (see §1). Ensure `preflight_check.py` exits 0 before
+any Robinhood live run.
 
 ---
 
@@ -1228,8 +1230,8 @@ any live run.
 The Robinhood Trading MCP lets a **Claude Code agent** (not the headless pipeline) place
 equity trades into a dedicated, separately-funded **Agentic account**. The platform only
 emits a gated, dry-run queue (`output/execution_queue.json`); the agent is the only actor
-that calls the MCP. This is **independent of `ADVISORY_ONLY`** — it never arms the Alpaca
-surface.
+that calls the MCP. This is **independent of `ADVISORY_ONLY`** — it never arms the
+automated paper-broker surface.
 
 ### One-time setup (operator, local — cannot be done headless)
 
@@ -1293,7 +1295,7 @@ The end-to-end path has two actors and one hand-off file:
    `overridden` field, never silently dropped), and two Pilots sharing a symbol are netted
    together rather than each queuing a separate order for it. `compose_and_emit` then builds
    each resulting intent into an `OrderIntent`, runs it through the **same** `PreTradeRiskGate`
-   + `GlobalKillSwitch` stack the Alpaca path uses (all in dry-run — no broker contact), stamps
+   + `GlobalKillSwitch` stack the paper-broker path uses (all in dry-run — no broker contact), stamps
    `allow_place`, and atomically writes `output/execution_queue.json`. In `off` mode nothing is
    written. **If the queue looks stale (unchanged across a cycle) and you have an active follow
    that hasn't been re-planned in a while:** a source file older than
@@ -1361,7 +1363,7 @@ Both are gitignored.
 
 This is the day-to-day operator procedure for driving the Robinhood Execution
 Bridge end to end — from a fresh queue to a confirmed fill. It sits **inside**
-advisory-mode framing: it never arms the Alpaca broker (those sections stay
+advisory-mode framing: it never arms the automated broker (those sections stay
 marked **⚠ N/A in Advisory Mode**), it only ever touches a small, separately-
 funded **Agentic** account, and every placement requires an explicit human
 confirmation. If you have not done the one-time setup above ("Robinhood

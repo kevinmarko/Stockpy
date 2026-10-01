@@ -1058,7 +1058,7 @@ class TestProviderStatus:
 
     def test_shape_and_values(self, monkeypatch):
         provider = SimpleNamespace(
-            quote_source="alpaca", is_realtime=True, source_name="yahoo_computed",
+            quote_source="fmp", is_realtime=True, source_name="yahoo_computed",
         )
         monkeypatch.setattr(data_api, "get_provider", lambda: provider)
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
@@ -1067,7 +1067,7 @@ class TestProviderStatus:
         assert resp.status_code == 200
         body = resp.json()
         assert body == {
-            "provider": "alpaca",
+            "provider": "fmp",
             "is_realtime": True,
             "mode": "real_time",
             "quote_ttl_seconds": 45,

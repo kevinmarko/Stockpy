@@ -27,7 +27,8 @@ const DEFAULT_TICK = (symbol: string): LiveTick => ({
  * useLiveTick — subscribe to live price ticks for a symbol via WebSocket.
  *
  * Falls back to REST polling every 5 s if the WebSocket fails or if the
- * platform's Alpaca key is not configured (server returns ws-unavailable).
+ * server reports the tick stream as unavailable (ws-unavailable). The
+ * stream pushes REST quotes from the configured provider (no separate real-time feed).
  *
  * Usage:
  *   const { price, bid, ask, isConnected } = useLiveTick('AAPL');

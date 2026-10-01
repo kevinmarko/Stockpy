@@ -15,7 +15,7 @@ flowchart TD
     subgraph SOURCES["External Data Sources"]
         YF["Yahoo Finance\n(OHLCV, statement-derived fundamentals)"]
         FRED["FRED API\n(VIX, yield curve, Sahm Rule,\nHY OAS, CPI, DGS10)"]
-        ALP["Alpaca IEX\n(real-time quotes & bars)"]
+        ALP["FMP (yfinance fallback)\n(quotes & bars)"]
         FHB["FMP\n(news catalyst headlines)"]
         RH["Robinhood\n(account snapshot — ADVISORY ONLY)"]
     end
@@ -161,7 +161,7 @@ flowchart TD
         direction LR
         OM["OrderManager\nexecution/order_manager.py\nIdempotency · risk gate · retry"]
         RG["PreTradeRiskGate\nexecution/risk_gate.py\n10-check pipeline"]
-        BB["BrokerBase / AlpacaBroker\nexecution/broker_base.py\nexecution/alpaca_broker.py"]
+        BB["BrokerBase / FMPPaperBroker\nexecution/broker_base.py\nexecution/fmp_paper_broker.py"]
         KSW["GlobalKillSwitch\nexecution/kill_switch.py\noutput/KILL_SWITCH file"]
     end
 
@@ -202,7 +202,7 @@ flowchart TD
 |---|-----------|
 | 1 | **DTO boundary** — all data crossing into calculation code must be coerced into `dto_models.py` types. No raw-dict lookups in signal or strategy code. |
 | 2 | **Single sizing SSOT** — Kelly Target is computed **only** in `StrategyEngine._calculate_kelly_sizing()` → `sizing/kelly.py` / `sizing/vol_target.py`. No score-derived win-probability formulas anywhere else. On a remote-backend outage where `TransactionsStore()` construction fails, the Kelly path falls back through `transactions_store._OfflineTransactionsStore` (empty closed-trades → `volatility_target_weight`) rather than raising. |
-| 3 | **Source-of-truth separation** — Robinhood is the source of truth for account state (qty, cost basis, dividends, equity). Market data providers (Alpaca / yfinance) are the source of truth for prices, bars, and fundamentals — fundamentals are Yahoo statement-derived (`data/yahoo_fundamentals.py`), with raw yfinance `.info` as the fallback; FMP feeds the news_catalyst signal (Finnhub removed 2026-09). These roles never cross. |
+| 3 | **Source-of-truth separation** — Robinhood is the source of truth for account state (qty, cost basis, dividends, equity). Market data providers (FMP / yfinance) are the source of truth for prices, bars, and fundamentals — fundamentals are Yahoo statement-derived (`data/yahoo_fundamentals.py`), with raw yfinance `.info` as the fallback; FMP feeds the news_catalyst signal (Finnhub removed 2026-09). These roles never cross. |
 | 4 | **No fabricated data** — missing fields are `NaN`, never `0.0`. Held symbols without live quotes get `EQUITY_ONLY` coverage; their equity view uses `qty × avg_cost`, not a fabricated current price. |
 | 5 | **Dead-letter resilience** — every per-symbol calculation is wrapped in try/except. One symbol's failure never aborts the run; it is captured in the dead-letter queue (`output/dead_letter.json`). On a **DB-backend outage**, Kelly position-sizing specifically **degrades** to a read-only `transactions_store._OfflineTransactionsStore` (empty trade history → vol-target fallback, per CONSTRAINT #6) instead of dead-lettering every symbol's advisory evaluation over an optional sizing refinement. |
 | 6 | **Broker quarantine** — `ADVISORY_ONLY=true` (the project default) causes `main_orchestrator._execute_broker_orders` to return immediately before any broker import. The OrderManager / BrokerBase path (shown in red above) is never reached. |

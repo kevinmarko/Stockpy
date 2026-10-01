@@ -6,7 +6,7 @@ Command Center's **Launcher & Orchestration** tab.
 
 Why a subprocess (not in-process asyncio)
 ------------------------------------------
-``main_orchestrator.main()`` is ``async`` and drives the Alpaca broker adapters,
+``main_orchestrator.main()`` is ``async`` and drives the async broker adapters,
 which run their own event loop.  Streamlit renders synchronously and reruns the
 whole script on every interaction.  Calling ``asyncio.run(main())`` inside a
 Streamlit callback would block the UI for the entire pipeline duration and risk

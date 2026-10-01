@@ -142,7 +142,7 @@ describe("UniverseCoverage (real mock API)", () => {
       cost_basis_delta_per_share: 5,
       market_value: 1050,
       is_stale_quote: false,
-      quote_source: "alpaca",
+      quote_source: "fmp",
       has_fundamentals: true,
       forecast_available: true,
       watchlists: [],
@@ -153,7 +153,7 @@ describe("UniverseCoverage (real mock API)", () => {
       positions: ["AAA", "BBB", "CCC"],
       watchlists: {},
       symbols: { AAA: makeRow("AAA"), BBB: makeRow("BBB"), CCC: makeRow("CCC") },
-      provider_source: "alpaca",
+      provider_source: "fmp",
       fundamentals_source: "yahoo_computed",
     };
     vi.spyOn(api, "getSyncReport").mockResolvedValue(allEqual);
