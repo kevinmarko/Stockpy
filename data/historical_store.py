@@ -99,6 +99,13 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+# Module-level binding (not a lazy import inside __init__) so the root
+# conftest.py's _isolate_historical_store_db_in_tests fixture can redirect
+# bare HistoricalStore() constructions away from the operator's live DB by
+# patching ``data.historical_store.resolve_database_url`` -- the same
+# _isolate_*_db_in_tests pattern every sibling store uses.
+from db_config import resolve_database_url
+
 if TYPE_CHECKING:
     from data.robinhood_portfolio import AccountSnapshot
 
@@ -651,6 +658,14 @@ CREATE INDEX IF NOT EXISTS idx_sector_snapshots_date
 
 CURRENT_SCHEMA_VERSION = 1
 
+# (db_path, db_version) pairs already warned about as NEWER in this process.
+# HistoricalStore is constructed per call site (thousands of times a day in
+# the daemon), so an unthrottled warning floods the log with one identical
+# line per construction. The stamp cannot change without a restart-worthy
+# event, so once per process per (DB, version) carries all the signal.
+_NEWER_SCHEMA_WARNED: set = set()
+_NEWER_SCHEMA_WARNED_LOCK = threading.Lock()
+
 _SCHEMA_VERSION_DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
@@ -700,7 +715,6 @@ class HistoricalStore:
 
     def __init__(self, db_path: Optional[str] = None, *, readonly: bool = False) -> None:
         if db_path is None:
-            from db_config import resolve_database_url
             db_path = resolve_database_url()
         self._db_path = db_path
         self._readonly = readonly
@@ -845,13 +859,19 @@ class HistoricalStore:
                     db_version, CURRENT_SCHEMA_VERSION,
                 )
             elif db_version > CURRENT_SCHEMA_VERSION:
-                logger.warning(
-                    "HistoricalStore: quant_platform.db schema_version=%d is NEWER than "
+                key = (self._db_path, db_version)
+                with _NEWER_SCHEMA_WARNED_LOCK:
+                    first = key not in _NEWER_SCHEMA_WARNED
+                    _NEWER_SCHEMA_WARNED.add(key)
+                logger.log(
+                    logging.WARNING if first else logging.DEBUG,
+                    "HistoricalStore: %s schema_version=%d is NEWER than "
                     "this build's CURRENT_SCHEMA_VERSION=%d. This DB was written by a "
                     "newer version of this codebase; reads against it from this older "
                     "build may silently return wrong values instead of an error. "
-                    "Update this checkout before trusting cached reads.",
-                    db_version, CURRENT_SCHEMA_VERSION,
+                    "Update this checkout before trusting cached reads. "
+                    "(Logged once per process.)",
+                    self._db_path, db_version, CURRENT_SCHEMA_VERSION,
                 )
         except Exception as exc:
             logger.warning("HistoricalStore._ensure_schema_version failed: %s", exc)

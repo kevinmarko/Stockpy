@@ -774,6 +774,45 @@ def _isolate_paper_and_transactions_db_in_tests(monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.fixture(autouse=True)
+def _isolate_historical_store_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Redirect every bare ``HistoricalStore()`` (no explicit ``db_path``)
+    to a private per-test temp file instead of the operator's real
+    ``~/.stockpy_local/quant_platform.db``.
+
+    Same risk class as ``_isolate_paper_and_transactions_db_in_tests`` above.
+    ``HistoricalStore`` is constructed implicitly deep inside production
+    code (``processing_engine``, ``macro_engine``, ``pilots/*``, the MCP
+    server, the production pipeline steps, ...), so tests reach it without
+    ever naming it. A 2026-10-02 probe of the offline suite found 172 tests
+    in ~30 files doing so, each running ``_ensure_tables()`` (DDL plus a
+    ``schema_version`` write) and whatever bar/news/fundamentals upserts the
+    test drove, all against the live DB. The live DB's stray
+    ``schema_version=2`` stamp (2026-08-23) came from the same gap, by way
+    of an uncommitted ``PaperAccountStore`` version stamp sharing the table.
+    See ``docs/known_issues/historical_store_schema_version_stamp_drift.md``.
+
+    A per-test temp FILE, not ``:memory:``, for the reason the fixture above
+    gives: separate constructions within one test must see each other's
+    writes. A test that passes an explicit ``db_path`` is unaffected, and so
+    is one that points ``settings.DATABASE_URL`` at its own seeded DB
+    (``tests/test_macro_snapshot.py``, ``tests/test_flatten_proposal.py``):
+    only the baseline resolution, the one that would reach the real DB, is
+    redirected.
+    """
+    import data.historical_store as _hs
+    import db_config as _dbc
+
+    isolated_url = f"sqlite:///{tmp_path / 'pytest_isolated_historical_store.db'}"
+    baseline_url = _dbc.resolve_database_url()
+
+    def _resolve() -> str:
+        current = _dbc.resolve_database_url()
+        return isolated_url if current == baseline_url else current
+
+    monkeypatch.setattr(_hs, "resolve_database_url", _resolve)
+
+
+@pytest.fixture(autouse=True)
 def _force_mock_data_engine_in_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Pipeline tests use ``MockDataEngine`` unless they opt in.
 

@@ -183,6 +183,40 @@ class TestSchemaVersion:
         assert store.get_schema_version() == 999
         assert any("NEWER" in rec.message for rec in caplog.records)
 
+    def test_newer_version_warns_once_per_process(self, tmp_path, caplog):
+        """HistoricalStore is constructed per call site, so the NEWER warning
+        must not repeat on every construction (it flooded the daemon log at
+        ~3,000 lines/day). Later constructions still log it at DEBUG."""
+        import logging
+
+        db = str(tmp_path / "test.db")
+        HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE schema_version SET version = 998 WHERE id = 1")
+            conn.commit()
+
+        with caplog.at_level(logging.DEBUG, logger="data.historical_store"):
+            for _ in range(5):
+                HistoricalStore(db_path=db)
+
+        newer = [r for r in caplog.records if "NEWER" in r.getMessage()]
+        assert len(newer) == 5
+        assert [r.levelno for r in newer].count(logging.WARNING) == 1
+        assert db in newer[0].getMessage()
+
+    def test_bare_construction_never_resolves_to_live_db(self, tmp_path):
+        """Regression guard for conftest.py's
+        _isolate_historical_store_db_in_tests: a bare HistoricalStore() in a
+        test must land in this test's tmp_path, never the operator's real
+        quant_platform.db (where test runs once wrote a stray
+        schema_version=2 stamp)."""
+        import db_config
+
+        store = HistoricalStore()
+        assert store._db_path != db_config.DEFAULT_DATABASE_URL
+        assert str(tmp_path) in store._db_path
+        assert store.get_schema_version() is not None
+
     def test_get_schema_version_none_when_unset(self, tmp_path):
         """A row-less schema_version table (e.g. DB predating this stamp)
         degrades to None, never a fabricated version number."""

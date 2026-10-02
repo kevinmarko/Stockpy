@@ -601,7 +601,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:704",
+        "site": "data/historical_store.py:718",
         "via": []
       },
       {
@@ -765,7 +765,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:715",
+        "site": "data/historical_store.py:729",
         "via": []
       },
       {
@@ -774,7 +774,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:718",
+        "site": "data/historical_store.py:732",
         "via": []
       },
       {
@@ -1028,7 +1028,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:715",
+        "site": "data/historical_store.py:729",
         "via": []
       },
       {
@@ -1037,7 +1037,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:718",
+        "site": "data/historical_store.py:732",
         "via": []
       },
       {
@@ -1918,7 +1918,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/historical_store.py:715",
+        "site": "data/historical_store.py:729",
         "via": []
       },
       {
