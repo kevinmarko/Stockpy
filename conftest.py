@@ -152,6 +152,25 @@ except Exception:
 
 
 @pytest.fixture(autouse=True)
+def _reset_sync_report_cache_in_tests() -> Any:
+    """Clear the GET /data/sync-report response cache (``api.data_api``) and
+    the observability forecast-section cache (``pilots.observability``)
+    around every test, so one test's cached result never answers another's.
+    Only touches the module when a test already imported it (it is heavy)."""
+    def _reset() -> None:
+        mod = sys.modules.get("api.data_api")
+        if mod is not None:
+            mod._SYNC_REPORT_CACHE = None
+        obs = sys.modules.get("pilots.observability")
+        if obs is not None:
+            obs.reset_forecast_section_cache()
+
+    _reset()
+    yield
+    _reset()
+
+
+@pytest.fixture(autouse=True)
 def _no_gdelt_throttle_in_tests(monkeypatch: pytest.MonkeyPatch) -> Any:
     """Disable the shared GDELT request throttle and reset its limiter state
     for every test.

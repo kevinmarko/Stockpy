@@ -175,6 +175,8 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
+import time
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1844,6 +1846,54 @@ def strategy_pnl_summary() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+# The two forecast-skill sections each run several full scans of the
+# multi-million-row ``forecast_errors`` table (no index serves a
+# horizon-only filter), which made GET /observability/summary take 10-60 s.
+# That table only changes once per pipeline cycle, so a finished section is
+# reused for ``_FORECAST_SECTION_TTL_SECONDS``. Keyed on everything the
+# section reads (horizon, the skill settings, the snapshot's timestamp and
+# symbols); only a result with no degraded ``reason`` is cached, so a
+# transient failure is retried on the next request.
+_FORECAST_SECTION_TTL_SECONDS = 300.0
+_forecast_section_cache: Dict[Tuple[Any, ...], Tuple[float, Dict[str, Any]]] = {}
+_forecast_section_lock = threading.Lock()
+
+
+def _snapshot_cache_key(snapshot: Optional[dict]) -> Tuple[Any, ...]:
+    if not isinstance(snapshot, dict):
+        return (None, ())
+    syms = tuple(
+        str(sig.get("symbol") or sig.get("ticker") or "")
+        for sig in (snapshot.get("signals") or [])
+        if isinstance(sig, dict)
+    )
+    return (snapshot.get("timestamp"), syms)
+
+
+def _cached_forecast_section(key: Tuple[Any, ...], build: Any) -> Dict[str, Any]:
+    full_key = key + (
+        int(settings.FORECAST_SKILL_WINDOW_DAYS),
+        int(settings.FORECAST_SKILL_MIN_OBS),
+    )
+    with _forecast_section_lock:
+        hit = _forecast_section_cache.get(full_key)
+        if hit is not None and time.monotonic() - hit[0] < _FORECAST_SECTION_TTL_SECONDS:
+            return hit[1]
+        result = build()
+        if isinstance(result, dict) and result.get("reason") is None:
+            # Keep one live entry per section kind so stale keys don't pile up.
+            for stale in [k for k in _forecast_section_cache if k[0] == full_key[0]]:
+                del _forecast_section_cache[stale]
+            _forecast_section_cache[full_key] = (time.monotonic(), result)
+        return result
+
+
+def reset_forecast_section_cache() -> None:
+    """Drop cached forecast-skill sections (tests)."""
+    with _forecast_section_lock:
+        _forecast_section_cache.clear()
+
+
 def observability_summary(
     *,
     equity_range: str = "1Y",
@@ -1861,8 +1911,14 @@ def observability_summary(
         "portfolio_heat": portfolio_heat_metric(),
         "equity_curve": equity_curve_with_drawdown(equity_range),
         "regime": regime_overlay(snapshot),
-        "forecast_skill": portfolio_forecast_skill(horizon_days),
-        "forecast_skill_by_symbol": forecast_skill_by_symbol_summary(snapshot, horizon_days),
+        "forecast_skill": _cached_forecast_section(
+            ("portfolio", int(horizon_days)),
+            lambda: portfolio_forecast_skill(horizon_days),
+        ),
+        "forecast_skill_by_symbol": _cached_forecast_section(
+            ("by_symbol", int(horizon_days)) + _snapshot_cache_key(snapshot),
+            lambda: forecast_skill_by_symbol_summary(snapshot, horizon_days),
+        ),
         "risk_gate_blocks": risk_gate_block_log(),
         "circuit_breakers": circuit_breaker_summary(),
         "system_telemetry": system_telemetry_summary(),

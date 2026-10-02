@@ -33,8 +33,10 @@ from __future__ import annotations
 import base64
 import logging
 import math
+import threading
+import time
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import json
 import asyncio
 
@@ -793,8 +795,30 @@ def get_quotes(symbols: str) -> Dict[str, Any]:
     return out
 
 
+# GET /data/sync-report probes every universe symbol over the network, so the
+# finished response is cached briefly. Only successful builds are cached, and
+# the lock makes concurrent requests share one rebuild instead of each
+# starting their own.
+_SYNC_REPORT_TTL_SECONDS = 120.0
+_SYNC_REPORT_CACHE: Optional[Tuple[float, Dict[str, Any]]] = None
+_SYNC_REPORT_LOCK = threading.Lock()
+
+
 @app.get("/data/sync-report", dependencies=[Depends(require_token)])
 def get_sync_report() -> Dict[str, Any]:
+    """Portfolio & watchlist coverage report, cached for
+    ``_SYNC_REPORT_TTL_SECONDS`` (see :func:`_build_sync_report_response`)."""
+    global _SYNC_REPORT_CACHE
+    with _SYNC_REPORT_LOCK:
+        cached = _SYNC_REPORT_CACHE
+        if cached is not None and time.monotonic() - cached[0] < _SYNC_REPORT_TTL_SECONDS:
+            return cached[1]
+        resp = _build_sync_report_response()  # raises 503 -> nothing cached
+        _SYNC_REPORT_CACHE = (time.monotonic(), resp)
+        return resp
+
+
+def _build_sync_report_response() -> Dict[str, Any]:
     """Portfolio & watchlist coverage report (holdings ∪ watchlists).
 
     Enriches each symbol entry with two rating fields sourced from
@@ -809,8 +833,13 @@ def get_sync_report() -> Dict[str, Any]:
     (``data/portfolio_sync.py`` is untouched) — a rating-store failure
     (missing DB, import error, etc.) degrades to leaving the two keys off
     every symbol rather than failing the whole endpoint (CONSTRAINT #6)."""
+    # Cached snapshot only (allow_live_fetch=False), like GET /data/universe:
+    # a read endpoint must never start a Robinhood device-approval login.
+    # With ROBINHOOD_AUTO_REFRESH_ENABLED and a stale snapshot, the default
+    # path spawned a login and blocked this request for up to
+    # RH_LOGIN_DEADLINE_SECONDS while pushing an approval prompt to the phone.
     try:
-        snapshot = fetch_account_snapshot(force=False)
+        snapshot = fetch_account_snapshot(allow_live_fetch=False)
     except Exception as exc:
         logger.warning("data_api: account snapshot unavailable for sync report: %s", exc)
         snapshot = None
@@ -954,7 +983,9 @@ def explain_ticker(symbol: str) -> Dict[str, Any]:
     # ── 2. Universe Tracking ─────────────────────────────────────────────
     snapshot = None
     try:
-        snapshot = fetch_account_snapshot(force=False)
+        # Cached only -- never start a Robinhood login from a read (see
+        # get_sync_report).
+        snapshot = fetch_account_snapshot(allow_live_fetch=False)
     except Exception as exc:
         logger.warning("data_api: account snapshot unavailable for explain %s: %s", sym, exc)
 

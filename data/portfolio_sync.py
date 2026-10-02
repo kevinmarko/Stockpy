@@ -65,6 +65,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -72,6 +73,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from settings import settings
+
+# Worker threads for build_sync_report's per-symbol coverage probes.
+_SYNC_PROBE_WORKERS = 8
 
 logger = logging.getLogger(__name__)
 
@@ -461,6 +465,32 @@ def build_sync_report(
 
     forecast_set = {s.upper() for s in (forecast_symbols or [])}
 
+    # ----- per-symbol coverage probes, in parallel -----
+    # Each probe is three network calls (quote, intraday bars, fundamentals)
+    # and used to run one symbol at a time: ~2.5 s x 29 symbols made
+    # GET /data/sync-report take over a minute. FMP's module-level throttle
+    # still paces FMP calls across threads; each probe dead-letters its own
+    # failures, and the wrapper below catches anything else per symbol.
+    probes: Dict[str, Dict[str, Any]] = {}
+    if provider is not None and probe_market:
+        def _safe_probe(sym: str) -> Dict[str, Any]:
+            try:
+                return _probe_symbol_coverage(sym, provider)
+            except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
+                logger.warning("sync probe failed for %s: %s", sym, exc)
+                return {
+                    "coverage": CoverageStatus.UNKNOWN,
+                    "current_price": float("nan"),
+                    "is_stale": False,
+                    "source": "",
+                    "has_funds": False,
+                    "diagnostic": f"probe:{type(exc).__name__}",
+                }
+
+        ordered = sorted(universe)
+        with ThreadPoolExecutor(max_workers=_SYNC_PROBE_WORKERS) as pool:
+            probes = dict(zip(ordered, pool.map(_safe_probe, ordered)))
+
     # ----- per-symbol assembly -----
     symbols: Dict[str, SymbolStatus] = {}
     for sym in sorted(universe):
@@ -469,8 +499,8 @@ def build_sync_report(
         qty = float(getattr(pos, "quantity", 0.0) or 0.0) if held else 0.0
         avg = float(getattr(pos, "average_cost", float("nan"))) if held else float("nan")
 
-        if provider is not None and probe_market:
-            probe = _probe_symbol_coverage(sym, provider)
+        if sym in probes:
+            probe = probes[sym]
         else:
             probe = {
                 "coverage": CoverageStatus.UNKNOWN,

@@ -714,7 +714,7 @@ def test_quotes_batch_provider_outage_degrades_to_empty_not_500(monkeypatch):
 
 
 def test_sync_report(monkeypatch):
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
         lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": [], "generated_at": "x"}),
@@ -725,10 +725,57 @@ def test_sync_report(monkeypatch):
     assert resp.json() == {"symbols": [], "generated_at": "x"}
 
 
+def test_sync_report_and_explain_never_start_a_robinhood_login(monkeypatch):
+    """Both read endpoints must ask for the cached snapshot only: a live fetch
+    with ROBINHOOD_AUTO_REFRESH_ENABLED pushed a device-approval prompt and
+    blocked the request for up to RH_LOGIN_DEADLINE_SECONDS."""
+    calls = []
+
+    def _fetch(*args, **kwargs):
+        calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", _fetch)
+    monkeypatch.setattr(
+        data_api, "build_sync_report",
+        lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": {}}, symbols={}),
+    )
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        client.get("/data/sync-report")
+        client.get("/data/explain/AAPL")
+    assert len(calls) >= 2
+    assert all(c.get("allow_live_fetch") is False for c in calls), calls
+
+
+def test_sync_report_is_cached_and_failures_are_not(monkeypatch):
+    builds = {"n": 0, "fail": True}
+
+    def _build(snap, **kwargs):
+        builds["n"] += 1
+        if builds["fail"]:
+            raise RuntimeError("provider down")
+        return SimpleNamespace(to_dict=lambda: {"symbols": {}, "n": builds["n"]})
+
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: None)
+    monkeypatch.setattr(data_api, "build_sync_report", _build)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        assert client.get("/data/sync-report").status_code == 503
+        builds["fail"] = False
+        first = client.get("/data/sync-report")  # the 503 was not cached
+        second = client.get("/data/sync-report")  # served from the cache
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json() == {"symbols": {}, "n": 2}
+    assert builds["n"] == 2
+
+    monkeypatch.setattr(data_api, "_SYNC_REPORT_TTL_SECONDS", 0.0)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        assert client.get("/data/sync-report").json()["n"] == 3  # expired -> rebuilt
+
+
 def test_sync_report_tolerates_missing_snapshot(monkeypatch):
     called = {}
 
-    def _fetch(force=False):
+    def _fetch(**kw):
         raise RuntimeError("no robinhood creds")
 
     def _build(snap, **kwargs):
@@ -792,7 +839,7 @@ def test_sync_report_forecast_available_reflects_real_forecast_tracker(monkeypat
         ),
     }
     fake_snapshot = SimpleNamespace(positions=held)
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: fake_snapshot)
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: fake_snapshot)
 
     # Skip the market-data probe entirely (irrelevant to this test) by making
     # get_provider() fail -- build_sync_report degrades that to
@@ -838,7 +885,7 @@ def test_sync_report_includes_rating_fields(monkeypatch):
         # Not held, streak (2) < threshold -> not excluded.
         "T": {"symbol": "T", "held": False, "coverage": "uncovered"},
     }
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
         lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
@@ -870,7 +917,7 @@ def test_sync_report_rating_enrichment_degrades_gracefully(monkeypatch):
     500 the whole endpoint (CONSTRAINT #6) -- the base sync-report payload
     still returns, just without the two rating keys on each symbol."""
     symbols = {"AAPL": {"symbol": "AAPL", "held": True, "coverage": "full"}}
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
         lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
@@ -896,7 +943,7 @@ def test_sync_report_rating_enrichment_degrades_gracefully(monkeypatch):
 
 def test_account_snapshot(monkeypatch):
     snap = SimpleNamespace(to_dict=lambda: {"total_equity": 12345.0, "positions": {}})
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: snap)
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: snap)
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/data/account")
     assert resp.status_code == 200
@@ -904,7 +951,7 @@ def test_account_snapshot(monkeypatch):
 
 
 def test_account_404_on_cold_state(monkeypatch):
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: None)
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: None)
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/data/account")
     assert resp.status_code == 404
@@ -961,7 +1008,7 @@ class TestDataSyncWrite:
         assert resp.status_code == 401
 
     def test_happy_path_calls_async_sync_now_and_echoes(self, monkeypatch):
-        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
         monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": []})
         monkeypatch.setattr(data_api, "async_sync_now", self._fake_async_sync_now)
         with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
@@ -981,7 +1028,7 @@ class TestDataSyncWrite:
         headless HTTP request handler."""
         captured = {}
 
-        def _fetch(force=False):
+        def _fetch(force=False, **kw):
             captured["force"] = force
             return object()
 
@@ -994,7 +1041,7 @@ class TestDataSyncWrite:
         assert captured["force"] is False
 
     def test_tolerates_missing_account_snapshot(self, monkeypatch):
-        def _fetch(force=False):
+        def _fetch(**kw):
             raise RuntimeError("no robinhood creds")
 
         called = {}
@@ -1018,7 +1065,7 @@ class TestDataSyncWrite:
         async def _boom(snapshot, **kwargs):
             raise RuntimeError("provider outage")
 
-        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
         monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": []})
         monkeypatch.setattr(data_api, "async_sync_now", _boom)
         with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
@@ -1029,7 +1076,7 @@ class TestDataSyncWrite:
         assert resp.status_code == 503
 
     def test_write_never_logs_token(self, monkeypatch, caplog):
-        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
         monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": []})
         monkeypatch.setattr(data_api, "async_sync_now", self._fake_async_sync_now)
         with caplog.at_level("DEBUG"):
@@ -1502,7 +1549,7 @@ def test_explain_ticker_tracked_full_success(monkeypatch):
         coverage=SimpleNamespace(value="full"),
         watchlists=("file:watchlist.txt",),
     )
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
     monkeypatch.setattr(
         data_api,
         "build_sync_report",
@@ -1603,7 +1650,7 @@ def test_explain_ticker_tracked_full_success(monkeypatch):
 
 def test_explain_ticker_untracked_symbol_honesty(monkeypatch):
     monkeypatch.setattr(data_api, "company_profile", lambda sym: None)
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: None)
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: None)
     monkeypatch.setattr(
         data_api,
         "build_sync_report",

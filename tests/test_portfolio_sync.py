@@ -462,6 +462,36 @@ def test_universe_dedup_and_sort(monkeypatch):
     assert set(report.symbols["AAPL"].watchlists) == {"List A", "List B"}
 
 
+def test_probe_crash_for_one_symbol_does_not_abort_the_others(monkeypatch):
+    """Probes run in a thread pool; one that raises is dead-lettered as
+    UNKNOWN for that symbol only, and the rest still classify."""
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from data import robinhood_client as rc
+    from settings import settings
+
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+    held = {"AAPL": _FakePosition("AAPL", 1, 100.0, 100.0, 100.0)}
+    client = _FakeRobinhoodClient(holdings=held, watchlists={"L": ["MSFT", "NVDA"]})
+    monkeypatch.setattr(rc, "_watchlist_tickers", lambda name: client._watchlists.get(name, []))
+    monkeypatch.setattr(md, "get_provider", lambda: _FakeProvider(
+        covered={"AAPL", "MSFT", "NVDA"}, has_funds={"AAPL", "MSFT", "NVDA"}
+    ))
+    real_probe = ps._probe_symbol_coverage
+
+    def _probe(sym, provider):
+        if sym == "MSFT":
+            raise RuntimeError("boom")
+        return real_probe(sym, provider)
+
+    monkeypatch.setattr(ps, "_probe_symbol_coverage", _probe)
+    report = ps.build_sync_report(_FakeSnapshot(positions=held), client=client)
+    assert list(report.symbols) == ["AAPL", "MSFT", "NVDA"]
+    assert report.symbols["MSFT"].coverage is ps.CoverageStatus.UNKNOWN
+    assert report.symbols["AAPL"].coverage is ps.CoverageStatus.FULL
+    assert report.symbols["NVDA"].coverage is ps.CoverageStatus.FULL
+
+
 # ---------------------------------------------------------------------------
 # Async sync — dry-run skips the .env write
 # ---------------------------------------------------------------------------

@@ -1635,3 +1635,50 @@ class TestStrategyPnlSummary:
             out = obs.strategy_pnl_summary()
         assert out["rows"] == []
         assert out["reason"]
+
+
+class TestForecastSectionCache:
+    """observability_summary reuses the two forecast-skill sections (each runs
+    several full scans of forecast_errors) for a short TTL."""
+
+    def _patch(self, monkeypatch, reason=None):
+        calls = {"portfolio": 0, "by_symbol": 0}
+
+        def _portfolio(h):
+            calls["portfolio"] += 1
+            return {"horizon_days": h, "reason": reason}
+
+        def _by_symbol(snap, h):
+            calls["by_symbol"] += 1
+            return {"horizon_days": h, "rows": [], "reason": reason}
+
+        monkeypatch.setattr(obs, "portfolio_forecast_skill", _portfolio)
+        monkeypatch.setattr(obs, "forecast_skill_by_symbol_summary", _by_symbol)
+        return calls
+
+    def test_second_call_is_served_from_cache(self, monkeypatch):
+        calls = self._patch(monkeypatch)
+        snap = {"timestamp": "t1", "signals": [{"symbol": "AAPL"}]}
+        obs.observability_summary(snapshot=snap)
+        obs.observability_summary(snapshot=snap)
+        assert calls == {"portfolio": 1, "by_symbol": 1}
+
+    def test_new_snapshot_or_horizon_misses(self, monkeypatch):
+        calls = self._patch(monkeypatch)
+        obs.observability_summary(snapshot={"timestamp": "t1", "signals": []})
+        obs.observability_summary(snapshot={"timestamp": "t2", "signals": []})
+        obs.observability_summary(snapshot={"timestamp": "t2", "signals": []}, horizon_days=10)
+        assert calls == {"portfolio": 2, "by_symbol": 3}
+
+    def test_degraded_result_is_not_cached(self, monkeypatch):
+        calls = self._patch(monkeypatch, reason="No forecast history yet")
+        obs.observability_summary(snapshot=None)
+        obs.observability_summary(snapshot=None)
+        assert calls == {"portfolio": 2, "by_symbol": 2}
+
+    def test_expired_entry_is_rebuilt(self, monkeypatch):
+        calls = self._patch(monkeypatch)
+        monkeypatch.setattr(obs, "_FORECAST_SECTION_TTL_SECONDS", 0.0)
+        obs.observability_summary(snapshot=None)
+        obs.observability_summary(snapshot=None)
+        assert calls == {"portfolio": 2, "by_symbol": 2}
