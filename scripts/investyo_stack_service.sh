@@ -129,9 +129,16 @@ fi
 
 # Orchestrator daemon, BACKGROUNDED (see the SIGNAL PATH comment at the top
 # of this file for why this is deliberate, not equivalent to the previous
-# foreground design). --interval 300 = 5-min cadence; the freshness gate
-# collapses pulls to at most one per DATA_FRESHNESS_TTL_SECONDS.
-"$PYTHON" -m desktop.orchestrator_daemon --interval 300 >> "$LOG_DIR/stack_daemon.log" 2>&1 &
+# foreground design). Cadence comes from settings.ORCHESTRATOR_INTERVAL_SECONDS
+# (.env) -- the same value a hand-started daemon uses -- so installing the
+# service never silently changes how often the pipeline (and its paper
+# orders) runs. Set STACK_DAEMON_INTERVAL (e.g. in the plist's
+# EnvironmentVariables) only to override it for the service.
+DAEMON_ARGS=()
+if [[ -n "${STACK_DAEMON_INTERVAL:-}" ]]; then
+    DAEMON_ARGS=(--interval "$STACK_DAEMON_INTERVAL")
+fi
+"$PYTHON" -m desktop.orchestrator_daemon ${DAEMON_ARGS[@]+"${DAEMON_ARGS[@]}"} >> "$LOG_DIR/stack_daemon.log" 2>&1 &
 DAEMON_PID=$!
 
 # Idempotency guard -- mirrors this codebase's Python _torn_down pattern
