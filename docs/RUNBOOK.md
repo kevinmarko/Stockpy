@@ -87,7 +87,7 @@ loop and APIs keep running with no Terminal window open.
 1. **Install (or confirm) the always-on backend stack service** — double-click
    `scripts/install_stack_service.command` (idempotent; safe to re-run). This installs the
    `com.investyo.stack` launchd job (`RunAtLoad` + `KeepAlive`), which starts at login and
-   keeps running with no app window open: the orchestrator daemon (5-min warm refresh
+   keeps running with no app window open: the orchestrator daemon (warm refresh every ORCHESTRATOR_INTERVAL_SECONDS
    cycles + Control API `:8601`) plus `data_api` (`:8603`) and `metrics_api` (`:8604`) as
    separate processes. It also unloads the older single-run `com.investyo.daily-advisory`
    job, which this supersedes (see §5.1). Verify with `launchctl list | grep com.investyo.stack`
