@@ -42,7 +42,7 @@
     {
       "expr": "getattr(settings, flag_name, False)",
       "file": "api/data_api.py",
-      "line": 164,
+      "line": 166,
       "resolved_by_factory": "require_ai_capability_enabled",
       "rules": []
     },
@@ -435,7 +435,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 796,
+    "attr": 798,
     "factory_param": 4,
     "getattr_const": 308,
     "os_environ": 2
@@ -506,7 +506,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "api/data_api.py:109",
+        "site": "api/data_api.py:111",
         "via": []
       },
       {
@@ -1638,7 +1638,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "data/portfolio_sync.py:84",
+        "site": "data/portfolio_sync.py:88",
         "via": []
       },
       {

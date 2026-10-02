@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `45d2ea220b3d9247f25c7f2f6473751d8a67fd4d`
+- Measured at commit: `89a2021ac2f6c591c61654bb815ea03fbc16624c`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -237,7 +237,7 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _guard_settings, _m
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 710 | 246 |
+| (a) `settings.KEY` | 712 | 246 |
 | (b) `getattr(settings, "KEY", default)` | 308 | 181 |
 | (c) `getattr(settings, <var>)` (dynamic) | 13 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
@@ -264,7 +264,7 @@ referenced by name somewhere and is probably read dynamically.
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:10736` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
-| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1528`, `pilots/feature_flags.py:49` | likely read dynamically |
+| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1559`, `pilots/feature_flags.py:49` | likely read dynamically |
 
 ### Fields reachable ONLY via form (b) or (d), never via (a) — **140**
 
@@ -422,7 +422,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `Gravity AI Review Suite.py:2684` | `getattr(_rh_settings, _MISSING_ATTR, None)` |
 | `api/_redact.py:38` | `getattr(settings, k, None)` |
 | `api/auth.py:150` | `getattr(settings, token_setting_name, None)` |
-| `api/data_api.py:164` | `getattr(settings, flag_name, False)` |
+| `api/data_api.py:166` | `getattr(settings, flag_name, False)` |
 | `api/pilots_api.py:3061` | `getattr(settings, body.key)` |
 | `api/pilots_api.py:4177` | `getattr(settings, key, None)` |
 | `api/pilots_api.py:4282` | `getattr(settings, key, None)` |

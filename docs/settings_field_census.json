@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "45d2ea220b3d9247f25c7f2f6473751d8a67fd4d",
+    "git_commit": "89a2021ac2f6c591c61654bb815ea03fbc16624c",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2851,7 +2851,7 @@
           "route": "/data/backfill/{symbol}",
           "method": "POST",
           "function": "trigger_symbol_backfill",
-          "line": 252,
+          "line": 254,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2868,7 +2868,7 @@
           "route": "/data/universe",
           "method": "PUT",
           "function": "update_universe",
-          "line": 732,
+          "line": 734,
           "writes_env": true,
           "env_write_calls_direct": [
             "write_setting"
@@ -2887,7 +2887,7 @@
           "route": "/data/ai/commentary/{symbol}",
           "method": "POST",
           "function": "generate_commentary",
-          "line": 1245,
+          "line": 1276,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2904,7 +2904,7 @@
           "route": "/data/ai/chart/{symbol}",
           "method": "POST",
           "function": "generate_chart_insight",
-          "line": 1288,
+          "line": 1319,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2921,7 +2921,7 @@
           "route": "/data/ai/research/{symbol}",
           "method": "POST",
           "function": "generate_research",
-          "line": 1390,
+          "line": 1421,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2938,7 +2938,7 @@
           "route": "/data/sync",
           "method": "POST",
           "function": "post_data_sync",
-          "line": 1539,
+          "line": 1570,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2959,7 +2959,7 @@
           "route": "/api/chat",
           "method": "POST",
           "function": "chat_endpoint",
-          "line": 2113,
+          "line": 2144,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3017,7 +3017,7 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 710,
+      "total_reads": 712,
       "distinct_fields": 246,
       "counts": {
         "OUTPUT_DIR": 116,
@@ -3026,9 +3026,9 @@
         "FRED_API_KEY": 13,
         "DISABLED_SIGNAL_MODULES": 11,
         "DEFAULT_TICKERS": 10,
-        "FORECAST_SKILL_WINDOW_DAYS": 9,
+        "FORECAST_SKILL_WINDOW_DAYS": 10,
         "REGIME_SIGNAL_WEIGHTS": 9,
-        "FORECAST_SKILL_MIN_OBS": 7,
+        "FORECAST_SKILL_MIN_OBS": 8,
         "KELLY_CAP": 7,
         "MAX_LEVERAGE": 7,
         "MAX_POSITION_WEIGHT": 7,
@@ -3475,7 +3475,7 @@
         },
         {
           "file": "api/data_api.py",
-          "line": 164,
+          "line": 166,
           "expr": "getattr(settings, flag_name, False)"
         },
         {
@@ -3925,7 +3925,7 @@
       {
         "field": "UNIVERSE_SYNC_ENABLED",
         "name_literal_sites": [
-          "api/data_api.py:1528",
+          "api/data_api.py:1559",
           "pilots/feature_flags.py:49"
         ],
         "name_literal_site_count": 2,
