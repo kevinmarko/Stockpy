@@ -132,7 +132,8 @@ reads a gated execution queue the pipeline writes.
   `engine/advisory.py::evaluate()` per symbol and keeps the `Recommendation`s) → `AgenticQueueStep`
   → `BrokerExecutionStep` (paper orders on the FMP paper ledger only, never when going
   live; trades only in regular US hours, skips reconciliation, acts only on `main_pipeline` positions, sizes
-  zero-Kelly buys with `PAPER_PIPELINE_PROBE_WEIGHT`, and closes on `RISK REDUCE`) →
+  zero-Kelly buys with `PAPER_PIPELINE_PROBE_WEIGHT` only at cold start (holiday-aware hours, stale
+  quotes rejected), and closes on `RISK REDUCE`) →
   `StateSnapshotStep`.
 - **`settings.DAEMON_AGENTIC_QUEUE_MODE`** (`off` | `shadow` | `primary`, default `off`, a
   `DANGEROUS_KEYS` member) controls `AgenticQueueStep`. `shadow` writes the advisory source and

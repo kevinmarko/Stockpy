@@ -276,3 +276,71 @@ class TestAsyncSyncNowDefaultTickersLeak:
         assert "DEFAULT_TICKERS" in written
         assert "AAPL" in written["DEFAULT_TICKERS"]
         assert "CMCL" not in written["DEFAULT_TICKERS"]
+
+
+# ---------------------------------------------------------------------------
+# Open pipeline paper positions always stay in the universe
+# ---------------------------------------------------------------------------
+
+
+class TestOpenPipelinePaperPositionsStayInUniverse:
+    """A position the pipeline opened must keep being scored, or it can never
+    receive its exit signal and never closes (the step-7 freeze count stalls)."""
+
+    def test_open_pipeline_symbol_is_kept_even_when_rating_excluded(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("main.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: set())
+        monkeypatch.setattr("pipeline.advisory_inputs._open_pipeline_paper_symbols", lambda: {"ZYX"})
+        with patch(
+            "rating.symbol_rating_store.SymbolRatingStore.get_excluded_symbols",
+            return_value={"ZYX"},
+        ):
+            result = _build_universe(_make_snapshot(positions={"AAPL": _make_position("AAPL")}))
+        assert "ZYX" in result
+        assert "AAPL" in result
+
+    def test_does_not_suppress_default_tickers_fallback(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", ["SPY"])
+        monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: set())
+        monkeypatch.setattr("pipeline.advisory_inputs._open_pipeline_paper_symbols", lambda: {"ZYX"})
+        result = _build_universe(_make_snapshot())
+        assert "SPY" in result and "ZYX" in result
+
+    def test_held_set_stays_robinhood_only(self, monkeypatch, tmp_path):
+        from pipeline.advisory_inputs import build_universe_detailed
+        monkeypatch.delenv("WATCHLIST", raising=False)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: set())
+        monkeypatch.setattr("pipeline.advisory_inputs._open_pipeline_paper_symbols", lambda: {"ZYX"})
+        build = build_universe_detailed(_make_snapshot(positions={"AAPL": _make_position("AAPL")}))
+        assert "ZYX" in build.symbols
+        assert "ZYX" not in build.held
+
+    def test_store_failure_leaves_universe_unchanged(self, monkeypatch, tmp_path):
+        import data.paper_account_store as pas
+        from pipeline.advisory_inputs import _open_pipeline_paper_symbols
+
+        def _boom(*a, **kw):
+            raise RuntimeError("db locked")
+
+        monkeypatch.setattr(pas, "PaperAccountStore", _boom)
+        assert _open_pipeline_paper_symbols() == set()
+
+    def test_reads_open_main_pipeline_positions_from_the_ledger(self, tmp_path):
+        from data.paper_account_store import PaperAccountStore, PaperPosition, session_scope
+        url = f"sqlite:///{tmp_path / 'paper.db'}"
+        store = PaperAccountStore(url)
+        with session_scope(store.Session) as s:
+            s.add(PaperPosition(symbol="AGNC", strategy_id="main_pipeline", qty=10, avg_entry_price=9.0))
+            s.add(PaperPosition(symbol="ABR", strategy_id="Manual Trade", qty=5, avg_entry_price=4.0))
+            s.add(PaperPosition(symbol="DX", strategy_id="main_pipeline", qty=0, avg_entry_price=11.0))
+        assert store.open_position_symbols("main_pipeline") == {"AGNC"}
+
+    def test_strategy_id_matches_the_executor(self):
+        import main_orchestrator
+        from pipeline.advisory_inputs import _PIPELINE_STRATEGY_ID
+        assert _PIPELINE_STRATEGY_ID == main_orchestrator.PIPELINE_STRATEGY_ID

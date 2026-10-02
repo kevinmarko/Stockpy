@@ -509,3 +509,11 @@ class TestDangerousKeysAlreadyExposedByShippedEditors:
             f"contradicts shared/env_io.py's EXCLUDED_FROM_GUI classification — treat "
             f"as a security regression, not a test to update."
         )
+
+
+def test_paper_pipeline_probe_weight_needs_typed_confirmation():
+    """It starts automated paper orders whose closed trades feed production
+    Kelly via the bridge -- same blast radius as the bridge flag itself."""
+    from settings_keysets import DANGEROUS_KEYS
+    assert "PAPER_PIPELINE_PROBE_WEIGHT" in DANGEROUS_KEYS
+    assert "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED" in DANGEROUS_KEYS

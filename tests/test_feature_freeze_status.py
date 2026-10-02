@@ -45,3 +45,19 @@ def test_open_positions_filtered_to_pipeline():
     pos = [SimpleNamespace(symbol="AGNC", strategy_id="main_pipeline"),
            SimpleNamespace(symbol="ABR", strategy_id="Manual Trade")]
     assert ffs.summarize([], pos)["open_pipeline_positions"] == ["AGNC"]
+
+
+def test_main_reads_open_positions_from_the_database_only(monkeypatch, capsys):
+    """The status check must not mark positions over the network."""
+    import data.paper_account_store as pas
+
+    def _no_network(self):
+        raise AssertionError("get_open_positions() marks prices over the network")
+
+    monkeypatch.setattr(pas.PaperAccountStore, "get_open_positions", _no_network)
+    monkeypatch.setattr(pas.PaperAccountStore, "get_full_closed_trades", lambda self, **kw: [])
+    monkeypatch.setattr(pas.PaperAccountStore, "open_position_symbols", lambda self, sid: {"AGNC"})
+    rc = ffs.main(["--json"])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert '"AGNC"' in out

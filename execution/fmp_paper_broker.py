@@ -22,6 +22,7 @@ submits equity market orders exclusively):
 
 import asyncio
 import logging
+import time
 from typing import AsyncIterator, Optional, List
 from datetime import datetime, timezone
 
@@ -39,6 +40,7 @@ from execution.broker_base import (
 from execution.cost_model import TieredCostModel
 from data.paper_account_store import PaperAccountStore
 from data import fmp_client
+from settings import settings
 
 logger = logging.getLogger("FMPPaperBroker")
 
@@ -244,6 +246,27 @@ class FMPPaperBroker(BrokerBase):
             if raw_price <= 0:
                 logger.error(f"FMPPaperBroker: Invalid price {raw_price} for {intent.symbol}")
                 return self._error_result(client_order_id, f"Invalid price {raw_price}")
+
+            # A fill must be priced off a CURRENT quote. On a holiday, early
+            # close or trading halt FMP keeps serving the last trade; filling
+            # at that stale price is a fill no real market order would get.
+            # A missing timestamp is rejected too (fail closed).
+            max_age = float(getattr(settings, "PAPER_FILL_MAX_QUOTE_AGE_SECONDS", 900) or 0)
+            if max_age > 0:
+                ts_raw = quote_data.get("timestamp")
+                try:
+                    quote_age = time.time() - float(ts_raw)
+                except (TypeError, ValueError):
+                    quote_age = None
+                if quote_age is None or quote_age > max_age:
+                    reason = (
+                        "quote has no timestamp" if quote_age is None
+                        else f"quote is {quote_age:.0f}s old (max {max_age:.0f}s)"
+                    )
+                    logger.warning(f"FMPPaperBroker: rejecting {intent.symbol}: {reason}")
+                    return self._error_result(
+                        client_order_id, f"Stale quote: {reason}", OrderStatus.REJECTED
+                    )
 
             # marketCap is genuinely unmeasured when FMP omits it, not zero --
             # a fabricated 0.0 previously routed straight into

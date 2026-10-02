@@ -184,7 +184,7 @@ def _install_enabled_broker_stack(
 
     Patches the SOURCE modules that ``_execute_broker_orders`` imports locally:
       * execution.fmp_paper_broker.FMPPaperBroker -> factory returning ``broker``
-      * engine.advisory_agent.is_us_market_open -> ``market_open``
+      * engine.advisory_agent.is_us_market_open_now -> ``market_open``
       * transactions_store.TransactionsStore  -> factory returning ``ts_store``
       * execution.risk_gate.PreTradeRiskGate  -> pass-through gate
       * execution.order_manager.GlobalKillSwitch -> factory returning ``kill_switch``
@@ -201,7 +201,7 @@ def _install_enabled_broker_stack(
     monkeypatch.setattr(main_orchestrator.settings, "PAPER_TRADING", True, raising=False)
     monkeypatch.setattr(main_orchestrator.settings, "BROKER_BACKEND", "fmp_paper", raising=False)
     monkeypatch.setattr(fmp_mod, "FMPPaperBroker", lambda *a, **k: broker)
-    monkeypatch.setattr(agent_mod, "is_us_market_open", lambda now: market_open)
+    monkeypatch.setattr(agent_mod, "is_us_market_open_now", lambda now: market_open)
     monkeypatch.setattr(ts_mod, "TransactionsStore", lambda *a, **k: ts_store)
     monkeypatch.setattr(risk_mod, "PreTradeRiskGate", lambda *a, **k: _PassThroughRiskGate())
     monkeypatch.setattr(om_mod, "GlobalKillSwitch", lambda *a, **k: kill_switch)
@@ -598,7 +598,7 @@ def _install_going_live(monkeypatch):
     monkeypatch.setattr(main_orchestrator.settings, "ADVISORY_ONLY", False, raising=False)
     monkeypatch.setattr(main_orchestrator.settings, "PAPER_TRADING", False, raising=False)
     monkeypatch.setattr(fmp_mod, "FMPPaperBroker", broker_ctor)
-    monkeypatch.setattr(agent_mod, "is_us_market_open", lambda now: True)
+    monkeypatch.setattr(agent_mod, "is_us_market_open_now", lambda now: True)
     telemetry_mock = MagicMock()
     monkeypatch.setattr(main_orchestrator, "telemetry", telemetry_mock)
     alert_mock = MagicMock()
@@ -660,7 +660,7 @@ def test_fmp_paper_outside_market_hours_submits_nothing(monkeypatch):
     assert broker.submitted == []
     assert broker.get_positions_calls == 0, "broker must not even be queried outside RTH"
     logged = " ".join(str(c.args[0]) for c in telemetry_mock.info.call_args_list if c.args)
-    assert "outside regular US market hours" in logged
+    assert "US market closed" in logged
 
 
 def test_fmp_paper_skips_reconciliation(monkeypatch):
@@ -734,7 +734,8 @@ def test_fmp_paper_probe_sizes_a_zero_kelly_buy(monkeypatch):
     monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.01, raising=False)
     df = _df([
         {"Symbol": "AGNC", "Action Signal": "STRONG BUY", "Kelly Target": 0.0,
-         "Kelly_Target_Post_Regime": 0.0, "Price": 10.0},
+         "Kelly_Target_Post_Regime": 0.0, "Price": 10.0,
+         "Regime_Multiplier": 1.0, "Meta_Label_Composite": 1.0},
         {"Symbol": "SPY", "Action Signal": "HOLD", "Kelly Target": 0.0, "Price": 500.0},
     ])
 
@@ -801,3 +802,94 @@ def test_exit_signals_match_strategy_engine_vocabulary():
     # strategy_engine emits RISK REDUCE as its exit instruction; it must close.
     assert "RISK REDUCE" in main_orchestrator.EXIT_SIGNALS
     assert "HOLD" not in main_orchestrator.EXIT_SIGNALS
+
+
+# ---------------------------------------------------------------------------
+# (j) probe gating: cold start only, respects risk zeros, gross-capped
+# ---------------------------------------------------------------------------
+
+def _probe_df(rows: list[dict]) -> pd.DataFrame:
+    """Rows with neutral sizing-decomposition columns unless overridden."""
+    full = []
+    for r in rows:
+        base = {"Kelly Target": 0.0, "Regime_Multiplier": 1.0, "Meta_Label_Composite": 1.0,
+                "DualMomentum_Signal": "disabled"}
+        base.update(r)
+        full.append(base)
+    return _df(full)
+
+
+def _probe_on(monkeypatch, weight=0.01, closed=0):
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", weight, raising=False)
+    import data.paper_account_store as pas
+    monkeypatch.setattr(pas.PaperAccountStore, "count_closed_trades", lambda self, sid: closed)
+
+
+def test_probe_off_once_kelly_has_enough_closed_trades(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    _probe_on(monkeypatch, closed=30)
+    df = _probe_df([{"Symbol": "AGNC", "Action Signal": "BUY", "Price": 10.0}])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert broker.submitted == []
+
+
+def test_probe_withheld_for_dual_momentum_zeroed_risky_asset(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    _probe_on(monkeypatch)
+    monkeypatch.setattr(main_orchestrator.settings, "DUAL_MOMENTUM_SAFE_ASSET", "AGG", raising=False)
+    monkeypatch.setattr(main_orchestrator.settings, "DUAL_MOMENTUM_RISKY_ASSETS", ["SPY", "EFA"], raising=False)
+    df = _probe_df([
+        {"Symbol": "SPY", "Action Signal": "BUY", "Price": 500.0, "DualMomentum_Signal": "AGG"},
+        {"Symbol": "AGNC", "Action Signal": "BUY", "Price": 10.0, "DualMomentum_Signal": "AGG"},
+    ])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert [o.symbol for o in broker.submitted] == ["AGNC"]
+
+
+@pytest.mark.parametrize("col,val", [
+    ("Regime_Multiplier", 0.0), ("Regime_Multiplier", float("nan")),
+    ("Meta_Label_Composite", 0.0), ("Meta_Label_Composite", None),
+])
+def test_probe_withheld_when_risk_logic_says_no(monkeypatch, col, val):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    _probe_on(monkeypatch)
+    df = _probe_df([{"Symbol": "AGNC", "Action Signal": "BUY", "Price": 10.0, col: val}])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert broker.submitted == []
+
+
+def test_probe_scaled_by_regime_multiplier(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    _probe_on(monkeypatch)
+    df = _probe_df([{"Symbol": "AGNC", "Action Signal": "BUY", "Price": 10.0, "Regime_Multiplier": 0.5}])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert broker.submitted[0].qty == pytest.approx(50.0)  # 0.5% of $100k at $10
+
+
+def test_probe_gross_cap_stops_probes_mid_cycle(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    _probe_on(monkeypatch, weight=0.05)
+    monkeypatch.setattr(main_orchestrator.settings, "MAX_PORTFOLIO_GROSS", 0.12, raising=False)
+    df = _probe_df([{"Symbol": s, "Action Signal": "BUY", "Price": 10.0} for s in ("A", "B", "C", "D")])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert [o.symbol for o in broker.submitted] == ["A", "B"]  # 0.05 + 0.05; a third would exceed 0.12
+
+
+def test_probe_disabled_when_closed_count_unavailable(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.01, raising=False)
+    import data.paper_account_store as pas
+
+    def _boom(self, sid):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(pas.PaperAccountStore, "count_closed_trades", _boom)
+    df = _probe_df([{"Symbol": "AGNC", "Action Signal": "BUY", "Price": 10.0}])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert broker.submitted == []

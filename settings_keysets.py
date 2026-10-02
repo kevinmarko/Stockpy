@@ -402,6 +402,13 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "main_orchestrator.py, and MCP reporting tools -- "
         "toggling it changes what those consumers learn from and report."
     ),
+    "PAPER_PIPELINE_PROBE_WEIGHT": (
+        "Turns on automated cold-start paper orders (a fraction of paper equity "
+        "per zero-Kelly BUY). Their closed trades are bridged into the "
+        "transactions_store 'trades' ledger that production Kelly reads "
+        "unfiltered, so changing it changes what live sizing learns from -- "
+        "same blast radius as PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED."
+    ),
     "DEAD_LETTER_RETRY_ENABLED": (
         "Gates POST /dead-letter/retry, which spawns a real main.py "
         "subprocess (network calls, a fresh data fetch, a real advisory "

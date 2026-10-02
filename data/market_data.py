@@ -854,6 +854,35 @@ class FMPProvider(MarketDataProvider):
             logger.error("FMPProvider.get_latest_quote(%s) failed: %s", symbol, exc)
             raise MarketDataError(f"FMP quote fetch failed for {symbol}: {exc}") from exc
 
+    _ONE_BY_ONE_BUDGET_SECONDS = 20.0
+
+    def _quotes_one_by_one(self, symbols: List[str]) -> Dict[str, Quote]:
+        """Per-symbol ``/quote`` fallback for plans without ``/batch-quote``,
+        bounded in wall-clock time. FMP issuance is serial (shared throttle),
+        so a large batch would otherwise block for N x the request interval.
+        Symbols not reached within the budget are simply absent (never
+        fabricated); ``CompositeProvider`` resolves them via yfinance.
+        """
+        budget = min(
+            self._ONE_BY_ONE_BUDGET_SECONDS,
+            float(getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", self._ONE_BY_ONE_BUDGET_SECONDS) or self._ONE_BY_ONE_BUDGET_SECONDS),
+        )
+        deadline = time.monotonic() + budget
+        out: Dict[str, Quote] = {}
+        for i, sym in enumerate(symbols):
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "FMPProvider: per-symbol quote fallback hit its %.0fs budget; "
+                    "%d of %d symbol(s) left for the next provider.",
+                    budget, len(symbols) - i, len(symbols),
+                )
+                break
+            try:
+                out[sym.upper()] = self.get_latest_quote(sym)
+            except Exception:  # noqa: BLE001 -- dead-letter per symbol, CONSTRAINT #6
+                continue
+        return out
+
     def get_quotes_batch(self, symbols: List[str]) -> Dict[str, Quote]:
         """Override of the ABC's per-symbol-loop default (F6, docs/
         module_efficiency_redundancy_audit.md): resolves ALL symbols via ONE
@@ -886,7 +915,7 @@ class FMPProvider(MarketDataProvider):
         # so the "don't retry N single calls against a down host" rule below
         # does not apply -- resolve per symbol via /quote instead.
         if fmp_client.is_endpoint_out_of_plan("batch-quote"):
-            return super().get_quotes_batch(symbols)
+            return self._quotes_one_by_one(symbols)
         out: Dict[str, Quote] = {}
         try:
             payload = fmp_client.batch_quote(list(symbols))
@@ -914,7 +943,7 @@ class FMPProvider(MarketDataProvider):
                 )
         except Exception as exc:  # noqa: BLE001 -- dead-letter the whole batch, CONSTRAINT #6
             if fmp_client.is_endpoint_out_of_plan("batch-quote"):
-                return super().get_quotes_batch(symbols)
+                return self._quotes_one_by_one(symbols)
             logger.error("FMPProvider.get_quotes_batch(%s) failed: %s", symbols, exc)
             return {}
         return out

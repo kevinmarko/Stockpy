@@ -15,6 +15,7 @@ frozen. It never writes anything.
 from __future__ import annotations
 
 import argparse
+from types import SimpleNamespace
 import json
 import sys
 from pathlib import Path
@@ -63,9 +64,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     store = PaperAccountStore(readonly=True)
     closed = store.get_full_closed_trades(limit=1_000_000)
+    # Database only: get_open_positions() would mark every position over the
+    # network, and this read-only status check must never depend on quotes.
     try:
-        open_positions = store.get_open_positions()
-    except Exception:  # marking needs quotes; the count must not depend on them
+        open_positions = [
+            SimpleNamespace(symbol=sym, strategy_id=PIPELINE_STRATEGY_ID)
+            for sym in store.open_position_symbols(PIPELINE_STRATEGY_ID)
+        ]
+    except Exception:
         open_positions = []
     s = summarize(closed, open_positions, min_trades=args.min)
 

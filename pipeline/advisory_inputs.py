@@ -207,6 +207,28 @@ def build_universe(snapshot: AccountSnapshot) -> List[str]:
     return build_universe_detailed(snapshot).symbols
 
 
+# Must equal main_orchestrator.PIPELINE_STRATEGY_ID (pinned by a test); not
+# imported from there to keep this module off the orchestrator import chain.
+_PIPELINE_STRATEGY_ID = "main_pipeline"
+
+
+def _open_pipeline_paper_symbols() -> set:
+    """Symbols the automated pipeline currently holds on the FMP paper ledger.
+
+    Database only (no price marking). They must stay in the evaluation
+    universe so the position keeps getting scored and can receive its exit
+    signal even after it drops out of the watchlist/scan or is rating-excluded.
+    Fails soft to an empty set (CONSTRAINT #6).
+    """
+    try:
+        from data.paper_account_store import PaperAccountStore
+
+        return PaperAccountStore(readonly=True).open_position_symbols(_PIPELINE_STRATEGY_ID)
+    except Exception as exc:  # noqa: BLE001 -- universe build must never fail on this
+        logger.warning("Universe: could not read open pipeline paper positions: %s", exc)
+        return set()
+
+
 def build_universe_detailed(
     snapshot: Optional[AccountSnapshot],
     *,
@@ -299,6 +321,18 @@ def build_universe_detailed(
             len(recently_closed), ", ".join(sorted(recently_closed)),
         )
     universe = sorted(set(universe) | recently_closed)
+
+    # 6. Open pipeline paper positions -- unioned LAST for the same reasons as
+    # retention: never rating-excluded, never suppressing the DEFAULT_TICKERS
+    # decision, always scored so the position can receive its exit signal.
+    # UniverseBuild.held stays Robinhood-only.
+    pipeline_held = _open_pipeline_paper_symbols() - set(universe)
+    if pipeline_held:
+        logger.info(
+            "Universe: retaining %d open pipeline paper position(s): %s",
+            len(pipeline_held), ", ".join(sorted(pipeline_held)),
+        )
+        universe = sorted(set(universe) | pipeline_held)
 
     logger.info(
         "Universe: %d symbols (%d held, %d watchlist-only, %d discovered, %d recently-closed).",
