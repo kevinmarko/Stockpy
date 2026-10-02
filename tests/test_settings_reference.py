@@ -141,7 +141,6 @@ class TestSettingsReferenceEndpoint:
         # respectively), but its own dedicated editor precedes feature-flags
         # in _build_editable_at_index()'s editor list, so it wins.
         assert fields["SECTOR_HEAT_ENABLED"]["editable_at"] == "/settings/sentiment"
-        assert fields["CACHE_LONG_SHORT_WRITES_ENABLED"]["editable_at"] == "/settings/cache-long-short"
         assert fields["PAPER_BROKER_WRITES_ENABLED"]["editable_at"] == "/settings/paper-broker"
         assert fields["FMP_API_KEY"]["editable_at"] is None  # Secret, not in any editor
         # ETF transmission was archived (step 4d) and its settings fields
@@ -260,10 +259,10 @@ class TestReferenceWriteIndexDerivation:
         real boolean as no_op and confirm it drops out."""
         real = settings_meta.load_liveness()
         fake = dict(real)
-        fake["no_op"] = frozenset(real.get("no_op", frozenset())) | {"PAIRS_SNAPSHOT_ENABLED"}
+        fake["no_op"] = frozenset(real.get("no_op", frozenset())) | {"NEWS_HISTORY_CAPTURE_ENABLED"}
         monkeypatch.setattr(settings_meta, "load_liveness", lambda *a, **k: fake)
         index = pilots_api._build_reference_write_index()
-        assert "PAIRS_SNAPSHOT_ENABLED" not in index
+        assert "NEWS_HISTORY_CAPTURE_ENABLED" not in index
         assert "SECTOR_HEAT_ENABLED" in index
 
     def test_contains_representative_live_boolean_flags(self):
@@ -273,7 +272,7 @@ class TestReferenceWriteIndexDerivation:
         were retired in step 4f.)"""
         for key in (
             "SECTOR_HEAT_ENABLED",
-            "PAIRS_SNAPSHOT_ENABLED",
+            "NEWS_HISTORY_CAPTURE_ENABLED",
             "PAPER_BROKER_WRITES_ENABLED",
             "LIVE_TRADE_EXECUTION_ENABLED",
         ):
@@ -320,13 +319,13 @@ class TestSettingsReferenceWrite:
         the write index under a liveness artifact that marks one as no_op."""
         real = settings_meta.load_liveness()
         fake = dict(real)
-        fake["no_op"] = frozenset(real.get("no_op", frozenset())) | {"PAIRS_SNAPSHOT_ENABLED"}
+        fake["no_op"] = frozenset(real.get("no_op", frozenset())) | {"NEWS_HISTORY_CAPTURE_ENABLED"}
         monkeypatch.setattr(settings_meta, "load_liveness", lambda *a, **k: fake)
         monkeypatch.setattr(pilots_api, "_REFERENCE_WRITE_INDEX", pilots_api._build_reference_write_index())
-        resp = _put_reference({"PAIRS_SNAPSHOT_ENABLED": True})
+        resp = _put_reference({"NEWS_HISTORY_CAPTURE_ENABLED": True})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["rejected"]["PAIRS_SNAPSHOT_ENABLED"] == "unknown_key"
+        assert body["rejected"]["NEWS_HISTORY_CAPTURE_ENABLED"] == "unknown_key"
         assert not body["written"]
 
     def test_dangerous_field_requires_confirmation(self):

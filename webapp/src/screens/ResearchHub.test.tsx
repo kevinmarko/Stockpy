@@ -1,10 +1,8 @@
 /**
- * ResearchHub.test.tsx — the Research section's landing hub: all 11 screen
+ * ResearchHub.test.tsx — the Research section's landing hub: all 9 screen
  * cards render with their label + description (Sentiment Dynamics and
- * Sector Selection closing parity gap G2 — the hub previously listed only 9
- * of the 11 screens the nav actually carries; the SVI Stitching Algorithm
- * Demo card added later to close the "unreachable from any UI link" gap for
- * /research/trends-stitcher), the TAB_HELP-sourced
+ * Sector Selection closing parity gap G2 — the hub previously listed only a
+ * subset of the screens the nav actually carries), the TAB_HELP-sourced
  * descriptions read live off help/helpContent.ts (never a hard-coded
  * duplicate, so the test would catch drift), and clicking a card's
  * click-to-navigate body (role="button", separate from its `.drag-handle`
@@ -39,13 +37,11 @@ function renderHub(initialPath = "/research") {
         <Route path="/compare" element={<Stub marker="landed:compare" />} />
         <Route path="/models" element={<Stub marker="landed:models" />} />
         <Route path="/strategy-health" element={<Stub marker="landed:strategy-health" />} />
-        <Route path="/pairs" element={<Stub marker="landed:pairs" />} />
         <Route path="/signals" element={<Stub marker="landed:signals" />} />
         <Route path="/sentiment" element={<Stub marker="landed:sentiment" />} />
         <Route path="/sector-selection" element={<Stub marker="landed:sector-selection" />} />
         <Route path="/forecast" element={<Stub marker="landed:forecast" />} />
         <Route path="/data-explorer" element={<Stub marker="landed:data-explorer" />} />
-        <Route path="/research/trends-stitcher" element={<Stub marker="landed:trends-stitcher" />} />
       </Routes>
     </MemoryRouter>
   );
@@ -60,26 +56,24 @@ describe("ResearchHub screen", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 11 card labels", () => {
+  it("renders all 9 card labels", () => {
     renderHub();
     for (const label of [
       "Pilots",
       "Compare",
       "Models",
       "Strategy Health",
-      "Pairs radar",
       "Signal Breakdown",
       "Sentiment Dynamics",
       "Sector Selection",
       "Forecast Viewer",
       "Data Explorer",
-      "SVI Stitching Algorithm Demo",
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
 
-  it("renders live TAB_HELP descriptions for all 10 cards, not a hard-coded duplicate", () => {
+  it("renders live TAB_HELP descriptions for all 9 cards, not a hard-coded duplicate", () => {
     renderHub();
     // Asserts against the actual TAB_HELP.* text at runtime -- a change to
     // helpContent.ts's prose would break this test if ResearchHub still
@@ -90,7 +84,6 @@ describe("ResearchHub screen", () => {
     expect(
       screen.getByText(TAB_HELP["strategy-health"].description)
     ).toBeInTheDocument();
-    expect(screen.getByText(TAB_HELP.pairs.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.signals.description)).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.sentiment.description)).toBeInTheDocument();
     expect(
@@ -102,33 +95,16 @@ describe("ResearchHub screen", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders the SVI Stitching Algorithm Demo card's static description", () => {
-    renderHub();
-    // Not TAB_HELP-sourced (no helpContent.ts entry exists for this demo
-    // screen yet) -- static prose. Disclosure fix: the description must not
-    // present this as unqualified real Google Trends data (the backend
-    // fetches this on labeled proxy data, since no live Google Trends
-    // source is wired into this platform) -- see TrendsVisualizer.tsx's own
-    // header for the sibling fix.
-    expect(
-      screen.getByText(
-        "Demonstrates the overlapping-window stitching algorithm used to reconstruct a continuous Google Trends SVI series from adjacent 90-day intervals (live Google Trends data isn't wired up in this platform, so the demo runs on labeled proxy data)."
-      )
-    ).toBeInTheDocument();
-  });
-
   it.each([
     ["Pilots", "landed:marketplace"],
     ["Compare", "landed:compare"],
     ["Models", "landed:models"],
     ["Strategy Health", "landed:strategy-health"],
-    ["Pairs radar", "landed:pairs"],
     ["Signal Breakdown", "landed:signals"],
     ["Sentiment Dynamics", "landed:sentiment"],
     ["Sector Selection", "landed:sector-selection"],
     ["Forecast Viewer", "landed:forecast"],
     ["Data Explorer", "landed:data-explorer"],
-    ["SVI Stitching Algorithm Demo", "landed:trends-stitcher"],
   ])("clicking the %s card's body navigates to its route", async (label, marker) => {
     const user = userEvent.setup();
     renderHub();

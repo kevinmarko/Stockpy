@@ -46,13 +46,6 @@ vi.mock("../api/client", () => ({
         drift_keys: [],
       })
     ),
-    getCacheLongShortSettings: vi.fn(() =>
-      Promise.resolve({
-        groups: [{ name: "Cache Long/Short", fields: [] }],
-        applies_counts: { immediately: 0, next_daemon_restart: 0, no_effect: 0, env_pinned: 0 },
-        drift_keys: [],
-      })
-    ),
     getPrompts: vi.fn(() =>
       Promise.resolve({
         prompts: [],

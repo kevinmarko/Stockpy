@@ -19,7 +19,10 @@ from pathlib import Path
 import pytest
 
 from pilots.validation_trend import (
+    ARCHIVED_STRATEGY_IDS,
+    ARCHIVED_STRATEGY_PREFIXES,
     cross_strategy_snapshot,
+    is_archived_strategy,
     macro_regime_timeline,
     validation_history_trend,
     validation_trend_snapshot,
@@ -45,6 +48,30 @@ FIXTURES_DIR = str(Path(__file__).parent / "fixtures")
 # cross_strategy_snapshot
 # ---------------------------------------------------------------------------
 class TestCrossStrategySnapshot:
+    def test_archived_options_strategies_are_hidden(self, tmp_path):
+        for sid in ("timeseries_momentum", "covered_call", "Iron Condor_SPY"):
+            (tmp_path / f"{sid.replace(' ', '_')}_validation_summary.json").write_text(
+                json.dumps({"strategy_id": sid, "deployable": False, "pbo": 0.4}),
+                encoding="utf-8",
+            )
+        ids = {r["strategy_id"] for r in cross_strategy_snapshot(str(tmp_path))["strategies"]}
+        assert ids == {"timeseries_momentum"}
+
+    def test_archived_list_never_hides_a_registered_strategy(self):
+        # Parse (not import) the heavy validation script's registry keys.
+        import ast
+
+        src = (Path(__file__).parent.parent / "scripts" / "refresh_validations.py").read_text()
+        keys = set()
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                target = node.target if isinstance(node, ast.AnnAssign) else node.targets[0]
+                if getattr(target, "id", None) == "STRATEGY_REGISTRY" and isinstance(node.value, ast.Dict):
+                    keys = {k.value for k in node.value.keys if isinstance(k, ast.Constant)}
+        assert keys, "could not parse STRATEGY_REGISTRY"
+        assert not {k for k in keys if is_archived_strategy(k)}
+        assert ARCHIVED_STRATEGY_IDS and ARCHIVED_STRATEGY_PREFIXES
+
     def test_real_fixtures_include_orphan_strategy(self):
         result = cross_strategy_snapshot(FIXTURES_DIR)
         ids = {r["strategy_id"] for r in result["strategies"]}

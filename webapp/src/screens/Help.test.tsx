@@ -61,10 +61,11 @@ describe("Help screen", () => {
   it("filters by a substring of the definition text, not just the term", async () => {
     const user = userEvent.setup();
     renderScreen();
-    // "Engle-Granger" only appears in the "cointegration" definition, not in
-    // the term name itself -- proves the search scans definitions too.
-    await user.type(screen.getByTestId("help-search"), "engle-granger");
-    expect(screen.getByTestId("help-term-cointegration")).toBeInTheDocument();
+    // "hidden-concentration" only appears in the "correlation cluster"
+    // definition, not in the term name itself -- proves the search scans
+    // definitions too.
+    await user.type(screen.getByTestId("help-search"), "hidden-concentration");
+    expect(screen.getByTestId("help-term-correlation cluster")).toBeInTheDocument();
     expect(screen.queryByTestId("help-term-conviction")).not.toBeInTheDocument();
   });
 

@@ -55,11 +55,6 @@ import type { StrategyReportCardSnapshot,
   MacroGateUpdateResult,
   ModelRow,
   ObservabilitySummary,
-  PairsAnalyzeRequest,
-  PairsAnalyzeResult,
-  PairsRadar,
-  PairsScanRequest,
-  PairsScanResult,
   PerfRange,
   PerformanceResponse,
   PilotDetail,
@@ -133,24 +128,14 @@ import type { StrategyReportCardSnapshot,
   ProviderStatus,
   MacroSentimentResponse,
   OrderBookLadderResponse,
-  ModelComparisonResponse,
-  CacheLongShortConcentratedPosition,
-  CacheLongShortSimulateRequest,
-  CacheLongShortSimulateResult,
-  CacheLongShortStartRequest,
-  CacheLongShortStartResult,
-  CacheLongShortDashboard,
-  CacheLongShortPendingTrade,
   PaperBrokerAccount,
   PaperBrokerPosition,
   PaperBrokerOrder,
   PaperBrokerClosedTrade,
   PaperBrokerResetResult,
-  CacheLongShortApproveBulkResult,
 
   EquityOrderRequest,
   EquityOrderResult,
-  TrendsStitchDemoResponse,
   DigestPayload,
 } from "./types";
 
@@ -426,24 +411,6 @@ const liveApi = {
       `/sector/selection?target=${encodeURIComponent(target)}&n=${n}`
     ),
   getModels: () => http<ModelRow[]>("/models"),
-  getPairs: () => http<PairsRadar>("/pairs"),
-  // ---- On-demand Pairs recompute (data base, :8603) — webapp porting
-  // backlog item 8b. Distinct from getPairs above (which only
-  // ever serve the last PIPELINE-WRITTEN artifact): these POSTs recompute
-  // synchronously against operator-chosen parameters/symbols, capped small.
-  // A 422 (too few/many symbols, identical Y/X) throws ApiError the normal
-  // way via http()'s shared error path -- callers enforce the cap client-side
-  // (matching SymbolComparison.tsx's precedent) so this is rarely hit live.
-  analyzePairs: (req: PairsAnalyzeRequest) =>
-    http<PairsAnalyzeResult>("/data/pairs/analyze", {
-      method: "POST",
-      body: JSON.stringify(req),
-    }),
-  scanPairs: (req: PairsScanRequest) =>
-    http<PairsScanResult>("/data/pairs/scan", {
-      method: "POST",
-      body: JSON.stringify(req),
-    }),
   postPaperEquityOrder: (req: EquityOrderRequest) =>
     http<EquityOrderResult>("/pilots/paper-broker/order", {
       method: "POST",
@@ -659,15 +626,6 @@ const liveApi = {
     confirm: SettingsConfirmMap = {},
   ) =>
     http<TunablesUpdateResult>("/settings/sentiment", {
-      method: "PUT",
-      body: JSON.stringify({ values, confirm }),
-    }),
-  getCacheLongShortSettings: () => http<TunablesResponse>("/settings/cache-long-short"),
-  updateCacheLongShortSettings: (
-    values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {},
-  ) =>
-    http<TunablesUpdateResult>("/settings/cache-long-short", {
       method: "PUT",
       body: JSON.stringify({ values, confirm }),
     }),
@@ -1009,7 +967,6 @@ const liveApi = {
   getMacroSentiment: () => http<MacroSentimentResponse>("/data/macro/sentiment"),
   getOrderBookLadder: (symbol: string) =>
     http<OrderBookLadderResponse>(`/data/ladder/${encodeURIComponent(symbol)}`),
-  getModelComparison: () => http<ModelComparisonResponse>("/metrics/models/comparison"),
   getForecastBackfill: () => http<ForecastBackfillSummary>("/pilots/forecast_backfill"),
   /**
    * POST /pilots/forecast_backfill/run. Deliberately bypasses the shared
@@ -1077,29 +1034,6 @@ const liveApi = {
       method: "POST",
     }),
     
-  // ---- Cache Long/Short ----
-  getClsConcentratedPositions: () =>
-    http<{ positions: CacheLongShortConcentratedPosition[] }>("/pilots/cache-long-short/concentrated-positions"),
-  getClsDashboard: () =>
-    http<CacheLongShortDashboard>("/pilots/cache-long-short/dashboard"),
-  getClsPendingApprovals: () =>
-    http<CacheLongShortPendingTrade[]>("/pilots/cache-long-short/pending-approvals"),
-  simulateCls(req: CacheLongShortSimulateRequest): Promise<CacheLongShortSimulateResult> {
-    return http<CacheLongShortSimulateResult>("/data/cache-long-short/simulate", {
-      method: "POST",
-      body: JSON.stringify(req),
-    });
-  },
-  startCls: (req: CacheLongShortStartRequest) =>
-    http<CacheLongShortStartResult>("/pilots/cache-long-short/start", {
-      method: "POST",
-      body: JSON.stringify(req),
-    }),
-  approveClsBulk: (lotIds: number[]) =>
-    http<CacheLongShortApproveBulkResult>("/pilots/cache-long-short/approve-bulk", {
-      method: "POST",
-      body: JSON.stringify({ lot_ids: lotIds }),
-    }),
   // ---- Paper Broker ----
   getPaperBrokerAccount: () => http<PaperBrokerAccount>("/pilots/paper-broker/account"),
   getPaperBrokerPositions: () => http<PaperBrokerPosition[]>("/pilots/paper-broker/positions"),
@@ -1143,9 +1077,6 @@ const liveApi = {
     http<LiveTradeProposal>(`/pilots/execution/${encodeURIComponent(token)}/approve`, { method: "POST" }),
   rejectLiveTrade: (token: string) =>
     http<LiveTradeProposal>(`/pilots/execution/${encodeURIComponent(token)}/reject`, { method: "POST" }),
-
-  // ---- Trends Stitching Demo ----
-  getTrendsStitchDemo: () => http<TrendsStitchDemoResponse>("/data/trends/stitch-demo"),
 };
 
 /**

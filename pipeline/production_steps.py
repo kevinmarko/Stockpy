@@ -3288,18 +3288,6 @@ class StateSnapshotStep(PipelineStep):
             snapshot_kwargs["recommendations"] = list(ctx.recommendations or [])
         _write_state_snapshot(ctx.macro_raw, ctx.dashboard_df, ctx.symbols, **snapshot_kwargs)
 
-        # Persist the optional Pilots-PWA pairs radar artifact. Opt-in
-        # (settings.PAIRS_SNAPSHOT_ENABLED, default False) and
-        # dead-letter-guarded: a failure here NEVER affects the pipeline
-        # (CONSTRAINT #6). The options premium matrix used to be written here
-        # too; it left core with the options desk (2026-09, step 3d).
-        try:
-            from reporting.pairs_snapshot import write_pairs_snapshot
-
-            write_pairs_snapshot(ctx.symbols)
-        except Exception as pairs_err:  # noqa: BLE001
-            telemetry.warning(f"Pairs radar snapshot skipped: {pairs_err}")
-
         # Jinja HTML report
         try:
             portfolio_dicts = ctx.dashboard_df.to_dict(orient="records")

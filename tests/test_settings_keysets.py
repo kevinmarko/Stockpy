@@ -307,7 +307,9 @@ class TestExistingEditorsAreNotBootstrap:
             # Pairs Snapshots", renamed "Pairs Snapshot") were retired.
             # 92 -> 91 (2026-09-30 Alpaca removal): MARKET_DATA_WS_ENABLED
             # ("Market Data") retired with the Alpaca WebSocket streamer.
-            "_TUNABLE_INDEX": 91,
+            # 91 -> 90 (2026-10 dead-tab cleanup): PAIRS_SNAPSHOT_ENABLED
+            # ("Pairs Snapshot") retired with the Pairs radar screen.
+            "_TUNABLE_INDEX": 90,
             # 33 -> 31 (2026-09 vendor removal): REDDIT_BACKFILL_MAX_PAGES and
             # FINNHUB_RATE_LIMIT_PER_MIN retired with Reddit/Finnhub.
             "_SENTIMENT_INDEX": 31,
@@ -321,7 +323,8 @@ class TestExistingEditorsAreNotBootstrap:
         # 184 -> 166 (step 4f): the 16 tunables + 2 FMP keys above.
         # 166 -> 164 (2026-09 vendor removal): the 2 sentiment keys above.
         # 164 -> 163 (2026-09-30 Alpaca removal): MARKET_DATA_WS_ENABLED.
-        assert len(ALL_EDITOR_KEYS) == 163
+        # 163 -> 162 (2026-10 dead-tab cleanup): PAIRS_SNAPSHOT_ENABLED.
+        assert len(ALL_EDITOR_KEYS) == 162
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

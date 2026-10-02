@@ -1278,86 +1278,6 @@ export interface ModelRow {
 }
 
 
-/** GET /pairs — one cointegrated pair row + current spread state. */
-export interface PairRow {
-  ticker1: string;
-  ticker2: string;
-  p_value: number | null;
-  half_life: number | null;
-  z_score: number | null;
-  beta: number | null;
-  rolling_p: number | null;
-  position: number | null;
-  signal: string; // advisory display label
-}
-
-export interface PairsRadar {
-  as_of: string | null;
-  universe: string[];
-  pairs: PairRow[];
-  reason: string | null;
-}
-
-// ---------------------------------------------------------------------------
-// On-demand Options / Pairs recompute (webapp porting backlog items 8a/8b) —
-// api/data_api.py POSTs, distinct from GET /options / GET /pairs above (which
-// only ever serve the LAST PIPELINE-WRITTEN artifact). These are synchronous,
-// request-scoped, operator-triggered computations against parameters/symbols
-// the operator chooses, capped to a small size (see each request type's docs).
-// ---------------------------------------------------------------------------
-
-/** Body for POST /data/pairs/analyze — one named pair. */
-export interface PairsAnalyzeRequest {
-  symbol_y: string;
-  symbol_x: string;
-}
-
-/**
- * POST /data/pairs/analyze response. Shaped like `PairRow` (`ticker1` = Y /
- * `ticker2` = X) plus a `found`/`reason` honesty envelope — `found: false`
- * (insufficient history, no cointegration, a degenerate pair) is an honest,
- * common, EXPECTED 200, not an error. `z_score_series` backs the frontend's
- * own mini chart (the server renders nothing itself).
- */
-export interface PairsAnalyzeResult {
-  ticker1: string;
-  ticker2: string;
-  found: boolean;
-  reason: string | null;
-  p_value: number | null;
-  half_life: number | null;
-  half_life_tradeable: boolean | null;
-  z_score: number | null;
-  beta: number | null;
-  rolling_p: number | null;
-  position: number | null;
-  signal: string;
-  aligned_bars: number;
-  z_score_series: { date: string; z_score: number }[];
-}
-
-/** Body for POST /data/pairs/scan — an operator-chosen symbol list (2-15
- * after de-dup; 422 with a stable tag outside that range). */
-export interface PairsScanRequest {
-  symbols: string[];
-  p_threshold?: number;
-  max_pairs?: number;
-}
-
-/**
- * POST /data/pairs/scan response. `pairs` rows match `PairRow` exactly;
- * `missing` lists symbols that failed to fetch (dead-lettered, not aborted).
- * An honest empty `pairs: []` + `reason` is a valid 200 — statistical
- * arbitrage candidates are genuinely rare.
- */
-export interface PairsScanResult {
-  pairs: PairRow[];
-  missing: string[];
-  aligned_symbols: number;
-  aligned_bars: number;
-  reason: string | null;
-}
-
 /**
  * GET /automation/status — the "did the pipeline run?" composite. Every
  * sub-object is honest about WHERE it came from (`source`/`*_source` fields)
@@ -3077,15 +2997,6 @@ export interface CommandManifest {
    * constant when this is absent or empty.
    */
   strategy_registry?: string[];
-  /**
-   * RETIRED (2026-09, step 4a): the options desk was removed, so the manifest
-   * and `GET /commands` no longer emit these two registries. Kept optional so
-   * an older manifest still type-checks; every consumer treats absence as
-   * empty (the options-only pickers and the "paper-broker realistic" quick
-   * action simply never appear).
-   */
-  options_strategy_registry?: string[];
-  paper_broker_options_strategy_registry?: string[];
   commands: CommandSpec[];
   reason: string | null;
 }
@@ -3732,20 +3643,6 @@ export interface OrderBookLadderResponse {
   is_synthetic: boolean;
 }
 
-export interface ModelComparisonRow {
-  name: string;
-  [modelName: string]: string | number;
-}
-
-export interface ModelComparisonResponse {
-  // Always empty from the live backend today -- "SF-GARCH-LSTM"/"Bond-BERT"
-  // are undeployed ridge-regression stand-ins (see ml/models/sf_garch_lstm.py
-  // / ml/models/bond_bert.py) with no tracked real return history to compare,
-  // so this honestly reports no data rather than a fabricated curve.
-  data: ModelComparisonRow[];
-  is_synthetic: boolean;
-}
-
 export interface ForecastBackfillModelMetrics {
   accuracy: number;
   auc: number;
@@ -3862,62 +3759,6 @@ export interface ForecastBackfillJob {
   partial_summary: ForecastBackfillPartialSummary | null;
   seconds_remaining: number;
 }
-
-export interface CacheLongShortConcentratedPosition {
-  ticker: string;
-  market_value: number;
-  pct_equity: number;
-}
-
-export interface CacheLongShortSimulateRequest {
-  ticker: string;
-  allocation: number;
-}
-
-export interface CacheLongShortSimulateResult {
-  found: boolean;
-  reason: string | null;
-  beta: number | null;
-  proxy_ticker: string | null;
-  correlation_coefficient: number | null;
-}
-
-export interface CacheLongShortStartRequest {
-  ticker: string;
-  proxy_ticker: string;
-  allocation: number;
-  correlation_coefficient: number;
-}
-
-export interface CacheLongShortStartResult {
-  status: string;
-  position_id: number;
-  ticker: string;
-}
-
-export interface CacheLongShortDashboard {
-  status: "enabled" | "disabled";
-  tax_bank?: number;
-  exposure?: {
-    long_exposure: number;
-    short_exposure: number;
-    net_exposure: number;
-    gross_exposure: number;
-  };
-}
-
-export interface CacheLongShortPendingTrade {
-  lot_id: number;
-  position_id: number;
-  cost_basis: number;
-  unrealized_loss_pct: number | null;
-}
-
-export interface CacheLongShortApproveBulkResult {
-  status: string;
-  count: number;
-}
-
 
 export interface PaperBrokerAccount {
   equity: number;
@@ -4047,16 +3888,6 @@ export class JobConflictError extends ApiError {
 
 export interface JobsListResponse {
   jobs: JobRecord[];
-}
-
-export interface TrendsCurve {
-  name: string;
-  data: [number, number][]; // timestamp ms, value
-}
-
-export interface TrendsStitchDemoResponse {
-  raw_curves: TrendsCurve[];
-  stitched_curve: TrendsCurve;
 }
 
 export interface StrategyReportCardPredicted {

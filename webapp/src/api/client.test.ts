@@ -208,7 +208,6 @@ describe("client.ts — live client (mocked fetch)", () => {
       [() => mod.api.getAlerts(25), "http://example.test:9000/alerts?limit=25"],
       [() => mod.api.getForecast("aapl", 30), "http://example.test:9000/symbols/aapl/forecast?horizon=30"],
       [() => mod.api.getModels(), "http://example.test:9000/models"],
-      [() => mod.api.getPairs(), "http://example.test:9000/pairs"],
       [() => mod.api.getStrategyMatrix(), "http://example.test:9000/strategy/matrix"],
     ];
     for (const [call, expectedUrl] of cases) {
