@@ -249,10 +249,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # (SECRET_KEYS above). MCP_OAUTH_ENABLED itself stays out of ALLOWED_KEYS
     # -- see EXCLUDED_FROM_GUI below.
     "MCP_OAUTH_ISSUER_URL",
-    # Persisted Pilots-PWA pairs radar. When on, the pipeline writes
-    # output/pairs.json for the AST-guarded Pilots API to read. Non-secret.
-    "PAIRS_SNAPSHOT_ENABLED",
-    "PAIRS_SNAPSHOT_MAX_PAIRS",
     # Execution mode toggle — pipeline paper trading (FMP paper ledger) vs.
     # going live (no automated orders; Robinhood queue only). Writeable from
     # the execution-mode selector. Never a secret.
@@ -631,18 +627,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "BROKER_BACKEND",
     "LIVE_TRADE_EXECUTION_ENABLED",
     "LIVE_TRADE_APPROVAL_ENABLED",
-    "CACHE_LONG_SHORT_ENABLED",
-    "CACHE_LONG_SHORT_MIN_CORRELATION",
-    "CACHE_LONG_SHORT_PROXY_CANDIDATES",
-    "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
-    "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
-    # CACHE_LONG_SHORT_WRITES_ENABLED: reclassified into ALLOWED_KEYS
-    # 2026-08-08 -- see the "Fail-closed command/write flags" block near the
-    # end of this tuple for the policy change and the full list of siblings
-    # reclassified alongside it. It carries no secret material; the
-    # POST /pilots/cache-long-short/{start,approve-bulk} endpoints it guards
-    # remain independently gated by their own command token regardless.
-    "CACHE_LONG_SHORT_WRITES_ENABLED",
     "PAPER_BROKER_WRITES_ENABLED",
     "FMP_PAPER_STARTING_CASH",
     # Fields flagged by scripts/auditor/stockpy_codebase_auditor.py's
@@ -653,7 +637,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # --- Fail-closed command/write flags -- reclassified 2026-08-08 --------
     # Per explicit operator decision (PR #630 audit): "not secret information"
     # is the sole bar for GUI-writability going forward. These 11 flags
-    # (CACHE_LONG_SHORT_WRITES_ENABLED above makes 12) previously lived in
+    # previously lived in
     # EXCLUDED_FROM_GUI specifically because each is a dedicated,
     # own-risk-class fail-closed master switch (see each's own
     # `require_*_enabled` docstring in api/pilots_api.py / api/data_api.py /

@@ -202,25 +202,6 @@ export const REGISTERED_STRATEGIES = [
   "aroon_trend",
 ];
 
-/**
- * Fallback-of-last-resort options-strategy list for `validation.harness`'s
- * bulk (`--strategies`) mode, used only when the manifest's own
- * `options_strategy_registry` field (generated live from
- * `STANDARD_OPTIONS_STRATEGIES` by `scripts/build_command_manifest.py`) is
- * absent or empty. Sibling of `REGISTERED_STRATEGIES` above -- kept separate
- * because `validation.harness --strategies` only ever gives real,
- * name-specific results for options strategies, not the equity/
- * cross-sectional names in `REGISTERED_STRATEGIES`/`STRATEGY_REGISTRY`.
- */
-export const REGISTERED_OPTIONS_STRATEGIES = [
-  "Put Credit Spread",
-  "Call Credit Spread",
-  "Iron Condor",
-  "Bull Call Spread",
-  "Bear Put Spread",
-  "Long Straddle",
-];
-
 /** Substring or fuzzy match on any command key — for suggestions while still typing. */
 function matchCommands(commands: CommandSpec[], partial: string): CommandSpec[] {
   if (!partial) return commands;
@@ -312,9 +293,7 @@ function optionSuggestions(spec: CommandSpec, usedAliases: Set<string>, partial:
 function valueSuggestions(
   option: CommandOption,
   partial: string,
-  strategyRegistry: string[] = [],
-  optionsStrategyRegistry: string[] = [],
-  commandName: string = ""
+  strategyRegistry: string[] = []
 ): Suggestion[] {
   let choices = option.choices ?? [];
   // "strateg" (not "strategy") on purpose: "--strategies".includes("strategy")
@@ -323,21 +302,7 @@ function valueSuggestions(
   // plural flag at all. Confirmed no other manifest option name contains
   // "strateg" as a substring (see cli_introspect/command_manifest.json).
   if (choices.length === 0 && option.name.includes("strateg")) {
-    // validation.harness's plural --strategies is options-strategies-only
-    // (see that CLI's own main() docstring) -- draw from the options
-    // registry there, and from the equity one for every other
-    // strategy-named option (including validation.harness's OWN singular
-    // --strategy, which stays on the equity fallback unchanged -- see
-    // CommandFormBuilder.tsx's identical, deliberate split for the Form-Mode
-    // multi-select).
-    const isOptionsHarnessBulk = commandName === "validation.harness" && option.name === "--strategies";
-    choices = isOptionsHarnessBulk
-      ? optionsStrategyRegistry.length > 0
-        ? optionsStrategyRegistry
-        : REGISTERED_OPTIONS_STRATEGIES
-      : strategyRegistry.length > 0
-        ? strategyRegistry
-        : REGISTERED_STRATEGIES;
+    choices = strategyRegistry.length > 0 ? strategyRegistry : REGISTERED_STRATEGIES;
   }
   if (choices.length === 0 && (option.name.includes("start") || option.name.includes("end") || option.name.includes("date"))) {
     const currentYear = new Date().getFullYear();
@@ -492,8 +457,7 @@ function validate(spec: CommandSpec, argTokens: string[]): ValidationHint[] {
 export function parseCommandLine(
   input: string,
   commands: CommandSpec[],
-  strategyRegistry: string[] = [],
-  optionsStrategyRegistry: string[] = []
+  strategyRegistry: string[] = []
 ): ParseResult {
   const empty: ParseResult = {
     command: null,
@@ -585,7 +549,7 @@ export function parseCommandLine(
       prevOption.name.includes("end") ||
       prevOption.name.includes("date"))
   ) {
-    suggestions = valueSuggestions(prevOption, partial, strategyRegistry, optionsStrategyRegistry, command.name);
+    suggestions = valueSuggestions(prevOption, partial, strategyRegistry);
   } else if (prevOption && prevOption.takes_value) {
     suggestions = []; // free value expected (e.g. a date, a name)
   } else {

@@ -12,7 +12,6 @@ import { loadThresholds } from "../help/thresholds";
 import { fmtDate, fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
 import SignalDriverWeights from "../components/SignalDriverWeights";
-import ModelComparisonChart from "../components/ModelComparisonChart";
 
 type DeployFilter = "all" | "deployable" | "not_deployable" | "needs_retrain";
 
@@ -419,13 +418,6 @@ export function Models() {
           ) : (
             <div style={{ flex: 1, minHeight: 0 }}>
               <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
-                <div key="comparison-chart" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)" }}>Model Comparison</div>
-                  <div style={{ flex: 1, minHeight: 0, padding: "var(--s-3)" }}>
-                    <ModelComparisonChart />
-                  </div>
-                </div>
-
                 <div key="signal-weights" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
                   <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)" }}>Signal Drivers</div>
                   <div style={{ flex: 1, minHeight: 0, padding: "var(--s-3)" }}>

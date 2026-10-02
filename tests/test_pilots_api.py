@@ -1554,43 +1554,11 @@ class TestModelsRegistry:
         assert checked_any  # ml/registry.yaml has at least one dated model
 
 
-class TestPairsRadar:
-    def test_disabled_is_honest_empty(self, tmp_path):
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            with mock.patch.object(settings, "STATE_API_TOKEN", None):
-                resp = client.get("/pairs")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["pairs"] == []
-        assert body["reason"] and "not generated" in body["reason"]
-
-    def test_reads_persisted_radar(self, tmp_path):
-        import json as _json
-
-        (tmp_path / "pairs.json").write_text(
-            _json.dumps(
-                {
-                    "timestamp": "2026-07-15T00:00:00+00:00",
-                    "universe": ["XOM", "CVX"],
-                    "pairs": [
-                        {"ticker1": "XOM", "ticker2": "CVX", "p_value": 0.01,
-                         "half_life": 12.0, "z_score": 2.4, "beta": 0.9,
-                         "rolling_p": 0.02, "position": -1.0,
-                         "signal": "ENTER SHORT spread"}
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            with mock.patch.object(settings, "STATE_API_TOKEN", None):
-                resp = client.get("/pairs")
-        body = resp.json()
-        assert body["pairs"][0]["ticker1"] == "XOM"
-        assert body["pairs"][0]["signal"] == "ENTER SHORT spread"
-        assert body["universe"] == ["XOM", "CVX"]
+class TestPairsRadarRemoved:
+    def test_pairs_route_is_gone(self):
+        # The Pairs radar screen and its snapshot were removed in 2026-10.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            assert client.get("/pairs").status_code == 404
 
 
 class TestObservabilitySummary:

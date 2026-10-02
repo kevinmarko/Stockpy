@@ -115,14 +115,6 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   },
   "opportunity scan": (t) =>
     `A Robinhood broker scan run by the agentic-discovery skill, cross-referenced against this platform's own advisory engine — never run automatically. Results are capped at ${fmtNum(t?.agentic_max_candidates, 0)} candidates regardless of how many the scan matches; a candidate with no computed action shows '—', never a guessed one.`,
-  cointegration:
-    "Two symbols whose price spread is stationary — it mean-reverts instead of wandering — tested via the Engle-Granger method. The basis for every pair on the Pairs radar screen; a broken cointegration (rolling ADF p-value > 0.10) exits the trade.",
-  "half-life":
-    // Fixed algorithm parameter (signals/pairs_trading.py-equivalent), not a
-    // Thresholds API field — a "documented literal", not a live threshold.
-    "How many trading days a pair's spread takes to close half the distance back to its rolling mean, from an Ornstein-Uhlenbeck fit. Pairs radar only surfaces pairs with a half-life between 5 and 60 days — too fast is noise, too slow ties up capital.",
-  "z-score":
-    "How many standard deviations the current spread sits from its rolling mean. Pairs radar enters at |z| > 2, exits on a 0-cross, and stops out at |z| > 4.",
   "correlation cluster":
     // 30% concentration flag is a local frontend constant (Attribution.tsx's
     // HEAVY_CONCENTRATION_THRESHOLD), not a Thresholds API field.
@@ -196,12 +188,6 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "Whether the primary US equity market is open right now, computed locally from the current time against the exchange's trading calendar rather than fetched from the server. Auto-refresh's 'pause when market closed' option reads this to decide whether background polling should pause or keep running.",
   "safety telemetry":
     "A switch separate from the auto-refresh master above, governing only the kill-switch and heartbeat readout in the top bar. It keeps polling on its own schedule even when auto-refresh is turned off or the market is closed — a stale safety reading is treated as a risk here, not as something worth pausing to save a background request.",
-  "tax loss harvesting":
-    "Selling securities at a loss to offset a capital gains tax liability. The Cache Long/Short strategy flags these opportunities automatically based on settings, holding them in a 'tax bank' tally.",
-  "proxy hedge":
-    "A highly correlated alternative security (like a sector ETF) bought when selling the original asset for tax-loss harvesting to maintain market exposure while waiting out the wash-sale rule window.",
-  "correlation drift":
-    "When a proxy security stops tracking its target asset closely enough. A background process continually monitors this correlation and flags if the proxy relationship weakens below a safety threshold.",
   "tracked universe":
     "The core set of symbols the pipeline processes every run, assembled from your holdings and watchlists. These are the symbols that get daily action signals and size recommendations.",
   "forecast-covered":
@@ -375,12 +361,6 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "The ML model registry behind the platform's forecasts — each model's honest CPCV-validated DSR and PBO, training date, and sample size. A model that fails a gate is shown as not deployable, never loosened to force a green badge.",
     keyConcepts: ["deployable", "dsr", "pbo"],
   },
-  pairs: {
-    title: "Pairs radar",
-    description:
-      "Cointegrated stat-arb pairs and their current spread state — z-score, half-life, hedge ratio, and cointegration p-value per pair. A cointegration break (rolling ADF p-value > 0.10) exits the trade even without a stop. Advisory only.",
-    keyConcepts: ["cointegration", "z-score", "half-life"],
-  },
   "data-explorer": {
     title: "Data explorer",
     description:
@@ -489,12 +469,6 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "General platform settings governing position sizing, risk limits, HMM regime detection, forecasting models, and operations. All modifications are advisory only — tuning changes what the platform computes and suggests, never placing broker orders automatically.",
     keyConcepts: ["kelly target", "regime multiplier", "risk gate", "circuit breaker"],
   },
-  "settings-cache-long-short": {
-    title: "Cache Long/Short Settings",
-    description:
-      "Configuration for the Cache Long/Short tax-loss harvesting engine. Controls scan frequency, maximum beta drift, proxy hedge correlation thresholds, and wash-sale safety windows.",
-    keyConcepts: ["tax loss harvesting", "proxy hedge", "correlation drift"],
-  },
   "settings-paper-broker": {
     title: "Paper Broker Settings",
     description:
@@ -538,12 +512,6 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "chart-pattern read",
       "research brief",
     ],
-  },
-  "cache-long-short": {
-    title: "Cache Long/Short",
-    description:
-      "A systematic tax-loss harvesting (TLH) overlay. It monitors concentrated equity positions for TLH opportunities, generating a proxy hedge (like a highly-correlated sector ETF) to maintain beta exposure while avoiding wash-sale rules. Pending trades are routed here for approval before taking effect.",
-    keyConcepts: ["tax loss harvesting", "proxy hedge", "correlation drift"],
   },
   universe: {
     title: "Universe Transparency",

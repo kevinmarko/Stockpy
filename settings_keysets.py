@@ -383,11 +383,6 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "prompt to their phone -- same risk class as BROKERAGE_REFRESH_ENABLED, "
         "but unattended and recurring."
     ),
-    "CACHE_LONG_SHORT_WRITES_ENABLED": (
-        "Gates POST /pilots/cache-long-short/{start,approve-bulk}, which "
-        "persists a new tracked position or approves a TLH recommendation — "
-        "changes what a trading strategy recommends."
-    ),
     "COMMAND_EXECUTION_ENABLED": (
         "The highest-risk flag in this group: enables the 'command' job "
         "type on POST /jobs, which can execute the global kill switch, a "

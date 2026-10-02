@@ -277,7 +277,7 @@ The web app is a graphical front-end over the same pipeline. Its main screens:
   forecast skill, circuit breakers, risk-gate blocks, heartbeat, and logs; see
   [§12](#12-the-observability-dashboard).
 - **Portfolio** (`/portfolio`) — holdings, P&L, and held-vs-signal reconciliation.
-- **Options** (`/options`), **Pairs radar** (`/pairs`), **Signal Breakdown** (`/signals`),
+- **Signal Breakdown** (`/signals`),
   **Symbol Screener**, **Forecast Viewer**, and other research screens.
 - **Calibration** (`/calibration`) and **Attribution** (`/attribution`) — decision journal,
   conviction calibration, and Brinson-Fachler attribution.

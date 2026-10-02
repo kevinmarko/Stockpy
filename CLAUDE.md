@@ -459,4 +459,8 @@ Don't build on these or cite them as live. `legacy/README.md` lists every moved 
 - **Google Sheets publisher** (step 4e): `legacy/reporting/{sheet_publisher,sheets_client}.py`.
 - **Alpaca** (2026-09-30): `legacy/execution/alpaca_broker.py`, `legacy/data/{alpaca_http,market_data_ws,websocket_streamer,alpaca_provider}.py`
   and their tests in `legacy/tests/`. Market data is FMP then yfinance; `/ws/ticks/{symbol}` pushes REST quotes.
+- **Cache Long/Short and the Pairs radar** (2026-10): `legacy/engine/cache_long_short_engine.py`,
+  `legacy/data/cache_long_short_store.py`, `legacy/pilots/{cache_long_short,pairs}.py`,
+  `legacy/reporting/pairs_snapshot.py`, with their webapp screens and the `CACHE_LONG_SHORT_*` /
+  `PAIRS_SNAPSHOT_*` settings. The `pairs_trading` signal and `pairs_ondemand.py` (MCP tools) stay.
 - **Streamlit desktop app**: deleted (git history only).

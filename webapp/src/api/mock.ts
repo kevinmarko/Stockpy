@@ -8,10 +8,6 @@
  */
 
 import { ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse } from "./types";
-import {
-  stitchMultipleIntervals,
-  type TrendsPoint,
-} from "../utils/trendsStitch";
 import type { StrategyReportCardSnapshot,
   RetrospectiveTradeRecord,
   BatchRetrospectiveInsightsResponse,
@@ -84,11 +80,6 @@ import type { StrategyReportCardSnapshot,
   MacroGateUpdateResult,
   ModelRow,
   ObservabilitySummary,
-  PairsAnalyzeRequest,
-  PairsAnalyzeResult,
-  PairsRadar,
-  PairsScanRequest,
-  PairsScanResult,
   PerfRange,
   PerformanceResponse,
   PilotDetail,
@@ -194,14 +185,6 @@ import type { StrategyReportCardSnapshot,
   PromptPinResult,
   DataSyncResult,
   ProviderStatus,
-  CacheLongShortConcentratedPosition,
-  CacheLongShortSimulateRequest,
-  CacheLongShortSimulateResult,
-  CacheLongShortStartRequest,
-  CacheLongShortStartResult,
-  CacheLongShortDashboard,
-  CacheLongShortPendingTrade,
-  CacheLongShortApproveBulkResult,
   PaperBrokerAccount,
   PaperBrokerPosition,
   PaperBrokerOrder,
@@ -209,7 +192,6 @@ import type { StrategyReportCardSnapshot,
   LiveTradeProposal,
   EquityOrderRequest,
   EquityOrderResult,
-  TrendsStitchDemoResponse,
   DigestPayload,
 } from "./types";
 
@@ -2062,10 +2044,10 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
 };
 
 // `settings_keysets.DANGEROUS_KEYS`, in full -- copied from the real set.
-// All 20 real settings_keysets.DANGEROUS_KEYS members are now covered here,
-// since the Feature Flags screen (webapp/src/api/mock.ts's
+// Every real settings_keysets.DANGEROUS_KEYS member is covered here, since
+// the Feature Flags screen (webapp/src/api/mock.ts's
 // FEATURE_FLAGS_TUNABLE_DEFS) serves every one of them, exercising the
-// typed-confirmation flow for all 20 in mock mode.
+// typed-confirmation flow for all of them in mock mode.
 const MOCK_DANGEROUS_KEYS = new Set([
   "BROKER_BACKEND",
   "ADVISORY_ONLY",
@@ -2075,11 +2057,9 @@ const MOCK_DANGEROUS_KEYS = new Set([
   "CORS_ALLOWED_ORIGINS",
   "FMP_BARS_ENABLED",
   "FMP_BARS_ADJUSTMENT",
-  "CACHE_LONG_SHORT_WRITES_ENABLED",
-  // 2026-08-08: settings_keysets.SAFETY_CRITICAL_KEY_REASONS gained these 13
-  // fields (CACHE_LONG_SHORT_WRITES_ENABLED above being one of them) when the
-  // fail-closed write/execution gates were reclassified out of
-  // EXCLUDED_FROM_GUI into ALLOWED_KEYS -- now all exposed by the Feature
+  // 2026-08-08: settings_keysets.SAFETY_CRITICAL_KEY_REASONS gained these
+  // fields when the fail-closed write/execution gates were reclassified out
+  // of EXCLUDED_FROM_GUI into ALLOWED_KEYS -- now all exposed by the Feature
   // Flags screen.
   "MACRO_REGIME_GATE_ENABLED",
   "AI_GENERATION_API_ENABLED",
@@ -3089,15 +3069,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     group: "Advanced / Config",
   },
   {
-    key: "PAIRS_SNAPSHOT_ENABLED",
-    value: true,
-    default: true,
-    type: "boolean",
-    description:
-      "When True, the pipeline persists the cointegrated pairs radar (ranking + current spread state) to output/pairs.json for the Pilots PWA (GET /pairs). Expensive O(n^2) scan; default False.",
-    group: "Advanced / Config",
-  },
-  {
     key: "META_LABELING_ENABLED",
     value: true,
     default: true,
@@ -3173,12 +3144,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     group: "Advanced / Config", key: "GRAVITY_REQUIRE_NATIVE", type: "boolean",
     value: false, default: false,
     description: "Require native implementation for Gravity Review Suite.",
-  },
-  // ---- Pairs Snapshot ----
-  {
-    group: "Pairs Snapshot", key: "PAIRS_SNAPSHOT_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "When True, the pipeline persists the cointegrated pairs radar (ranking + current spread state) to output/pairs.json for the Pilots PWA (GET /pairs). Expensive O(n^2) scan; default False.",
   },
   // ---- ML, Data Capture & Audit ----
   {
@@ -3960,9 +3925,6 @@ const SECTOR_SELECTION_TUNABLE_DEFS: MockTunableDef[] = [
 
 const FMP_TUNABLES_KEY = "stockpy.mock.fmp_tunables";
 const FMP_TUNABLES_DRIFT_KEY = "stockpy.mock.fmp_tunables_drift";
-const CACHE_LONG_SHORT_TUNABLES_KEY = "stockpy.mock.cache_long_short_tunables";
-const CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY =
-  "stockpy.mock.cache_long_short_tunables_drift";
 
 const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   {
@@ -4227,75 +4189,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   },
 ];
 
-const CACHE_LONG_SHORT_TUNABLE_DEFS: MockTunableDef[] = [
-  {
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Master switch for the Cache Long/Short tax-loss-harvesting advisory strategy.",
-  },
-  {
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_WRITES_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Dedicated fail-closed flag for the position-writing endpoints (start, approve-bulk).",
-  },
-  {
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_MIN_CORRELATION",
-    type: "number",
-    value: 0.75,
-    default: 0.75,
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-    description: "Min correlation to trigger drift alert.",
-  },
-  {
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
-    type: "number",
-    value: 0.05,
-    default: 0.05,
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-    description:
-      "Percentage loss to trigger a tax-loss-harvesting recommendation.",
-  },
-  {
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
-    type: "number",
-    value: 3600,
-    default: 3600,
-    min: 60,
-    max: 86400,
-    step: 60,
-    description:
-      "Interval (seconds) for the Cache Long/Short background worker loop.",
-  },
-  {
-    // JSON-array field -- kept as a "string" type like every other JSON-blob
-    // tunable (SECTOR_FORECAST_CONFIGS, etc.); the
-    // frontend's TunableFieldType has no separate "json" member.
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_PROXY_CANDIDATES",
-    type: "string",
-    value: '["SPY","QQQ","XLK","XLF","XLV","XLE"]',
-    default: '["SPY","QQQ","XLK","XLF","XLV","XLE"]',
-    description:
-      "JSON array of candidate proxy ETFs screened for a concentrated ticker's hedge leg.",
-  },
-];
-
-// Mirrors api/pilots_api.py's _FEATURE_FLAGS_GROUPS exactly: the 19
+// Mirrors api/pilots_api.py's _FEATURE_FLAGS_GROUPS exactly: the
 // settings_keysets.DANGEROUS_KEYS + the 6 pilots/feature_flags.py
 // WRITE_GATE_REASONS keys in one group, the 7 DIAGNOSTIC_FLAG_REASONS keys
 // in the other. Values/defaults mirror the real settings.py defaults after
@@ -4415,15 +4309,6 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     default: false,
     description:
       "Makes the orchestrator daemon start a real Robinhood device-approval login every weekday at ROBINHOOD_SCHEDULED_LOGIN_TIME_ET, pushing an approval prompt to the operator's phone.",
-  },
-  {
-    group: "Write & Execution Gates",
-    key: "CACHE_LONG_SHORT_WRITES_ENABLED",
-    type: "boolean",
-    value: true,
-    default: true,
-    description:
-      "Gates the Cache Long/Short position-writing endpoints (start, approve-bulk) -- changes what a trading strategy recommends.",
   },
   {
     group: "Write & Execution Gates",
@@ -5109,27 +4994,6 @@ function applyFmpTunables(
     FMP_TUNABLE_DEFS,
     FMP_TUNABLES_KEY,
     FMP_TUNABLES_DRIFT_KEY,
-    confirm,
-  );
-}
-
-function mockCacheLongShortTunables(): TunablesResponse {
-  return buildTunablesResponse(
-    CACHE_LONG_SHORT_TUNABLE_DEFS,
-    CACHE_LONG_SHORT_TUNABLES_KEY,
-    CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY,
-  );
-}
-
-function applyCacheLongShortTunables(
-  values: Record<string, number | boolean | string>,
-  confirm: Record<string, string> = {},
-): TunablesUpdateResult {
-  return applyTunablesGeneric(
-    values,
-    CACHE_LONG_SHORT_TUNABLE_DEFS,
-    CACHE_LONG_SHORT_TUNABLES_KEY,
-    CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY,
     confirm,
   );
 }
@@ -6140,43 +6004,6 @@ const GRAVITY_AUDIT_STATUS_MOCK: GravityAuditStatus = {
 
 
 
-
-// ---- Pairs radar fixture ----
-function mockPairs(): PairsRadar {
-  const rows = [
-    ["XOM", "CVX"],
-    ["V", "JPM"],
-    ["MSFT", "AAPL"],
-    ["HD", "COST"],
-  ].map(([t1, t2]) => {
-    const rng = seeded([...t1, ...t2].reduce((a, c) => a + c.charCodeAt(0), 0));
-    const z = +((rng() - 0.5) * 6).toFixed(2);
-    return {
-      ticker1: t1,
-      ticker2: t2,
-      p_value: +(rng() * 0.05).toFixed(4),
-      half_life: +(8 + rng() * 40).toFixed(1),
-      z_score: z,
-      beta: +(0.5 + rng()).toFixed(3),
-      rolling_p: +(rng() * 0.1).toFixed(4),
-      position: z > 2 ? -1 : z < -2 ? 1 : 0,
-      signal:
-        Math.abs(z) > 4
-          ? "STOP — |z|>4"
-          : Math.abs(z) > 2
-            ? z > 0
-              ? "ENTER SHORT spread"
-              : "ENTER LONG spread"
-            : "Flat — no entry (|z|<2)",
-    };
-  });
-  return {
-    as_of: new Date(Date.now() - 5_400_000).toISOString(),
-    universe: ["XOM", "CVX", "V", "JPM", "MSFT", "AAPL", "HD", "COST"],
-    pairs: rows,
-    reason: null,
-  };
-}
 
 // Factor z-scores for a subset of PORTFOLIO's holdings, deliberately NOT
 // covering every symbol -- DUK (held) has no entry, exercising the "held
@@ -10177,160 +10004,6 @@ export const mockApi = {
     );
   },
 
-  async getPairs(): Promise<PairsRadar> {
-    return delay(mockPairs());
-  },
-
-  // ---- On-demand Options/Pairs recompute (webapp porting backlog 8a/8b) ----
-  // "ZZZ" is this file's existing dead-letter/no-data convention (see the
-  // OPTIONS_DIRECTIVES fixture row above) -- reused here so a symbol/pair
-  // typo exercises the SAME honest degrade path a real unresolved ticker
-  // would hit against the live API, not a happy-path-only fixture.
-  async analyzePairs(req: PairsAnalyzeRequest): Promise<PairsAnalyzeResult> {
-    const symY = req.symbol_y.trim().toUpperCase();
-    const symX = req.symbol_x.trim().toUpperCase();
-    const notFoundBase = {
-      ticker1: symY,
-      ticker2: symX,
-      found: false as const,
-      p_value: null,
-      half_life: null,
-      half_life_tradeable: null,
-      z_score: null,
-      beta: null,
-      rolling_p: null,
-      position: null,
-      signal: "No signal — insufficient history",
-      aligned_bars: 0,
-      z_score_series: [],
-    };
-    if (!symY || !symX) {
-      return delay(
-        { ...notFoundBase, reason: "Both Symbol Y and Symbol X are required." },
-        250,
-      );
-    }
-    if (symY === symX) {
-      return delay(
-        {
-          ...notFoundBase,
-          reason: "Symbol Y and Symbol X must be different tickers.",
-        },
-        250,
-      );
-    }
-    if (symY === "ZZZ" || symX === "ZZZ") {
-      return delay(
-        {
-          ...notFoundBase,
-          reason: `Insufficient aligned history for ${symY}/${symX} — one or both symbols may be unavailable from the provider.`,
-        },
-        450,
-      );
-    }
-
-    const rng = seeded(
-      [...symY, ...symX].reduce((a, c) => a + c.charCodeAt(0), 0),
-    );
-    const z = +((rng() - 0.5) * 6).toFixed(2);
-    const halfLife = +(8 + rng() * 40).toFixed(1);
-    const rollingP = +(rng() * 0.15).toFixed(4);
-    const position = z > 2 ? -1 : z < -2 ? 1 : 0;
-    const halfLifeTradeable =
-      halfLife >= 5 && halfLife <= 60 && rollingP <= 0.1;
-    const signal =
-      rollingP > 0.1
-        ? "No signal — not cointegrated (ADF p>0.10)"
-        : Math.abs(z) > 4
-          ? "STOP — |z|>4 (exit spread)"
-          : Math.abs(z) > 2
-            ? z > 0
-              ? "ENTER SHORT spread"
-              : "ENTER LONG spread"
-            : "Flat — no entry (|z|<2)";
-    const n = 90;
-    const series = Array.from({ length: n }, (_, i) => ({
-      date: new Date(Date.now() - (n - i) * 86_400_000)
-        .toISOString()
-        .slice(0, 10),
-      z_score: +(Math.sin(i / 9 + rng()) * 2 + (rng() - 0.5)).toFixed(2),
-    }));
-    series[series.length - 1] = {
-      date: series[series.length - 1].date,
-      z_score: z,
-    };
-
-    return delay(
-      {
-        ticker1: symY,
-        ticker2: symX,
-        found: true,
-        reason: null,
-        p_value: +(rng() * 0.05).toFixed(4),
-        half_life: halfLife,
-        half_life_tradeable: halfLifeTradeable,
-        z_score: z,
-        beta: +(0.5 + rng()).toFixed(3),
-        rolling_p: rollingP,
-        position,
-        signal,
-        aligned_bars: 240,
-        z_score_series: series,
-      },
-      450,
-    );
-  },
-
-  async scanPairs(req: PairsScanRequest): Promise<PairsScanResult> {
-    const requested = Array.from(
-      new Set(req.symbols.map((s) => s.trim().toUpperCase()).filter(Boolean)),
-    );
-    const known = new Set([
-      "XOM",
-      "CVX",
-      "V",
-      "JPM",
-      "MSFT",
-      "AAPL",
-      "HD",
-      "COST",
-    ]);
-    const missing = requested.filter((s) => !known.has(s));
-    const usable = requested.filter((s) => known.has(s));
-
-    if (usable.length < 2) {
-      return delay(
-        {
-          pairs: [],
-          missing,
-          aligned_symbols: usable.length,
-          aligned_bars: usable.length > 0 ? 240 : 0,
-          reason:
-            "Insufficient aligned history to scan — need at least two symbols with ~60+ overlapping daily bars after the inner-join.",
-        },
-        400,
-      );
-    }
-
-    const usableSet = new Set(usable);
-    const pairs = mockPairs().pairs.filter(
-      (p) => usableSet.has(p.ticker1) && usableSet.has(p.ticker2),
-    );
-    return delay(
-      {
-        pairs,
-        missing,
-        aligned_symbols: usable.length,
-        aligned_bars: 240,
-        reason:
-          pairs.length > 0
-            ? null
-            : "No cointegrated pairs found for this universe at the selected p-value with a 5–60 day half-life.",
-      },
-      500,
-    );
-  },
-
   // Equity-only Quick Trade ticket -- options-free counterpart to
   // postOptionsOrder's stock branch above (see EquityOrderTicket.tsx).
   // Shares its fill math with that branch via applyMockStockFill so the two
@@ -10796,17 +10469,6 @@ export const mockApi = {
     confirm?: SettingsConfirmMap,
   ): Promise<TunablesUpdateResult> {
     return delay(applyFeatureFlagsTunables(values, confirm ?? {}));
-  },
-
-  async getCacheLongShortSettings(): Promise<TunablesResponse> {
-    return delay(mockCacheLongShortTunables());
-  },
-
-  async updateCacheLongShortSettings(
-    values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {},
-  ): Promise<TunablesUpdateResult> {
-    return delay(applyCacheLongShortTunables(values, confirm));
   },
 
   async getSettingsReference(): Promise<SettingsReferenceResponse> {
@@ -12062,55 +11724,6 @@ export const mockApi = {
       is_synthetic: true,
     });
   },
-  async getModelComparison() {
-    // Demo-only curve: "SF-GARCH-LSTM"/"Bond-BERT" are undeployed
-    // ridge-regression stand-ins (ml/models/sf_garch_lstm.py,
-    // ml/models/bond_bert.py) with no real tracked return history -- the
-    // live endpoint honestly reports no data (see api/metrics_api.py), this
-    // mock fixture exists only to populate the offline demo UI and is
-    // flagged is_synthetic so the chart shows a Demo Data badge.
-    return delay({
-      data: [
-        {
-          name: "Jan",
-          "SF-GARCH-LSTM": 2.1,
-          "Bond-BERT": 1.8,
-          "Benchmark (SPY)": 1.5,
-        },
-        {
-          name: "Feb",
-          "SF-GARCH-LSTM": 4.5,
-          "Bond-BERT": 3.2,
-          "Benchmark (SPY)": 3.0,
-        },
-        {
-          name: "Mar",
-          "SF-GARCH-LSTM": 3.8,
-          "Bond-BERT": 4.0,
-          "Benchmark (SPY)": 2.8,
-        },
-        {
-          name: "Apr",
-          "SF-GARCH-LSTM": 6.2,
-          "Bond-BERT": 5.5,
-          "Benchmark (SPY)": 4.2,
-        },
-        {
-          name: "May",
-          "SF-GARCH-LSTM": 8.0,
-          "Bond-BERT": 6.8,
-          "Benchmark (SPY)": 5.5,
-        },
-        {
-          name: "Jun",
-          "SF-GARCH-LSTM": 10.5,
-          "Bond-BERT": 8.2,
-          "Benchmark (SPY)": 6.1,
-        },
-      ],
-      is_synthetic: true,
-    });
-  },
   async getForecastBackfill() {
     return delay(mockForecastBackfill());
   },
@@ -12161,83 +11774,6 @@ export const mockApi = {
     return delay(_mockForecastBackfillJobStatus(jobId, job));
   },
 
-  // ---- Cache Long/Short ----
-  async getClsConcentratedPositions(): Promise<{
-    positions: CacheLongShortConcentratedPosition[];
-  }> {
-    return delay({
-      positions: [{ ticker: "AAPL", market_value: 12000, pct_equity: 0.25 }],
-    });
-  },
-  async getClsDashboard(): Promise<CacheLongShortDashboard> {
-    return delay({
-      status: "enabled",
-      tax_bank: 1540.23,
-      exposure: {
-        long_exposure: 45000,
-        short_exposure: 20000,
-        net_exposure: 25000,
-        gross_exposure: 65000,
-      },
-    });
-  },
-  async getClsPendingApprovals(): Promise<CacheLongShortPendingTrade[]> {
-    return delay([
-      {
-        lot_id: 101,
-        position_id: 1,
-        cost_basis: 150.5,
-        unrealized_loss_pct: -0.12,
-      },
-      {
-        lot_id: 102,
-        position_id: 2,
-        cost_basis: 300.2,
-        unrealized_loss_pct: -0.07,
-      },
-    ]);
-  },
-  async simulateCls(
-    req: CacheLongShortSimulateRequest,
-  ): Promise<CacheLongShortSimulateResult> {
-    // "ZZZ" is this codebase's established honesty-branch trigger for
-    // on-demand analyze/simulate mocks (see analyzePairs above) --
-    // exercises the "no usable proxy hedge found" path a real ticker with
-    // insufficient history would hit.
-    if (req.ticker.trim().toUpperCase() === "ZZZ") {
-      return delay({
-        found: false,
-        reason: "Insufficient price history for ticker or suitable proxy",
-        beta: null,
-        proxy_ticker: null,
-        correlation_coefficient: null,
-      });
-    }
-    return delay({
-      found: true,
-      reason: null,
-      beta: 1.2,
-      proxy_ticker: "XLK",
-      correlation_coefficient: 0.85,
-    });
-  },
-  async startCls(
-    req: CacheLongShortStartRequest,
-  ): Promise<CacheLongShortStartResult> {
-    return delay({
-      status: "started",
-      position_id: 99,
-      ticker: req.ticker,
-    });
-  },
-  async approveClsBulk(
-    lotIds: number[],
-  ): Promise<CacheLongShortApproveBulkResult> {
-    return delay({
-      status: "approved",
-      count: lotIds.length,
-    });
-  },
   async getPaperBrokerAccount() {
     // Seed on first read too: tickets gate orders on this cash figure, so an
     // unseeded $0 account made the very first mock order impossible.
@@ -12343,86 +11879,6 @@ export const mockApi = {
     proposal.approved_at = new Date().toISOString();
     proposal.approved_by = "operator";
     return delay({ ...proposal });
-  },
-
-  // ---- Trends Stitching Demo ----
-  //
-  // Genuinely demonstrates the overlapping-window stitching algorithm
-  // (webapp/src/utils/trendsStitch.ts, ported from
-  // data/trends_stitcher.py::GoogleTrendsStitcher) rather than faking it:
-  // two raw "Google Trends" windows are generated on DIFFERENT absolute
-  // scales (mirroring Google Trends' own per-query 0-100 window-relative
-  // renormalization -- the exact problem the algorithm exists to solve),
-  // spanning DIFFERENT but PARTIALLY OVERLAPPING date ranges, and the
-  // "stitched" curve is the real output of `stitchIntervals` run against
-  // those two raw curves -- not a third independent random walk.
-  async getTrendsStitchDemo(): Promise<TrendsStitchDemoResponse> {
-    const now = Date.now();
-    const DAY_MS = 86400000;
-
-    // Deterministic pseudo-random walk generator (mulberry32) so the demo
-    // is reproducible across calls/renders rather than reseeding chaos on
-    // every fetch, while still looking like a genuine noisy SVI series.
-    const mulberry32 = (seed: number) => {
-      let a = seed;
-      return () => {
-        a |= 0;
-        a = (a + 0x6d2b79f5) | 0;
-        let x = Math.imul(a ^ (a >>> 15), 1 | a);
-        x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
-        return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
-      };
-    };
-
-    const generateWindow = (
-      startDay: number,
-      endDay: number,
-      baseline: number,
-      amplitude: number,
-      seed: number,
-    ): TrendsPoint[] => {
-      const rand = mulberry32(seed);
-      const data: TrendsPoint[] = [];
-      // `startDay`/`endDay` are both "days ago" (startDay > endDay, since
-      // startDay is further in the past); iterate from the older day down
-      // to the more recent one.
-      for (let day = startDay; day >= endDay; day--) {
-        const time = now - day * DAY_MS;
-        // A gently mean-reverting walk around `baseline`, always >= 0 (SVI
-        // is a non-negative index).
-        const drift = (rand() - 0.5) * amplitude;
-        const seasonal = Math.sin(day / 9) * amplitude * 0.3;
-        const value = Math.max(0, baseline + drift + seasonal);
-        data.push([time, Math.round(value * 10) / 10]);
-      }
-      return data; // already ascending by time (oldest -> newest)
-    };
-
-    // Three overlapping windows, each on a DIFFERENT absolute scale (as if
-    // Google Trends renormalized each query window independently against
-    // its own peak) -- this is the whole reason stitching is needed:
-    //   Window A: days -100..-40, baseline ~50  (small scale)
-    //   Window B: days  -60..-15, baseline ~100 (hot scale) -- overlaps A
-    //             on days -60..-40 (~20 days)
-    //   Window C: days  -25..0,   baseline ~30  (cool scale) -- overlaps B
-    //             on days -25..-15 (~10 days)
-    const windowA = generateWindow(100, 40, 50, 12, 1);
-    const windowB = generateWindow(60, 15, 100, 15, 2);
-    const windowC = generateWindow(25, 0, 30, 8, 3);
-
-    const stitched = stitchMultipleIntervals([windowA, windowB, windowC]);
-
-    return delay({
-      raw_curves: [
-        { name: "Window A (Raw, days -100..-40)", data: windowA },
-        { name: "Window B (Raw, days -60..-15)", data: windowB },
-        { name: "Window C (Raw, days -25..0)", data: windowC },
-      ],
-      stitched_curve: {
-        name: "Stitched Output",
-        data: stitched,
-      },
-    });
   },
 };
 

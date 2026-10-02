@@ -299,8 +299,7 @@ def classify_field(key: str) -> str:
         return "Alerting/Observability"
 
     if (
-        key.startswith("CACHE_LONG_SHORT_")
-        or key.startswith("SECTOR_SELECTION_")
+        key.startswith("SECTOR_SELECTION_")
         or key.startswith("SECTOR_FORECAST_")
         or key.startswith("CORRELATION_CLUSTER_")
         or key.startswith("PAIRS_")
