@@ -105,7 +105,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   "brinson-fachler":
     "Attribution that splits benchmark out-/under-performance into Allocation (right sectors?), Selection (right stocks within a sector?), and Interaction (the combined effect).",
   "execution mode":
-    "The Robinhood order queue's posture: 'off' builds nothing, 'review' builds a dry-run queue for you to confirm, 'live' still requires the same per-trade human confirmation before any order reaches the broker — no mode ever places an order automatically.",
+    "The Robinhood order queue's posture (shown as the 'Robinhood: <mode>' chip; distinct from the 'Broker: <mode>' chip, which is the in-app paper-broker execution mode): 'off' builds nothing, 'review' builds a dry-run queue for you to confirm, 'live' still requires the same per-trade human confirmation before any order reaches the broker — no mode ever places an order automatically.",
   "kill switch":
     "A global, file-based safety switch. While active, the execution queue adds no new orders. Pausing does not stop the pipeline schedule — cycles keep running, they just produce no actionable output.",
   "notional cap": (t) => {

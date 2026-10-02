@@ -20,7 +20,7 @@ export type ExecutionModeLabel = "LIVE" | "PAPER" | "ADVISORY" | "UNKNOWN";
 
 export interface ExecutionMode {
   /**
-   * Coarse mode label for display (a `Mode: X` chip etc.) -- derived the
+   * Coarse mode label for display (a `Broker: X` chip etc.) -- derived the
    * same way as `advisoryOnly`/`paperTrading` below, just pre-collapsed to
    * one of four values. `"UNKNOWN"` while `data` hasn't loaded yet.
    */

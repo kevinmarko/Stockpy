@@ -221,13 +221,17 @@ export function CategoryChip({ category }: { category: PilotCategory }) {
 export function Chip({
   label,
   tone,
+  title,
 }: {
   label: string;
   tone: "growth" | "decline" | "caution" | "muted";
+  /** Optional hover tooltip (native `title`). */
+  title?: string;
 }) {
   const color = tone === "muted" ? theme.textMuted : theme[tone];
   return (
     <span
+      title={title}
       style={{
         fontSize: "var(--t-micro)",
         fontWeight: 600,

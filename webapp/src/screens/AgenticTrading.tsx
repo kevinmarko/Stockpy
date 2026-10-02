@@ -132,7 +132,8 @@ export function AgenticTrading() {
               tone={brokerageStatus.data?.connected ? "growth" : "caution"}
             />
             <Chip
-              label={`Mode: ${mode}`}
+              label={`Broker: ${mode}`}
+              title="In-app paper broker execution mode (ADVISORY_ONLY / PAPER_TRADING). Separate from the Robinhood queue mode."
               tone={mode === "LIVE" ? "decline" : mode === "PAPER" ? "caution" : "muted"}
             />
           </div>
