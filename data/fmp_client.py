@@ -373,6 +373,17 @@ def _is_access_denied(payload: Any) -> bool:
     return any(marker in lowered for marker in _ACCESS_DENIED_MARKERS)
 
 
+def _is_plan_restriction_402(resp: Any) -> bool:
+    """True when a 402 body says the endpoint is outside this account's plan
+    (FMP: "Restricted Endpoint: ... not available under your current
+    subscription"), as opposed to a billing/quota 402 that may clear."""
+    try:
+        text = str(getattr(resp, "text", "") or "")[:2000].lower()
+    except Exception:
+        return False
+    return "restricted endpoint" in text or any(m in text for m in _ACCESS_DENIED_MARKERS)
+
+
 def _mark_endpoint_dead(path: str, reason: str) -> None:
     """Latch ``path`` as unavailable for the remainder of the process, logging
     an ERROR exactly once for it.
@@ -480,6 +491,15 @@ def _fmp_get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
                 time.sleep(wait)
             continue
 
+        if status == 402 and not _is_plan_restriction_402(resp):
+            # A 402 that is NOT a plan restriction (billing lapse, quota or
+            # bandwidth limit) is transient: it counts toward the cooldown
+            # like a 429/5xx, but never latches the endpoint for the rest of
+            # the process, so a long-lived daemon recovers once FMP does.
+            _fmp_note_failure(threshold, cooldown)
+            _bump(path, "failures")
+            raise FMPUnavailable(f"FMP returned HTTP 402 (not a plan restriction) for '{path}'.")
+
         # Everything below is a DEFINITE answer from a responsive host, so the
         # consecutive-failure run is cleared regardless of what the answer is.
         _fmp_note_answered()
@@ -503,6 +523,7 @@ def _fmp_get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
             # FMP answers an out-of-plan endpoint with 402 "Restricted Endpoint"
             # (plain text, e.g. /batch-quote on Starter) as well as 403. Both are
             # plan entitlements, not host health: latch the endpoint, skip JSON.
+            # (A 402 reaching here passed _is_plan_restriction_402 above.)
             _bump(path, "failures")
             _mark_endpoint_dead(path, f"HTTP {status}")
             raise FMPUnavailable(f"FMP endpoint '{path}' returned HTTP {status}.")
@@ -563,6 +584,12 @@ def _sym(symbol: str) -> str:
 def quote(symbol: str) -> Any:
     """Latest quote for one symbol (``/quote``)."""
     return _fmp_get("quote", {"symbol": _sym(symbol)})
+
+
+def exchange_market_hours(exchange: str = "NASDAQ") -> Any:
+    """Live market-hours state for one exchange (``/exchange-market-hours``),
+    including ``isMarketOpen`` (FMP accounts for holidays and early closes)."""
+    return _fmp_get("exchange-market-hours", {"exchange": exchange})
 
 
 def batch_quote(symbols: List[str]) -> Any:

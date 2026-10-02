@@ -281,7 +281,19 @@ class Settings(BaseSettings):
             "Kelly needs. When > 0, a BUY/STRONG BUY whose Kelly Target is 0 buys this "
             "fraction of paper equity instead (e.g. 0.01 = 1%). A positive Kelly Target "
             "always wins. Never applies to the Robinhood queue. "
-            "0 (default) = today's behavior."
+            "0 (default) = today's behavior. Only active while the pipeline has fewer "
+            "closed paper trades than Kelly needs to scale in; withheld when Dual "
+            "Momentum, the regime multiplier or the meta-label composite says no; "
+            "scaled by the regime multiplier; capped by MAX_PORTFOLIO_GROSS."
+        ),
+    )
+    PAPER_FILL_MAX_QUOTE_AGE_SECONDS: float = Field(
+        default=900.0,
+        ge=0.0,
+        description=(
+            "FMPPaperBroker rejects a fill whose FMP quote timestamp is older than "
+            "this (or missing), so holiday/early-close/halt cycles never fill at a "
+            "stale last price. 0 disables the check. Paper ledger only."
         ),
     )
     PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES: list[str] = Field(

@@ -47,13 +47,14 @@ import os
 import sys
 import json
 import logging
+import math
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
-from typing import Optional, Any
+from typing import Any, Dict, Optional
 
 # ---------------------------------------------------------------------------
 # python-dotenv import (loader is INVOKED inside main(), NOT at module top)
@@ -468,6 +469,40 @@ PIPELINE_STRATEGY_ID = "main_pipeline"
 EXIT_SIGNALS = frozenset({"SELL", "TRIM", "RISK REDUCE", "AVOID"})
 
 
+def _probe_weight_for_row(row: Any, base_weight: float) -> tuple:
+    """Paper cold-start probe weight for one zero-Kelly BUY row, or 0.0 + a reason.
+
+    The probe only stands in for a Kelly Target that is zero because Kelly has
+    not scaled in yet (no closed trades). It must never override a zero the
+    risk logic set on purpose, so it is withheld when:
+      * Dual Momentum picked the safe asset and this is one of its risky assets
+        (pipeline/production_steps.py zeroes their Kelly Target);
+      * the HMM regime multiplier or the meta-label composite is <= 0, or is
+        missing/NaN (fail closed: an unknown risk opinion is not a yes).
+    It is scaled by the regime multiplier, like a real Kelly weight would be.
+    Returns ``(weight, reason)``; reason is None when the probe applies.
+    """
+    def _num(key: str) -> float:
+        try:
+            v = float(row.get(key))
+        except (TypeError, ValueError):
+            return float("nan")
+        return v
+
+    dm_signal = str(row.get("DualMomentum_Signal", "") or "")
+    safe_asset = str(getattr(settings, "DUAL_MOMENTUM_SAFE_ASSET", "") or "")
+    risky = {str(s).upper() for s in (getattr(settings, "DUAL_MOMENTUM_RISKY_ASSETS", None) or [])}
+    if safe_asset and dm_signal == safe_asset and str(row.get("Symbol", "")).upper() in risky:
+        return 0.0, "dual_momentum_safe_asset"
+    regime = _num("Regime_Multiplier")
+    if not (regime > 0):  # False for NaN too
+        return 0.0, "regime_multiplier_not_positive"
+    meta = _num("Meta_Label_Composite")
+    if not (meta > 0):
+        return 0.0, "meta_label_not_positive"
+    return base_weight * min(regime, 1.0), None
+
+
 async def _execute_broker_orders(
     final_df: "pd.DataFrame",
     dry_run: bool,
@@ -528,10 +563,11 @@ async def _execute_broker_orders(
         # fills market orders at whatever quote is current, so an hourly
         # daemon cycle at 06:00 or 19:00 ET would otherwise fill at thin
         # pre/after-market quotes no real market order would get.
-        from engine.advisory_agent import is_us_market_open
-        if not is_us_market_open(datetime.now(timezone.utc)):
+        # Holiday/early-close aware (FMP market hours, NYSE-calendar fallback).
+        from engine.advisory_agent import is_us_market_open_now
+        if not is_us_market_open_now(datetime.now(timezone.utc)):
             telemetry.info(
-                "fmp_paper: outside regular US market hours; skipping "
+                "fmp_paper: US market closed (outside hours or holiday); skipping "
                 "pipeline paper-order submission this cycle."
             )
             return
@@ -609,7 +645,37 @@ async def _execute_broker_orders(
             )
             log_fn(result)
 
+        # Paper cold-start probe (settings.PAPER_PIPELINE_PROBE_WEIGHT). Active
+        # only while the pipeline has fewer closed paper trades than Kelly
+        # needs to scale in; after that, measured Kelly decides (a measured
+        # zero stays zero). Probe exposure is capped together with the
+        # pipeline's existing exposure at MAX_PORTFOLIO_GROSS.
         probe_weight = float(getattr(settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.0) or 0.0)
+        probe_skips: Dict[str, int] = {}
+        probe_gross_left = 0.0
+        if probe_weight > 0:
+            from sizing.kelly import MIN_TRADES_REQUIRED
+            try:
+                from data.paper_account_store import PaperAccountStore
+                n_closed = PaperAccountStore(readonly=True).count_closed_trades(PIPELINE_STRATEGY_ID)
+            except Exception as exc:  # noqa: BLE001 -- unknown count: fail closed (no probe)
+                telemetry.warning("Probe disabled this cycle: closed-trade count unavailable (%s)", exc)
+                n_closed = None
+            equity_now = float(account.equity) if account is not None else 0.0
+            if n_closed is None or n_closed >= MIN_TRADES_REQUIRED or equity_now <= 0:
+                if n_closed is not None and n_closed >= MIN_TRADES_REQUIRED:
+                    telemetry.info(
+                        "Probe off: %d closed pipeline trades >= %d; measured Kelly sizes buys.",
+                        n_closed, MIN_TRADES_REQUIRED,
+                    )
+                probe_weight = 0.0
+            else:
+                existing = sum(
+                    abs(float(p.market_value)) for p in own_pos
+                    if p.market_value is not None and math.isfinite(float(p.market_value))
+                )
+                gross_cap = float(getattr(settings, "MAX_PORTFOLIO_GROSS", 2.0) or 0.0)
+                probe_gross_left = max(0.0, gross_cap - existing / equity_now)
 
         now = datetime.now(timezone.utc)
         for _, row in final_df.iterrows():
@@ -624,8 +690,15 @@ async def _execute_broker_orders(
             # with no closed pipeline trades Kelly scales every target to 0,
             # which would stop the pipeline ever collecting the closed trades
             # Kelly needs. A positive Kelly Target always wins.
-            if "BUY" in signal and kelly <= 0 and probe_weight > 0:
-                kelly = probe_weight
+            if "BUY" in signal and kelly <= 0 and probe_weight > 0 and symbol not in open_symbols:
+                w, why = _probe_weight_for_row(row, probe_weight)
+                if why is None and w > probe_gross_left:
+                    w, why = 0.0, "gross_cap"
+                if why is None and w > 0:
+                    kelly = w
+                    probe_gross_left -= w
+                else:
+                    probe_skips[why] = probe_skips.get(why, 0) + 1
 
             try:
                 if "BUY" in signal and kelly > 0 and symbol not in open_symbols:
@@ -731,6 +804,12 @@ async def _execute_broker_orders(
         # Drain the priority queue (URGENT before NORMAL, paced by the leaky
         # bucket) — a no-op loop when the queue is disabled (pending_queue is
         # None) since nothing was ever pushed to it above.
+        if probe_skips:
+            telemetry.info(
+                "Paper probe withheld this cycle: %s",
+                ", ".join(f"{k}={v}" for k, v in sorted(probe_skips.items())),
+            )
+
         if pending_queue is not None:
             while len(pending_queue) > 0:
                 intent, log_fn = await pending_queue.drain_one()

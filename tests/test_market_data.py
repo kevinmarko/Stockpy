@@ -2098,6 +2098,33 @@ class TestFMPProviderGetQuotesBatch:
         assert set(second) == {"AAPL"}
         assert len(batch_calls) == 1  # latched: the refused endpoint is not re-asked
 
+    def test_per_symbol_fallback_stops_at_its_time_budget(self, monkeypatch):
+        """Serial /quote calls must not block for N x the request interval:
+        past the budget the rest are left absent for the next provider."""
+        from data import fmp_client
+        from data.market_data import FMPProvider
+
+        provider = FMPProvider(api_key="test-key-abc123")
+        monkeypatch.setattr(FMPProvider, "_ONE_BY_ONE_BUDGET_SECONDS", 1.0)
+        clock = {"t": 0.0}
+        monkeypatch.setattr("data.market_data.time.monotonic", lambda: clock["t"])
+        calls = []
+
+        def _single(self, symbol):
+            calls.append(symbol)
+            clock["t"] += 0.4  # each /quote costs 0.4 s of wall clock
+            return _make_fake_quote(symbol.upper(), "fmp")
+
+        monkeypatch.setattr(FMPProvider, "get_latest_quote", _single)
+        fmp_client._mark_endpoint_dead("batch-quote", "HTTP 402")
+        try:
+            out = provider.get_quotes_batch(["A", "B", "C", "D", "E"])
+        finally:
+            fmp_client.reset_fmp_rate_limiter()
+
+        assert calls == ["A", "B", "C"]  # 0.0, 0.4, 0.8 started; 1.2 >= budget
+        assert set(out) == {"A", "B", "C"}
+
 
 class TestCompositeProviderGetQuotesBatch:
     """CompositeProvider's override -- cache-first per symbol, then one

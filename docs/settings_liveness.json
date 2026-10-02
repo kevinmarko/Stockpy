@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 320,
+    "live_safe": 321,
     "no_op": 4,
     "restart_required": 81,
-    "total": 405
+    "total": 406
   },
   "dynamic_sites": [
     {
@@ -326,6 +326,7 @@
     "PAIRS_SNAPSHOT_ENABLED",
     "PAIRS_SNAPSHOT_MAX_PAIRS",
     "PAPER_BROKER_WRITES_ENABLED",
+    "PAPER_FILL_MAX_QUOTE_AGE_SECONDS",
     "PAPER_OPTION_MARK_CACHE_SECONDS",
     "PAPER_PIPELINE_PROBE_WEIGHT",
     "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",
@@ -444,13 +445,13 @@
   "read_forms": {
     "attr": 814,
     "factory_param": 4,
-    "getattr_const": 306,
+    "getattr_const": 311,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 255,
     "factory_param": 4,
-    "getattr_const": 180,
+    "getattr_const": 184,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -1287,7 +1288,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1376",
+        "site": "data/market_data.py:1405",
         "via": []
       },
       {
@@ -1296,9 +1297,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1412",
+        "site": "data/market_data.py:1441",
         "via": [
-          1351
+          1380
         ]
       }
     ],
@@ -1309,9 +1310,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1423",
+        "site": "data/market_data.py:1452",
         "via": [
-          1351
+          1380
         ]
       }
     ],
@@ -1533,7 +1534,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1348",
+        "site": "data/market_data.py:1377",
         "via": []
       },
       {
@@ -1542,7 +1543,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:1923",
+        "site": "data/market_data.py:1952",
         "via": []
       }
     ],
@@ -1553,7 +1554,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1181",
+        "site": "data/market_data.py:1210",
         "via": []
       },
       {
@@ -1562,7 +1563,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1349",
+        "site": "data/market_data.py:1378",
         "via": []
       },
       {
@@ -1571,7 +1572,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:1924",
+        "site": "data/market_data.py:1953",
         "via": []
       }
     ],
@@ -1582,7 +1583,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1374",
+        "site": "data/market_data.py:1403",
         "via": []
       }
     ],
@@ -1800,7 +1801,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "data/market_data.py:1343",
+        "site": "data/market_data.py:1372",
         "via": []
       },
       {
@@ -1809,7 +1810,7 @@
         "rules": [
           "method_self_assign"
         ],
-        "site": "data/market_data.py:1727",
+        "site": "data/market_data.py:1756",
         "via": []
       }
     ],
@@ -1820,9 +1821,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/market_data.py:1404",
+        "site": "data/market_data.py:1433",
         "via": [
-          1351
+          1380
         ]
       }
     ],
@@ -1833,7 +1834,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/market_data.py:1338",
+        "site": "data/market_data.py:1367",
         "via": []
       }
     ],
@@ -2187,7 +2188,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "main_orchestrator.py:117",
+        "site": "main_orchestrator.py:118",
         "via": []
       },
       {

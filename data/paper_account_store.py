@@ -866,6 +866,41 @@ class PaperAccountStore:
         with session_scope(self.Session) as session:
             return session.query(PaperPosition.id).filter(PaperPosition.qty != 0).first() is not None
 
+    def open_position_symbols(self, strategy_id: str) -> set:
+        """Symbols with a non-zero open position tagged ``strategy_id``.
+
+        Database only -- never marks prices (unlike ``get_open_positions()``),
+        so it is safe for the universe builder and status scripts.
+        """
+        if self._readonly:
+            try:
+                if not inspect(self.engine).has_table("paper_positions"):
+                    return set()
+            except Exception:
+                return set()
+        with session_scope(self.Session) as session:
+            rows = (
+                session.query(PaperPosition.symbol)
+                .filter(PaperPosition.qty != 0, PaperPosition.strategy_id == strategy_id)
+                .all()
+            )
+        return {str(r[0]).upper() for r in rows if r[0]}
+
+    def count_closed_trades(self, strategy_id: str) -> int:
+        """Number of ``paper_closed_trades`` rows tagged ``strategy_id`` (database only)."""
+        if self._readonly:
+            try:
+                if not inspect(self.engine).has_table("paper_closed_trades"):
+                    return 0
+            except Exception:
+                return 0
+        with session_scope(self.Session) as session:
+            return int(
+                session.query(PaperClosedTrade.trade_id)
+                .filter(PaperClosedTrade.strategy_id == strategy_id)
+                .count()
+            )
+
     def get_open_positions(self) -> List[PositionSnapshot]:
         if self._readonly:
             try:

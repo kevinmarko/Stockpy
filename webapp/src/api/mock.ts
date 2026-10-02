@@ -4544,6 +4544,18 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Write & Execution Gates",
+    key: "PAPER_PIPELINE_PROBE_WEIGHT",
+    type: "number",
+    value: 0.0,
+    default: 0.0,
+    min: 0,
+    max: 0.05,
+    step: 0.005,
+    description:
+      "Cold-start paper probe: fraction of paper equity per zero-Kelly BUY while the pipeline has fewer than 30 closed trades. 0 = off.",
+  },
+  {
+    group: "Write & Execution Gates",
     key: "META_LABELING_BACKFILL_BRIDGE_ENABLED",
     type: "boolean",
     value: false,

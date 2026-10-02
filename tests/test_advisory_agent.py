@@ -687,3 +687,63 @@ class TestModuleSurface:
 
 def _iso_to_dt(iso: str) -> datetime:
     return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+
+# ---------------------------------------------------------------------------
+# is_us_market_open_now -- holiday/early-close aware gate for order submission
+# ---------------------------------------------------------------------------
+
+
+class TestIsUsMarketOpenNow:
+    @staticmethod
+    def _utc(y, mo, d, h, mi):
+        from zoneinfo import ZoneInfo
+        return datetime(y, mo, d, h, mi, tzinfo=ZoneInfo("America/New_York")).astimezone(timezone.utc)
+
+    @pytest.fixture(autouse=True)
+    def _fresh_cache(self):
+        import engine.advisory_agent as aa
+        aa.reset_market_open_cache()
+        yield
+        aa.reset_market_open_cache()
+
+    def test_fmp_closed_on_a_weekday_counts_as_closed(self, monkeypatch):
+        import engine.advisory_agent as aa
+        monkeypatch.setattr(aa, "_fmp_market_is_open", lambda: False)
+        assert aa.is_us_market_open_now(self._utc(2026, 10, 2, 11, 0)) is False
+
+    def test_fmp_open_counts_as_open(self, monkeypatch):
+        import engine.advisory_agent as aa
+        monkeypatch.setattr(aa, "_fmp_market_is_open", lambda: True)
+        assert aa.is_us_market_open_now(self._utc(2026, 10, 2, 11, 0)) is True
+
+    @pytest.mark.parametrize("day", [(2026, 11, 26), (2026, 12, 25)])
+    def test_fallback_is_closed_on_nyse_holidays(self, monkeypatch, day):
+        import engine.advisory_agent as aa
+        monkeypatch.setattr(aa, "_fmp_market_is_open", lambda: None)
+        assert aa.is_us_market_open_now(self._utc(*day, 11, 0)) is False
+
+    def test_fallback_open_on_a_normal_weekday_in_hours(self, monkeypatch):
+        import engine.advisory_agent as aa
+        monkeypatch.setattr(aa, "_fmp_market_is_open", lambda: None)
+        assert aa.is_us_market_open_now(self._utc(2026, 10, 2, 11, 0)) is True
+
+    def test_answer_is_cached_for_sixty_seconds(self, monkeypatch):
+        import engine.advisory_agent as aa
+        calls = []
+        monkeypatch.setattr(aa, "_fmp_market_is_open", lambda: calls.append(1) or True)
+        t0 = self._utc(2026, 10, 2, 11, 0)
+        aa.is_us_market_open_now(t0)
+        aa.is_us_market_open_now(t0 + timedelta(seconds=30))
+        assert len(calls) == 1
+        aa.is_us_market_open_now(t0 + timedelta(seconds=61))
+        assert len(calls) == 2
+
+    def test_fmp_payload_parsing(self, monkeypatch):
+        import engine.advisory_agent as aa
+        monkeypatch.setattr("data.fmp_client.exchange_market_hours",
+                            lambda exchange="NASDAQ": [{"exchange": "NASDAQ", "isMarketOpen": False}])
+        assert aa._fmp_market_is_open() is False
+        monkeypatch.setattr("data.fmp_client.exchange_market_hours",
+                            lambda exchange="NASDAQ": [{"exchange": "NASDAQ"}])
+        assert aa._fmp_market_is_open() is None
