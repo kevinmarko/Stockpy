@@ -376,13 +376,6 @@ export function Marketplace() {
                 CPCV-gated ML registry
               </div>
             </Link>
-            <Link to="/pairs" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🔗</div>
-              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Pairs radar</div>
-              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
-                Cointegrated stat-arb candidates
-              </div>
-            </Link>
             <Link to="/attribution" className="card card-pad" style={{ textDecoration: "none" }}>
               <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🧮</div>
               <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Attribution</div>
@@ -465,13 +458,6 @@ export function Marketplace() {
               <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Sector selection</div>
               <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Semantic related-sector ranking
-              </div>
-            </Link>
-            <Link to="/research/trends-stitcher" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🧵</div>
-              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Trends stitcher</div>
-              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
-                Overlapping-window SVI stitching demo
               </div>
             </Link>
           </div>

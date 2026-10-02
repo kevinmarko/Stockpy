@@ -1423,58 +1423,6 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
 
 
 
-async def _cache_long_short_worker() -> None:
-    """Background worker for Cache Long/Short strategy operations.
-
-    Runs every ``settings.CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS`` seconds
-    while ``settings.CACHE_LONG_SHORT_ENABLED`` is True (see ``main()``'s
-    conditional ``asyncio.create_task`` below). Scans open tax lots for TLH
-    opportunities (persisted by the engine itself so
-    ``GET /pilots/cache-long-short/pending-approvals`` can read them without
-    ever importing a heavy engine) and monitors correlation drift for every
-    tracked long position's proxy hedge.
-    """
-    from engine.cache_long_short_engine import CacheLongShortEngine
-    from data.cache_long_short_store import CacheLongShortStore
-
-    interval = settings.CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS
-    try:
-        while True:
-            try:
-                store = CacheLongShortStore()
-                opportunities = CacheLongShortEngine.scan_tlh_opportunities()
-                if opportunities:
-                    logger.info(
-                        "Cache Long/Short: flagged %d TLH opportunit%s",
-                        len(opportunities),
-                        "y" if len(opportunities) == 1 else "ies",
-                    )
-
-                for pos in store.get_open_positions():
-                    if pos.position_type != "long":
-                        continue
-                    proxy = store.get_security_proxy(pos.ticker)
-                    if not proxy:
-                        continue
-                    corr = CacheLongShortEngine.check_correlation_drift(
-                        pos.ticker, proxy["proxy_ticker"]
-                    )
-                    if corr is not None and corr < settings.CACHE_LONG_SHORT_MIN_CORRELATION:
-                        logger.warning(
-                            "Cache Long/Short: %s/%s correlation drifted to %.2f "
-                            "(below %.2f) -- proxy hedge is out of balance",
-                            pos.ticker,
-                            proxy["proxy_ticker"],
-                            corr,
-                            settings.CACHE_LONG_SHORT_MIN_CORRELATION,
-                        )
-            except Exception as e:
-                logger.error(f"Cache Long/Short worker error: {e}")
-            await asyncio.sleep(interval)
-    except asyncio.CancelledError:
-        pass
-
-
 async def main(dry_run: bool = False, strict: bool = False) -> None:
     """Entry point for the master orchestrator.
 
@@ -1498,20 +1446,13 @@ async def main(dry_run: bool = False, strict: bool = False) -> None:
         telemetry.info("DRY-RUN mode active: orders will be logged but NOT submitted.")
 
     _hb_task = asyncio.create_task(_heartbeat(settings.OUTPUT_DIR, interval=60))
-    _cls_task = None
-    if getattr(settings, "CACHE_LONG_SHORT_ENABLED", False):
-        _cls_task = asyncio.create_task(_cache_long_short_worker())
-    
+
     try:
         await _main_body(effective_dry_run, strict=strict)
     finally:
         _hb_task.cancel()
-        if _cls_task:
-            _cls_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await _hb_task
-            if _cls_task:
-                await _cls_task
 
 
 if __name__ == "__main__":

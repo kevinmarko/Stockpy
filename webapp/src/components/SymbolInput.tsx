@@ -18,8 +18,7 @@ import { useSearchDefault } from "../context/SearchDefaultContext";
 /**
  * Shared symbol entry bar for the per-symbol research screens (Data Explorer,
  * Signal Breakdown, Forecast Viewer, Sentiment Dynamics, Sector Selection),
- * Pairs Radar, Cache Long/Short, Paper Broker's Quick Trade, and Universe
- * Manager. An accessible combobox: as the operator types, it suggests
+ * Paper Broker's Quick Trade, and Universe Manager. An accessible combobox: as the operator types, it suggests
  * tickers from the tracked universe (`GET /universe`, or `trackedSymbols` --
  * see below) so they don't have to know a symbol by heart — every tracked
  * suggestion resolves to a real detail page. It ALSO suggests any FMP-known
@@ -81,7 +80,7 @@ export function SymbolInput({
   buttonText?: string;
   onChange?: (symbol: string) => void;
   /** Override the default `data-testid` -- needed when more than one
-   * SymbolInput renders on the same screen (e.g. PairsRadar's Symbol Y/X),
+   * SymbolInput renders on the same screen,
    * since `screen.getByTestId` requires a unique match. Defaults to
    * "symbol-input" to stay compatible with every existing single-instance
    * caller/test. */

@@ -3990,29 +3990,6 @@ class Settings(BaseSettings):
             "output/scan_candidates.json."
         ),
     )
-    # --- Pilots PWA: persisted analytics artifacts (options matrix + pairs radar) ---
-    # The pairs radar (pairs/ + signals.pairs_trading) is persisted nowhere by
-    # default, so the AST-guarded Pilots API (which must never import the heavy
-    # engines) cannot surface it. When enabled, the pipeline's StateSnapshotStep
-    # writes reporting/pairs_snapshot.py -> output/pairs.json, which the pure
-    # pilots.pairs reader then serves. Default OFF so fresh clones / CI are
-    # unaffected (mirrors the FORECAST_*_ENABLED opt-in convention).
-    PAIRS_SNAPSHOT_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "When True, the pipeline persists the cointegrated pairs radar "
-            "(ranking + current spread state) to output/pairs.json for the "
-            "Pilots PWA (GET /pairs). Expensive O(n^2) scan; default False."
-        ),
-    )
-    PAIRS_SNAPSHOT_MAX_PAIRS: int = Field(
-        default=20,
-        description=(
-            "Maximum number of cointegrated pairs persisted to output/pairs.json "
-            "by reporting/pairs_snapshot.py (find_cointegrated_pairs max_pairs)."
-        ),
-    )
-
     # --- Multifactor signal (signals/multifactor.py) ---
     MULTIFACTOR_MICROCAP_THRESHOLD: float = Field(
         default=300_000_000.0,
@@ -5023,39 +5000,6 @@ class Settings(BaseSettings):
             raise ValueError("Killswitch thresholds must be non-negative")
         return value
 
-
-    CACHE_LONG_SHORT_ENABLED: bool = Field(
-        default=False,
-        description="Master switch for the Cache Long/Short tax-loss-harvesting "
-        "advisory strategy. False (the default) is a complete no-op reproducing "
-        "today's exact behavior: the background TLH/correlation-drift scanner in "
-        "main_orchestrator.py never starts, and every read endpoint returns an "
-        "honest empty/disabled shape. Advisory only in this version -- no broker "
-        "order is ever submitted regardless of this flag. This is a trading-"
-        "behavior flag, not an admin/API capability, so it keeps the opt-in "
-        "default per the 2026-08-03 convention-change carve-out above.",
-    )
-    CACHE_LONG_SHORT_WRITES_ENABLED: bool = Field(
-        default=True,
-        description="Dedicated fail-closed flag for POST /pilots/cache-long-short/* "
-        "write endpoints (start, approve-bulk) -- persists a new tracked position "
-        "or marks a TLH recommendation approved. Its own risk class, must not "
-        "ride in on AUTOMATION_WRITES_ENABLED/STRATEGY_WRITES_ENABLED (this "
-        "changes what a trading strategy recommends). GUI-writable (added to "
-        "shared/env_io.py's ALLOWED_KEYS 2026-08-08 by operator decision -- carries "
-        "no secret material; also a settings_keysets.DANGEROUS_KEYS member, "
-        "requiring typed confirmation on write regardless of editor). The "
-        "POST /pilots/cache-long-short/* endpoints it guards remain "
-        "independently gated by their own command token regardless.",
-    )
-    CACHE_LONG_SHORT_MIN_CORRELATION: float = Field(default=0.75, description="Min correlation to trigger drift alert")
-    CACHE_LONG_SHORT_TLH_THRESHOLD_PCT: float = Field(default=0.05, description="Percentage loss to trigger TLH")
-    CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS: int = Field(default=3600, description="Interval for cache l/s worker loop")
-    CACHE_LONG_SHORT_PROXY_CANDIDATES: list[str] = Field(
-        default_factory=lambda: ["SPY", "QQQ", "XLK", "XLF", "XLV", "XLE"],
-        description="Candidate proxy ETFs find_correlated_proxy() screens "
-        "against for a concentrated ticker's hedge leg.",
-    )
 
     # --- 26. Google Trends ASVI ---
     GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS: float = Field(

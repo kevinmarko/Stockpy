@@ -200,7 +200,6 @@ def test_excluded_from_gui_keys_are_neither_writable_nor_secret():
         "AI_GENERATION_API_ENABLED",
         "AUTOMATION_WRITES_ENABLED",
         "BROKERAGE_REFRESH_ENABLED",
-        "CACHE_LONG_SHORT_WRITES_ENABLED",
         "COMMAND_EXECUTION_ENABLED",
         "DEAD_LETTER_RETRY_ENABLED",
         "GENERAL_SETTINGS_WRITES_ENABLED",

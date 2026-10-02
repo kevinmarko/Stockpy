@@ -1,16 +1,12 @@
 """pairs_ondemand.py — on-demand (operator-triggered, synchronous) pairs-
-trading compute for the Pilots PWA's "recompute with custom parameters"
-actions on ``PairsRadar.tsx`` (webapp porting backlog item 8a).
+trading compute, used by the MCP server's ``analyze_pairs_arbitrage`` and
+``scan_pairs_arbitrage`` tools (``investyo_mcp_server.py``). It works on an
+arbitrary, request-scoped symbol list or named pair and persists nothing.
 
-Distinct from ``reporting/pairs_snapshot.py``, which is the PIPELINE-side
-writer: gated behind ``settings.PAIRS_SNAPSHOT_ENABLED``, always operates over
-the operator's configured universe, and persists ``output/pairs.json`` for the
-read-only ``GET /pairs`` endpoint. This module is invoked directly from an
-HTTP POST handler (``api/data_api.py``) with an arbitrary, REQUEST-scoped
-symbol list or named pair — it never reads or writes ``output/pairs.json``,
-and it is intentionally NOT gated by ``PAIRS_SNAPSHOT_ENABLED`` (that flag
-controls only the automatic pipeline artifact, not an explicit operator
-action).
+The Pilots PWA's Pairs radar screen, its ``GET /pairs`` /
+``POST /data/pairs/{analyze,scan}`` endpoints and the pipeline-side writer
+``reporting/pairs_snapshot.py`` were removed in 2026-10 (the writer is in
+``legacy/reporting/``).
 
 Row shape mirrors ``reporting.pairs_snapshot.write_pairs_snapshot``'s
 persisted ``pairs[]`` entries 1:1 (``ticker1``/``ticker2``/``p_value``/

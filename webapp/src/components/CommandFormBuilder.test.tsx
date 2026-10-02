@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import toast from "react-hot-toast";
 import { CommandFormBuilder } from "./CommandFormBuilder";
 import { api } from "../api/client";
-import { REGISTERED_OPTIONS_STRATEGIES, REGISTERED_STRATEGIES } from "../commandParse";
+import { REGISTERED_STRATEGIES } from "../commandParse";
 import type { CommandSpec, JobRecord } from "../api/types";
 
 // Mirrors Commands.test.tsx's exact convention: react-hot-toast's `toast()`
@@ -128,30 +128,6 @@ const REFRESH_VALIDATIONS_COMMAND: CommandSpec = {
 };
 
 const FAKE_STRATEGY_REGISTRY = ["alpha_strat", "beta_strat", "gamma_strat", "delta_strat", "epsilon_strat"];
-
-const FAKE_OPTIONS_STRATEGY_REGISTRY = ["Iron Condor", "Put Credit Spread", "Long Straddle"];
-
-// A validation.harness manifest entry that also carries the new bulk
-// `--strategies` option, mirroring the real (regenerated) manifest shape.
-// Kept separate from HARNESS_COMMAND above so the pre-existing singular
-// `--strategy` describe block's fixture/assertions stay untouched.
-const HARNESS_COMMAND_WITH_STRATEGIES: CommandSpec = {
-  ...HARNESS_COMMAND,
-  options: [
-    ...HARNESS_COMMAND.options,
-    {
-      name: "--strategies",
-      aliases: ["--strategies"],
-      description: "Comma-separated OPTIONS strategy names to validate in bulk.",
-      default: null,
-      choices: null,
-      required: false,
-      arg_kind: "optional",
-      metavar: null,
-      takes_value: true,
-    },
-  ],
-};
 
 const NO_OPTIONS_COMMAND: CommandSpec = {
   name: "scripts/preflight_check.py",
@@ -459,130 +435,12 @@ describe("CommandFormBuilder", () => {
       expect(screen.getByText(`${REGISTERED_STRATEGIES.length} of ${REGISTERED_STRATEGIES.length} selected`)).toBeInTheDocument();
     });
 
-    it("initialStrategiesOverride narrows the initial selection to just the supplied names, instead of the full strategyRegistry", () => {
-      const override = ["put_credit_spread", "call_debit_spread"];
-      render(
-        <CommandFormBuilder
-          command={REFRESH_VALIDATIONS_COMMAND}
-          onClose={vi.fn()}
-          strategyRegistry={FAKE_STRATEGY_REGISTRY}
-          initialStrategiesOverride={override}
-        />
-      );
-
-      const composed = screen.getByTestId("command-composed");
-      for (const name of override) {
-        expect(composed.textContent).toContain(name);
-      }
-      for (const name of FAKE_STRATEGY_REGISTRY) {
-        expect(composed.textContent).not.toContain(name);
-      }
-      expect(screen.getByText(`${override.length} of ${FAKE_STRATEGY_REGISTRY.length} selected`)).toBeInTheDocument();
-    });
-
-    it("Reset restores initialStrategiesOverride's narrowed selection, not the full strategyRegistry", async () => {
-      const user = userEvent.setup();
-      const override = ["put_credit_spread"];
-      render(
-        <CommandFormBuilder
-          command={REFRESH_VALIDATIONS_COMMAND}
-          onClose={vi.fn()}
-          strategyRegistry={FAKE_STRATEGY_REGISTRY}
-          initialStrategiesOverride={override}
-        />
-      );
-
-      await user.click(screen.getByRole("button", { name: "Select All" }));
-      expect(
-        screen.getByText(`${FAKE_STRATEGY_REGISTRY.length} of ${FAKE_STRATEGY_REGISTRY.length} selected`)
-      ).toBeInTheDocument();
-
-      await user.click(screen.getByRole("button", { name: "Reset" }));
-      expect(screen.getByText(`${override.length} of ${FAKE_STRATEGY_REGISTRY.length} selected`)).toBeInTheDocument();
-      expect(screen.getByTestId("command-composed").textContent).toContain("put_credit_spread");
-    });
-
     it("does NOT affect the singular --strategy select on validation.harness -- still starts empty with no strategyRegistry prop", () => {
       render(<CommandFormBuilder command={HARNESS_COMMAND} onClose={vi.fn()} />);
       const select = screen.getByDisplayValue("-- Select --strategy --");
       expect(select.tagName).toBe("SELECT");
       for (const strategy of REGISTERED_STRATEGIES) {
         expect(within(select).getByRole("option", { name: strategy })).toBeInTheDocument();
-      }
-    });
-  });
-
-  describe("plural --strategies multi-select (validation.harness bulk mode)", () => {
-    it("defaults to every OPTIONS strategy pre-selected -- NOT the equity strategyRegistry", () => {
-      render(
-        <CommandFormBuilder
-          command={HARNESS_COMMAND_WITH_STRATEGIES}
-          onClose={vi.fn()}
-          strategyRegistry={FAKE_STRATEGY_REGISTRY}
-          optionsStrategyRegistry={FAKE_OPTIONS_STRATEGY_REGISTRY}
-        />
-      );
-
-      const composed = screen.getByTestId("command-composed");
-      for (const name of FAKE_OPTIONS_STRATEGY_REGISTRY) {
-        expect(composed.textContent).toContain(name);
-      }
-      for (const name of FAKE_STRATEGY_REGISTRY) {
-        expect(composed.textContent).not.toContain(name);
-      }
-      expect(
-        screen.getByText(`${FAKE_OPTIONS_STRATEGY_REGISTRY.length} of ${FAKE_OPTIONS_STRATEGY_REGISTRY.length} selected`)
-      ).toBeInTheDocument();
-    });
-
-    it("Clear then re-toggling one name back leaves only that name in the compiled command", async () => {
-      const user = userEvent.setup();
-      render(
-        <CommandFormBuilder
-          command={HARNESS_COMMAND_WITH_STRATEGIES}
-          onClose={vi.fn()}
-          optionsStrategyRegistry={FAKE_OPTIONS_STRATEGY_REGISTRY}
-        />
-      );
-
-      await user.click(screen.getByRole("button", { name: "Clear" }));
-      expect(screen.getByText(`0 of ${FAKE_OPTIONS_STRATEGY_REGISTRY.length} selected`)).toBeInTheDocument();
-
-      await user.click(screen.getByRole("switch", { name: FAKE_OPTIONS_STRATEGY_REGISTRY[0] }));
-
-      const composed = screen.getByTestId("command-composed");
-      expect(composed.textContent).toContain(FAKE_OPTIONS_STRATEGY_REGISTRY[0]);
-      for (const name of FAKE_OPTIONS_STRATEGY_REGISTRY) {
-        if (name !== FAKE_OPTIONS_STRATEGY_REGISTRY[0]) {
-          expect(composed.textContent).not.toContain(name);
-        }
-      }
-    });
-
-    it("falls back to REGISTERED_OPTIONS_STRATEGIES when no optionsStrategyRegistry prop is passed", () => {
-      render(<CommandFormBuilder command={HARNESS_COMMAND_WITH_STRATEGIES} onClose={vi.fn()} />);
-      expect(
-        screen.getByText(`${REGISTERED_OPTIONS_STRATEGIES.length} of ${REGISTERED_OPTIONS_STRATEGIES.length} selected`)
-      ).toBeInTheDocument();
-    });
-
-    it("still does NOT affect validation.harness's own singular --strategy select", () => {
-      render(
-        <CommandFormBuilder
-          command={HARNESS_COMMAND_WITH_STRATEGIES}
-          onClose={vi.fn()}
-          optionsStrategyRegistry={FAKE_OPTIONS_STRATEGY_REGISTRY}
-        />
-      );
-      const select = screen.getByDisplayValue("-- Select --strategy --");
-      expect(select.tagName).toBe("SELECT");
-      for (const strategy of REGISTERED_STRATEGIES) {
-        expect(within(select).getByRole("option", { name: strategy })).toBeInTheDocument();
-      }
-      // The options-strategy names must NOT leak into the singular --strategy
-      // select's choices.
-      for (const strategy of FAKE_OPTIONS_STRATEGY_REGISTRY) {
-        expect(within(select).queryByRole("option", { name: strategy })).not.toBeInTheDocument();
       }
     });
   });

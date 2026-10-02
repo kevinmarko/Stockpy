@@ -591,8 +591,6 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         allowed = allowed | {"execution"}
     if module_name == "prompt_registry":
         allowed = allowed | {"prompt_registry"}
-    if module_name == "cache_long_short":
-        allowed = allowed | {"data"}
     if module_name == "catalog":
         allowed = allowed | {"dataclasses"}
     if module_name == "feature_flags":

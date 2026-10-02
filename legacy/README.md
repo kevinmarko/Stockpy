@@ -208,3 +208,16 @@ masked.
 | `data/websocket_streamer.py` -> `legacy/data/websocket_streamer.py` | Alpaca WebSocket streamer wired into the daemon, `api/data_api.py`'s lifespan and `api/ws_api.py`'s tick fast path (`source: "alpaca-ws"`). Ticks now always come from the quote provider. |
 | `AlpacaProvider` (from `data/market_data.py`) -> `legacy/data/alpaca_provider.py` | The Alpaca quote/bar provider, cut out of `data/market_data.py`. The FMP fallback tail is now `[YFinanceProvider]` and `MARKET_DATA_PROVIDER='alpaca'` raises "unknown value". |
 | `tests/test_alpaca_broker.py`, `tests/test_alpaca_http.py`, `tests/test_alpaca_paper_smoke.py`, `tests/test_alpaca_stream.py`, `tests/test_market_data_ws.py`, `tests/test_websocket_streamer.py` -> `legacy/tests/` | The suites for the modules above (they still import the original module paths; put the module back first to run one). The `AlpacaProvider` tests in `tests/test_market_data.py` were deleted, not moved. |
+
+## Dead webapp tabs (2026-10)
+
+Operator-approved removal of three Pilots PWA tabs that were switched on but never produced anything on the live install (`output/pairs.json` held 0 pairs; `cache_ls_positions` and `cache_ls_tax_lots` were empty), plus the SVI stitching demo. The `cache_ls_*` DB tables were left in place, untouched. The `CACHE_LONG_SHORT_*` and `PAIRS_SNAPSHOT_*` settings, their `shared/env_io.py` entries and their settings editors were removed (an old `.env` that still sets them is ignored). The demo endpoint `GET /data/trends/stitch-demo`, `POST /data/pairs/{analyze,scan}`, `POST /data/cache-long-short/simulate`, `GET /pairs` and the `/pilots/cache-long-short/*` and `/settings/cache-long-short` routes were deleted, not moved.
+
+| Moved | Why |
+|---|---|
+| `engine/cache_long_short_engine.py` -> `legacy/engine/cache_long_short_engine.py` | Cache Long/Short tax-loss-harvesting advisory engine; its background worker in `main_orchestrator.py::main()` was removed. |
+| `data/cache_long_short_store.py` -> `legacy/data/cache_long_short_store.py` | Its position / tax-lot / proxy store. |
+| `pilots/cache_long_short.py` -> `legacy/pilots/cache_long_short.py` | The Pilots API read helper for its dashboard. |
+| `pilots/pairs.py` -> `legacy/pilots/pairs.py` | The `GET /pairs` reader for `output/pairs.json`. |
+| `reporting/pairs_snapshot.py` -> `legacy/reporting/pairs_snapshot.py` | The pipeline writer of `output/pairs.json` (called from `StateSnapshotStep`). `pairs_ondemand.py` stays for the MCP pairs tools. |
+| `tests/test_cache_long_short_{api,engine,store}.py` -> `legacy/tests/` | The suites for the modules above. |

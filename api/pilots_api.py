@@ -170,7 +170,6 @@ from pilots import (
     models,
     news_catalyst,
     observability,
-    pairs,
     performance,
     radar_ranking,
     realized,
@@ -554,22 +553,6 @@ def require_live_trade_approval_enabled() -> None:
             detail="Live trade approval is disabled (LIVE_TRADE_APPROVAL_ENABLED=false).",
         )
 
-def require_cache_long_short_writes_enabled() -> None:
-    """FAIL-CLOSED master-switch guard for ``POST /pilots/cache-long-short/*``
-    write endpoints (start, approve-bulk) -- persists a new tracked position
-    or marks a TLH recommendation approved. A DEDICATED flag
-    (``settings.CACHE_LONG_SHORT_WRITES_ENABLED``), NOT
-    ``AUTOMATION_WRITES_ENABLED`` or ``STRATEGY_WRITES_ENABLED``: this changes
-    what a trading strategy recommends, its own risk class, and must not ride
-    in on any of those. GUI-writable (as of 2026-08-08), surfaced in the Feature Flags screen
-    only. ``GET`` endpoints are read-only and NOT gated by this flag."""
-    if not settings.CACHE_LONG_SHORT_WRITES_ENABLED:
-        raise HTTPException(
-            status_code=403,
-            detail="Cache Long/Short writes are disabled (CACHE_LONG_SHORT_WRITES_ENABLED=false).",
-        )
-
-
 def require_rag_query_enabled() -> None:
     """FAIL-CLOSED master-switch guard for ``POST /rag/query``. A DEDICATED
     flag (``settings.RAG_QUERY_API_ENABLED``), NOT ``AI_GENERATION_API_ENABLED``:
@@ -670,11 +653,6 @@ def _snapshot_path() -> str:
 def _history_dir() -> str:
     """Resolve the rotated-snapshot history dir from live settings per call."""
     return str(settings.OUTPUT_DIR / "history")
-
-
-def _pairs_snapshot_path() -> str:
-    """Resolve ``output/pairs.json`` from live settings per call."""
-    return str(settings.OUTPUT_DIR / "pairs.json")
 
 
 def _reports_dir() -> Optional[str]:
@@ -1309,7 +1287,7 @@ def simulate_pilot(pilot_id: str, body: PilotSimulationRequest) -> Dict[str, Any
 
     ``require_read_token`` ALONE — this performs no writes (no order is
     placed, nothing is persisted), matching this file's
-    ``/data/cache-long-short/simulate``-style "interactive, on-demand" read
+    "interactive, on-demand" read
     tier per the pilots-endpoint skill.
 
     Every number returned is either reused verbatim from the same real
@@ -2020,18 +1998,6 @@ def get_models() -> List[Dict[str, Any]]:
     ``cpcv_dsr``/``pbo`` are ``null`` for an un-validated model (CONSTRAINT #4).
     ``[]`` when the registry is missing/unreadable; never 500s (CONSTRAINT #6)."""
     return models.model_registry_rows()
-
-
-@app.get("/pairs", dependencies=[Depends(require_read_token)])
-def get_pairs_radar() -> Dict[str, Any]:
-    """The persisted pairs-trading radar (ranked cointegrated pairs + current
-    spread state — z-score, half-life, advisory signal label). ADVISORY ONLY.
-
-    Reads only ``output/pairs.json`` (never imports the pairs engine /
-    ``statsmodels``). Returns ``{as_of, universe, pairs, reason}`` — empty
-    ``pairs`` + an honest ``reason`` when ``PAIRS_SNAPSHOT_ENABLED`` is off or the
-    artifact hasn't been written yet (CONSTRAINT #4). Never 500s."""
-    return pairs.pairs_radar(path=_pairs_snapshot_path())
 
 
 @app.get("/commands", dependencies=[Depends(require_read_token)])
@@ -4099,12 +4065,6 @@ _TUNABLE_GROUPS: List[tuple] = [
         ],
     ),
     (
-        "Pairs Snapshot",
-        [
-            ("PAIRS_SNAPSHOT_ENABLED", "bool", {}),
-        ],
-    ),
-    (
         "ML, Data Capture & Audit",
         [
             ("META_LABELING_ENABLED", "bool", {}),
@@ -4757,26 +4717,6 @@ _PAPER_BROKER_INDEX = {
     for key, kind, extras in _specs
 }
 
-_CACHE_LONG_SHORT_GROUPS = [
-    (
-        "Cache Long/Short Overlay",
-        [
-            ("CACHE_LONG_SHORT_ENABLED", "bool", {}),
-            ("CACHE_LONG_SHORT_WRITES_ENABLED", "bool", {}),
-            ("CACHE_LONG_SHORT_MIN_CORRELATION", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("CACHE_LONG_SHORT_TLH_THRESHOLD_PCT", "float", {"min": 0.0, "max": 1.0, "step": 0.01}),
-            ("CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS", "int", {"min": 60, "max": 86400, "step": 60}),
-            ("CACHE_LONG_SHORT_PROXY_CANDIDATES", "json", {}),
-        ],
-    ),
-]
-
-_CACHE_LONG_SHORT_INDEX = {
-    key: (kind, extras)
-    for _group, _specs in _CACHE_LONG_SHORT_GROUPS
-    for key, kind, extras in _specs
-}
-
 _SECTOR_SELECTION_GROUPS = [
     (
         "Related Sector Selection",
@@ -4906,30 +4846,6 @@ def put_settings_sector_selection(body: TunablesUpdateRequest) -> Dict[str, Any]
     return _validate_and_write_payload(body.values, _SECTOR_SELECTION_INDEX, confirm=body.confirm)
 
 
-@app.get("/settings/cache-long-short", dependencies=[Depends(require_read_token)])
-def get_settings_cache_long_short() -> Dict[str, Any]:
-    """Get Cache Long/Short configuration."""
-    return _settings_editor_payload(_CACHE_LONG_SHORT_GROUPS, _CACHE_LONG_SHORT_INDEX)
-
-
-@app.put(
-    "/settings/cache-long-short",
-    dependencies=[
-        Depends(require_command_token),
-        Depends(require_general_settings_writes_enabled),
-    ],
-)
-@app.patch(
-    "/settings/cache-long-short",
-    dependencies=[
-        Depends(require_command_token),
-        Depends(require_general_settings_writes_enabled),
-    ],
-)
-def put_settings_cache_long_short(body: TunablesUpdateRequest) -> Dict[str, Any]:
-    """Update Cache Long/Short configuration in .env."""
-    return _validate_and_write_payload(body.values, _CACHE_LONG_SHORT_INDEX, confirm=body.confirm)
-
 @app.get("/settings/paper-broker", dependencies=[Depends(require_read_token)])
 def get_settings_paper_broker() -> Dict[str, Any]:
     return _settings_editor_payload(_PAPER_BROKER_GROUPS, _PAPER_BROKER_INDEX)
@@ -5053,13 +4969,12 @@ def put_settings_fmp(body: TunablesUpdateRequest) -> Dict[str, Any]:
 
 
 def _build_editable_at_index() -> Dict[str, str]:
-    """Reverse-index mapping every setting key served across all 7 /settings/*
+    """Reverse-index mapping every setting key served across all the /settings/*
     editors to its canonical edit route. Built once at import time. Dedicated
     editors take precedence over the broader Tunables/Feature Flags screens."""
     editors: List[tuple[str, List[tuple]]] = [
         ("/settings/sentiment", _SENTIMENT_GROUPS),
         ("/settings/sector-selection", _SECTOR_SELECTION_GROUPS),
-        ("/settings/cache-long-short", _CACHE_LONG_SHORT_GROUPS),
         ("/settings/paper-broker", _PAPER_BROKER_GROUPS),
         ("/settings/fmp", _FMP_GROUPS),
         ("/settings/feature-flags", _FEATURE_FLAGS_GROUPS),
@@ -5651,15 +5566,6 @@ def post_rag_query(body: RagQueryRequest) -> Dict[str, Any]:
     }
 
 
-class CacheLongShortStartRequest(BaseModel):
-    ticker: str = Field(..., min_length=1, max_length=10)
-    proxy_ticker: str = Field(..., min_length=1, max_length=10)
-    allocation: float = Field(..., gt=0)
-    correlation_coefficient: float = Field(...)
-
-class CacheLongShortApproveBulkRequest(BaseModel):
-    lot_ids: List[int]
-
 class PaperBrokerResetRequest(BaseModel):
     cash: Optional[float] = Field(default=None, gt=0)
 
@@ -5683,61 +5589,6 @@ class RollOrderRequest(BaseModel):
     order_type: Optional[str] = "market"
     is_live: Optional[bool] = False
 
-
-@app.get("/pilots/cache-long-short/concentrated-positions", dependencies=[Depends(require_read_token)])
-def get_cls_concentrated_positions() -> Dict[str, Any]:
-    """Real held (long) positions exceeding 20% of account equity, sourced
-    from the cached AccountSnapshot (allow_live_fetch=False -- never blocks
-    on a live broker login). Degrades to an empty list, never a fabricated
-    row, on any lookup failure (CONSTRAINT #6)."""
-    from data.robinhood_portfolio import fetch_account_snapshot
-
-    try:
-        snap = fetch_account_snapshot(allow_live_fetch=False)
-        equity = snap.total_equity if snap else 0
-        positions = []
-        if equity > 0 and snap:
-            for p in snap.positions:
-                if (p.market_value / equity) > 0.20:
-                    positions.append(
-                        {"ticker": p.symbol, "market_value": p.market_value, "pct_equity": (p.market_value / equity)}
-                    )
-        return {"positions": positions}
-    except Exception as exc:
-        logger.warning("get_cls_concentrated_positions: account snapshot lookup failed: %s", exc)
-        return {"positions": []}
-
-@app.get("/pilots/cache-long-short/dashboard", dependencies=[Depends(require_read_token)])
-def get_cls_dashboard() -> Dict[str, Any]:
-    from pilots.cache_long_short import get_dashboard
-    return get_dashboard()
-
-@app.get("/pilots/cache-long-short/pending-approvals", dependencies=[Depends(require_read_token)])
-def get_cls_pending_approvals() -> List[Dict[str, Any]]:
-    from pilots.cache_long_short import get_pending_approvals
-    return get_pending_approvals()
-
-@app.post("/pilots/cache-long-short/start", dependencies=[Depends(require_command_token), Depends(require_cache_long_short_writes_enabled)])
-def start_cls_strategy(body: CacheLongShortStartRequest) -> Dict[str, Any]:
-    """Persists a new tracked position + its already-simulated proxy hedge
-    (the caller must have already called POST /data/cache-long-short/simulate
-    -- this endpoint never recomputes beta/proxy/correlation itself, per the
-    AST-guard split documented in engine/cache_long_short_engine.py)."""
-    from data.cache_long_short_store import CacheLongShortStore
-    store = CacheLongShortStore()
-    pos_id = store.record_position(body.ticker, "long")
-    store.upsert_security_proxy(body.ticker, body.proxy_ticker, body.correlation_coefficient)
-    return {"status": "started", "position_id": pos_id, "ticker": body.ticker}
-
-@app.post("/pilots/cache-long-short/approve-bulk", dependencies=[Depends(require_command_token), Depends(require_cache_long_short_writes_enabled)])
-def approve_cls_bulk(body: CacheLongShortApproveBulkRequest) -> Dict[str, Any]:
-    """Marks the given TLH-flagged lots approved. Still advisory only in V1
-    -- no broker order is submitted; approval only changes what's shown as
-    actionable."""
-    from data.cache_long_short_store import CacheLongShortStore
-    store = CacheLongShortStore()
-    store.approve_tax_lots(body.lot_ids)
-    return {"status": "approved", "count": len(body.lot_ids)}
 
 @app.get("/pilots/paper-broker/account", dependencies=[Depends(require_read_token)])
 def get_paper_broker_account() -> Dict[str, Any]:

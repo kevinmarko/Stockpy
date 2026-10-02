@@ -14,7 +14,6 @@ import { Portfolio } from "./screens/Portfolio";
 import { SymbolDetail } from "./screens/SymbolDetail";
 import { Activity } from "./screens/Activity";
 import { Models } from "./screens/Models";
-import { PairsRadar } from "./screens/PairsRadar";
 import { Attribution } from "./screens/Attribution";
 import { Observability } from "./screens/Observability";
 import { StrategyHealth } from "./screens/StrategyHealth";
@@ -32,7 +31,6 @@ import { SettingsManager } from "./screens/SettingsManager";
 import { SentimentSettings } from "./screens/SentimentSettings";
 import { SectorSelectionSettings } from "./screens/SectorSelectionSettings";
 import { FmpSettings } from "./screens/FmpSettings";
-import { SettingsCacheLongShort } from "./screens/SettingsCacheLongShort";
 import { SettingsReference } from "./screens/SettingsReference";
 import { FeatureFlagsScreen } from "./screens/FeatureFlagsScreen";
 import { AIControlCenter } from "./screens/AIControlCenter";
@@ -55,11 +53,9 @@ import { TradingHub } from "./screens/TradingHub";
 import { OperationsHub } from "./screens/OperationsHub";
 import { Help } from "./screens/Help";
 import { Onboarding } from "./screens/Onboarding";
-import { CacheLongShort } from "./screens/CacheLongShort";
 import { PaperBroker } from "./screens/PaperBroker";
 import { SettingsPaperBroker } from "./screens/SettingsPaperBroker";
 import { LiveTradeApprovals } from "./screens/LiveTradeApprovals";
-import { TrendsVisualizer } from "./screens/TrendsVisualizer";
 import { RetrospectiveJournal } from "./screens/RetrospectiveJournal";
 
 import { StrategyInsights } from "./screens/StrategyInsights";
@@ -254,7 +250,6 @@ export default function App() {
                   <Route path="/symbol/:ticker" element={<SymbolDetail />} />
                   <Route path="/activity" element={<Activity />} />
                   <Route path="/models" element={<Models />} />
-                  <Route path="/pairs" element={<PairsRadar />} />
                   <Route path="/retrospective" element={<RetrospectiveJournal />} />
                   <Route path="/attribution" element={<Attribution />} />
                   <Route path="/observability" element={<Observability />} />
@@ -276,12 +271,10 @@ export default function App() {
                   <Route path="/agentic" element={<AgenticTrading />} />
                   <Route path="/pilots-manager" element={<PilotsManager />} />
                   <Route path="/research" element={<ResearchHub />} />
-                  <Route path="/research/trends-stitcher" element={<TrendsVisualizer />} />
                   <Route path="/trading" element={<TradingHub />} />
                   <Route path="/operations" element={<OperationsHub />} />
                   <Route path="/universe" element={<UniverseTransparency />} />
                   <Route path="/portfolio" element={<Portfolio />} />
-                  <Route path="/cache-long-short" element={<CacheLongShort />} />
           <Route path="/paper-broker" element={<PaperBroker />} />
                   <Route path="/live-trade-approvals" element={<LiveTradeApprovals />} />
 
@@ -301,7 +294,6 @@ export default function App() {
                     <Route path="sentiment" element={<SentimentSettings />} />
                     <Route path="sector-selection" element={<SectorSelectionSettings />} />
                     <Route path="fmp" element={<FmpSettings />} />
-                    <Route path="cache-long-short" element={<SettingsCacheLongShort />} />
             <Route path="paper-broker" element={<SettingsPaperBroker />} />
 
                     <Route path="feature-flags" element={<FeatureFlagsScreen />} />
@@ -323,7 +315,6 @@ export default function App() {
               onClose={() => setIsPaletteOpen(false)}
               commands={commandManifest?.commands ?? []}
               strategyRegistry={commandManifest?.strategy_registry ?? []}
-              optionsStrategyRegistry={commandManifest?.options_strategy_registry ?? []}
               onSelectCommandForBuilder={(spec) => {
                 setIsPaletteOpen(false);
                 navigate(`/commands?builder=${spec.name}`);

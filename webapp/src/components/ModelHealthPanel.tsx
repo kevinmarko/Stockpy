@@ -14,7 +14,6 @@ import { Activity, Loader2 } from 'lucide-react';
 import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
 import { EmptyState } from './ui';
-import ModelComparisonChart from './ModelComparisonChart';
 import {
   chartAxisTick,
   chartAxisLine,
@@ -26,10 +25,10 @@ import { fmtPct } from '../format';
 /**
  * ModelHealthPanel — per-symbol forecast-skill (inverse-RMSE trust weight)
  * bar chart, used from the Agentic Trading screen. When no `symbol` is
- * given it delegates entirely to the pre-existing, already-mounted
- * `ModelComparisonChart` (used on the Models screen) rather than
- * re-authoring the same universe-wide chart here -- keeping this file's
- * actual contribution scoped to the symbol-driven forecast-skill view.
+ * given there is no universe-wide model-health feed to show (the old
+ * /metrics/models/comparison endpoint only ever returned an empty,
+ * is_synthetic payload), so it renders an honest empty state instead of a
+ * chart.
  */
 export function ModelHealthPanel({ symbol, compact }: { symbol?: string; compact?: boolean }) {
   // Only fetch forecast reliability if a symbol is provided. Hooks are
@@ -45,10 +44,30 @@ export function ModelHealthPanel({ symbol, compact }: { symbol?: string; compact
     return Object.entries(forecastData.skill_weights).map(([name, weight]) => ({ name, weight }));
   }, [forecastData]);
 
-  // No symbol -> reuse the universe-wide comparison component wholesale
-  // (same fetch, same honesty gate, same header) instead of duplicating it.
+  // No symbol -> there is no universe-wide model-health source to chart, so
+  // say so honestly rather than render an empty/synthetic comparison.
   if (!symbol) {
-    return <ModelComparisonChart />;
+    return (
+      <div className={`card card-pad ${compact ? 'compact' : ''}`} style={{ display: "flex", flexDirection: "column" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--s-2)",
+            marginBottom: "var(--s-3)",
+            paddingBottom: "var(--s-3)",
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          <Activity style={{ width: 20, height: 20, color: "var(--caution)" }} />
+          <h3 style={{ margin: 0, fontWeight: 600, color: "var(--text-primary)" }}>Model Health</h3>
+        </div>
+        <EmptyState
+          title="No model-health data"
+          hint="No universe-wide model comparison is tracked. Pick a symbol to see its forecast skill weights."
+        />
+      </div>
+    );
   }
 
   const renderContent = () => {

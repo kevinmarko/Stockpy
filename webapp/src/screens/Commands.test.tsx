@@ -150,34 +150,6 @@ const MAIN_PY_COMMAND: CommandSpec = {
   ],
 };
 
-/** Minimal refresh_validations.py fixture for the "paper-broker-realistic
- * button hides when the manifest lacks paper_broker_options_strategy_registry"
- * test below -- distinct from MAIN_PY_COMMAND so that test can carry the
- * command the "Bulk Validate All Strategies" button targets while still
- * using buildManifest() (which never sets any of the three registry fields),
- * exercising the real "command present, registry field absent/empty" case. */
-const REFRESH_VALIDATIONS_PY_COMMAND: CommandSpec = {
-  name: "refresh_validations.py",
-  invocation: "python -m scripts.refresh_validations",
-  aliases: [],
-  description: "Walk-forward strategy validation cadence.",
-  positionals: [],
-  subcommands: [],
-  options: [
-    {
-      name: "--strategies",
-      aliases: ["--strategies"],
-      description: "Comma-separated strategy names to validate in bulk.",
-      default: null,
-      choices: null,
-      required: false,
-      arg_kind: "optional",
-      metavar: "NAMES",
-      takes_value: true,
-    },
-  ],
-};
-
 /** A believable "running" JobRecord for a command job, cast past the strict
  * `JobType` union (which the parallel agent's implementation is expected to
  * extend with `"command"`) since this test file must stay independently
@@ -597,56 +569,6 @@ describe("Commands screen — Run button", () => {
 
     expect(
       screen.queryByRole("button", { name: /Bulk Validate All Strategies/i })
-    ).not.toBeInTheDocument();
-  });
-
-  it("does not render either options quick action against the default manifest (the options desk was removed in 2026-09, step 4a)", async () => {
-    renderCommands();
-    await screen.findByText("main.py");
-
-    // The equity bulk-validate button still shows...
-    expect(
-      await screen.findByRole("button", { name: /Bulk Validate All Strategies/i })
-    ).toBeInTheDocument();
-    // ...but validation.harness has no --strategies option any more, and the
-    // manifest carries no paper_broker_options_strategy_registry, so neither
-    // options button renders.
-    expect(
-      screen.queryByRole("button", { name: /Bulk Validate Options Strategies/i })
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /Paper-Broker Realistic/i })
-    ).not.toBeInTheDocument();
-  });
-
-  it("does not render the Bulk Validate Options Strategies button when the manifest lacks validation.harness", async () => {
-    vi.spyOn(api, "getCommands").mockResolvedValueOnce(buildManifest([MAIN_PY_COMMAND]));
-
-    renderCommands();
-    await screen.findByText("main.py");
-
-    expect(
-      screen.queryByRole("button", { name: /Bulk Validate Options Strategies/i })
-    ).not.toBeInTheDocument();
-  });
-
-  it("does not render the paper-broker-realistic button when the manifest's refresh_validations.py has no paper_broker_options_strategy_registry (older/degraded manifest)", async () => {
-    vi.spyOn(api, "getCommands").mockResolvedValueOnce(
-      buildManifest([MAIN_PY_COMMAND, REFRESH_VALIDATIONS_PY_COMMAND])
-    );
-
-    renderCommands();
-    await screen.findByText("main.py");
-
-    // The pre-existing "Bulk Validate All Strategies" button still shows
-    // (only gated on the command being present)...
-    expect(
-      await screen.findByRole("button", { name: /Bulk Validate All Strategies/i })
-    ).toBeInTheDocument();
-    // ...but the paper-broker-realistic one does not, since buildManifest's
-    // fixture manifest carries no paper_broker_options_strategy_registry field.
-    expect(
-      screen.queryByRole("button", { name: /Paper-Broker Realistic/i })
     ).not.toBeInTheDocument();
   });
 

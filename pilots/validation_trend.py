@@ -115,6 +115,45 @@ _NO_HISTORY_REASON = (
     "line appears once a strategy has at least 2 recorded runs."
 )
 
+# Strategies archived with the options desk (2026-09, steps 3d-4b) and the
+# research extras. Their old ``reports/*_validation_summary.json`` files and
+# ``validation_runs`` rows still sit on disk / in the DB (never deleted -- the
+# history is kept), but they are no longer validated or tradeable, so the
+# cross-strategy view hides them. ``tests/test_pilots_validation_trend.py``
+# fails if any of these is still registered in
+# ``scripts/refresh_validations.py::STRATEGY_REGISTRY``.
+ARCHIVED_STRATEGY_IDS = frozenset(
+    {
+        "call_credit_spread",
+        "call_debit_spread",
+        "copula_stat_arb",
+        "covered_call",
+        "options_flow_sentiment",
+        "put_credit_spread",
+        "put_debit_spread",
+        "vol_mispricing",
+        "vrp_premium_selling",
+    }
+)
+# Per-symbol option-structure runs, stored as "<Structure>_<SYMBOL>".
+ARCHIVED_STRATEGY_PREFIXES = (
+    "Bear Put Spread_",
+    "Bull Call Spread_",
+    "Call Credit Spread_",
+    "Iron Condor_",
+    "Long Straddle_",
+    "Put Credit Spread_",
+)
+
+
+def is_archived_strategy(strategy_id: Optional[str]) -> bool:
+    """True for a strategy id archived with the options desk (see above)."""
+    if not strategy_id:
+        return False
+    return strategy_id in ARCHIVED_STRATEGY_IDS or strategy_id.startswith(
+        ARCHIVED_STRATEGY_PREFIXES
+    )
+
 
 def _clean_float(value: Any) -> Optional[float]:
     """Finite float, else ``None`` — never a NaN/inf JSON literal (CONSTRAINT #4)."""
@@ -270,7 +309,10 @@ def cross_strategy_snapshot(
         if row:
             merged[sid] = row  # DB wins over a file row for the same strategy
 
-    rows = sorted(merged.values(), key=lambda r: r["strategy_id"] or "")
+    rows = sorted(
+        (r for r in merged.values() if not is_archived_strategy(r["strategy_id"])),
+        key=lambda r: r["strategy_id"] or "",
+    )
     return {"strategies": rows, "reason": None if rows else _NO_SUMMARIES_REASON}
 
 

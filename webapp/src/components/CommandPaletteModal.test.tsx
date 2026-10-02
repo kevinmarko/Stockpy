@@ -43,9 +43,9 @@ const PREFLIGHT_COMMAND: CommandSpec = {
 
 const COMMANDS = [HARNESS_COMMAND, PREFLIGHT_COMMAND];
 
-// validation.harness carrying BOTH the singular --strategy and the plural
-// --strategies options, used to prove the palette routes each one to the
-// correct live registry prop (strategyRegistry vs. optionsStrategyRegistry).
+// validation.harness carrying BOTH the singular --strategy and a plural
+// --strategies option, used to prove the palette routes both to the live
+// strategyRegistry prop (there is no separate options registry any more).
 const HARNESS_COMMAND_WITH_STRATEGIES: CommandSpec = {
   ...HARNESS_COMMAND,
   options: [
@@ -65,7 +65,6 @@ const HARNESS_COMMAND_WITH_STRATEGIES: CommandSpec = {
 };
 
 const STRATEGY_REGISTRY_FIXTURE = ["equity_a", "equity_b"];
-const OPTIONS_STRATEGY_REGISTRY_FIXTURE = ["Iron Condor", "Put Credit Spread"];
 
 describe("CommandPaletteModal", () => {
   it("renders nothing when isOpen is false", () => {
@@ -197,7 +196,7 @@ describe("CommandPaletteModal", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("plural --strategies suggestions come from optionsStrategyRegistry, not strategyRegistry", async () => {
+  it("plural --strategies suggestions come from strategyRegistry", async () => {
     const user = userEvent.setup();
     render(
       <CommandPaletteModal
@@ -205,7 +204,6 @@ describe("CommandPaletteModal", () => {
         onClose={vi.fn()}
         commands={[HARNESS_COMMAND_WITH_STRATEGIES, PREFLIGHT_COMMAND]}
         strategyRegistry={STRATEGY_REGISTRY_FIXTURE}
-        optionsStrategyRegistry={OPTIONS_STRATEGY_REGISTRY_FIXTURE}
       />
     );
 
@@ -214,13 +212,11 @@ describe("CommandPaletteModal", () => {
       "validation.harness --strategies "
     );
 
-    expect(screen.getByText("Iron Condor")).toBeInTheDocument();
-    expect(screen.getByText("Put Credit Spread")).toBeInTheDocument();
-    expect(screen.queryByText("equity_a")).not.toBeInTheDocument();
-    expect(screen.queryByText("equity_b")).not.toBeInTheDocument();
+    expect(screen.getByText("equity_a")).toBeInTheDocument();
+    expect(screen.getByText("equity_b")).toBeInTheDocument();
   });
 
-  it("singular --strategy suggestions come from strategyRegistry, not optionsStrategyRegistry", async () => {
+  it("singular --strategy suggestions come from strategyRegistry", async () => {
     const user = userEvent.setup();
     render(
       <CommandPaletteModal
@@ -228,7 +224,6 @@ describe("CommandPaletteModal", () => {
         onClose={vi.fn()}
         commands={[HARNESS_COMMAND_WITH_STRATEGIES, PREFLIGHT_COMMAND]}
         strategyRegistry={STRATEGY_REGISTRY_FIXTURE}
-        optionsStrategyRegistry={OPTIONS_STRATEGY_REGISTRY_FIXTURE}
       />
     );
 
@@ -239,7 +234,6 @@ describe("CommandPaletteModal", () => {
 
     expect(screen.getByText("equity_a")).toBeInTheDocument();
     expect(screen.getByText("equity_b")).toBeInTheDocument();
-    expect(screen.queryByText("Iron Condor")).not.toBeInTheDocument();
   });
 
   it("renders and functions without the new registry props (falls back to hardcoded constants)", async () => {
