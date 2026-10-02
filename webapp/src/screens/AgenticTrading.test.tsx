@@ -82,9 +82,9 @@ describe("Agentic Trading screen (real mock API)", () => {
   it("renders the agent status header with mode and kill switch, and no follows summary", async () => {
     renderScreen();
     expect(await screen.findByRole("heading", { name: "Agentic Trading" })).toBeInTheDocument();
-    // "mode: review" legitimately appears twice (Agent status header AND the
-    // shared execution queue section both render the same live mode).
-    expect((await screen.findAllByText(/mode: review/)).length).toBeGreaterThan(0);
+    // The Robinhood queue mode badge is labelled "Robinhood: <mode>" so it is
+    // not confused with the in-app "Broker: <mode>" chip.
+    expect((await screen.findAllByText(/Robinhood: review/)).length).toBeGreaterThan(0);
     expect(screen.queryByText(/active follow/)).not.toBeInTheDocument();
     expect(screen.queryByText("Pilot follows")).not.toBeInTheDocument();
   });
