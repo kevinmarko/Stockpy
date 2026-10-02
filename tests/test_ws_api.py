@@ -31,34 +31,39 @@ class _FakeQuote:
         self.is_stale = is_stale
 
 
-class TestBuildTickPayloadWsCache:
-    def test_uses_ws_cache_when_fresh(self, monkeypatch):
-        class _FakeStreamer:
-            def get_quote(self, symbol):
-                return {"bp": 100.0, "ap": 100.2}
+class TestTickSourceIsTheQuoteProvider:
+    """The Alpaca WebSocket cache (source "alpaca-ws") was removed 2026-09-30:
+    every tick now comes from the REST quote provider, and its ``source`` is
+    that provider's own name (e.g. "fmp"/"yfinance")."""
 
-        monkeypatch.setattr(ws_api, "_WS_AVAILABLE", True)
-        monkeypatch.setattr(ws_api, "_WS_STREAMER", _FakeStreamer())
+    def test_source_is_the_provider_name(self, monkeypatch):
+        class _Provider:
+            def get_latest_quote(self, symbol):
+                return _FakeQuote(source="fmp")
+
+        class _FakeMarketData:
+            @staticmethod
+            def get_provider():
+                return _Provider()
+
+        import sys
+        monkeypatch.setitem(sys.modules, "data.market_data", _FakeMarketData)
 
         payload = asyncio.run(ws_api._build_tick_payload("AAPL"))
 
-        assert payload["source"] == "alpaca-ws"
-        assert payload["bid"] == 100.0
-        assert payload["ask"] == 100.2
-        assert payload["is_stale"] is False
+        assert payload["source"] == "fmp"
+        assert payload["price"] == 192.34
+
+    def test_ws_streamer_globals_are_gone(self):
+        assert not hasattr(ws_api, "_WS_STREAMER")
+        assert not hasattr(ws_api, "_WS_AVAILABLE")
 
 
 class TestBuildTickPayloadRestFallback:
-    def _no_ws_cache(self, monkeypatch):
-        monkeypatch.setattr(ws_api, "_WS_AVAILABLE", False)
-        monkeypatch.setattr(ws_api, "_WS_STREAMER", None)
-
     def test_reuses_provider_singleton_not_a_fresh_instance(self, monkeypatch):
         """The fix: get_provider() (the shared singleton) is called, never a
         freshly constructed CompositeProvider() that would carry its own
         cold TTL cache on every tick."""
-        self._no_ws_cache(monkeypatch)
-
         call_count = {"n": 0}
 
         class _Provider:
@@ -87,8 +92,6 @@ class TestBuildTickPayloadRestFallback:
         """get_latest_quote() is a synchronous call; it must be offloaded to
         the executor so a slow call doesn't stall other coroutines sharing
         this event loop (every other connected client's socket)."""
-        self._no_ws_cache(monkeypatch)
-
         class _SlowProvider:
             def get_latest_quote(self, symbol):
                 time.sleep(0.1)  # simulate a slow synchronous network call
@@ -120,8 +123,6 @@ class TestBuildTickPayloadRestFallback:
         assert len(progress) >= 2, f"event loop was blocked -- other coroutine only ran {len(progress)} times"
 
     def test_quote_failure_degrades_to_unavailable(self, monkeypatch):
-        self._no_ws_cache(monkeypatch)
-
         class _FailingProvider:
             def get_latest_quote(self, symbol):
                 raise RuntimeError("no network")

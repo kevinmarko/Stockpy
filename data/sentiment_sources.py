@@ -16,7 +16,7 @@ Mac-mini / free-tier footprint -- no paid feed is wired up. A future paid
 source (e.g. a licensed X/Twitter tier) can be added later as a new
 ``SentimentSource`` subclass with zero changes to ``CompositeSentimentSource``
 or the signal that consumes it -- the same seam ``MarketDataProvider`` leaves
-open for Alpaca vs. yfinance today.
+open for FMP vs. yfinance today.
 
 ``GoogleNewsRSSSource`` (``"google_news"``) is registered but deliberately
 NOT in the ``SENTIMENT_SOURCES`` default -- it's free/no-auth like the

@@ -158,7 +158,7 @@ export function TopStatusBar() {
           <div style={{ display: "flex", alignItems: "center" }}>
             <Chip
               label={`Broker: ${mode}`}
-              title="In-app paper/Alpaca broker execution mode (ADVISORY_ONLY / ALPACA_PAPER). Separate from the Robinhood queue mode."
+              title="In-app paper broker execution mode (ADVISORY_ONLY / PAPER_TRADING). Separate from the Robinhood queue mode."
               tone={mode === "LIVE" ? "decline" : mode === "PAPER" ? "caution" : "muted"}
             />
           </div>

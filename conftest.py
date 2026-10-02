@@ -799,7 +799,7 @@ def _stub_paper_marking_network_in_tests(request: pytest.FixtureRequest, monkeyp
 
     ``get_account()``/``get_open_positions()`` mark positions through two
     live seams -- ``_fetch_stock_prices`` (CompositeProvider batch quotes,
-    with an Alpaca/yfinance fallback chain) and ``_fetch_option_chain``
+    with an FMP/yfinance fallback chain) and ``_fetch_option_chain``
     (a yfinance option chain). Dozens of pre-existing tests open paper
     positions without mocking either, so without this stub they would make
     real outbound requests. Default stub: no live data at all, so every

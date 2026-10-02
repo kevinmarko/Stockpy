@@ -11,7 +11,7 @@ import type { AutomationStatus } from "../api/types";
 // ---------------------------------------------------------------------------
 
 /**
- * Coarse execution-mode label derived from `advisory_only`/`alpaca_paper` --
+ * Coarse execution-mode label derived from `advisory_only`/`paper_trading` --
  * `"UNKNOWN"` only while the initial fetch hasn't resolved yet (never a
  * fabricated guess -- CONSTRAINT #4). Named distinctly from the
  * `ExecutionMode` context-value interface below to avoid a collision.
@@ -21,7 +21,7 @@ export type ExecutionModeLabel = "LIVE" | "PAPER" | "ADVISORY" | "UNKNOWN";
 export interface ExecutionMode {
   /**
    * Coarse mode label for display (a `Broker: X` chip etc.) -- derived the
-   * same way as `advisoryOnly`/`alpacaPaper` below, just pre-collapsed to
+   * same way as `advisoryOnly`/`paperTrading` below, just pre-collapsed to
    * one of four values. `"UNKNOWN"` while `data` hasn't loaded yet.
    */
   mode: ExecutionModeLabel;
@@ -33,8 +33,8 @@ export interface ExecutionMode {
   killSwitchReason: string | null;
   /** Dry-run flag — orders are simulated, not submitted to the broker. */
   dryRun: boolean;
-  /** Alpaca paper trading flag. */
-  alpacaPaper: boolean;
+  /** Platform-wide paper/live flag (PAPER_TRADING): true = paper. */
+  paperTrading: boolean;
   /** True while the initial fetch is in flight. */
   loading: boolean;
   /** Non-null when the fetch failed. */
@@ -51,7 +51,7 @@ export const DEFAULT_EXECUTION_MODE: ExecutionMode = {
   killSwitchActive: false,
   killSwitchReason: null,
   dryRun: true,
-  alpacaPaper: true,
+  paperTrading: true,
   loading: true,
   error: null,
   reload: () => {},

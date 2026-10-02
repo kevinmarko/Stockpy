@@ -5,7 +5,7 @@ def test_tiered_cost_model_aapl():
     """
     Test 100 shares of AAPL at $150 round-trip.
     AAPL is large_cap, so:
-    - Base commission = $0 (default Alpaca style)
+    - Base commission = $0 (zero-commission retail broker default)
     - Bid-ask spread = 1.0 bps round-trip (0.5 bps each side)
     - Market order slippage = 5.0 bps each side = 10.0 bps round-trip
     - SEC fee = 0.0000278 (only on sells)

@@ -54,7 +54,7 @@ class LeakyBucketQueue:
     """Queue wrapper that enforces Token Bucket rate limits and load shedding."""
     
     def __init__(self, capacity: int = 200, refill_rate: float = 10.0):
-        # Default Alpaca rate limit is ~200 requests/minute depending on endpoint
+        # Default capacity: ~200 requests/minute (the historical broker REST budget)
         self.bucket = TokenBucket.create(capacity=capacity, refill_rate=refill_rate)
         self.queue_depth = 0
         self.load_shed_threshold = 0.8  # 80% of capacity

@@ -44,17 +44,18 @@ def _get_broker():
     # resolve_broker_backend() is the single source of truth for "which
     # broker should actually be used" -- shared with
     # main_orchestrator.py::_execute_broker_orders so the two call sites
-    # can never drift on the fmp_paper/live-trading safety guard. It
-    # forces 'alpaca' (and fires a CRITICAL alert) when
-    # BROKER_BACKEND='fmp_paper' while this run is genuinely going live
-    # (ADVISORY_ONLY=False and ALPACA_PAPER=False).
+    # can never drift on the live-trading safety guard. It returns None when
+    # the run is going live (PAPER_TRADING=False and ADVISORY_ONLY=False):
+    # there is no automated live broker (Alpaca was removed 2026-09-30).
     from execution.broker_selection import resolve_broker_backend
 
-    if resolve_broker_backend() == "fmp_paper":
-        from execution.fmp_paper_broker import FMPPaperBroker
-        return FMPPaperBroker()
-    from execution.alpaca_broker import AlpacaBroker
-    return AlpacaBroker()
+    if resolve_broker_backend() is None:
+        raise RuntimeError(
+            "No automated live broker: PAPER_TRADING=False routes real-money "
+            "trades through the Robinhood execution queue only."
+        )
+    from execution.fmp_paper_broker import FMPPaperBroker
+    return FMPPaperBroker()
 
 @mcp.tool()
 def execute_live_trade(symbol: str, side: str, qty: float, order_type: str = "market", limit_price: float = None) -> str:
@@ -197,7 +198,10 @@ async def confirm_live_trade(confirmation_token: str) -> str:
         limit_price=proposal.limit_price,
     )
 
-    broker = _get_broker()
+    try:
+        broker = _get_broker()
+    except RuntimeError as e:
+        return json.dumps({"status": "error", "message": str(e)})
     om = OrderManager(broker, dry_run=False, risk_gate=PreTradeRiskGate())
 
     try:
@@ -265,8 +269,8 @@ async def cancel_order(order_id: str) -> str:
     if not _rate_limiter.consume():
         return json.dumps({"status": "error", "message": "Rate limit exceeded."})
 
-    broker = _get_broker()
     try:
+        broker = _get_broker()
         success = await broker.cancel_order(order_id)
         if success:
             return json.dumps({"status": "success", "message": f"Order {order_id} cancelled."})

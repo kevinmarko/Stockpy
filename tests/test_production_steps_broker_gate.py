@@ -5,21 +5,20 @@ Regression coverage for pipeline/production_steps.py's Finding 1 fix: a
 pipeline cycle that fell back to MockDataEngine (AsyncDataFetchStep's
 fail-safe branch, triggered by a total market-data outage -- flat $10
 prices, fabricated fundamentals) must NEVER submit a live/paper broker
-order. Before this fix, a synthetic-data cycle with ADVISORY_ONLY=False and
-Alpaca credentials configured would flow straight into
-main_orchestrator._execute_broker_orders() with no marker anywhere
-distinguishing it from a real-data cycle.
+order. Before this fix, a synthetic-data cycle with ADVISORY_ONLY=False
+would flow straight into main_orchestrator._execute_broker_orders() with no
+marker anywhere distinguishing it from a real-data cycle.
 
 The fix threads a broker-agnostic marker (``ctx.context_extras
 ['data_is_synthetic']``) from AsyncDataFetchStep's MockDataEngine fallback
 site through to BrokerExecutionStep.run(), which checks it BEFORE the
-existing ADVISORY_ONLY/Alpaca-key branches and returns unconditionally
-without calling _execute_broker_orders() when it's set. Because the check
-sits entirely upstream of broker SELECTION (which happens one layer deeper
-inside _execute_broker_orders, keyed off settings.BROKER_BACKEND), the gate
-protects AlpacaBroker and FMPPaperBroker identically -- this test proves
-that by exercising the exact "Alpaca keys configured" branch and showing
-the gate still wins.
+existing ADVISORY_ONLY branch and returns unconditionally without calling
+_execute_broker_orders() when it's set. The check sits entirely upstream of
+broker SELECTION (which happens one layer deeper inside
+_execute_broker_orders via execution.broker_selection), so it holds for any
+broker. Since Alpaca was removed (2026-09-30) the step needs no broker keys:
+the FMP paper ledger is the only automated broker, and going live places no
+pipeline orders at all.
 
 Targets BrokerExecutionStep.run() directly with a hand-built RunContext,
 mirroring legacy/tests/test_production_steps_etf_transmission_multiplier.py's
@@ -94,11 +93,10 @@ class TestSyntheticDataGateSkipsBrokerExecution:
     """Finding 1: the synthetic-data marker must block broker execution
     regardless of ADVISORY_ONLY or configured broker credentials."""
 
-    def test_synthetic_marker_skips_broker_execution_advisory_only_false_alpaca_keys_set(self):
+    def test_synthetic_marker_skips_broker_execution_advisory_only_false(self):
         ctx = _make_ctx(data_is_synthetic=True)
         with mock.patch("settings.settings.ADVISORY_ONLY", False), \
-             mock.patch("settings.settings.ALPACA_API_KEY", "fake-key"), \
-             mock.patch("settings.settings.ALPACA_SECRET_KEY", "fake-secret"):
+             mock.patch("settings.settings.PAPER_TRADING", True):
             m_exec = _run_step(ctx)
 
         m_exec.assert_not_called()
@@ -118,12 +116,11 @@ class TestRealDataPathIsUnaffected:
     absent (the normal, real-data path) -- broker execution proceeds
     exactly as it did before this fix."""
 
-    def test_real_data_path_calls_execute_broker_orders_when_advisory_only_false_and_keys_set(self):
+    def test_real_data_path_calls_execute_broker_orders_when_advisory_only_false(self):
         ctx = _make_ctx(data_is_synthetic=False)
         assert "data_is_synthetic" not in ctx.context_extras
         with mock.patch("settings.settings.ADVISORY_ONLY", False), \
-             mock.patch("settings.settings.ALPACA_API_KEY", "fake-key"), \
-             mock.patch("settings.settings.ALPACA_SECRET_KEY", "fake-secret"):
+             mock.patch("settings.settings.PAPER_TRADING", True):
             m_exec = _run_step(ctx)
 
         m_exec.assert_called_once()
@@ -137,52 +134,59 @@ class TestRealDataPathIsUnaffected:
 
         m_exec.assert_not_called()
 
-    def test_real_data_path_skips_without_alpaca_keys_configured(self):
-        """Sanity check: the pre-existing missing-credentials gate still
-        works unmodified when the synthetic marker is absent."""
+
+class TestFmpPaperLedgerNeedsNoBrokerKeys:
+    """The local FMP paper ledger (BROKER_BACKEND='fmp_paper') needs no broker
+    credentials; Alpaca (and its keys) were removed 2026-09-30."""
+
+    def test_fmp_paper_runs_broker_execution_with_no_keys(self):
         ctx = _make_ctx(data_is_synthetic=False)
         with mock.patch("settings.settings.ADVISORY_ONLY", False), \
-             mock.patch("settings.settings.BROKER_BACKEND", "alpaca"), \
-             mock.patch("settings.settings.ALPACA_API_KEY", None), \
-             mock.patch("settings.settings.ALPACA_SECRET_KEY", None):
-            m_exec = _run_step(ctx)
-
-        m_exec.assert_not_called()
-
-
-class TestFmpPaperLedgerNeedsNoAlpacaKeys:
-    """The local FMP paper ledger (BROKER_BACKEND='fmp_paper') needs no Alpaca
-    credentials. Before this fix the step skipped whenever Alpaca keys were
-    missing, so the pipeline never placed a single automated paper order."""
-
-    def test_fmp_paper_without_alpaca_keys_runs_broker_execution(self):
-        ctx = _make_ctx(data_is_synthetic=False)
-        with mock.patch("settings.settings.ADVISORY_ONLY", False), \
-             mock.patch("settings.settings.ALPACA_PAPER", True), \
-             mock.patch("settings.settings.BROKER_BACKEND", "fmp_paper"), \
-             mock.patch("settings.settings.ALPACA_API_KEY", None), \
-             mock.patch("settings.settings.ALPACA_SECRET_KEY", None):
+             mock.patch("settings.settings.PAPER_TRADING", True), \
+             mock.patch("settings.settings.BROKER_BACKEND", "fmp_paper"):
             m_exec = _run_step(ctx)
 
         m_exec.assert_called_once()
 
-    def test_fmp_paper_going_live_still_needs_alpaca_keys(self):
-        """A going-live run (ALPACA_PAPER=False) is forced onto Alpaca by
-        resolve_broker_backend(), so it must still require Alpaca keys."""
-        ctx = _make_ctx(data_is_synthetic=False)
-        with mock.patch("settings.settings.ADVISORY_ONLY", False), \
-             mock.patch("settings.settings.ALPACA_PAPER", False), \
-             mock.patch("settings.settings.BROKER_BACKEND", "fmp_paper"), \
-             mock.patch("settings.settings.ALPACA_API_KEY", None), \
-             mock.patch("settings.settings.ALPACA_SECRET_KEY", None):
-            m_exec = _run_step(ctx)
+    def test_going_live_calls_execute_broker_orders_but_submits_nothing(self):
+        """Going live (ADVISORY_ONLY=False, PAPER_TRADING=False): the step still
+        hands off to _execute_broker_orders (the single place that decides),
+        and that function constructs no broker and places no order."""
+        import main_orchestrator
 
-        m_exec.assert_not_called()
+        ctx = _make_ctx(data_is_synthetic=False)
+        real_exec = main_orchestrator._execute_broker_orders
+        broker_ctor = mock.MagicMock(name="FMPPaperBroker")
+        step = BrokerExecutionStep()
+        with mock.patch("settings.settings.ADVISORY_ONLY", False), \
+             mock.patch("settings.settings.PAPER_TRADING", False), \
+             mock.patch("data.market_data.get_provider", return_value=None), \
+             mock.patch(
+                 "data.robinhood_portfolio.fetch_account_snapshot",
+                 side_effect=RuntimeError("no snapshot in test"),
+             ), \
+             mock.patch(
+                 "engine.advisory.evaluate",
+                 side_effect=RuntimeError("no advisory in test"),
+             ), \
+             mock.patch("execution.fmp_paper_broker.FMPPaperBroker", broker_ctor), \
+             mock.patch("observability.alerts.send_alert") as m_alert, \
+             mock.patch("diagnostics_and_visuals.telemetry.error"), \
+             mock.patch(
+                 "main_orchestrator._execute_broker_orders",
+                 new_callable=mock.AsyncMock,
+                 side_effect=real_exec,
+             ) as m_exec:
+            asyncio.run(step.run(ctx))
+
+        m_exec.assert_called_once()
+        broker_ctor.assert_not_called()
+        m_alert.assert_called_once()
 
     def test_synthetic_marker_still_wins_for_fmp_paper(self):
         ctx = _make_ctx(data_is_synthetic=True)
         with mock.patch("settings.settings.ADVISORY_ONLY", False), \
-             mock.patch("settings.settings.ALPACA_PAPER", True), \
+             mock.patch("settings.settings.PAPER_TRADING", True), \
              mock.patch("settings.settings.BROKER_BACKEND", "fmp_paper"):
             m_exec = _run_step(ctx)
 

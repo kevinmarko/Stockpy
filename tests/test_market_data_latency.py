@@ -102,7 +102,7 @@ class TestLatencySampleRing:
 class TestRecordQuoteLatency:
     def test_real_fetch_records_one_sample_with_small_positive_latency(self) -> None:
         quote_ts = datetime.now(timezone.utc) - timedelta(seconds=2)
-        record_quote_latency("AAPL", "alpaca", quote_ts, is_stale=False)
+        record_quote_latency("AAPL", "fmp", quote_ts, is_stale=False)
 
         samples = get_ring().samples()
         assert len(samples) == 1
@@ -110,11 +110,11 @@ class TestRecordQuoteLatency:
         assert sample.latency_seconds >= 0.0
         assert sample.latency_seconds < 10.0  # ~2s ago, generous flake margin
         assert sample.symbol == "AAPL"
-        assert sample.source == "alpaca"
+        assert sample.source == "fmp"
         assert sample.is_stale is False
 
     def test_none_timestamp_records_nothing(self) -> None:
-        record_quote_latency("AAPL", "alpaca", None, is_stale=False)
+        record_quote_latency("AAPL", "fmp", None, is_stale=False)
         assert get_ring().samples() == []
 
     def test_naive_timestamp_handled_without_raising(self) -> None:

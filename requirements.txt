@@ -105,7 +105,7 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 tzdata==2026.2
 tzlocal==5.4.3
-urllib3==2.7.0
+urllib3==2.8.0
 vectorbt==1.0.0
 wcwidth==0.8.1
 websockets==16.0
@@ -132,7 +132,6 @@ lxml==6.1.0
 # response, not something the app's own local data ever needs.
 defusedxml>=0.7.1
 pykalman==0.11.2
-alpaca-py>=0.40.0
 streamlit>=1.37.0
 PyYAML>=6.0.0
 robin_stocks>=3.1.0

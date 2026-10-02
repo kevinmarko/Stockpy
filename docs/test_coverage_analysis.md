@@ -94,8 +94,8 @@ the template for new tests:
   scaler, triple-barrier labels, HMM `predict_proba`). This is the codebase's single most valuable
   test category and it is thorough.
 - **Fully-offline determinism.** Network I/O is uniformly monkeypatched (`unittest.mock` +
-  `monkeypatch`); no test hits Yahoo/FRED/Robinhood/Alpaca except explicitly-gated live smoke tests
-  (`test_alpaca_paper_smoke.py`) that skip when credentials are absent.
+  `monkeypatch`); no test hits Yahoo/FRED/Robinhood except explicitly-gated live smoke tests
+  that skip when credentials are absent (the Alpaca smoke test moved to `legacy/tests/` on 2026-09-30).
 - **DB isolation.** `tests/_db_isolation.py` and the `TransactionsStore(db_url="sqlite:///:memory:")`
   pattern keep DB-dependent tests hermetic and free of on-disk state bleed.
 - **Risk-gate and resilience depth.** All ten `PreTradeRiskGate` checks, the kill switch,

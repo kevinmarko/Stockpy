@@ -52,9 +52,9 @@ def test_get_value_refuses_secret(temp_env):
 
 def test_write_setting_refuses_secret(temp_env):
     with pytest.raises(env_io.SecretWriteError):
-        env_io.write_setting("ALPACA_SECRET_KEY", "anything")
+        env_io.write_setting("FRED_API_KEY", "anything")
     # The secret must not have been written.
-    assert "ALPACA_SECRET_KEY" not in temp_env.read_text(encoding="utf-8")
+    assert "anything" not in temp_env.read_text(encoding="utf-8")
 
 
 def test_is_secret_classification():
@@ -285,7 +285,7 @@ def test_dual_momentum_and_regime_weights_json_roundtrip(temp_env):
         "META_LABELING_ENABLED",
         "HISTORICAL_STORE_ENABLED",
         "PILOTS_TOP_N",
-        "ALPACA_KEY_ROTATED_DATE",
+        "PAPER_TRADING",
         "PAPER_TRADING_START_DATE",
     ],
 )

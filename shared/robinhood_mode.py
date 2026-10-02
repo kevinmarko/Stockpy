@@ -12,7 +12,7 @@ active.  This module derives the mode state from
 so the banner is a pure function of those two fields — no new state.
 
 Independent of :mod:`shared.run_mode`: Robinhood's execution mode is a
-different flag from the Alpaca ``DRY_RUN``/``ALPACA_PAPER`` posture
+different flag from the pipeline broker's ``DRY_RUN``/``PAPER_TRADING`` posture
 (CLAUDE.md Tier 8, "Relationship to ADVISORY_ONLY"), so we render its
 own banner rather than folding it into the existing run-mode header.
 

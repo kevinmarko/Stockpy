@@ -44,8 +44,8 @@ def _fetch_stock_prices(symbols: List[str]) -> Dict[str, float]:
 
     Routes through ``pilots.price_provider.get_latest_prices`` ->
     ``CompositeProvider.get_quotes_batch``: one ``/batch-quote`` request for
-    every cache miss, the in-process quote TTL cache, and the FMP -> Alpaca
-    -> yfinance fallback chain. A symbol with no real, positive, finite
+    every cache miss, the in-process quote TTL cache, and the FMP -> yfinance
+    fallback chain. A symbol with no real, positive, finite
     quote is ABSENT from the result (never a fabricated 0.0). Never raises.
     """
     if not symbols:

@@ -3748,7 +3748,7 @@ class HistoricalStore:
         n = len(df)
         # Column-wise build instead of df.iterrows() (avoids constructing a
         # Series per row). itertuples() isn't a fit here: "Adj Close" isn't a
-        # valid Python identifier and some providers (e.g. Alpaca) omit that
+        # valid Python identifier and some providers omit that
         # column entirely, so per-column optional-missing handling below
         # mirrors the old row.get(...) per-key default of None.
         dates = pd.to_datetime(df.index).strftime("%Y-%m-%d")

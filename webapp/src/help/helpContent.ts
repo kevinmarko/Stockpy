@@ -105,7 +105,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   "brinson-fachler":
     "Attribution that splits benchmark out-/under-performance into Allocation (right sectors?), Selection (right stocks within a sector?), and Interaction (the combined effect).",
   "execution mode":
-    "The Robinhood order queue's posture (shown as the 'Robinhood: <mode>' chip; distinct from the 'Broker: <mode>' chip, which is the in-app paper/Alpaca execution mode): 'off' builds nothing, 'review' builds a dry-run queue for you to confirm, 'live' still requires the same per-trade human confirmation before any order reaches the broker — no mode ever places an order automatically.",
+    "The Robinhood order queue's posture (shown as the 'Robinhood: <mode>' chip; distinct from the 'Broker: <mode>' chip, which is the in-app paper-broker execution mode): 'off' builds nothing, 'review' builds a dry-run queue for you to confirm, 'live' still requires the same per-trade human confirmation before any order reaches the broker — no mode ever places an order automatically.",
   "kill switch":
     "A global, file-based safety switch. While active, the execution queue adds no new orders. Pausing does not stop the pipeline schedule — cycles keep running, they just produce no actionable output.",
   "notional cap": (t) => {
@@ -219,7 +219,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   "universe coverage":
     "Tracked symbols are every symbol in this report — held positions plus Robinhood/file-backed watchlists. Forecast-covered are the subset with a price forecast recorded recently (the pipeline's forecast-tracking database — not a fixed sector or model list); a symbol can be tracked without one, e.g. if it's new or hasn't had a pipeline cycle run for it yet. Full coverage means a live check — run right now, not read from a cached pipeline artifact — confirmed price quotes, historical bars, and fundamental data are all available for the symbol.",
   "uncovered symbols":
-    "Why isn't symbol X covered? A symbol shows as Uncovered, Quotes-only, or Equity-only when the upstream data provider (e.g. FMP or Alpaca) doesn't have fundamental data or historical bars for it, or the ticker was delisted/renamed.",
+    "Why isn't symbol X covered? A symbol shows as Uncovered, Quotes-only, or Equity-only when the upstream data provider (FMP, with yfinance as the fallback) doesn't have fundamental data or historical bars for it, or the ticker was delisted/renamed.",
   "weekly digest":
     "A periodic 'names worth a look' panel that reuses Today's Radar's ranking rather than a second scoring system. Each pick is tagged with which rule selected it (Personalized, Sector Gap, or Today's Radar) and a confidence tier — a Personalized pick only appears once real view-tracking history exists; otherwise the digest honestly falls back to plain Radar picks rather than pretending to know your habits.",
   "decision snapshot":

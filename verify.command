@@ -50,7 +50,7 @@ load_dotenv()
 import os, sys
 
 required = ["FRED_API_KEY"]
-optional = ["RH_USERNAME", "RH_PASSWORD", "RH_MFA_SECRET", "NTFY_TOPIC", "ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
+optional = ["RH_USERNAME", "RH_PASSWORD", "RH_MFA_SECRET", "NTFY_TOPIC"]
 
 missing_req = [k for k in required if not os.environ.get(k)]
 missing_opt = [k for k in optional if not os.environ.get(k)]

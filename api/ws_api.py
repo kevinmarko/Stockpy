@@ -5,10 +5,9 @@ FastAPI WebSocket endpoints, split into two independent routers so that
 mounting one in a given process's app never drags the other's route along
 with it:
 
-``tick_router`` -- ``GET /ws/ticks/{symbol}``, live tick streaming from the
-``WebSocketStreamer`` singleton every 500 ms while the client is connected
-(falls back gracefully to polling the REST quote if the streamer has no
-fresh tick). Mounted by ``api/data_api.py`` only.
+``tick_router`` -- ``GET /ws/ticks/{symbol}``, pushes the REST quote
+(``data.market_data.get_provider()``, TTL-cached) every 500 ms while the
+client is connected. Mounted by ``api/data_api.py`` only.
 
 ``training_router`` -- ``GET /ws/training/status``, training-job
 started/finished broadcasts (``TrainingStatusManager``). Mounted by
@@ -51,7 +50,6 @@ from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
 from api.auth import is_loopback_host
-from data.websocket_streamer import _STREAMER as _WS_STREAMER, _WS_AVAILABLE
 from settings import settings
 
 logger = logging.getLogger(__name__)
@@ -95,43 +93,20 @@ def _sanitize(value) -> float | None:
 
 
 async def _build_tick_payload(sym_upper: str) -> dict:
-    """Build one tick JSON payload for *sym_upper* (WS cache, else REST fallback).
+    """Build one tick JSON payload for *sym_upper* from the REST quote provider.
 
     Extracted from ws_tick_endpoint's loop body so the REST-fallback path
     (provider reuse + executor offload) is directly unit-testable without
     driving a real WebSocket connection.
     """
-    tick = None
-
-    # 1. Try the live WS cache
-    if _WS_AVAILABLE and _WS_STREAMER is not None:
-        tick = _WS_STREAMER.get_quote(sym_upper)
-
-    if tick is not None:
-        bid = _sanitize(tick.get("bp"))
-        ask = _sanitize(tick.get("ap"))
-        price = (
-            ((bid or 0) + (ask or 0)) / 2
-            if bid is not None and ask is not None
-            else (bid or ask)
-        )
-        return {
-            "symbol": sym_upper,
-            "price": price,
-            "bid": bid,
-            "ask": ask,
-            "source": "alpaca-ws",
-            "is_stale": False,
-        }
-
-    # 2. REST fallback via the market_data module singleton. get_provider()
+    # Quote via the market_data module singleton. get_provider()
     # (not a fresh CompositeProvider()) so this reuses the provider's own
     # in-process quote TTL cache across ticks/clients instead of
     # constructing a brand-new, cold cache on every 500 ms iteration -- a
     # fresh CompositeProvider() re-creates that cache every call, silently
     # defeating MARKET_DATA_QUOTE_TTL_SECONDS entirely and re-hitting the
     # underlying network provider on every single tick. get_latest_quote()
-    # is itself a synchronous/blocking call (yfinance/alpaca-py's REST
+    # is itself a synchronous/blocking call (FMP/yfinance REST
     # clients), so it's additionally offloaded to the executor -- otherwise
     # a slow or cold-cache call would block the whole event loop (every
     # other connected client's socket) for its duration.
@@ -169,7 +144,7 @@ async def ws_tick_endpoint(
             "price": 192.34,
             "bid":   192.30,
             "ask":   192.38,
-            "source": "alpaca-ws",   // or "rest-fallback"
+            "source": "fmp",   // the quote provider's own name
             "is_stale": false
         }
 
@@ -185,10 +160,6 @@ async def ws_tick_endpoint(
     await websocket.accept()
     sym_upper = symbol.upper()
     logger.info("ws_tick_endpoint: client connected for %s", sym_upper)
-
-    # Ensure the symbol is subscribed to the streamer
-    if _WS_AVAILABLE and _WS_STREAMER is not None:
-        _WS_STREAMER.subscribe([sym_upper])
 
     try:
         while True:

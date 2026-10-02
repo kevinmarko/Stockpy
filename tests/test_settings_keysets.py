@@ -262,7 +262,7 @@ class TestExistingEditorsAreNotBootstrap:
             # gained the 5 BERT_LLA_* keys, the 3 CNN_LSTM_* subprocess-isolation
             # keys, FORECAST_CNN_LSTM_WALKFORWARD_SCALING, and
             # LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED; "Market Data" gained
-            # MARKET_DATA_WS_ENABLED/HISTORICAL_STORE_ENABLED; "Runtime & Ops"
+            # MARKET_DATA_WS_ENABLED (retired 2026-09-30)/HISTORICAL_STORE_ENABLED; "Runtime & Ops"
             # gained ROBINHOOD_AUTO_REFRESH_ENABLED/RUNTIME_FLAGS_REFRESH_ENABLED/
             # RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS; "Advanced / Config" gained
             # GRAVITY_REQUIRE_NATIVE (also fixed to read via settings.X instead
@@ -305,7 +305,9 @@ class TestExistingEditorsAreNotBootstrap:
             # Desk Automation" group, OPTIONS_VRP_THRESHOLD ("Regime Model"),
             # and OPTIONS_MATRIX_ENABLED/OPTIONS_TRUE_IVR_ENABLED ("Options &
             # Pairs Snapshots", renamed "Pairs Snapshot") were retired.
-            "_TUNABLE_INDEX": 92,
+            # 92 -> 91 (2026-09-30 Alpaca removal): MARKET_DATA_WS_ENABLED
+            # ("Market Data") retired with the Alpaca WebSocket streamer.
+            "_TUNABLE_INDEX": 91,
             # 33 -> 31 (2026-09 vendor removal): REDDIT_BACKFILL_MAX_PAGES and
             # FINNHUB_RATE_LIMIT_PER_MIN retired with Reddit/Finnhub.
             "_SENTIMENT_INDEX": 31,
@@ -318,7 +320,8 @@ class TestExistingEditorsAreNotBootstrap:
         # editor was removed when ETF volatility transmission was archived.
         # 184 -> 166 (step 4f): the 16 tunables + 2 FMP keys above.
         # 166 -> 164 (2026-09 vendor removal): the 2 sentiment keys above.
-        assert len(ALL_EDITOR_KEYS) == 164
+        # 164 -> 163 (2026-09-30 Alpaca removal): MARKET_DATA_WS_ENABLED.
+        assert len(ALL_EDITOR_KEYS) == 163
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

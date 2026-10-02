@@ -1,7 +1,7 @@
 """tests/test_strategy_registry.py — strategy version + mode toggle helpers.
 
 Exercises ``gui/strategy_registry.py``. The mode-toggle test never touches
-the real .env: it monkey-patches ``settings.ALPACA_PAPER`` / ``settings.DRY_RUN``
+the real .env: it monkey-patches ``settings.PAPER_TRADING`` / ``settings.DRY_RUN``
 on a copied object, and stubs ``shared.env_io.write_setting`` so writes are
 captured in a dict.
 """
@@ -80,18 +80,18 @@ class TestListStrategyVersions:
 # ---------------------------------------------------------------------------
 
 class _FakeSettings:
-    def __init__(self, alpaca_paper: bool, dry_run: bool) -> None:
-        self.ALPACA_PAPER = alpaca_paper
+    def __init__(self, paper_trading: bool, dry_run: bool) -> None:
+        self.PAPER_TRADING = paper_trading
         self.DRY_RUN = dry_run
 
 
 @pytest.fixture
 def patch_settings(monkeypatch):
     """Helper to swap in a fake settings module for read_active_mode."""
-    def _apply(alpaca_paper: bool, dry_run: bool) -> None:
+    def _apply(paper_trading: bool, dry_run: bool) -> None:
         import settings as real_settings
         real = real_settings.settings
-        fake = _FakeSettings(alpaca_paper=alpaca_paper, dry_run=dry_run)
+        fake = _FakeSettings(paper_trading=paper_trading, dry_run=dry_run)
         monkeypatch.setattr(real_settings, "settings", fake)
         return real, fake
     return _apply
@@ -99,20 +99,20 @@ def patch_settings(monkeypatch):
 
 class TestReadActiveMode:
     def test_paper_default(self, patch_settings) -> None:
-        patch_settings(alpaca_paper=True, dry_run=False)
+        patch_settings(paper_trading=True, dry_run=False)
         state = sr.read_active_mode()
         assert state.mode is sr.ExecutionMode.PAPER
         assert state.is_live is False
 
     def test_live_when_paper_false(self, patch_settings) -> None:
-        patch_settings(alpaca_paper=False, dry_run=False)
+        patch_settings(paper_trading=False, dry_run=False)
         state = sr.read_active_mode()
         assert state.mode is sr.ExecutionMode.LIVE
         assert state.is_live is True
 
     def test_dry_run_wins_over_paper(self, patch_settings) -> None:
-        """DRY_RUN=true forces SIMULATION even if ALPACA_PAPER=false."""
-        patch_settings(alpaca_paper=False, dry_run=True)
+        """DRY_RUN=true forces SIMULATION even if PAPER_TRADING=false."""
+        patch_settings(paper_trading=False, dry_run=True)
         state = sr.read_active_mode()
         assert state.mode is sr.ExecutionMode.SIMULATION
 
@@ -132,7 +132,7 @@ class TestSetActiveMode:
         monkeypatch.setattr(env_io, "write_setting", fake_write)
 
         state = sr.set_active_mode(sr.ExecutionMode.LIVE)
-        assert written == {"DRY_RUN": False, "ALPACA_PAPER": False}
+        assert written == {"DRY_RUN": False, "PAPER_TRADING": False}
         assert state.mode is sr.ExecutionMode.LIVE
         assert state.is_live is True
 
@@ -143,12 +143,12 @@ class TestSetActiveMode:
                             lambda k, v, **_kw: written.setdefault(k, v))
         state = sr.set_active_mode("simulation")
         assert written["DRY_RUN"] is True
-        assert written["ALPACA_PAPER"] is True
+        assert written["PAPER_TRADING"] is True
         assert state.mode is sr.ExecutionMode.SIMULATION
 
     def test_mode_banner_text_includes_all_flags(self) -> None:
-        state = sr.ModeState(sr.ExecutionMode.PAPER, alpaca_paper=True, dry_run=False)
+        state = sr.ModeState(sr.ExecutionMode.PAPER, paper_trading=True, dry_run=False)
         text = sr.mode_banner_text(state)
-        assert "ALPACA_PAPER=True" in text
+        assert "PAPER_TRADING=True" in text
         assert "DRY_RUN=False" in text
         assert "Paper" in text or "📝" in text

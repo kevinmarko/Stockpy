@@ -72,7 +72,7 @@ const HEALTHY_STATUS: AutomationStatus = {
   errors: { generated_at: "2026-07-16T19:05:00+00:00", entry_count: 0, entries: [] },
   advisory_only: true,
   dry_run: false,
-  alpaca_paper: false,
+  paper_trading: false,
 };
 
 function renderScreen() {
@@ -177,7 +177,7 @@ describe("SettingsGeneral screen — Execution mode (typed confirmation)", () =>
     const user = userEvent.setup();
     vi.spyOn(api, "getAutomationStatus").mockResolvedValue(HEALTHY_STATUS);
     const modeSpy = vi.spyOn(api, "setExecutionMode").mockResolvedValueOnce({
-      written: ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"],
+      written: ["ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"],
       advisory_only: false,
       mode: "live",
       applies: "next_daemon_restart",
@@ -208,7 +208,7 @@ describe("SettingsGeneral screen — Execution mode (typed confirmation)", () =>
       ...HEALTHY_STATUS,
       advisory_only: false,
       dry_run: false,
-      alpaca_paper: false, // currentMode: live, so "Advisory Only" is clickable
+      paper_trading: false, // currentMode: live, so "Advisory Only" is clickable
     });
     const modeSpy = vi.spyOn(api, "setExecutionMode").mockResolvedValueOnce({
       written: ["ADVISORY_ONLY"],

@@ -1990,7 +1990,7 @@ function mockStrategyMatrix(): StrategyMatrix {
 // SIZING_CAP_ALERT_THRESHOLD_PCT, LOG_LEVEL) and stay `null` here, never
 // fabricated (CONSTRAINT #4). MARKET_DATA_PROVIDER is honestly `value: null, default:
 // null` too -- its real settings.py default IS None (auto-select; unset until
-// an operator forces "alpaca"/"yfinance"). Accepted writes persist to
+// an operator forces "fmp"/"yfinance"). Accepted writes persist to
 // localStorage so a later GET reflects them AND marks those keys as env_drift
 // (a real .env write does not reach the running process until restart --
 // mirrors mockStrategyMatrix's STRATEGY_DRIFT_KEY convention above). A value
@@ -2695,15 +2695,15 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   // ---- Market Data ----
   {
     // Honest absent value: settings.py's real default IS None (auto-select
-    // by key availability) -- never fabricated as "alpaca"/"yfinance".
+    // by key availability) -- never fabricated as "fmp"/"yfinance".
     group: "Market Data",
     key: "MARKET_DATA_PROVIDER",
     type: "enum",
     value: null,
     default: null,
-    options: ["alpaca", "yfinance", "fmp"],
+    options: ["fmp", "yfinance"],
     description:
-      "Force a specific market-data backend: 'fmp', 'alpaca' or 'yfinance'. When unset the platform auto-selects based on key availability (Alpaca if its keys are present, else yfinance). Setting FMP_API_KEY alone NEVER auto-elects FMP: unlike the Alpaca ladder, FMP is chosen only by explicitly setting this to 'fmp', so an operator who adds the key to enable the analyst or earnings feed does not silently have their quote/bars source change underneath them. FMP quotes/bars additionally require FMP_QUOTES_ENABLED / FMP_BARS_ENABLED (the two-gate convention).",
+      "Force a specific market-data backend: 'fmp' or 'yfinance'. When unset the platform auto-selects based on key availability. Setting FMP_API_KEY alone NEVER auto-elects FMP: FMP is chosen only by explicitly setting this to 'fmp', so an operator who adds the key to enable the analyst or earnings feed does not silently have their quote/bars source change underneath them. FMP quotes/bars additionally require FMP_QUOTES_ENABLED / FMP_BARS_ENABLED (the two-gate convention).",
   },
   {
     group: "Market Data",
@@ -2738,11 +2738,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     options: ["yahoo", "yfinance_info", "fmp"],
     description:
       "Primary fundamentals backend: 'yahoo' (statement-derived, default), 'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling Prep — see section 25). Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen explicitly here, so adding the key for one feed cannot silently change what every valuation metric is computed from. 'fmp' additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate convention); with either half missing the Yahoo path is used, exactly as today.",
-  },
-  {
-    group: "Market Data", key: "MARKET_DATA_WS_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Opt-in: subscribe to Alpaca's real-time StockDataStream WebSocket for quotes, SUPPLEMENTING (never replacing) the REST-polling CompositeProvider -- see data/market_data_ws.py. Only takes effect when the active quote provider is AlpacaProvider; otherwise a no-op with an INFO log. False (default) reproduces the exact current REST-only behavior -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention. Any WS failure (connect, subscribe, disconnect, missing credentials) degrades to the existing REST path -- never crashes the pipeline.",
   },
   {
     group: "Market Data", key: "HISTORICAL_STORE_ENABLED", type: "boolean",
@@ -3048,15 +3043,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     description:
       "Opt-in: LGBMCrossSectionalRanker.train() calls CombinatorialPurgedCV.split() directly on the (date, ticker) MultiIndex panel (PR #648's native MultiIndex support) instead of flattening to a date-only index first before purging/embargoing. Default False preserves today's exact flatten-path behavior for every existing caller -- train()'s own use_native_multiindex_cv kwarg always overrides this when explicitly passed (True or False); this setting is only consulted when a caller leaves that kwarg unset (None). The native path additionally REQUIRES an explicit t1 (raises ValueError otherwise) -- CombinatorialPurgedCV cannot safely synthesize a default t1 across a MultiIndex -- while the flatten path keeps silently synthesizing a 'next row' default t1 when none is supplied, exactly as it always has.",
     group: "Forecasting",
-  },
-  {
-    key: "MARKET_DATA_WS_ENABLED",
-    value: false,
-    default: false,
-    type: "boolean",
-    description:
-      "Opt-in: subscribe to Alpaca's real-time StockDataStream WebSocket for quotes, SUPPLEMENTING (never replacing) the REST-polling CompositeProvider -- see data/market_data_ws.py. Only takes effect when the active quote provider is AlpacaProvider; otherwise a no-op with an INFO log. False (default) reproduces the exact current REST-only behavior -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention. Any WS failure (connect, subscribe, disconnect, missing credentials) degrades to the existing REST path -- never crashes the pipeline.",
-    group: "Market Data",
   },
   {
     key: "HISTORICAL_STORE_ENABLED",
@@ -4061,7 +4047,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
     value: true,
     default: true,
     description:
-      "Fall through to secondary providers (Alpaca/yfinance/Yahoo) on FMP failure.",
+      "Fall through to secondary providers (yfinance/Yahoo) on FMP failure.",
   },
   {
     group: "Client & Resiliency",
@@ -4525,9 +4511,9 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     type: "enum",
     value: "fmp_paper",
     default: "fmp_paper",
-    options: ["fmp_paper", "alpaca"],
+    options: ["fmp_paper"],
     description:
-      "Selects which broker actually receives orders: 'alpaca' (real broker) vs. 'fmp_paper' (a local SQLite-backed paper broker).",
+      "The automated pipeline's broker is the local FMP paper ledger ('fmp_paper', SQLite-backed). Alpaca was removed; real money moves only through the Robinhood execution queue.",
   },
   {
     group: "Write & Execution Gates",
@@ -4780,7 +4766,7 @@ function mockSettingsReference(): SettingsReferenceResponse {
       value: "fmp_paper",
       default: "fmp_paper",
       type: "string",
-      description: "Selects which broker actually receives orders: 'alpaca' (real broker) vs. 'fmp_paper' (a local SQLite-backed paper broker).",
+      description: "The automated pipeline's broker is the local FMP paper ledger ('fmp_paper', SQLite-backed). Alpaca was removed; real money moves only through the Robinhood execution queue.",
       domain: "Execution/Brokers",
       dangerous: true,
       liveness: mockLiveness("BROKER_BACKEND"),
@@ -6649,7 +6635,7 @@ function mockLatencyHeatmap(): LatencyHeatmap {
     const quoteTs = new Date(now - (i + 1) * 90_000 - latency * 1000);
     return {
       symbol,
-      source: i % 2 === 0 ? "alpaca" : "yfinance",
+      source: i % 2 === 0 ? "fmp" : "yfinance",
       quote_timestamp: quoteTs.toISOString(),
       ingested_at: new Date(quoteTs.getTime() + latency * 1000).toISOString(),
       latency_seconds: latency,
@@ -9027,7 +9013,7 @@ export const mockApi = {
           covered && held ? +((rng() - 0.5) * 40).toFixed(2) : null,
         market_value: covered ? +(1000 + rng() * 9000).toFixed(2) : null,
         is_stale_quote: coverage === "stale",
-        quote_source: covered ? "alpaca" : "",
+        quote_source: covered ? "fmp" : "",
         has_fundamentals: coverage === "full" || coverage === "stale",
         forecast_available: covered,
         watchlists: held ? [] : ["file:watchlist.txt"],
@@ -9043,7 +9029,7 @@ export const mockApi = {
       positions: PORTFOLIO.positions.map((p) => p.symbol),
       watchlists: { "file:watchlist.txt": ["T", "XOM"] },
       symbols,
-      provider_source: "alpaca",
+      provider_source: "fmp",
       fundamentals_source: "yahoo_computed",
     });
   },
@@ -9714,7 +9700,7 @@ export const mockApi = {
         },
         advisory_only: true,
         dry_run: false,
-        alpaca_paper: false,
+        paper_trading: false,
       },
       120,
     );
@@ -9860,7 +9846,7 @@ export const mockApi = {
   ): Promise<ExecutionModeUpdateResult> {
     // Mirrors api/pilots_api.py's _require_dangerous_confirmation: every
     // settings_keysets.DANGEROUS_KEYS field this write is about to touch
-    // (ADVISORY_ONLY always; DRY_RUN too when mode != "advisory" -- ALPACA_PAPER
+    // (ADVISORY_ONLY always; DRY_RUN too when mode != "advisory" -- PAPER_TRADING
     // is written but is NOT a DANGEROUS_KEYS member, so it needs no confirmation)
     // must be echoed in `confirm` mapped to its own name, or nothing is written
     // -- same all-or-nothing, same 422. Hardcoded rather than derived (this file
@@ -9887,7 +9873,7 @@ export const mockApi = {
         written:
           req.mode === "advisory"
             ? ["ADVISORY_ONLY"]
-            : ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"],
+            : ["ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"],
         advisory_only: req.advisory_only,
         mode: req.mode,
         applies: "next_daemon_restart",
@@ -10976,8 +10962,8 @@ export const mockApi = {
   // #4). "V" is the fixed honesty-fixture symbol for the "unreachable"
   // branch -- it's a real, always-present member of SYMBOL_UNIVERSE (a
   // PORTFOLIO position), so MarketDataHealth's tracked-universe check always
-  // exercises it. Every OTHER symbol resolves, alternating realtime
-  // (Alpaca, fresh) vs. delayed (yfinance, `is_stale: true` by design -- see
+  // exercises it. Every OTHER symbol resolves, alternating realtime-labelled
+  // (FMP, fresh) vs. delayed (yfinance, `is_stale: true` by design -- see
   // CLAUDE.md's Market-data layer note) by a deterministic hash so at least
   // one stale row is always present too, never an all-green fixture.
   async getDataQuotes(symbols: string[]): Promise<QuotesResponse> {
@@ -10998,7 +10984,7 @@ export const mockApi = {
           Date.now() - (delayed ? 15 * 60_000 : 2_000),
         ).toISOString(),
         is_stale: delayed,
-        source: delayed ? "yfinance" : "alpaca",
+        source: delayed ? "yfinance" : "fmp",
       };
     }
     // Realistic per-call timing variance: deterministic per the first
@@ -12011,9 +11997,9 @@ export const mockApi = {
   // ---- Market Data provider status (webapp parity gap G9) ----
   async getProviderStatus(): Promise<ProviderStatus> {
     return delay<ProviderStatus>({
-      provider: "alpaca",
-      is_realtime: true,
-      mode: "real_time",
+      provider: "fmp",
+      is_realtime: false,
+      mode: "delayed",
       quote_ttl_seconds: 30,
       fundamentals_source: "yahoo_computed",
     });
@@ -12853,11 +12839,8 @@ export const MOCK_META = {
 // names, types, and defaults) -- this fixture previously invented fields
 // (PAPER_BROKER_ENABLED, PAPER_BROKER_INITIAL_CASH, PAPER_BROKER_SLIPPAGE_BPS)
 // that don't exist in settings.py at all, and gave BROKER_BACKEND a fake
-// "PAPER"/"ALPACA"/"ROBINHOOD" enum with a "ROBINHOOD" option that doesn't
-// actually work (BROKER_BACKEND recognizes only "alpaca"/"fmp_paper" today;
-// "robinhood" is a documented-but-not-yet-implemented reserved value that
-// falls through to "alpaca" -- see docs/architecture/execution.md's "Future
-// extension point" section). A mock-mode operator exercising this screen was
+// "PAPER"/"ROBINHOOD" enum with a "ROBINHOOD" option that doesn't
+// actually work (BROKER_BACKEND recognizes only "fmp_paper" today; real money moves only through the Robinhood execution queue). A mock-mode operator exercising this screen was
 // seeing a fictional, unsafe-looking control surface that bore no relation
 // to what a real write would do.
 const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
@@ -12868,7 +12851,7 @@ const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
     value: "fmp_paper",
     default: "fmp_paper",
     description:
-      "Selects the active broker backend ('alpaca' or 'fmp_paper'). Defaults to 'fmp_paper'. A runtime guard forces 'alpaca' if 'fmp_paper' is used while genuinely going live. 'robinhood' is reserved for a future automated broker; any unrecognized value falls through to 'alpaca'.",
+      "The automated pipeline's broker is the local FMP paper ledger ('fmp_paper', SQLite-backed). Alpaca was removed; real money moves only through the Robinhood execution queue.",
   },
   {
     group: "Paper Broker Configuration",

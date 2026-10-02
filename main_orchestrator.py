@@ -1,4 +1,4 @@
-"""Async master orchestrator. Runs the full cycle: concurrent data fetch, run_pipeline (macro -> options -> processing -> forecasting -> strategy), schema validation, HTML report + Plotly chart, JSON payload, and gated broker execution (only when Alpaca credentials are configured). Supports engine reuse via EngineContext, a heartbeat watchdog, and hot-path parallelization; raises PipelineFatalError (not sys.exit) on a fatal cycle so a long-lived daemon caller survives a crashed cycle."""
+"""Async master orchestrator. Runs the full cycle: concurrent data fetch, run_pipeline (macro -> options -> processing -> forecasting -> strategy), schema validation, HTML report + Plotly chart, JSON payload, and gated paper-broker execution on the local FMP paper ledger. Supports engine reuse via EngineContext, a heartbeat watchdog, and hot-path parallelization; raises PipelineFatalError (not sys.exit) on a fatal cycle so a long-lived daemon caller survives a crashed cycle."""
 
 # =============================================================================
 # MODULE: MASTER ORCHESTRATOR
@@ -479,8 +479,10 @@ async def _execute_broker_orders(
 
     Design constraints
     ------------------
-    * With the Alpaca backend, never called when Alpaca credentials are
-      absent (checked by caller). The fmp_paper backend needs no Alpaca keys.
+    * The only automated broker is the local FMP paper ledger
+      (``FMPPaperBroker``). When the run is going live (``PAPER_TRADING=False``
+      and ``ADVISORY_ONLY=False``) ``resolve_broker_backend()`` returns None and
+      this places NO orders: real money moves only through the Robinhood queue.
     * Errors are logged as ERROR and never propagate — broker execution is
       best-effort; the analysis pipeline's value must never be held hostage
       to broker connectivity.
@@ -502,69 +504,46 @@ async def _execute_broker_orders(
         )
         return
     try:
-        from execution.alpaca_broker import AlpacaBroker
         from execution.broker_base import OrderIntent, OrderPriority, OrderSide, OrderType
         from execution.kill_switch import KillSwitchActiveError
         from execution.order_manager import OrderManager
         from execution.priority_queue import LeakyBucketPriorityQueue
         from execution.risk_gate import PreTradeRiskGate, RiskContext
-        from transactions_store import TransactionsStore
 
         from execution.broker_selection import resolve_broker_backend
 
         # resolve_broker_backend() is the single source of truth for "which
         # broker should actually be used" -- shared with
-        # robinhood_execution_mcp.py::_get_broker() so the two call sites
-        # can never drift on the fmp_paper/live-trading safety guard. It
-        # logs CRITICAL + fires an alert and forces 'alpaca' internally
-        # when BROKER_BACKEND='fmp_paper' while this run is genuinely going
-        # live (ADVISORY_ONLY=False and ALPACA_PAPER=False).
+        # broker_live_execution_mcp.py::_get_broker() so the two call sites
+        # can never drift on the live-trading safety guard. None means the run
+        # is going live, and the automated pipeline has no live broker.
         broker_backend = resolve_broker_backend()
-        # The local FMP paper ledger (BROKER_BACKEND='fmp_paper') is not an
-        # external broker: it has no market hours of its own, it IS the
-        # position ledger, and it also holds the operator's manual Quick
-        # Trade positions. Three paper-only rules follow from that (see
-        # below); the Alpaca path is unchanged.
-        is_paper_ledger = broker_backend == "fmp_paper"
+        if broker_backend is None:
+            return
+        # The local FMP paper ledger is not an external broker: it has no
+        # market hours of its own, it IS the position ledger, and it also holds
+        # the operator's manual Quick Trade positions. Three rules follow.
 
-        if is_paper_ledger:
-            # Rule 1: only trade during regular US market hours. The paper
-            # broker fills market orders at whatever quote is current, so an
-            # hourly daemon cycle at 06:00 or 19:00 ET would otherwise fill
-            # at thin pre/after-market quotes no real market order would get.
-            from engine.advisory_agent import is_us_market_open
-            if not is_us_market_open(datetime.now(timezone.utc)):
-                telemetry.info(
-                    "fmp_paper: outside regular US market hours; skipping "
-                    "pipeline paper-order submission this cycle."
-                )
-                return
-            from execution.fmp_paper_broker import FMPPaperBroker
-            broker = FMPPaperBroker()
-        else:
-            broker = AlpacaBroker()
-        ts_store = TransactionsStore()
+        # Rule 1: only trade during regular US market hours. The paper broker
+        # fills market orders at whatever quote is current, so an hourly
+        # daemon cycle at 06:00 or 19:00 ET would otherwise fill at thin
+        # pre/after-market quotes no real market order would get.
+        from engine.advisory_agent import is_us_market_open
+        if not is_us_market_open(datetime.now(timezone.utc)):
+            telemetry.info(
+                "fmp_paper: outside regular US market hours; skipping "
+                "pipeline paper-order submission this cycle."
+            )
+            return
+        from execution.fmp_paper_broker import FMPPaperBroker
+        broker = FMPPaperBroker()
         risk_gate = PreTradeRiskGate()
         om = OrderManager(broker, dry_run=dry_run, risk_gate=risk_gate)
 
-        # --- Reconcile before submitting new orders ---
-        # Rule 2: reconciliation compares an EXTERNAL broker against the
-        # internal trades ledger. For the local paper ledger there is no
-        # external truth to drift from, and the trades ledger only receives
-        # paper rows at close (via the bridge), so every open paper position
-        # would read as "drift" and fire an alert every cycle.
-        if is_paper_ledger:
-            telemetry.info(
-                "fmp_paper: skipping broker reconciliation (the paper store "
-                "is the position ledger; there is no external broker)."
-            )
-        else:
-            recon_report = await om.reconcile_state(ts_store)
-            if recon_report.has_drift:
-                telemetry.critical(
-                    "Broker state drift detected before order submission — "
-                    "review reconciliation report before trusting signals."
-                )
+        # Rule 2: no broker reconciliation. It compares an EXTERNAL broker
+        # against the internal trades ledger; the paper store IS the ledger,
+        # and the trades ledger only receives paper rows at close (via the
+        # bridge), so every open paper position would read as "drift".
 
         # --- Fetch live positions + account for risk-gate context ---
         open_pos = await broker.get_open_positions()
@@ -573,10 +552,7 @@ async def _execute_broker_orders(
         # Quick Trade positions share the ledger; a SELL signal must never
         # close them, and holding one manually must not block the pipeline
         # from opening its own. The risk gate still sees every position.
-        own_pos = (
-            [p for p in open_pos if p.strategy_id == PIPELINE_STRATEGY_ID]
-            if is_paper_ledger else open_pos
-        )
+        own_pos = [p for p in open_pos if p.strategy_id == PIPELINE_STRATEGY_ID]
         open_symbols = {p.symbol: p.qty for p in own_pos}
         try:
             account = await broker.get_account()
@@ -633,10 +609,7 @@ async def _execute_broker_orders(
             )
             log_fn(result)
 
-        probe_weight = (
-            float(getattr(settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.0) or 0.0)
-            if is_paper_ledger else 0.0
-        )
+        probe_weight = float(getattr(settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.0) or 0.0)
 
         now = datetime.now(timezone.utc)
         for _, row in final_df.iterrows():
@@ -651,7 +624,7 @@ async def _execute_broker_orders(
             # with no closed pipeline trades Kelly scales every target to 0,
             # which would stop the pipeline ever collecting the closed trades
             # Kelly needs. A positive Kelly Target always wins.
-            if is_paper_ledger and "BUY" in signal and kelly <= 0 and probe_weight > 0:
+            if "BUY" in signal and kelly <= 0 and probe_weight > 0:
                 kelly = probe_weight
 
             try:
@@ -1444,12 +1417,6 @@ async def main(dry_run: bool = False, strict: bool = False) -> None:
     effective_dry_run = dry_run or settings.DRY_RUN
     if effective_dry_run:
         telemetry.info("DRY-RUN mode active: orders will be logged but NOT submitted.")
-    else:
-        # Preflight Check: Exit gracefully if live execution is requested but broker keys are missing.
-        if not getattr(settings, "ADVISORY_ONLY", True):
-            if not getattr(settings, "ALPACA_API_KEY", None) or not getattr(settings, "ALPACA_SECRET_KEY", None):
-                telemetry.critical("Fatal preflight check: Live broker execution requested but Alpaca API keys are missing.")
-                raise PipelineFatalError("Alpaca API keys are missing for live execution")
 
     _hb_task = asyncio.create_task(_heartbeat(settings.OUTPUT_DIR, interval=60))
     _cls_task = None

@@ -158,7 +158,7 @@ _NEW_MISC_TUNABLE_KEYS = {
     "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", "CNN_LSTM_PROCESS_POOL_WORKERS",
     "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS", "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
     "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",
-    "MARKET_DATA_WS_ENABLED", "HISTORICAL_STORE_ENABLED",
+    "HISTORICAL_STORE_ENABLED",
     "ROBINHOOD_AUTO_REFRESH_ENABLED", "RUNTIME_FLAGS_REFRESH_ENABLED",
     "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS",
     "PAIRS_SNAPSHOT_ENABLED",
@@ -442,7 +442,7 @@ class TestTunablesScopeInvariants:
         for key in (
             "SIGNAL_WEIGHTS", "DISABLED_SIGNAL_MODULES", "DEFAULT_TICKERS",
             "LLM_COMMENTARY_ENABLED", "OPAL_RESEARCH_PROVIDER",
-            "MACRO_REGIME_GATE_ENABLED", "ALPACA_PAPER",
+            "MACRO_REGIME_GATE_ENABLED", "PAPER_TRADING",
         ):
             assert key not in pilots_api._TUNABLE_INDEX, f"{key} leaked into tunables scope"
 
@@ -468,6 +468,16 @@ class TestTunablesScopeInvariants:
     def test_retired_circuit_breaker_keys_are_not_tunables(self):
         assert not any(g[0] == "Circuit Breaker" for g in pilots_api._TUNABLE_GROUPS)
         assert not (_RETIRED_CIRCUIT_BREAKER_KEYS & set(pilots_api._TUNABLE_INDEX))
+
+    def test_alpaca_removal_keys_and_options(self):
+        """Alpaca was removed 2026-09-30: its WS toggle is no longer a tunable
+        or a Settings field, and the provider enum no longer offers it."""
+        assert "MARKET_DATA_WS_ENABLED" not in pilots_api._TUNABLE_INDEX
+        assert "MARKET_DATA_WS_ENABLED" not in Settings.model_fields
+        _kind, extras = pilots_api._TUNABLE_INDEX["MARKET_DATA_PROVIDER"]
+        assert extras["options"] == ["fmp", "yfinance"]
+        kind, extras = pilots_api._PAPER_BROKER_INDEX["BROKER_BACKEND"]
+        assert (kind, extras["options"]) == ("enum", ["fmp_paper"])
 
 
 # ---------------------------------------------------------------------------

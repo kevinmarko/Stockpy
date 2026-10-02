@@ -5,7 +5,7 @@ the production module can be re-used from any caller. Tests are organised
 around the four public surfaces of that module:
 
 1.  ``classify_market_error`` — error-category matrix across yfinance,
-    Alpaca, and Finnhub-style exception strings.
+    FMP-style exception strings.
 2.  ``validate_quote`` — happy path + every invariant violation.
 3.  ``FetchHealthTracker`` — empty → healthy, mixed → degraded, all-fail →
     down; window roll-off.
@@ -80,7 +80,7 @@ class TestClassifyMarketError:
              ErrorCategory.NETWORK_TIMEOUT),
             ("Max retries exceeded with url",
              ErrorCategory.NETWORK_TIMEOUT),
-            ("Connection refused by alpaca.markets",
+            ("Connection refused by financialmodelingprep.com",
              ErrorCategory.NETWORK_TIMEOUT),
             ("json.decoder.JSONDecodeError: Unexpected token",
              ErrorCategory.MALFORMED),
@@ -107,7 +107,7 @@ class TestClassifyMarketError:
     def test_chained_cause_walked(self) -> None:
         """A MarketDataError wrapping a Timeout still classifies as network."""
         inner = TimeoutError("read timed out")
-        outer = MarketDataError("Alpaca quote fetch failed for SPY")
+        outer = MarketDataError("FMP quote fetch failed for SPY")
         outer.__cause__ = inner
         assert classify_market_error(outer) is ErrorCategory.NETWORK_TIMEOUT
 

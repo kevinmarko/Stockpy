@@ -187,7 +187,7 @@ install_redacting_exception_handler(app)
 # make the daemon process unintentionally also serve it, an unrelated
 # surface with no test coverage in this context -- see api/ws_api.py's
 # module docstring. Broad `except Exception`, not `except ImportError` --
-# api/ws_api.py imports data.websocket_streamer at its own module top, and a
+# api/ws_api.py has module-top imports of its own, and a
 # narrower catch would let ANY non-ImportError failure in that import chain
 # crash this entire file's import (killing every Control API route, not
 # just the WS ones).
