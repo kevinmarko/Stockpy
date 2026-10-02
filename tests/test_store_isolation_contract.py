@@ -542,6 +542,7 @@ _EXPECTED_CONFTEST_ISOLATED = {
     # itself moved to legacy/data/execution_audit_store.py, and nothing in
     # tests/ constructs it directly any more.
     "data/broker_fills_store.py",
+    "data/historical_store.py",
     "data/paper_account_store.py",
     "transactions_store.py",
 }
