@@ -279,3 +279,54 @@ class TestRouterSplit:
         assert self._paths(ws_api.tick_router).isdisjoint(
             self._paths(ws_api.training_router)
         )
+
+
+class TestAuthRejectionIsVisibleToTheBrowser:
+    """An unauthenticated connection must be accepted and then closed with
+    4003, not closed before accept. A pre-accept close becomes an HTTP 403 on
+    the handshake, which a browser reports only as close code 1006 -- the PWA
+    could not tell "rejected" from "server down" and retried several times a
+    second, flooding the log (2026-10-02). Built on a bare FastAPI app with
+    just these routers so neither the Data API nor the Control API needs to
+    be imported."""
+
+    @pytest.fixture()
+    def client(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(ws_api.settings, "STATE_API_TOKEN", "secret-token-123")
+        app = FastAPI()
+        app.include_router(ws_api.tick_router)
+        app.include_router(ws_api.training_router)
+        return TestClient(app, client=("127.0.0.1", 54321))
+
+    @pytest.mark.parametrize("path", ["/ws/ticks/AAPL", "/ws/training/status"])
+    @pytest.mark.parametrize("query", ["", "?token=wrong-token"])
+    def test_rejection_reaches_client_as_close_4003(self, client, path, query):
+        from starlette.websockets import WebSocketDisconnect
+
+        with client.websocket_connect(path + query) as ws:
+            with pytest.raises(WebSocketDisconnect) as exc_info:
+                ws.receive_text()
+        assert exc_info.value.code == ws_api.WS_AUTH_REJECTED_CODE == 4003
+
+    def test_rejected_tick_connection_never_receives_a_quote(self, client, monkeypatch):
+        called = []
+
+        async def _fake_payload(sym):
+            called.append(sym)
+            return {"symbol": sym}
+
+        monkeypatch.setattr(ws_api, "_build_tick_payload", _fake_payload)
+        from starlette.websockets import WebSocketDisconnect
+
+        with client.websocket_connect("/ws/ticks/AAPL?token=wrong") as ws:
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_text()
+        assert called == []
+
+    def test_valid_token_is_still_accepted(self, client):
+        with client.websocket_connect("/ws/training/status?token=secret-token-123") as ws:
+            assert ws is not None
+        assert not ws_api.training_status_manager.active_connections
