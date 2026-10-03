@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "89a2021ac2f6c591c61654bb815ea03fbc16624c",
+    "git_commit": "21800d5df57b77be2f4c878ef64b2ac0161a1362",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2887,7 +2887,7 @@
           "route": "/data/ai/commentary/{symbol}",
           "method": "POST",
           "function": "generate_commentary",
-          "line": 1276,
+          "line": 1278,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2904,7 +2904,7 @@
           "route": "/data/ai/chart/{symbol}",
           "method": "POST",
           "function": "generate_chart_insight",
-          "line": 1319,
+          "line": 1321,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2921,7 +2921,7 @@
           "route": "/data/ai/research/{symbol}",
           "method": "POST",
           "function": "generate_research",
-          "line": 1421,
+          "line": 1423,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2938,7 +2938,7 @@
           "route": "/data/sync",
           "method": "POST",
           "function": "post_data_sync",
-          "line": 1570,
+          "line": 1572,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2959,7 +2959,7 @@
           "route": "/api/chat",
           "method": "POST",
           "function": "chat_endpoint",
-          "line": 2144,
+          "line": 2146,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -3925,7 +3925,7 @@
       {
         "field": "UNIVERSE_SYNC_ENABLED",
         "name_literal_sites": [
-          "api/data_api.py:1559",
+          "api/data_api.py:1561",
           "pilots/feature_flags.py:49"
         ],
         "name_literal_site_count": 2,

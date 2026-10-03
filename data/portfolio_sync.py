@@ -70,7 +70,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from settings import settings
 
@@ -243,6 +243,8 @@ def _isfinite(x: float) -> bool:
 def _probe_symbol_coverage(
     symbol: str,
     provider: Any,
+    *,
+    fundamentals_lookup: Optional[Callable[[str], Tuple[bool, str]]] = None,
 ) -> Dict[str, Any]:
     """Probe one symbol against the market-data provider.
 
@@ -254,6 +256,11 @@ def _probe_symbol_coverage(
       - ``source``       : str, "" on no-quote
       - ``has_funds``    : bool
       - ``diagnostic``   : str, "" on full success
+
+    ``fundamentals_lookup``, when given, replaces the live
+    ``provider.get_fundamentals`` call. It returns ``(has_funds, diag)``,
+    where ``diag`` is "" on success. Read endpoints pass a database-only
+    lookup so a page load never waits on per-symbol FMP fundamentals calls.
     """
     diag: List[str] = []
     quote_ok = False
@@ -286,13 +293,22 @@ def _probe_symbol_coverage(
 
     # --- fundamentals probe — empty dict is a legitimate "no coverage"
     # outcome (the get_fundamentals contract never raises). ---
-    try:
-        funds = provider.get_fundamentals(symbol) or {}
-        fund_ok = bool(funds)
-        if not fund_ok:
-            diag.append("fundamentals:empty")
-    except Exception as exc:  # noqa: BLE001 - defensive; provider says it doesn't raise
-        diag.append(f"fundamentals:{type(exc).__name__}")
+    if fundamentals_lookup is not None:
+        try:
+            fund_ok, fund_diag = fundamentals_lookup(symbol)
+            if fund_diag:
+                diag.append(fund_diag)
+        except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
+            fund_ok = False
+            diag.append(f"fundamentals:{type(exc).__name__}")
+    else:
+        try:
+            funds = provider.get_fundamentals(symbol) or {}
+            fund_ok = bool(funds)
+            if not fund_ok:
+                diag.append("fundamentals:empty")
+        except Exception as exc:  # noqa: BLE001 - defensive; provider says it doesn't raise
+            diag.append(f"fundamentals:{type(exc).__name__}")
 
     # --- classify ---
     if quote_ok and bars_ok and fund_ok:
@@ -323,6 +339,49 @@ def _probe_symbol_coverage(
     }
 
 
+def _stored_fundamentals_lookup() -> Callable[[str], Tuple[bool, str]]:
+    """Return a database-only fundamentals check for the coverage probe.
+
+    Reads the newest ``fundamentals_history`` row through a read-only
+    ``HistoricalStore``; it never calls a provider. The daemon pipeline keeps
+    these rows current every cycle. A symbol counts as having fundamentals
+    when its newest row carries at least one real typed value or a non-empty
+    raw payload. A symbol with no row reports ``fundamentals:not_in_store``,
+    and an unreadable store reports ``fundamentals:store_unavailable``.
+    Neither is ever reported as covered.
+    """
+    try:
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(readonly=True)
+    except Exception as exc:  # noqa: BLE001 - degrade honestly, never fetch live
+        logger.warning("sync probe: fundamentals store unavailable: %s", exc)
+
+        def _unavailable(_symbol: str) -> Tuple[bool, str]:
+            return False, "fundamentals:store_unavailable"
+
+        return _unavailable
+
+    def _lookup(symbol: str) -> Tuple[bool, str]:
+        try:
+            row = store._read_fundamentals_row(symbol.upper())
+        except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
+            logger.debug("sync probe: fundamentals row read failed for %s: %s", symbol, exc)
+            return False, "fundamentals:store_unavailable"
+        if row is None:
+            return False, "fundamentals:not_in_store"
+        _as_of, typed, raw_json = row
+        has_value = any(
+            isinstance(v, (int, float)) and _isfinite(float(v)) for v in typed.values()
+        )
+        has_raw = bool(raw_json) and str(raw_json).strip() not in ("", "{}", "null")
+        if has_value or has_raw:
+            return True, ""
+        return False, "fundamentals:empty"
+
+    return _lookup
+
+
 # ---------------------------------------------------------------------------
 # Report builder
 # ---------------------------------------------------------------------------
@@ -346,6 +405,7 @@ def build_sync_report(
     watchlist_files: Optional[Iterable[Path]] = None,
     forecast_symbols: Optional[Iterable[str]] = None,
     probe_market: bool = True,
+    fundamentals_from_store: bool = False,
 ) -> SyncReport:
     """Build a :class:`SyncReport` reconciling all sources for the current run.
 
@@ -374,6 +434,14 @@ def build_sync_report(
         When ``False``, skip the market-data probe entirely and return all
         symbols as ``CoverageStatus.UNKNOWN``.  Useful for fast offline
         sanity tests.
+    fundamentals_from_store:
+        When ``True``, the fundamentals leg of each probe reads the stored
+        ``fundamentals_history`` rows instead of calling the provider.
+        Read endpoints set this: after a restart the in-process fundamentals
+        cache is empty, and live per-symbol FMP fundamentals calls made the
+        first ``GET /data/sync-report`` take about 95 s. Quote and bars
+        probes stay live. Default ``False`` keeps the explicit sync path
+        (``async_sync_now``), the MCP and Gravity on live probes.
 
     Returns
     -------
@@ -473,9 +541,15 @@ def build_sync_report(
     # failures, and the wrapper below catches anything else per symbol.
     probes: Dict[str, Dict[str, Any]] = {}
     if provider is not None and probe_market:
+        fund_lookup = _stored_fundamentals_lookup() if fundamentals_from_store else None
+        if fundamentals_from_store:
+            fundamentals_source = "fundamentals_history (stored)"
+
         def _safe_probe(sym: str) -> Dict[str, Any]:
             try:
-                return _probe_symbol_coverage(sym, provider)
+                return _probe_symbol_coverage(
+                    sym, provider, fundamentals_lookup=fund_lookup
+                )
             except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
                 logger.warning("sync probe failed for %s: %s", sym, exc)
                 return {

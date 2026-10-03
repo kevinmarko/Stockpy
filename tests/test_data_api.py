@@ -773,6 +773,21 @@ def test_sync_report_is_cached_and_failures_are_not(monkeypatch):
         assert client.get("/data/sync-report").json()["n"] == 3  # expired -> rebuilt
 
 
+def test_sync_report_reads_fundamentals_from_store_not_live(monkeypatch):
+    """The read endpoint must ask for stored fundamentals, never live FMP calls."""
+    seen = {}
+
+    def _build(snap, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(to_dict=lambda: {"symbols": {}})
+
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: None)
+    monkeypatch.setattr(data_api, "build_sync_report", _build)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        assert client.get("/data/sync-report").status_code == 200
+    assert seen.get("fundamentals_from_store") is True
+
+
 def test_sync_report_tolerates_missing_snapshot(monkeypatch):
     called = {}
 
