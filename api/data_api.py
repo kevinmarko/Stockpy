@@ -850,7 +850,9 @@ def _build_sync_report_response() -> Dict[str, Any]:
         forecast_symbols = []
 
     try:
-        report = build_sync_report(snapshot, forecast_symbols=forecast_symbols)
+        report = build_sync_report(
+            snapshot, forecast_symbols=forecast_symbols, fundamentals_from_store=True
+        )
     except Exception as exc:
         logger.warning("data_api: sync report failed: %s", exc)
         raise HTTPException(status_code=503, detail="Sync report unavailable")

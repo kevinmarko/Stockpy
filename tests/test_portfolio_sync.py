@@ -479,10 +479,10 @@ def test_probe_crash_for_one_symbol_does_not_abort_the_others(monkeypatch):
     ))
     real_probe = ps._probe_symbol_coverage
 
-    def _probe(sym, provider):
+    def _probe(sym, provider, **kw):
         if sym == "MSFT":
             raise RuntimeError("boom")
-        return real_probe(sym, provider)
+        return real_probe(sym, provider, **kw)
 
     monkeypatch.setattr(ps, "_probe_symbol_coverage", _probe)
     report = ps.build_sync_report(_FakeSnapshot(positions=held), client=client)
@@ -490,6 +490,127 @@ def test_probe_crash_for_one_symbol_does_not_abort_the_others(monkeypatch):
     assert report.symbols["MSFT"].coverage is ps.CoverageStatus.UNKNOWN
     assert report.symbols["AAPL"].coverage is ps.CoverageStatus.FULL
     assert report.symbols["NVDA"].coverage is ps.CoverageStatus.FULL
+
+
+# ---------------------------------------------------------------------------
+# fundamentals_from_store — read endpoints never fetch fundamentals live
+# ---------------------------------------------------------------------------
+
+
+class _CountingProvider(_FakeProvider):
+    """A provider that records every live fundamentals call."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.fundamentals_calls: list[str] = []
+
+    def get_fundamentals(self, symbol: str) -> dict[str, Any]:
+        self.fundamentals_calls.append(symbol)
+        return super().get_fundamentals(symbol)
+
+
+def _store_with_rows(tmp_path, rows: dict[str, tuple[dict, dict]]):
+    from data.historical_store import HistoricalStore
+
+    db = tmp_path / "hist.db"
+    store = HistoricalStore(str(db))
+    for sym, (typed, raw) in rows.items():
+        store._upsert_fundamentals(sym, typed, raw, "test")
+    return str(db)
+
+
+def _point_store_at(monkeypatch, db_path: str):
+    import data.historical_store as hs
+
+    real_cls = hs.HistoricalStore
+
+    def _factory(db_path_arg=None, *, readonly=False):
+        return real_cls(db_path, readonly=readonly)
+
+    monkeypatch.setattr(hs, "HistoricalStore", _factory)
+
+
+def _typed(**over):
+    base = {k: float("nan") for k in (
+        "pe_ratio", "pb_ratio", "roe", "dividend_yield", "market_cap",
+        "eps", "operating_margin", "debt_to_equity",
+    )}
+    base.update(over)
+    return base
+
+
+def test_store_mode_reads_db_and_never_calls_provider_fundamentals(monkeypatch, tmp_path):
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from settings import settings
+
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+    db = _store_with_rows(tmp_path, {
+        "AAPL": (_typed(pe_ratio=30.0), {"trailingPE": 30.0}),
+        "EMPT": (_typed(), {}),
+    })
+    _point_store_at(monkeypatch, db)
+    provider = _CountingProvider(
+        covered={"AAPL", "MSFT", "EMPT"}, has_funds={"AAPL", "MSFT", "EMPT"}
+    )
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+    held = {s: _FakePosition(s, 1, 100.0, 100.0, 100.0) for s in ("AAPL", "MSFT", "EMPT")}
+
+    report = ps.build_sync_report(
+        _FakeSnapshot(positions=held), fundamentals_from_store=True
+    )
+
+    assert provider.fundamentals_calls == []
+    assert report.symbols["AAPL"].coverage is ps.CoverageStatus.FULL
+    assert report.symbols["AAPL"].has_fundamentals is True
+    # No stored row: honestly not covered, never assumed.
+    assert report.symbols["MSFT"].coverage is ps.CoverageStatus.QUOTES_ONLY
+    assert "fundamentals:not_in_store" in report.symbols["MSFT"].diagnostic
+    # A stored row with no real values does not count as covered.
+    assert report.symbols["EMPT"].has_fundamentals is False
+    assert "fundamentals:empty" in report.symbols["EMPT"].diagnostic
+    assert report.fundamentals_source == "fundamentals_history (stored)"
+
+
+def test_store_mode_unreadable_store_degrades_without_live_fetch(monkeypatch):
+    import data.historical_store as hs
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from settings import settings
+
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+
+    def _boom(*a, **k):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(hs, "HistoricalStore", _boom)
+    provider = _CountingProvider(covered={"AAPL"}, has_funds={"AAPL"})
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+    held = {"AAPL": _FakePosition("AAPL", 1, 100.0, 100.0, 100.0)}
+
+    report = ps.build_sync_report(
+        _FakeSnapshot(positions=held), fundamentals_from_store=True
+    )
+
+    assert provider.fundamentals_calls == []
+    assert report.symbols["AAPL"].has_fundamentals is False
+    assert "fundamentals:store_unavailable" in report.symbols["AAPL"].diagnostic
+
+
+def test_default_mode_still_probes_fundamentals_live(monkeypatch):
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from settings import settings
+
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+    provider = _CountingProvider(covered={"AAPL"}, has_funds={"AAPL"})
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+    held = {"AAPL": _FakePosition("AAPL", 1, 100.0, 100.0, 100.0)}
+
+    report = ps.build_sync_report(_FakeSnapshot(positions=held))
+
+    assert provider.fundamentals_calls == ["AAPL"]
+    assert report.symbols["AAPL"].coverage is ps.CoverageStatus.FULL
 
 
 # ---------------------------------------------------------------------------

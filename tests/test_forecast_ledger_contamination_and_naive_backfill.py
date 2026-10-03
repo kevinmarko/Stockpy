@@ -457,5 +457,8 @@ class TestProjection:
         v = rep["per_symbol"]["P"]["h10"]
         assert v["n_now_before"] == 0
         assert v["n_now_after"] == 70  # every day matured before today
-        assert v["first_n60_after"] == today  # already reachable
+        # Already reachable: the first projected date. projection_report walks
+        # pd.bdate_range(today, ...), so on a weekend that is the next business
+        # day, not today itself.
+        assert v["first_n60_after"] == pd.bdate_range(today, periods=1)[0]
         assert rep["daybased_below_real_read_pairs"] == 0
