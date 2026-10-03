@@ -83,6 +83,24 @@ def _check_ws_token(
     return False
 
 
+# Application close code for an auth rejection. The PWA's WebSocket hooks
+# (webapp/src/hooks/wsReconnect.ts) treat it as terminal and stop retrying.
+WS_AUTH_REJECTED_CODE = 4003
+
+
+async def _reject_ws(websocket: WebSocket) -> None:
+    """Close an unauthenticated WebSocket so the browser can SEE why.
+
+    Closing before ``accept()`` makes the ASGI server answer the handshake
+    with a plain HTTP 403, which a browser surfaces only as close code 1006
+    -- indistinguishable from "server down", so the client kept retrying
+    and flooded the log. Accepting first and then closing with 4003 delivers
+    the code to ``onclose``. Nothing is sent before the close.
+    """
+    await websocket.accept()
+    await websocket.close(code=WS_AUTH_REJECTED_CODE)
+
+
 def _sanitize(value) -> float | None:
     """Convert a value to float, returning None for NaN/Inf (never fabricated)."""
     try:
@@ -153,7 +171,7 @@ async def ws_tick_endpoint(
     auth_header = websocket.headers.get("authorization")
     client_host = websocket.client.host if websocket.client else None
     if not _check_ws_token(token, auth_header, client_host):
-        await websocket.close(code=4003)
+        await _reject_ws(websocket)
         logger.warning("ws_tick_endpoint: rejected unauthenticated connection for %s", symbol)
         return
 
@@ -217,7 +235,7 @@ async def ws_training_status_endpoint(
     auth_header = websocket.headers.get("authorization")
     client_host = websocket.client.host if websocket.client else None
     if not _check_ws_token(token, auth_header, client_host):
-        await websocket.close(code=4003)
+        await _reject_ws(websocket)
         logger.warning("ws_training_status_endpoint: rejected unauthenticated connection")
         return
 

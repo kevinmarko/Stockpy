@@ -1,18 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { trainingStatusWsUrl } from "../api/client";
+import { trainingStatusWsUrl, USE_MOCK } from "../api/client";
+import {
+  WS_INITIAL_RETRY_DELAY_MS,
+  isAuthRejection,
+  nextRetryDelay,
+} from "./wsReconnect";
 
 export interface TrainingJobStatus {
   status: string;
   exit_code?: number | null;
 }
-
-// A few seconds is plenty for this hook -- unlike useLiveTick (a per-symbol
-// price feed an operator stares at), a training job's lifecycle is measured
-// in minutes, so there's no need for useLiveTick's fuller exponential-backoff
-// convention. A fixed delay keeps this hook much simpler, per the "Retrain
-// Now" feature's own scope.
-const INITIAL_RETRY_DELAY_MS = 1000;
-const MAX_RETRY_DELAY_MS = 30000;
 
 /**
  * useTrainingStatus — subscribes to the Control API's `/ws/training/status`
@@ -24,15 +21,21 @@ const MAX_RETRY_DELAY_MS = 30000;
  * job/symbol like useLiveTick) -- messages are `{job_id, status, ...}`
  * frames that merge into a `job_id`-keyed map rather than replacing a
  * single value.
+ *
+ * Reconnects follow wsReconnect.ts (1 s -> 30 s backoff, no retry after an
+ * auth rejection). Mock mode opens no socket: there is no backend to
+ * broadcast, and Models.tsx's GET /jobs/{id} poll is the authoritative
+ * completion signal in both modes anyway.
  */
 export function useTrainingStatus(): Record<string, TrainingJobStatus> {
   const [statuses, setStatuses] = useState<Record<string, TrainingJobStatus>>({});
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryDelayRef = useRef(INITIAL_RETRY_DELAY_MS);
+  const retryDelayRef = useRef(WS_INITIAL_RETRY_DELAY_MS);
   const aliveRef = useRef(true);
 
   useEffect(() => {
+    if (USE_MOCK) return;
     aliveRef.current = true;
 
     const connect = () => {
@@ -51,7 +54,7 @@ export function useTrainingStatus(): Record<string, TrainingJobStatus> {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        retryDelayRef.current = INITIAL_RETRY_DELAY_MS;
+        retryDelayRef.current = WS_INITIAL_RETRY_DELAY_MS;
       };
 
       ws.onmessage = (event) => {
@@ -67,12 +70,18 @@ export function useTrainingStatus(): Record<string, TrainingJobStatus> {
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event: CloseEvent) => {
         wsRef.current = null;
         if (!aliveRef.current) return;
         if (retryRef.current) clearTimeout(retryRef.current);
+        if (isAuthRejection(event?.code)) {
+          console.warn(
+            `useTrainingStatus: /ws/training/status rejected the API token (close ${event.code}); not retrying`
+          );
+          return;
+        }
         const delay = retryDelayRef.current;
-        retryDelayRef.current = Math.min(delay * 2, MAX_RETRY_DELAY_MS);
+        retryDelayRef.current = nextRetryDelay(delay);
         retryRef.current = setTimeout(connect, delay);
       };
 
