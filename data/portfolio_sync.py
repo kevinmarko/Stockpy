@@ -245,6 +245,7 @@ def _probe_symbol_coverage(
     provider: Any,
     *,
     fundamentals_lookup: Optional[Callable[[str], Tuple[bool, str]]] = None,
+    price_lookup: Optional[Callable[[str], Optional[Tuple[float, bool]]]] = None,
 ) -> Dict[str, Any]:
     """Probe one symbol against the market-data provider.
 
@@ -261,6 +262,15 @@ def _probe_symbol_coverage(
     ``provider.get_fundamentals`` call. It returns ``(has_funds, diag)``,
     where ``diag`` is "" on success. Read endpoints pass a database-only
     lookup so a page load never waits on per-symbol FMP fundamentals calls.
+
+    ``price_lookup``, when given, is tried first for the quote and bars legs.
+    It returns ``(last_close, is_outdated)`` from the stored daily bars, or
+    ``None`` when the symbol has no stored bars. A stored close is reported
+    with ``is_stale=True`` and source ``"price_bars (stored close)"``, because
+    it is not a live price. Coverage is downgraded to STALE only when the
+    stored bar itself is outdated (``is_outdated``), so a symbol whose bars
+    are current still counts as FULL. A ``None`` result falls back to the
+    live quote and bars probes for that symbol only.
     """
     diag: List[str] = []
     quote_ok = False
@@ -269,20 +279,36 @@ def _probe_symbol_coverage(
     price = float("nan")
     is_stale = False
     source = ""
+    coverage_stale: Optional[bool] = None  # None = follow is_stale
 
-    # --- quote probe ---
-    try:
-        q = provider.get_latest_quote(symbol)
-        quote_ok = True
-        price = float(q.price)
-        is_stale = bool(q.is_stale)
-        source = str(q.source)
-    except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
-        diag.append(f"quote:{type(exc).__name__}")
+    stored = None
+    if price_lookup is not None:
+        try:
+            stored = price_lookup(symbol)
+        except Exception as exc:  # noqa: BLE001 - fall back to the live probe
+            logger.debug("sync probe: stored price read failed for %s: %s", symbol, exc)
+            stored = None
+
+    if stored is not None:
+        price, coverage_stale = float(stored[0]), bool(stored[1])
+        quote_ok = bars_ok = True
+        is_stale = True
+        source = "price_bars (stored close)"
+
+    # --- quote probe (skipped when the stored close already answered it) ---
+    if stored is None:
+        try:
+            q = provider.get_latest_quote(symbol)
+            quote_ok = True
+            price = float(q.price)
+            is_stale = bool(q.is_stale)
+            source = str(q.source)
+        except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
+            diag.append(f"quote:{type(exc).__name__}")
 
     # --- bars probe (only if quote succeeded — bar fetch is the heavier call
     # and we don't pay it for symbols we already know aren't covered) ---
-    if quote_ok:
+    if stored is None and quote_ok:
         try:
             bars = provider.get_intraday_bars(symbol, lookback_days=5)
             bars_ok = bars is not None and not bars.empty
@@ -318,7 +344,9 @@ def _probe_symbol_coverage(
         # works, and it's fresh" apart from "everything works, but don't
         # trust this price for time-sensitive decisions". Bars/fundamentals
         # coverage is unaffected -- only the quote leg drives this flag.
-        coverage = CoverageStatus.STALE if is_stale else CoverageStatus.FULL
+        # A stored close sets coverage_stale from the bar's own age instead.
+        stale_for_coverage = is_stale if coverage_stale is None else coverage_stale
+        coverage = CoverageStatus.STALE if stale_for_coverage else CoverageStatus.FULL
     elif quote_ok and bars_ok and not fund_ok:
         coverage = CoverageStatus.QUOTES_ONLY
     elif not quote_ok and not fund_ok:
@@ -382,6 +410,65 @@ def _stored_fundamentals_lookup() -> Callable[[str], Tuple[bool, str]]:
     return _lookup
 
 
+# A stored bar counts as current when it is no more than this many business
+# days old. Two, not one, so the session after an exchange holiday (whose
+# previous business day had no bar) does not read as outdated.
+_STORED_BAR_MAX_AGE_BDAYS = 2
+
+
+def _stored_price_lookup(
+    *, today: Optional[Any] = None
+) -> Callable[[str], Optional[Tuple[float, bool]]]:
+    """Return a database-only last-close lookup for the coverage probe.
+
+    Reads the newest ``price_bars`` row through a read-only
+    ``HistoricalStore``; it never calls a provider. The daemon pipeline tops
+    these bars up every cycle. Returns ``(close, is_outdated)``, where
+    ``is_outdated`` is True when the bar is older than
+    ``_STORED_BAR_MAX_AGE_BDAYS`` business days before *today* (US/Eastern).
+    Returns ``None`` when the symbol has no usable stored bar, or the store
+    is unreadable; the probe then falls back to live calls for that symbol.
+    """
+    import pandas as pd
+
+    if today is None:
+        today = pd.Timestamp.now(tz="America/New_York").tz_localize(None)
+    cutoff = (pd.Timestamp(today).normalize()
+              - pd.tseries.offsets.BDay(_STORED_BAR_MAX_AGE_BDAYS))
+
+    try:
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(readonly=True)
+    except Exception as exc:  # noqa: BLE001 - live probe takes over
+        logger.warning("sync probe: price store unavailable: %s", exc)
+        return lambda _symbol: None
+
+    def _lookup(symbol: str) -> Optional[Tuple[float, bool]]:
+        try:
+            with store._lock:
+                row = store._get_conn().execute(
+                    "SELECT date, close FROM price_bars WHERE symbol = ? "
+                    "AND close IS NOT NULL ORDER BY date DESC LIMIT 1",
+                    (symbol.upper(),),
+                ).fetchone()
+        except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
+            logger.debug("sync probe: stored close read failed for %s: %s", symbol, exc)
+            return None
+        if not row:
+            return None
+        try:
+            close = float(row[1])
+            bar_date = pd.Timestamp(row[0]).normalize()
+        except Exception:  # noqa: BLE001 - unparseable row, use live probe
+            return None
+        if not (_isfinite(close) and close > 0):
+            return None
+        return close, bool(bar_date < cutoff)
+
+    return _lookup
+
+
 # ---------------------------------------------------------------------------
 # Report builder
 # ---------------------------------------------------------------------------
@@ -406,6 +493,7 @@ def build_sync_report(
     forecast_symbols: Optional[Iterable[str]] = None,
     probe_market: bool = True,
     fundamentals_from_store: bool = False,
+    prices_from_store: bool = False,
 ) -> SyncReport:
     """Build a :class:`SyncReport` reconciling all sources for the current run.
 
@@ -440,8 +528,15 @@ def build_sync_report(
         Read endpoints set this: after a restart the in-process fundamentals
         cache is empty, and live per-symbol FMP fundamentals calls made the
         first ``GET /data/sync-report`` take about 95 s. Quote and bars
-        probes stay live. Default ``False`` keeps the explicit sync path
-        (``async_sync_now``), the MCP and Gravity on live probes.
+        probes stay live unless ``prices_from_store`` is also set. Default
+        ``False`` keeps the explicit sync path (``async_sync_now``), the MCP
+        and Gravity on live probes.
+    prices_from_store:
+        When ``True``, the quote and bars legs use the last stored daily close
+        from ``price_bars`` (reported as a stale quote) and only fall back to
+        live calls for symbols with no stored bar. This plan has no bulk
+        quote endpoint, so live quotes cost one throttled FMP call per symbol
+        (about 23 s for 29 symbols on a cold start). Read endpoints set this.
 
     Returns
     -------
@@ -545,10 +640,15 @@ def build_sync_report(
         if fundamentals_from_store:
             fundamentals_source = "fundamentals_history (stored)"
 
+        price_lookup = _stored_price_lookup() if prices_from_store else None
+
         def _safe_probe(sym: str) -> Dict[str, Any]:
             try:
                 return _probe_symbol_coverage(
-                    sym, provider, fundamentals_lookup=fund_lookup
+                    sym,
+                    provider,
+                    fundamentals_lookup=fund_lookup,
+                    price_lookup=price_lookup,
                 )
             except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
                 logger.warning("sync probe failed for %s: %s", sym, exc)

@@ -786,6 +786,7 @@ def test_sync_report_reads_fundamentals_from_store_not_live(monkeypatch):
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         assert client.get("/data/sync-report").status_code == 200
     assert seen.get("fundamentals_from_store") is True
+    assert seen.get("prices_from_store") is True
 
 
 def test_sync_report_tolerates_missing_snapshot(monkeypatch):
