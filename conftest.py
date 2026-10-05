@@ -574,6 +574,34 @@ def _isolate_symbol_view_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     monkeypatch.setattr(_svs, "resolve_database_url", lambda: f"sqlite:///{fake_db}")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_symbol_rating_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Redirect every bare ``SymbolRatingStore()`` (no explicit ``db_url``) to a
+    private per-test temp file instead of the operator's real
+    ``~/.stockpy_local/quant_platform.db``.
+
+    Same risk class as ``_isolate_symbol_view_db_in_tests`` above, but worse:
+    ``settings.SYMBOL_RATING_ENABLED`` defaults to **True**, and the store is
+    written from ``pipeline/steps.py`` / ``pipeline/production_steps.py``, so
+    any test that drives ``run_once`` / ``StrategyEvalStep`` reaches it without
+    naming it. Before this fixture, ``tests/test_run_once.py``,
+    ``tests/test_pipeline_smoke.py`` and ``tests/test_progress_emission.py``
+    wrote ~26.5k fixture rows (constant score 55.0 or 1.0) into the live
+    ``symbol_rating_events`` table, which reset real BAD streaks and delayed
+    auto-drops. See ``docs/known_issues/symbol_rating_burst_rows_test_leakage.md``.
+
+    A per-test temp FILE, not ``:memory:``: a write-mode store and a later
+    ``readonly=True`` store in the same test must see each other's rows. The
+    schema is created up front so a readonly store opened before any write does
+    not fail on a missing file. A test passing an explicit ``db_url`` is
+    unaffected.
+    """
+    import rating.symbol_rating_store as _srs
+
+    isolated_url = f"sqlite:///{tmp_path / 'isolated_symbol_rating.db'}"
+    monkeypatch.setattr(_srs, "resolve_database_url", lambda: isolated_url)
+
+
 # Set to "1" ONLY in the dedicated child process that
 # tests/test_rag_index.py::test_real_faiss_in_subprocess spawns to run the
 # real-faiss tests. See _block_real_faiss_in_pytest_process below.
