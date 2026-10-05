@@ -57,7 +57,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, func
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, func, or_
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from db_config import create_db_engine, resolve_database_url, session_scope
@@ -67,6 +67,8 @@ logger = logging.getLogger(__name__)
 Base = declarative_base()
 
 _VALID_TIERS = ("GOOD", "BAD")
+# cycle_id that reinclude() writes; not a rating cycle.
+_MANUAL_REINCLUDE_CYCLE_ID = "manual_reinclude"
 
 # Safety bound for the per-symbol history scan in get_consecutive_bad_cycles
 # / get_excluded_symbols -- this should never realistically be hit (a
@@ -164,6 +166,36 @@ class SymbolRatingStore:
                     tier=tier,
                     is_held=bool(is_held),
                 ))
+
+    def has_cycle_since(self, utc_start: datetime) -> bool:
+        """True when any rating cycle row has ``timestamp >= utc_start``.
+
+        ``manual_reinclude`` rows (``reinclude()``) are not rating cycles and
+        never count. ``utc_start`` may be aware (converted) or naive UTC,
+        matching how ``record_ratings`` stores timestamps. Used by the
+        daemon's once-per-trading-day write gate
+        (``pipeline.production_steps._daemon_should_record_ratings``).
+
+        Unlike the streak readers this RAISES on a DB error: the caller
+        treats an error as "don't write", so a read failure can never lead
+        to a duplicate cycle being recorded.
+        """
+        if utc_start.tzinfo is not None:
+            utc_start = utc_start.astimezone(timezone.utc).replace(tzinfo=None)
+        session = self.Session()
+        try:
+            row = (
+                session.query(SymbolRatingEvent.id)
+                .filter(SymbolRatingEvent.timestamp >= utc_start)
+                .filter(or_(
+                    SymbolRatingEvent.cycle_id.is_(None),
+                    SymbolRatingEvent.cycle_id != _MANUAL_REINCLUDE_CYCLE_ID,
+                ))
+                .first()
+            )
+            return row is not None
+        finally:
+            session.close()
 
     def get_consecutive_bad_cycles(self, symbol: str) -> int:
         """How many of the symbol's MOST RECENT rating events are BAD,
@@ -397,7 +429,7 @@ class SymbolRatingStore:
         with session_scope(self.Session) as session:
             session.add(SymbolRatingEvent(
                 timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
-                cycle_id="manual_reinclude",
+                cycle_id=_MANUAL_REINCLUDE_CYCLE_ID,
                 symbol=str(symbol).upper(),
                 score=50.0,
                 action_signal=None,
