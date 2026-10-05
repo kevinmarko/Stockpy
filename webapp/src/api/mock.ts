@@ -12436,6 +12436,7 @@ function pushMockClosedTrade(params: {
     realized_pnl_pct: realizedPnlPct,
     holding_period_days: 0,
     close_reason: closeReason,
+    exit_context_json: null, // manual Quick Trade close: no exit context (live parity)
     leg_group_id: null,
   });
 }
