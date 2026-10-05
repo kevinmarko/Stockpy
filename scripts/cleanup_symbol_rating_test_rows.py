@@ -42,12 +42,13 @@ FIXTURE_SCORES = (55.0, 1.0)
 FIXTURE_SYMBOLS = {"AAPL", "MSFT", "GOOG", "SPY", "AGNC", "JNJ", "NVDA", "TSLA"}
 MANUAL_CYCLE_ID = "manual_reinclude"
 
+# Built only from module constants (MANUAL_CYCLE_ID, FIXTURE_SCORES); the only runtime value, max_id, is a bound parameter.
 _MATCH_CYCLES_SQL = f"""
 SELECT cycle_id FROM symbol_rating_events
 WHERE id <= :max_id AND cycle_id IS NOT NULL AND cycle_id <> '{MANUAL_CYCLE_ID}'
 GROUP BY cycle_id
 HAVING COUNT(DISTINCT score) = 1 AND MIN(score) IN ({", ".join(str(s) for s in FIXTURE_SCORES)})
-"""
+"""  # nosec B608
 
 
 def _sqlite_path_from_url(url: str) -> Path:
@@ -171,8 +172,9 @@ def apply_cleanup(db_path: Path, max_id: int, threshold: int) -> Dict[str, Any]:
         conn.isolation_level = None  # manual transaction control
         conn.execute("BEGIN IMMEDIATE")
         try:
+            # _MATCH_CYCLES_SQL is built only from module constants; max_id is a bound parameter.
             cur = conn.execute(
-                f"DELETE FROM symbol_rating_events WHERE id <= :max_id AND cycle_id IN ({_MATCH_CYCLES_SQL})",
+                f"DELETE FROM symbol_rating_events WHERE id <= :max_id AND cycle_id IN ({_MATCH_CYCLES_SQL})",  # nosec B608
                 {"max_id": max_id},
             )
             deleted = cur.rowcount
