@@ -341,6 +341,9 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   `docs/known_issues/pr872_live_db_test_contamination_2026.md`).
   Network-touching defaults get the same treatment (`_force_mock_data_engine_in_tests`,
   `_stub_paper_marking_network_in_tests`).
+  `OUTPUT_DIR` is redirected differently: the root `conftest.py` sets it as an environment variable to a temp
+  dir before any import, so import-time path constants are covered too
+  (`docs/known_issues/output_dir_test_contamination_2026_10.md`).
 - **`.env` writes go through `shared/env_io.py`** (`write_setting`/`write_many`/`write_many_atomic`):
   `ALLOWED_KEYS` is the allowlist of non-secret GUI-writable keys, `SECRET_KEYS` are masked on read and
   refused on write, anything else raises. Never add a credential to `ALLOWED_KEYS`. Pass `_JSON_KEYS`
