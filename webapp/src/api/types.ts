@@ -1512,11 +1512,41 @@ export interface ExecutionModeUpdateRequest {
   confirm?: SettingsConfirmMap;
 }
 
+/**
+ * Per-key outcome of the runtime-flags store write PUT /automation/execution-mode
+ * now performs after its `.env` write (a stored override shadows `.env`).
+ */
+export type ExecutionModeKeyApplies =
+  | "immediately"
+  | "next_daemon_restart"
+  | "env_pinned"
+  | "refused";
+
+/** Present when at least one written key could not be made effective. */
+export interface ExecutionModeStoreConflict {
+  keys: string[];
+  /** key -> human-readable reason (never a value). */
+  reasons: Record<string, string>;
+  message: string;
+}
+
 export interface ExecutionModeUpdateResult {
   written: string[];
   advisory_only: boolean;
   mode: "live" | "paper" | "simulation" | "advisory";
+  /** "immediately" only when every key is in force now and `ok`. */
   applies: "next_daemon_restart" | "immediately";
+  per_key_applies: Record<string, ExecutionModeKeyApplies>;
+  /** False when `store_conflict` is set: the requested mode is NOT fully in force. */
+  ok: boolean;
+  /**
+   * Whether the ADVISORY_ONLY quarantine is confirmed engaged in the serving
+   * process. Fails closed: false (never true) when an "advisory" request
+   * could not be confirmed; null when unknown (a non-advisory request whose
+   * ADVISORY_ONLY write failed).
+   */
+  quarantine_engaged: boolean | null;
+  store_conflict: ExecutionModeStoreConflict | null;
   note: string;
 }
 

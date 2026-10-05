@@ -1,9 +1,10 @@
 # The test suite wrote the live runtime-flags store (ADVISORY_ONLY co-writes), 2026-09 to 2026-10
 
-**Status:** Fixed for the test-suite leak: the root `conftest.py` fixture, the writer backstop,
-and value-free audit provenance. **Open:** the execution-mode endpoint does not update the
-store (see "Latent fail-open" below). That fix waits on operator sign-off, and so does the
-one-time cleanup of the two test-planted store entries.
+**Status:** Fixed for the test-suite leak (#1107: the root `conftest.py` fixture, the writer
+backstop, and value-free audit provenance). **Fail-open fixed (2026-10-05, operator-approved):**
+`PUT /automation/execution-mode` now also writes the runtime-flags store and reports
+`quarantine_engaged`/`store_conflict` (see "Latent fail-open" below). **Still open:** the one-time
+cleanup of the two test-planted live store entries, which waits on operator sign-off.
 
 ## Symptom
 
@@ -57,15 +58,29 @@ when it restarted at 09:29 that morning. No Friday cycle logged the quarantine m
 (`ADVISORY_ONLY=True — broker execution surface is quarantined` /
 `📋 ADVISORY_ONLY=True`), which the quarantine always emits.
 
-## Latent fail-open (open, follow-up)
+## Latent fail-open (fixed 2026-10-05)
 
 Precedence is shell env, then the store, then `.env`. `PUT /automation/execution-mode`,
 behind the Settings > Execution Mode "Advisory Only" button, writes `.env` only. With a stored
 `ADVISORY_ONLY=false`, which every test run re-planted, pressing "Advisory Only" sets `.env`
 to `true`. The store's `false` overrides it on the next daemon start or runtime-flags refresh,
-so **the quarantine would silently not engage**. The fix is for that endpoint to also update
-the store, plus a one-time removal of the two test-planted entries. Both need operator
-sign-off and are not in this change.
+so **the quarantine would silently not engage**.
+
+**Fix:** after its unchanged `.env` write, the endpoint writes every key it sets (`ADVISORY_ONLY`,
+plus `DRY_RUN`/`PAPER_TRADING` for non-advisory modes) to the store with `write_override`
+(actor `pilots_api:execution_mode`). It reports the writer's real per-key `applies`, and returns
+`ok: false` with an explicit `store_conflict` whenever a key cannot be made effective: the
+writer refuses or raises, or a disagreeing shell export pins it. It fails closed:
+`quarantine_engaged` is `true` only when the `ADVISORY_ONLY=true` store write succeeded and
+the value is live, and otherwise the note says the quarantine is NOT engaged. The Settings
+screen shows that warning instead of a success toast. Tests:
+`tests/test_pilots_api.py::TestExecutionModeStoreOverride` (including the regression: a store
+seeded `ADVISORY_ONLY=false`, then a confirmed "advisory" press, gives effective `True` after a
+fresh runtime-flags apply) and `webapp/src/screens/SettingsGeneral.test.tsx`. Runbook: §3.17.
+CLAUDE.md now carries the rule that a `.env` write of a key must also update or clear that
+key's store override.
+
+The one-time removal of the two test-planted live entries still needs operator sign-off.
 
 ## Fix
 

@@ -9719,16 +9719,28 @@ export const mockApi = {
         422,
       );
     }
+    // Mirrors the live endpoint's store write: every written key is also put
+    // in the runtime-flags store. The mock's store always accepts, so this is
+    // the in-force shape; the degraded `store_conflict` shape (quarantine NOT
+    // engaged) is pinned in SettingsGeneral.test.tsx and
+    // tests/test_pilots_api.py::TestExecutionModeStoreOverride.
+    const written =
+      req.mode === "advisory"
+        ? ["ADVISORY_ONLY"]
+        : ["ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"];
     return delay(
       {
-        written:
-          req.mode === "advisory"
-            ? ["ADVISORY_ONLY"]
-            : ["ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"],
+        written,
         advisory_only: req.advisory_only,
         mode: req.mode,
-        applies: "next_daemon_restart",
-        note: "Execution mode updated.",
+        applies: "immediately",
+        per_key_applies: Object.fromEntries(
+          written.map((k) => [k, "immediately" as const]),
+        ),
+        ok: true,
+        quarantine_engaged: req.advisory_only,
+        store_conflict: null,
+        note: "Execution mode updated and in force.",
       },
       150,
     );
