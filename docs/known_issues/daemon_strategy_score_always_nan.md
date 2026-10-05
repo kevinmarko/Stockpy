@@ -27,10 +27,14 @@ Trading decisions were not affected: the engine picks the Action Signal from `fi
 - The snapshot writer (`main_orchestrator.py::_write_state_snapshot`) uses `_safe_float_or_none`, so a missing score is JSON `null`, never `0.0` and never a bare `NaN` token.
 - Tests: `tests/test_strategy_eval_step_score_column.py`, `tests/test_state_snapshot_parity.py::TestOrchestratorStrategyScore`, `tests/test_orchestrator_e2e.py::…::test_strategy_score_populated_via_real_run_pipeline`.
 
-## What was not changed (on purpose)
+## Rating writes: once per trading day (follow-up, 2026-10-05)
 
-With Score fixed, the daemon would start writing ratings every cycle. `SYMBOL_RATING_AUTO_DROP_ENABLED` is on in the live config, with a threshold of 5 consecutive BAD *cycles*. At the daemon's hourly cadence, an unheld watchlist or scan symbol could be dropped from the universe within hours, instead of the ~5 trading days `main.py`'s daily run implies. That would change trading behavior during the step-7 feature freeze.
+With Score fixed, the daemon would have written ratings every cycle. `SYMBOL_RATING_AUTO_DROP_ENABLED` is on in the live config, with a threshold of 5 consecutive BAD *cycles*. At the daemon's hourly cadence, an unheld watchlist or scan symbol could be dropped within hours instead of after about 5 trading days. The first fix therefore kept daemon writes off.
 
-So the call is gated by `_DAEMON_RECORDS_SYMBOL_RATINGS = False` (operator decision, 2026-10-05; pinned by `tests/test_symbol_rating_wiring.py::TestDaemonRatingWritesStayOff`). Open pipeline paper positions are unaffected either way: `pipeline/advisory_inputs.py::_open_pipeline_paper_symbols` keeps them in the universe even after a rating drop.
+The operator then chose a once-per-trading-day cadence. `pipeline/production_steps.py::_daemon_should_record_ratings` allows a write only when both hold:
+- the US market is open (`engine.advisory_agent.is_us_market_open_now`, holiday-aware);
+- no rating cycle exists yet for today's America/New_York date (`SymbolRatingStore.has_cycle_since`, which ignores `manual_reinclude` rows).
 
-**Follow-up required before `main.py` is archived (step 5.5):** once `main.py` is gone nobody writes ratings, and auto-drop would freeze on stale data. Give the daemon writer a once-per-trading-day cadence, then flip the gate. Noted in `.claude/shrink_step5_retire_main_py_implementation_plan.md` §5.
+Any error means "don't write". `main.py` records its cycle at about 08:47 ET, before the open, so while it runs the daemon skips. If `main.py` didn't run, or once it is archived (step 5.5), the first daemon cycle during market hours records the day's single cycle. Pinned by `tests/test_symbol_rating_wiring.py::TestDaemonDailyRatingCadence` and `tests/test_symbol_rating.py::TestHasCycleSince`.
+
+Open pipeline paper positions are unaffected either way: `pipeline/advisory_inputs.py::_open_pipeline_paper_symbols` keeps them in the universe even after a rating drop.

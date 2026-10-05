@@ -717,21 +717,49 @@ def _apply_strategy_score_column(dashboard_df: pd.DataFrame, eval_results: dict)
     ).astype(float)
 
 
-# The daemon does NOT write symbol ratings (rating/symbol_rating_store.py).
-# It never did in practice: "Score" was always NaN on this path, so
-# _record_symbol_ratings skipped every row. Now that Score is real, writing
-# ratings here would change trading behavior: SYMBOL_RATING_AUTO_DROP_ENABLED
-# counts consecutive BAD *cycles*, and the daemon runs hourly, so an unheld
-# symbol could be dropped from the universe within hours instead of the ~5
-# trading days main.py's once-a-day run gives today. Kept off on purpose
-# (operator decision, 2026-10-05, during the step-7 feature freeze). When
-# main.py is retired (step 5.5) nobody writes ratings any more, so this needs
-# a once-per-trading-day cadence before it is turned on — see
-# docs/known_issues/daemon_strategy_score_always_nan.md.
-_DAEMON_RECORDS_SYMBOL_RATINGS = False
+def _daemon_should_record_ratings(now_utc: datetime) -> bool:
+    """Once-per-trading-day cadence for the daemon's symbol-rating writes.
+
+    SYMBOL_RATING_AUTO_DROP_ENABLED counts consecutive BAD *cycles*, so the
+    hourly daemon must not record one per run: that would turn "5 cycles"
+    into ~5 hours. Operator decision (2026-10-05): one rating cycle per
+    trading day. Writes only when the US market is open (holiday-aware, the
+    same check the broker step uses) AND no rating cycle exists yet for
+    today's America/New_York date. main.py still records its cycle at ~08:47
+    ET, before the open, so while it runs the daemon skips; if main.py did
+    not run, or once it is retired (step 5.5), the first in-hours daemon
+    cycle records the day's one cycle (a cycle with no rateable rows writes
+    nothing, so the next in-hours cycle tries again). Any error means "don't
+    write" -- a read failure must never produce a duplicate cycle
+    (CONSTRAINT #6). Disclosed limit: the check and the write are not one
+    transaction. Daemon cycles are single-flight, so the only overlap is a
+    manual main.py run during market hours, which could add a second cycle
+    that day.
+    See docs/known_issues/daemon_strategy_score_always_nan.md.
+    """
+    if not settings.SYMBOL_RATING_ENABLED:
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+
+        from engine.advisory_agent import is_us_market_open_now
+        from rating.symbol_rating_store import SymbolRatingStore
+
+        if not is_us_market_open_now(now_utc):
+            telemetry.info("Symbol ratings not recorded this cycle: US market closed.")
+            return False
+        et = ZoneInfo("America/New_York")
+        et_midnight = now_utc.astimezone(et).replace(hour=0, minute=0, second=0, microsecond=0)
+        if SymbolRatingStore().has_cycle_since(et_midnight):
+            telemetry.info("Symbol ratings not recorded this cycle: already recorded today.")
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001 -- fail closed: skip the write
+        telemetry.warning(f"Symbol-rating cadence check failed; not recording this cycle: {exc}")
+        return False
 
 
-def _record_symbol_ratings(dashboard_df: Optional[pd.DataFrame], cycle_id: str) -> None:
+def _record_symbol_ratings(dashboard_df: Optional[pd.DataFrame], cycle_id: str) -> int:
     """Best-effort write of this cycle's per-symbol GOOD/BAD rating
     (``rating.symbol_rating.classify_tier``) to the durable
     ``rating.symbol_rating_store.SymbolRatingStore``.
@@ -744,10 +772,11 @@ def _record_symbol_ratings(dashboard_df: Optional[pd.DataFrame], cycle_id: str) 
     Write failures intentionally propagate (``SymbolRatingStore.record_ratings``'s
     own documented contract) -- the caller (``StrategyEvalStep.run()``) wraps
     this in its own best-effort try/except so a DB hiccup never affects the
-    run's own scoring/sizing decisions (CONSTRAINT #6).
+    run's own scoring/sizing decisions (CONSTRAINT #6). Returns the number
+    of rating rows written (0 when nothing was rateable).
     """
     if not settings.SYMBOL_RATING_ENABLED or dashboard_df is None or dashboard_df.empty:
-        return
+        return 0
 
     from rating.symbol_rating import classify_tier
     from rating.symbol_rating_store import SymbolRatingStore
@@ -774,6 +803,7 @@ def _record_symbol_ratings(dashboard_df: Optional[pd.DataFrame], cycle_id: str) 
             "cycle_id": cycle_id,
         })
     SymbolRatingStore().record_ratings(events, cycle_id=cycle_id)
+    return len(events)
 
 
 def _apply_symbol_rating_columns(dashboard_df: pd.DataFrame) -> None:
@@ -2620,10 +2650,11 @@ class StrategyEvalStep(PipelineStep):
         # _apply_sector_heat_factor) so it can be
         # exercised directly in tests without going through the whole of
         # StrategyEvalStep.run().
-        # Off on purpose — see _DAEMON_RECORDS_SYMBOL_RATINGS.
-        if _DAEMON_RECORDS_SYMBOL_RATINGS:
+        # Once per trading day only — see _daemon_should_record_ratings.
+        if _daemon_should_record_ratings(datetime.now(timezone.utc)):
             try:
-                _record_symbol_ratings(ctx.dashboard_df, cycle_id)
+                n_rated = _record_symbol_ratings(ctx.dashboard_df, cycle_id)
+                telemetry.info(f"Symbol ratings recorded for cycle {cycle_id}: {n_rated} symbols.")
             except Exception as rating_exc:
                 telemetry.warning(f"Symbol-rating audit write failed (non-critical): {rating_exc}")
 
