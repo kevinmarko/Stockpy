@@ -545,6 +545,9 @@ _EXPECTED_CONFTEST_ISOLATED = {
     "data/historical_store.py",
     "data/paper_account_store.py",
     "transactions_store.py",
+    # Added after the 2026-10 symbol_rating_events leak: see
+    # docs/known_issues/symbol_rating_burst_rows_test_leakage.md.
+    "rating/symbol_rating_store.py",
 }
 
 
@@ -565,6 +568,40 @@ def test_known_conftest_fixtures_still_registered() -> None:
         "incident. See CLAUDE.md's PR-872-remediation bullet and "
         "docs/known_issues/pr872_live_db_test_contamination_2026.md."
     )
+
+
+# Stores written from a production path gated by a settings flag whose CODED
+# DEFAULT IS TRUE. The 2026-08-29 hand audit behind property 3 assumed gated
+# stores default their flag to False; for these the write is reachable from
+# any test that runs a pipeline step, so a root conftest isolation fixture is
+# mandatory (the direct-construction scan in property 3 cannot see them).
+DEFAULT_TRUE_GATED_STORES: Dict[str, str] = {
+    "SYMBOL_RATING_ENABLED": "rating/symbol_rating_store.py",
+}
+
+
+def test_default_true_gated_stores_have_root_conftest_isolation() -> None:
+    import settings as _settings
+
+    fields = _settings.Settings.model_fields
+    isolated = _conftest_isolated_store_files()
+    problems = []
+    for flag, store_file in DEFAULT_TRUE_GATED_STORES.items():
+        if flag not in fields:
+            problems.append(f"{flag} no longer exists in settings.Settings -- update DEFAULT_TRUE_GATED_STORES")
+            continue
+        if store_file not in isolated:
+            problems.append(f"{store_file} (gated by default-True {flag}) has no root conftest isolation fixture")
+    assert not problems, "; ".join(problems)
+
+
+def test_gated_store_registry_flags_are_still_default_true() -> None:
+    """If a listed flag stops defaulting to True the entry is stale (harmless
+    but misleading); keep the registry honest."""
+    import settings as _settings
+
+    for flag in DEFAULT_TRUE_GATED_STORES:
+        assert _settings.Settings.model_fields[flag].default is True, flag
 
 
 if __name__ == "__main__":  # pragma: no cover

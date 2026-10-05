@@ -336,8 +336,9 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   shared DB and is reachable from widely-called production code, add a session-wide autouse fixture
   in the root `conftest.py` that redirects it (pattern: `_isolate_validation_runs_db_in_tests`,
   `_isolate_broker_fills_db_in_tests`, `_isolate_paper_and_transactions_db_in_tests`,
-  `_isolate_forecast_tracker_db_in_tests`, `_isolate_runtime_flags_store_in_tests`). Without one,
-  the suite writes fake rows into the operator's live DB (it has happened: `docs/known_issues/pr872_live_db_test_contamination_2026.md`).
+  `_isolate_forecast_tracker_db_in_tests`, `_isolate_runtime_flags_store_in_tests`,
+  `_isolate_symbol_rating_db_in_tests`). Without one, the suite writes fake rows into the operator's live DB (it has happened:
+  `docs/known_issues/pr872_live_db_test_contamination_2026.md`).
   Network-touching defaults get the same treatment (`_force_mock_data_engine_in_tests`,
   `_stub_paper_marking_network_in_tests`).
 - **`.env` writes go through `shared/env_io.py`** (`write_setting`/`write_many`/`write_many_atomic`):
