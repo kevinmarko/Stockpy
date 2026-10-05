@@ -50,7 +50,7 @@ class SignalContext:
     # LGBMRankerSignal.pre_compute; empty dict = module did not run this cycle).
     lgbm_scores: Dict[str, float] = field(default_factory=dict)
     # News sentiment scores (Tier 2.4) keyed by symbol (float in [-1, +1]).
-    # Populated by NewsCatalystSignal.pre_compute(); empty when Finnhub is
+    # Populated by NewsCatalystSignal.pre_compute(); empty when the news provider is
     # not configured or the module hasn't run this cycle.
     news_sentiment_scores: Dict[str, float] = field(default_factory=dict)
     # Next earnings dates as ISO-date strings keyed by symbol ("" = unknown).
@@ -63,7 +63,7 @@ class SignalContext:
     # NewsCatalystSignal.pre_compute() from
     # HistoricalStore.get_sentiment_aggregate_by_symbol(). Empty dict when no
     # multi-source social documents exist for this trading day (distinct from
-    # news_sentiment_scores, which is Finnhub-headline-only).
+    # news_sentiment_scores, which is news-headline-only).
     sentiment_credibility_scores: Dict[str, Dict[str, float]] = field(default_factory=dict)
     # Sector-Neutral Earnings-Quality Rank (SNEQR) percentiles, keyed by
     # ticker (float in [0, 1], a within-sector-standardized composite of
@@ -74,10 +74,9 @@ class SignalContext:
     # missing, or when the accrual/gross-profitability raw inputs aren't yet
     # present in universe_df (see signals/sector_quality_rank.py).
     sector_quality_ranks: Dict[str, float] = field(default_factory=dict)
-    # Institutional options order flow net sentiment score in [-1.0, 1.0],
-    # keyed by symbol. Populated by OptionsFlowSentimentSignal.pre_compute()
-    # or pilots/unusual_options_flow.py.
-    options_flow_sentiment: Dict[str, float] = field(default_factory=dict)
+    # options_flow_sentiment field removed (step 4b, options desk archive):
+    # its only reader/writer, signals/options_flow_sentiment.py, moved to
+    # legacy/ -- nothing in active code touches this field any more.
 
 
 @dataclass

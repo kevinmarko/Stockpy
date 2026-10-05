@@ -75,9 +75,12 @@ describe("mock API — /pilots list contract", () => {
       expect(CATEGORIES).toContain(p.category);
       expect(typeof p.description).toBe("string");
       expect(typeof p.holdings_count).toBe("number");
-      expect(typeof p.aum_proxy).toBe("number");
-      expect(typeof p.followers_proxy).toBe("number");
       expect(typeof p.long_only).toBe("boolean");
+      // Follow-a-Pilot was removed: the popularity/followability proxies are
+      // gone from the contract, never re-derived.
+      expect(p).not.toHaveProperty("aum_proxy");
+      expect(p).not.toHaveProperty("followers_proxy");
+      expect(p).not.toHaveProperty("followable");
       expectHeadline(p.headline);
     }
   });
@@ -89,8 +92,6 @@ describe("mock API — /pilots/{id} detail contract", () => {
     // Inherited PilotSummary fields (PilotDetail extends PilotSummary).
     expect(detail.id).toBe("trend-following");
     expect(typeof detail.holdings_count).toBe("number");
-    expect(typeof detail.aum_proxy).toBe("number");
-    expect(typeof detail.followers_proxy).toBe("number");
     expect(typeof detail.long_only).toBe("boolean");
     expectHeadline(detail.headline);
     // Detail-only fields.
@@ -258,7 +259,6 @@ describe("mock API — per-field liveness metadata parity", () => {
     "getSentimentSettings",
     "getSectorSelectionSettings",
     "getFmpSettings",
-    "getEtfTransmissionSettings",
   ] as const;
 
   async function allFields(method: string) {
@@ -892,9 +892,8 @@ describe("mock API — Agentic Trading contract", () => {
     expect(typeof s.queue.n_intents).toBe("number");
     expect(typeof s.queue.n_placeable).toBe("number");
     expect(typeof s.queue.stale).toBe("boolean");
-    // follows summary.
-    expect(typeof s.follows.n_active).toBe("number");
-    expect(typeof s.follows.total_amount).toBe("number");
+    // GET /agentic/status no longer carries a follows sub-section.
+    expect(s).not.toHaveProperty("follows");
     // agent_loop mirrors engine/advisory_agent.py's persisted AgentState.
     expect(typeof s.agent_loop.cycle_count).toBe("number");
     expect(typeof s.agent_loop.backlog_count).toBe("number");

@@ -36,20 +36,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import threading
 import time
 import uuid
-from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, time as dtime, timezone, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 import main_orchestrator
 import runtime_flags
-from settings import settings, validate_interval_seconds
+from settings import parse_scheduled_login_time, settings, validate_interval_seconds
+import data_engine
 from data_engine import DataEngine, MockDataEngine
 from reporting.atomic_write import atomic_write_json
 from reporting.progress import read_progress
@@ -66,8 +66,8 @@ _STORE_UNCHECKED = object()
 #: running in strictly on-demand mode (``settings.ORCHESTRATOR_INTERVAL_SECONDS
 #: <= 0``). Previously an UNBOUNDED ``threading.Event.wait()`` -- woken only
 #: by ``set_interval()``/``shutdown()`` -- which meant every self-gated
-#: periodic check at the top of the loop (``maybe_update_circuit_breaker``,
-#: ``maybe_refresh_google_trends``, ``maybe_dispatch_weekly_digest``, ...)
+#: periodic check at the top of the loop (``maybe_refresh_google_trends``,
+#: ``maybe_dispatch_weekly_digest``, ...)
 #: got at most one chance to run (the loop's first iteration, before the
 #: first park) and then never again for the rest of the process's life
 #: unless something else happened to call ``set_interval()``. A bounded park
@@ -77,6 +77,92 @@ _STORE_UNCHECKED = object()
 #: See ``maybe_dispatch_weekly_digest``'s own docstring for the concrete
 #: case this constant was introduced to fix.
 _PARKED_TIMER_POLL_SECONDS = 3600.0
+
+#: US/Eastern -- the scheduled Robinhood login's wall-clock zone (same zone
+#: engine.advisory_agent's market-hours gates use; no holiday calendar).
+_ET = ZoneInfo("America/New_York")
+
+#: Filename (under settings.OUTPUT_DIR) for the scheduled Robinhood login's
+#: durable "last attempted ET date" -- see maybe_run_scheduled_robinhood_login.
+_SCHEDULED_LOGIN_STATE_FILENAME = "robinhood_scheduled_login_state.json"
+
+#: Floor on any timer wait shortened for the scheduled login, so a hook that
+#: somehow fails to record its attempt can never turn the loop into a spin.
+_SCHEDULED_LOGIN_MIN_WAIT_SECONDS = 5.0
+
+#: Slack added when waking for the scheduled time, so the hook reliably sees
+#: "now >= target" on the wake (never a hair early).
+_SCHEDULED_LOGIN_WAKE_SLACK_SECONDS = 1.0
+
+#: How often the scheduled login's outcome watcher polls the login job.
+_SCHEDULED_LOGIN_WATCH_POLL_SECONDS = 2.0
+
+
+def _scheduled_login_state_path() -> Path:
+    return Path(settings.OUTPUT_DIR) / _SCHEDULED_LOGIN_STATE_FILENAME
+
+
+def _read_scheduled_login_state() -> dict:
+    """The durable scheduled-login state, or ``{}`` if missing/unreadable.
+    Never raises."""
+    try:
+        path = _scheduled_login_state_path()
+        if not path.exists():
+            return {}
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6
+        logger.warning("scheduled Robinhood login: state file unreadable (%s).", exc)
+        return {}
+
+
+def _write_scheduled_login_state(**fields: Any) -> None:
+    """Merge ``fields`` into the durable state file (atomic). Never raises --
+    the in-process claim still prevents a same-process re-prompt when this
+    write fails; only restart-dedup is lost, and that is logged."""
+    try:
+        state = _read_scheduled_login_state()
+        state.update(fields)
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        path = _scheduled_login_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(path, state)
+    except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6
+        logger.warning(
+            "scheduled Robinhood login: could not persist state (%s); a daemon "
+            "restart today could prompt again.", exc,
+        )
+
+
+def _latest_account_snapshot_fetched_at() -> Optional[datetime]:
+    """Newest ``fetched_at`` across the two cached Robinhood snapshot tiers
+    (DB, then JSON cache -- the same tiers fetch_account_snapshot reads), as
+    an aware UTC datetime, or ``None`` if neither has one. Read-only; never
+    logs in; never raises."""
+    candidates: list[datetime] = []
+    try:
+        from data.historical_store import HistoricalStore
+
+        snap = HistoricalStore(readonly=True).latest_account_snapshot()
+        if snap is not None and snap.fetched_at is not None:
+            candidates.append(snap.fetched_at)
+    except Exception as exc:  # noqa: BLE001 - dead-letter: fall through to the JSON tier
+        logger.debug("scheduled Robinhood login: DB snapshot read failed: %s", exc)
+    try:
+        from data.robinhood_portfolio import _read_cache
+
+        cached = _read_cache()
+        if cached is not None and cached.fetched_at is not None:
+            candidates.append(cached.fetched_at)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("scheduled Robinhood login: JSON cache read failed: %s", exc)
+    normalized = [
+        (c if c.tzinfo is not None else c.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+        for c in candidates
+        if isinstance(c, datetime)
+    ]
+    return max(normalized) if normalized else None
+
 
 #: Filename (under settings.OUTPUT_DIR) for the weekly digest's durable
 #: last-dispatch state. See ``_weekly_digest_state_path`` /
@@ -316,18 +402,16 @@ class OrchestratorDaemon:
         # "the file wasn't there last time either" (see that method).
         self._last_seen_store_stat: Any = _STORE_UNCHECKED
 
-        # Bounded in-process (timestamp, equity) sample buffer for
-        # maybe_update_circuit_breaker()'s loss-velocity brake. Sized for a
-        # ~60-minute rolling window assuming a ~60s daemon tick cadence (the
-        # smallest practically-useful ORCHESTRATOR_INTERVAL_SECONDS an
-        # operator would run this feature at) -- comfortably covers
-        # settings.CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS's default 30m
-        # even with some margin. A slower configured cadence just means the
-        # buffer's oldest sample spans MORE than 60 minutes, which only
-        # makes the computed rate a smoother, longer-horizon average -- never
-        # a correctness problem. Never persisted; intentionally lost on
-        # restart (an intraday-only metric with no cross-restart meaning).
-        self._circuit_breaker_equity_history: "deque[tuple[float, float]]" = deque(maxlen=60)
+        # Scheduled Robinhood login: the ET date (ISO) this process last
+        # claimed, so the hook fires at most once per day even if the durable
+        # state write fails; and the last invalid time value warned about, so
+        # a bad ROBINHOOD_SCHEDULED_LOGIN_TIME_ET/_CUTOFF_ET warns once, not
+        # every wake.
+        self._scheduled_login_claimed_date: Optional[str] = None
+        self._scheduled_login_warned_value: Optional[str] = None
+        # The ET date the after-cut-off INFO line was last logged for, so a
+        # daemon woken repeatedly in the evening logs it once, not per wake.
+        self._scheduled_login_cutoff_logged_date: Optional[str] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -353,28 +437,12 @@ class OrchestratorDaemon:
 
         # Previously gated on `self._interval_seconds > 0` alone -- under the
         # realistic default deployment (ORCHESTRATOR_INTERVAL_SECONDS=0, "on-
-        # demand only"), no timer thread was ever created at all, so
-        # _timer_loop never ran even once, and every self-gated periodic
-        # check at its top (maybe_update_circuit_breaker,
-        # maybe_refresh_google_trends, maybe_dispatch_weekly_digest) never
-        # got a chance to run automatically -- NOT just the digest. This
-        # was first fixed narrowly (checking WEEKLY_DIGEST_ENABLED alone),
-        # which incidentally gave maybe_update_circuit_breaker/
-        # maybe_refresh_google_trends an UNDISCLOSED, untested new hourly
-        # cadence whenever the digest happened to also be enabled --
-        # maybe_update_circuit_breaker in particular does real external
-        # market-data-provider calls per invocation with no throttle of
-        # its own (see its own docstring's cost warning), so this was a
-        # real behavior change riding on an unrelated flag. Generalized
-        # here: each self-gated periodic check that genuinely needs the
-        # timer loop now names ITS OWN flag explicitly and symmetrically,
-        # rather than accidentally depending on whichever ONE of them
-        # happens to be on. This also fixes those two checks' identical
-        # pre-existing "never fires automatically under on-demand mode"
-        # gap as a natural consequence -- both already document being
-        # "Called from _timer_loop on every wake" as their intended
-        # cadence, so giving them that wake under on-demand mode too is a
-        # correction, not a new behavior invented here.
+        # demand only"), no timer thread was ever created, so the self-gated
+        # periodic checks at the top of _timer_loop
+        # (maybe_refresh_google_trends, maybe_dispatch_weekly_digest) never
+        # ran automatically. Each check that genuinely needs the timer loop
+        # names ITS OWN flag here, rather than depending on whichever one
+        # happens to be on.
         #
         # Combined with _PARKED_TIMER_POLL_SECONDS bounding the loop's park
         # below, this is what lets these checks actually fire on a
@@ -387,8 +455,8 @@ class OrchestratorDaemon:
         needs_timer_thread = (
             self._interval_seconds > 0
             or settings.WEEKLY_DIGEST_ENABLED
-            or settings.CIRCUIT_BREAKER_ENABLED
             or settings.GOOGLE_TRENDS_ENABLED
+            or settings.ROBINHOOD_SCHEDULED_LOGIN_ENABLED
         )
         if needs_timer_thread:
             self._stop_event.clear()
@@ -459,8 +527,7 @@ class OrchestratorDaemon:
         """Construct a DataEngine/MockDataEngine exactly the way
         ``main_orchestrator._main_body`` would have, so ``start()`` produces
         the identical choice, just once instead of every cycle."""
-        creds_exist = os.path.exists("credentials.json")
-        if creds_exist:
+        if data_engine.live_data_configured():
             try:
                 settings.ensure_fred_configured()
                 return DataEngine(settings.FRED_API_KEY)
@@ -471,7 +538,7 @@ class OrchestratorDaemon:
                 )
                 return MockDataEngine()
         else:
-            logger.warning("credentials.json not found. Operating with deterministic MockDataEngine.")
+            logger.warning("FRED_API_KEY not configured. Operating with deterministic MockDataEngine.")
             return MockDataEngine()
 
     # ------------------------------------------------------------------
@@ -537,7 +604,7 @@ class OrchestratorDaemon:
         # skipped as "data still fresh".
         force = reason != "interval"
         try:
-            macro_dto = asyncio.run(
+            asyncio.run(
                 main_orchestrator._main_body(
                     self._dry_run,
                     strict=self._strict,
@@ -549,31 +616,6 @@ class OrchestratorDaemon:
             )
             state = RunState.SUCCEEDED
             error = None
-
-            # Automated options paper execution and dynamic lifecycle
-            # (auto-exits, strategy auto-execution, delta hedging).
-            # Sourced from execution.options_lifecycle without side-effects.
-            # Only run when a real cycle actually executed this wake -- NOT on
-            # a DATA_FRESHNESS_TTL_SECONDS freshness-skip (macro_dto is then
-            # main_orchestrator.CYCLE_SKIPPED, not a real macro context),
-            # otherwise every skipped interval wake would silently bypass the
-            # VIX/CREDIT-EVENT premium-selling gate that macro_dto threading
-            # exists to enforce. run_0dte=False because _timer_loop already
-            # evaluates 0DTE exits directly on every interval wake (see its
-            # own comment below) -- re-running it here would double-fire it.
-            if (
-                mode == "full"
-                and not self._dry_run
-                and macro_dto is not main_orchestrator.CYCLE_SKIPPED
-            ):
-                try:
-                    from execution.options_lifecycle import run_automated_options_lifecycle
-                    run_automated_options_lifecycle(macro_dto=macro_dto, run_0dte=False)
-                except Exception as opt_exc:  # noqa: BLE001 - non-fatal to daemon cycle
-                    logger.warning(
-                        "Daemon options lifecycle execution failed (non-critical): %s",
-                        opt_exc,
-                    )
         except main_orchestrator.PipelineFatalError as exc:
             state = RunState.FAILED
             error = str(exc)
@@ -828,236 +870,6 @@ class OrchestratorDaemon:
             )
             return None
 
-    # ------------------------------------------------------------------
-    # Live circuit-breaker updater (volatility-jump + VPIN + loss-velocity;
-    # OFI deliberately unwired -- see maybe_update_circuit_breaker's own
-    # docstring for the full, honest scope)
-    # ------------------------------------------------------------------
-
-    def maybe_update_circuit_breaker(self) -> None:
-        """Live circuit-breaker updater: volatility-jump + VPIN + loss-velocity.
-
-        HONEST SCOPE — read this before assuming full automatic coverage:
-        this wires THREE of the Dynamic Circuit Breaker's four sub-checks
-        (``execution.dynamic_circuit_breaker.DynamicCircuitBreaker``) into a
-        periodic live data feed:
-
-        1. **Volatility jump** (``check_volatility_jump`` / the
-           ``volatility_zscore`` input) — daily-bar baseline vs. a reactive
-           hourly window, as before.
-        2. **VPIN** (Volume-Synchronized Probability of Toxicity, the
-           ``vpin`` input) — a coarse, BAR-LEVEL Bulk Volume Classification
-           approximation (``pilots.options_vpin.calculate_vpin``) computed
-           against the SAME reactive hourly-bar window fetched for #1 (no
-           second network fetch). This is intentionally NOT tick-resolution
-           toxicity — with only ~a few dozen hourly bars available, the
-           number of volume buckets is sized down from the module's 50-bucket
-           tick-stream default to fit the actual row count. It is a genuine,
-           non-fabricated signal, just a coarser one than the literature's
-           tick-level formulation.
-        3. **Loss velocity** (``check_loss_velocity_brake`` / the
-           ``loss_velocity_per_min``/``account_equity`` inputs) — sampled
-           from ``data.paper_account_store.PaperAccountStore(readonly=True)
-           .get_account().equity`` into a small in-process rolling buffer
-           (``self._circuit_breaker_equity_history``) on this instance; the
-           rate is computed against the OLDEST buffered sample once at least
-           two samples span >= 60 seconds. Each sample is a REAL read (not a
-           cached/stale value) that resolves live prices for every open
-           paper position, so this ties a real external quote-API cost to
-           whatever daemon tick cadence is configured — worth knowing before
-           turning ``CIRCUIT_BREAKER_ENABLED`` on with a tight interval.
-
-        **OFI (Order Flow Imbalance) is deliberately NOT wired and stays
-        MANUAL-ONLY.** No configured market-data provider (Alpaca/FMP/
-        yfinance) populates bid/ask SIZE anywhere in this codebase's
-        ``Quote`` type — there is no real order-flow-imbalance signal to
-        compute from here, full stop; this is a genuine data-availability
-        gap, not an oversight. Because ``check_flash_crash_shield`` requires
-        BOTH ``ofi`` and ``vpin`` to be non-``None`` before it evaluates
-        anything, the compound flash-crash shield still can never trigger
-        automatically even though VPIN itself is now real and persisted —
-        VPIN's persisted value retains standalone diagnostic/observability
-        worth on its own. An operator (or an external watchdog) can still
-        trip either the flash-crash shield or any other state directly via
-        ``python -m execution.kill_switch --activate-soft-halt`` /
-        ``--activate``.
-
-        Gated on ``settings.CIRCUIT_BREAKER_ENABLED`` (default ``False`` —
-        today's exact, inert, behavior; a no-op when disabled). When
-        enabled: fetches recent daily bars for
-        ``settings.CIRCUIT_BREAKER_REFERENCE_SYMBOL`` to build a rolling
-        20-trading-day annualized realized-vol baseline (plus that series'
-        own std), fetches a short recent hourly window as the reactive
-        "current" input (reused for VPIN, see #2 above), computes the
-        5m-EWMA-style volatility Z-score via ``check_volatility_jump``, and
-        persists the combined result via ``update_metrics(volatility_zscore=
-        ..., vpin=..., loss_velocity_per_min=..., account_equity=...,
-        persist=True)`` — the same persistence path
-        ``dynamic_circuit_breaker_check``'s file-sentinel fallback
-        (``execution/risk_gate.py``) reads via ``load_metrics()``.
-
-        Never raises (CONSTRAINT #6): any data-fetch or computation failure
-        in the volatility-jump path degrades this whole tick to a logged
-        WARNING (skipped, previous state untouched). The VPIN and
-        loss-velocity sub-steps are each wrapped in their OWN try/except so
-        a failure in either (e.g. VPIN's bar-level BVC computation, or a
-        paper-account-store read) degrades that one input to ``None``
-        without preventing the other two inputs (including the
-        already-working volatility Z-score) from still being computed and
-        persisted this tick. Called from ``_timer_loop`` on every wake,
-        mirroring ``maybe_refresh_settings``'s own defensive pattern.
-        """
-        if not settings.CIRCUIT_BREAKER_ENABLED:
-            return
-        try:
-            from data.market_data import get_provider
-            from execution.dynamic_circuit_breaker import DynamicCircuitBreaker
-
-            symbol = settings.CIRCUIT_BREAKER_REFERENCE_SYMBOL
-            provider = get_provider()
-
-            daily_bars = provider.get_intraday_bars(symbol, lookback_days=90, interval="1d")
-            if daily_bars is None or daily_bars.empty or "Close" not in daily_bars.columns:
-                logger.warning(
-                    "maybe_update_circuit_breaker: no usable daily bars for %s; skipping tick.",
-                    symbol,
-                )
-                return
-
-            daily_returns = daily_bars["Close"].pct_change().dropna()
-            if len(daily_returns) < 21:
-                logger.warning(
-                    "maybe_update_circuit_breaker: insufficient daily-return history for "
-                    "%s (%d rows, need >= 21 for a 20d rolling-vol baseline); skipping tick.",
-                    symbol, len(daily_returns),
-                )
-                return
-
-            rolling_vol = daily_returns.rolling(window=20).std().dropna() * (252.0 ** 0.5)
-            if rolling_vol.empty:
-                logger.warning(
-                    "maybe_update_circuit_breaker: rolling 20d vol series empty for %s; "
-                    "skipping tick.",
-                    symbol,
-                )
-                return
-            baseline_20d_vol = float(rolling_vol.iloc[-1])
-            baseline_vol_std = float(rolling_vol.std()) if len(rolling_vol) > 1 else None
-
-            reactive_bars = provider.get_intraday_bars(symbol, lookback_days=2, interval="1h")
-            if reactive_bars is None or reactive_bars.empty or "Close" not in reactive_bars.columns:
-                logger.warning(
-                    "maybe_update_circuit_breaker: no usable hourly bars for %s; skipping tick.",
-                    symbol,
-                )
-                return
-
-            cb = DynamicCircuitBreaker()
-            _triggered, z_score, _reason = cb.check_volatility_jump(
-                intraday_returns_or_prices=reactive_bars["Close"],
-                baseline_20d_vol=baseline_20d_vol,
-                baseline_vol_std=baseline_vol_std,
-                is_prices=True,
-            )
-
-            # --- VPIN: coarse bar-level BVC approximation ------------------
-            # Reuses the SAME reactive_bars hourly window fetched above for
-            # the vol-jump detector -- no second network fetch. Isolated in
-            # its own try/except (CONSTRAINT #6): a VPIN failure must never
-            # prevent the already-computed volatility Z-score (or the
-            # loss-velocity sub-step below) from still being persisted.
-            vpin_value: Optional[float] = None
-            try:
-                import pandas as pd
-
-                from pilots.options_vpin import calculate_vpin
-
-                # DEFAULT_NUM_BUCKETS (50) assumes a real tick/trade stream;
-                # a ~2-day hourly window is only ~13-14 rows, so bucket count
-                # is sized down to the actual row count instead (floored at
-                # 2 so the rolling-VPIN window is never degenerate).
-                vpin_num_buckets = max(2, min(10, len(reactive_bars) // 2))
-                # _normalize_trades_df matches an EXACT lowercase column set
-                # ("price"/"volume"/"time" among its aliases) -- the raw
-                # OHLCV bars use capitalized "Close"/"Volume" and a
-                # DatetimeIndex, neither of which match those aliases
-                # as-is, so an explicit rename (not a bare pass-through) is
-                # required here.
-                vpin_trades_df = pd.DataFrame(
-                    {
-                        "price": reactive_bars["Close"].to_numpy(dtype=float),
-                        "volume": reactive_bars["Volume"].to_numpy(dtype=float),
-                        "time": reactive_bars.index.astype(str),
-                    }
-                )
-                vpin_result = calculate_vpin(
-                    vpin_trades_df, num_buckets=vpin_num_buckets, symbol=symbol
-                )
-                vpin_value = float(vpin_result.vpin)
-            except Exception as vpin_exc:  # noqa: BLE001 - CONSTRAINT #6, isolate from vol-jump
-                logger.warning(
-                    "maybe_update_circuit_breaker: VPIN computation failed (%s); "
-                    "leaving vpin=None this tick.", type(vpin_exc).__name__, exc_info=True,
-                )
-
-            # --- Loss velocity: live PaperAccountStore equity sampling -----
-            # Isolated in its own try/except (CONSTRAINT #6) for the same
-            # reason as VPIN above -- a paper-account-store read failure
-            # must not take down the vol-jump/VPIN inputs already computed.
-            loss_velocity_per_min: Optional[float] = None
-            account_equity_for_update: Optional[float] = None
-            try:
-                from data.paper_account_store import PaperAccountStore
-
-                equity_now = float(PaperAccountStore(readonly=True).get_account().equity)
-                now_ts = time.time()
-                self._circuit_breaker_equity_history.append((now_ts, equity_now))
-
-                if len(self._circuit_breaker_equity_history) >= 2:
-                    earliest_ts, earliest_equity = self._circuit_breaker_equity_history[0]
-                    elapsed_seconds = now_ts - earliest_ts
-                    # Require >= 60s of real elapsed time so the rate isn't
-                    # dominated by noise from two near-simultaneous samples.
-                    if elapsed_seconds >= 60.0:
-                        loss_velocity_per_min = (
-                            (equity_now - earliest_equity) / (elapsed_seconds / 60.0)
-                        )
-                        account_equity_for_update = equity_now
-            except Exception as lv_exc:  # noqa: BLE001 - CONSTRAINT #6, isolate from vol-jump/VPIN
-                logger.warning(
-                    "maybe_update_circuit_breaker: loss-velocity sampling failed (%s); "
-                    "leaving loss_velocity_per_min=None this tick.",
-                    type(lv_exc).__name__, exc_info=True,
-                )
-
-            # --- OFI: deliberately NOT computed -----------------------------
-            # No configured market-data provider (Alpaca/FMP/yfinance)
-            # populates bid/ask SIZE anywhere in this codebase's Quote type,
-            # so there is no real order-flow-imbalance signal available to
-            # compute here -- this is a genuine data-availability gap, not
-            # an oversight. check_flash_crash_shield requires BOTH ofi and
-            # vpin to be non-None before it evaluates anything, so the
-            # compound flash-crash shield still cannot trigger automatically
-            # even with vpin now real and persisted below; VPIN's persisted
-            # value retains standalone diagnostic worth on its own.
-            cb.update_metrics(
-                volatility_zscore=z_score,
-                vpin=vpin_value,
-                loss_velocity_per_min=loss_velocity_per_min,
-                account_equity=account_equity_for_update,
-                persist=True,
-            )
-            logger.debug(
-                "maybe_update_circuit_breaker: %s volatility Z-score=%.2f vpin=%s "
-                "loss_velocity_per_min=%s -> state=%s",
-                symbol, z_score, vpin_value, loss_velocity_per_min, cb.current_state.value,
-            )
-        except Exception as exc:  # noqa: BLE001 - CONSTRAINT #6, never break the timer loop
-            logger.warning(
-                "maybe_update_circuit_breaker: unexpected failure (%s); will retry "
-                "next tick.", type(exc).__name__, exc_info=True,
-            )
-
     def maybe_alert_on_pipeline_stall(self) -> None:
         """Read-only stall watchdog for a wedged pipeline cycle.
 
@@ -1080,8 +892,7 @@ class OrchestratorDaemon:
         going silent forever after the first alert.
 
         Called unconditionally from both ``_timer_loop`` per-wake spots
-        (self-gates internally, matching ``maybe_update_circuit_breaker``'s
-        own contract) AND from ``trigger_run`` -- ``settings.ORCHESTRATOR_INTERVAL_SECONDS``
+        (self-gates internally, like ``maybe_refresh_google_trends``) AND from ``trigger_run`` -- ``settings.ORCHESTRATOR_INTERVAL_SECONDS``
         defaults to 0 (on-demand only), where ``_timer_loop`` parks on an
         untimed wait and would otherwise never get a periodic chance to check.
         """
@@ -1338,6 +1149,300 @@ class OrchestratorDaemon:
                 pass
 
 
+    # ------------------------------------------------------------------
+    # Scheduled daily Robinhood device-approval login (step 5, decision 6)
+    # ------------------------------------------------------------------
+
+    def _scheduled_login_window(self) -> Optional[tuple[tuple[int, int], tuple[int, int]]]:
+        """``((start_h, start_m), (cutoff_h, cutoff_m))`` ET when the
+        scheduled login is enabled and both times are valid with the cut-off
+        strictly after the start, else ``None``. A login is only STARTED in
+        ``[start, cutoff)``. An invalid window warns once per value pair."""
+        if not settings.ROBINHOOD_SCHEDULED_LOGIN_ENABLED:
+            return None
+        raw = settings.ROBINHOOD_SCHEDULED_LOGIN_TIME_ET
+        raw_cutoff = settings.ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET
+        start = parse_scheduled_login_time(raw)
+        cutoff = parse_scheduled_login_time(raw_cutoff)
+        problem: Optional[str] = None
+        if start is None:
+            problem = (
+                f"ROBINHOOD_SCHEDULED_LOGIN_TIME_ET={raw!r} is not a valid HH:MM time"
+            )
+        elif cutoff is None:
+            problem = (
+                f"ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET={raw_cutoff!r} is not a valid "
+                "HH:MM time"
+            )
+        elif cutoff <= start:
+            problem = (
+                f"ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET={raw_cutoff!r} is not after "
+                f"ROBINHOOD_SCHEDULED_LOGIN_TIME_ET={raw!r}"
+            )
+        if problem is not None:
+            key = f"{raw!s}|{raw_cutoff!s}"
+            if self._scheduled_login_warned_value != key:
+                self._scheduled_login_warned_value = key
+                logger.warning("%s; the scheduled Robinhood login is disabled.", problem)
+            return None
+        return start, cutoff
+
+    def _scheduled_login_attempted_date(self) -> Optional[str]:
+        """The latest ET date (ISO) a scheduled login was attempted -- this
+        process's own claim, else the durable state file's (so a daemon
+        restart the same day does not prompt again)."""
+        durable = _read_scheduled_login_state().get("last_attempted_et_date")
+        durable = durable if isinstance(durable, str) else None
+        return max(filter(None, (self._scheduled_login_claimed_date, durable)), default=None)
+
+    def seconds_until_scheduled_login(self, now_utc: Optional[datetime] = None) -> Optional[float]:
+        """Seconds until the scheduled login is next due (``0.0`` if due now),
+        or ``None`` when disabled/invalid. Weekdays only (US/Eastern, no
+        holiday calendar); a weekday already attempted counts as done.
+        Used by ``_timer_loop`` to wake near the target time even when the
+        pipeline interval is much longer. Never raises."""
+        try:
+            window = self._scheduled_login_window()
+            if window is None:
+                return None
+            hm, cut = window
+            now_et = (now_utc or datetime.now(timezone.utc)).astimezone(_ET)
+            attempted = self._scheduled_login_attempted_date()
+            for offset in range(8):
+                day: date = now_et.date() + timedelta(days=offset)
+                if day.weekday() >= 5:
+                    continue
+                target = datetime.combine(day, dtime(hm[0], hm[1]), tzinfo=_ET)
+                if offset == 0:
+                    if attempted == day.isoformat():
+                        continue
+                    # Past today's cut-off: nothing more today, so the next
+                    # target is the next weekday's start (no repeated wakes
+                    # all evening).
+                    if now_et >= datetime.combine(day, dtime(cut[0], cut[1]), tzinfo=_ET):
+                        continue
+                    if now_et >= target:
+                        return 0.0
+                return max(0.0, (target - now_et).total_seconds())
+            return None  # pragma: no cover - a weekday always exists within 8 days
+        except Exception:  # noqa: BLE001 - CONSTRAINT #6
+            logger.warning("seconds_until_scheduled_login: unexpected failure", exc_info=True)
+            return None
+
+    def _bounded_wait_timeout(self, base: float) -> float:
+        """``base``, shortened so the timer loop wakes just after the
+        scheduled login is due. Exactly ``base`` when the scheduled login is
+        off, so the timer loop's pre-existing waits are unchanged."""
+        until = self.seconds_until_scheduled_login()
+        if until is None:
+            return base
+        return min(
+            base,
+            max(until + _SCHEDULED_LOGIN_WAKE_SLACK_SECONDS, _SCHEDULED_LOGIN_MIN_WAIT_SECONDS),
+        )
+
+    def _wait_out_interval(self, interval: float) -> bool:
+        """Wait ``interval`` seconds for the next interval cycle, waking early
+        (without shortening the cycle cadence) to run the scheduled login
+        when it falls inside the wait. Returns True if woken by
+        ``_wake_event`` (interval change or shutdown), False once the full
+        interval has elapsed. With the scheduled login off this is exactly
+        one ``_wake_event.wait(interval)`` -- the pre-existing behaviour."""
+        deadline = time.monotonic() + interval
+        timeout = self._bounded_wait_timeout(interval)
+        while True:
+            if self._wake_event.wait(timeout=timeout):
+                return True
+            if self._stop_event.is_set():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self.maybe_run_scheduled_robinhood_login()
+            timeout = self._bounded_wait_timeout(remaining)
+
+    def maybe_run_scheduled_robinhood_login(self, now_utc: Optional[datetime] = None) -> Optional[str]:
+        """Start the day's Robinhood device-approval login at the scheduled
+        time, so the approval push arrives when the operator can tap it
+        (shrink step 5, operator decision 6 -- replaces main.py's 08:45 ET
+        launchd run as the thing that triggers the daily prompt).
+
+        Gated on ``settings.ROBINHOOD_SCHEDULED_LOGIN_ENABLED`` (default
+        False -> returns immediately, no I/O). Fires at most once per US/
+        Eastern weekday, at/after ``ROBINHOOD_SCHEDULED_LOGIN_TIME_ET`` and
+        before ``ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET`` (default 18:00). After
+        the cut-off nothing is started AND the day is not claimed, so a
+        daemon first started in the evening does nothing that day and fires
+        at the next weekday's scheduled time. Inside the window the
+        day is claimed (in-process, then in
+        ``OUTPUT_DIR/robinhood_scheduled_login_state.json``) BEFORE anything
+        that could prompt, so neither a later wake nor a same-day daemon
+        restart prompts again -- whatever the outcome. Skips (still claiming
+        the day) when no credentials are configured or when the cached
+        account snapshot is already newer than today's scheduled time.
+
+        Non-blocking: ``data.robinhood_login.start_login("refresh")`` spawns
+        the killable worker and returns; a daemon thread watches the job and
+        logs/alerts the outcome. Single-flight: a refresh already running
+        (e.g. the webapp's Refresh button) is joined; a running connect is
+        left alone, as is a login running in ANOTHER process (cross-process
+        lock in ``data.robinhood_login``). Returns the outcome (``started``, ``skipped_fresh``,
+        ``skipped_no_credentials``, ``skipped_login_in_progress``,
+        ``start_failed``) or ``None`` when nothing was due. Never raises
+        into the timer loop.
+        """
+        try:
+            window = self._scheduled_login_window()
+            if window is None:
+                return None
+            hm, cut = window
+            now_et = (now_utc or datetime.now(timezone.utc)).astimezone(_ET)
+            if now_et.weekday() >= 5:
+                return None
+            target = datetime.combine(now_et.date(), dtime(hm[0], hm[1]), tzinfo=_ET)
+            if now_et < target:
+                return None
+            today = now_et.date().isoformat()
+            if self._scheduled_login_attempted_date() == today:
+                return None
+            cutoff = datetime.combine(now_et.date(), dtime(cut[0], cut[1]), tzinfo=_ET)
+            if now_et >= cutoff:
+                # After the evening cut-off: never prompt, and do NOT claim
+                # the day -- there is nothing to dedup, and the next attempt
+                # is simply the next weekday's scheduled time. Logged once
+                # per ET day per process.
+                if self._scheduled_login_cutoff_logged_date != today:
+                    self._scheduled_login_cutoff_logged_date = today
+                    logger.info(
+                        "Scheduled Robinhood login not started today: it is past "
+                        "the %02d:%02d ET cut-off. Next attempt: the next weekday "
+                        "at %02d:%02d ET.", cut[0], cut[1], hm[0], hm[1],
+                    )
+                return None
+
+            # Claim the day first -- see the docstring.
+            self._scheduled_login_claimed_date = today
+            _write_scheduled_login_state(
+                last_attempted_et_date=today, last_outcome="claimed",
+                job_id=None, last_error_code=None,
+            )
+
+            from data.brokerage_credentials import rh_credentials_present
+
+            if not rh_credentials_present():
+                logger.warning(
+                    "Scheduled Robinhood login skipped: RH_USERNAME/RH_PASSWORD "
+                    "are not configured."
+                )
+                _write_scheduled_login_state(last_outcome="skipped_no_credentials")
+                return "skipped_no_credentials"
+
+            fetched_at = _latest_account_snapshot_fetched_at()
+            if fetched_at is not None and fetched_at >= target.astimezone(timezone.utc):
+                logger.info(
+                    "Scheduled Robinhood login skipped: the account snapshot "
+                    "(%s) is already newer than today's %02d:%02d ET.",
+                    fetched_at.isoformat(), hm[0], hm[1],
+                )
+                _write_scheduled_login_state(last_outcome="skipped_fresh")
+                return "skipped_fresh"
+
+            from data.robinhood_login import RobinhoodLoginInProgress, start_login
+
+            try:
+                job = start_login("refresh")
+            except RobinhoodLoginInProgress as exc:
+                # exc.job is None when the running login belongs to ANOTHER
+                # process (cross-process lock); its job id is then in
+                # exc.owner (diagnostic sidecar, may be empty).
+                running_id = exc.job.job_id if exc.job is not None else exc.owner.get("job_id")
+                running_mode = exc.job.mode if exc.job is not None else exc.owner.get("mode", "?")
+                logger.info(
+                    "Scheduled Robinhood login skipped: a %s login (%s) is "
+                    "already in progress%s.", running_mode, running_id,
+                    "" if exc.job is not None else " in another process",
+                )
+                _write_scheduled_login_state(
+                    last_outcome="skipped_login_in_progress",
+                    job_id=running_id if isinstance(running_id, str) else None,
+                )
+                return "skipped_login_in_progress"
+            except Exception as exc:  # noqa: BLE001 - e.g. OSError from Popen
+                logger.error("Scheduled Robinhood login could not start: %s", exc)
+                _write_scheduled_login_state(last_outcome="start_failed")
+                self._send_scheduled_login_alert(
+                    "WARNING",
+                    "Scheduled Robinhood login could not start. Use Refresh in "
+                    "the webapp to log in.",
+                )
+                return "start_failed"
+
+            logger.info(
+                "Scheduled Robinhood login started (job %s): approve the push "
+                "in the Robinhood app within %ss.",
+                job.job_id, settings.RH_LOGIN_DEADLINE_SECONDS,
+            )
+            _write_scheduled_login_state(last_outcome="started", job_id=job.job_id)
+            self._send_scheduled_login_alert(
+                "INFO",
+                f"Robinhood login started: approve the push in the Robinhood "
+                f"app within {settings.RH_LOGIN_DEADLINE_SECONDS}s.",
+            )
+            threading.Thread(
+                target=self._watch_scheduled_login, args=(job.job_id,),
+                name="ScheduledRobinhoodLoginWatcher", daemon=True,
+            ).start()
+            return "started"
+        except Exception:  # noqa: BLE001 - CONSTRAINT #6, never break the timer loop
+            logger.warning("maybe_run_scheduled_robinhood_login: unexpected failure", exc_info=True)
+            return None
+
+    def _watch_scheduled_login(self, job_id: str) -> None:
+        """Wait for the scheduled login job to finish, then record and alert
+        its outcome. Bounded by the job's own RH_LOGIN_DEADLINE_SECONDS;
+        stops early on daemon shutdown. Never raises."""
+        try:
+            from data.robinhood_login import get_login_state
+
+            while True:
+                if self._stop_event.is_set():
+                    return
+                job = get_login_state(job_id)
+                if job is None:
+                    return
+                with job._lock:
+                    state, error_code = job.state, job.error_code
+                if state != "running":
+                    break
+                self._stop_event.wait(timeout=_SCHEDULED_LOGIN_WATCH_POLL_SECONDS)
+            _write_scheduled_login_state(last_outcome=state, last_error_code=error_code)
+            if state == "succeeded":
+                logger.info("Scheduled Robinhood login %s succeeded.", job_id)
+                self._send_scheduled_login_alert(
+                    "INFO", "Robinhood login succeeded; account snapshot refreshed.",
+                )
+            else:
+                logger.warning(
+                    "Scheduled Robinhood login %s ended %s (%s).", job_id, state, error_code,
+                )
+                self._send_scheduled_login_alert(
+                    "WARNING",
+                    f"Scheduled Robinhood login ended '{state}' ({error_code}). It "
+                    "will not retry today; use Refresh in the webapp to log in.",
+                )
+        except Exception:  # noqa: BLE001 - CONSTRAINT #6
+            logger.warning("scheduled Robinhood login watcher failed", exc_info=True)
+
+    @staticmethod
+    def _send_scheduled_login_alert(level: str, message: str) -> None:
+        """Best-effort operator alert; never raises."""
+        try:
+            from observability.alerts import send_alert
+
+            send_alert(level, message, dedup_key="robinhood_scheduled_login")
+        except Exception as exc:  # noqa: BLE001 - alerting is best-effort
+            logger.debug("scheduled Robinhood login alert failed: %s", exc)
+
     def _timer_loop(self) -> None:
         while not self._stop_event.is_set():
             # Clear BEFORE reading the interval. If set_interval() fires
@@ -1358,17 +1463,12 @@ class OrchestratorDaemon:
             # operator has explicitly set the flag to False to opt out.
             if settings.RUNTIME_FLAGS_REFRESH_ENABLED:
                 self.maybe_refresh_settings()
-            # maybe_update_circuit_breaker() gates on
-            # settings.CIRCUIT_BREAKER_ENABLED internally (unlike
-            # maybe_refresh_settings, which relies on its callers to gate) --
-            # see its own docstring. Called unconditionally here so it is a
-            # true no-op, not merely "never invoked," when the flag is off.
-            self.maybe_update_circuit_breaker()
             self.maybe_refresh_google_trends()
             self.maybe_dispatch_weekly_digest()
             # Same "called unconditionally, self-gates internally" contract --
             # see maybe_alert_on_pipeline_stall's own docstring.
             self.maybe_alert_on_pipeline_stall()
+            self.maybe_run_scheduled_robinhood_login()
             with self._lock:
                 interval = self._interval_seconds
             if self._stop_event.is_set():
@@ -1384,18 +1484,26 @@ class OrchestratorDaemon:
                 # for the full rationale; every check above already self-
                 # gates on its own settings flag, so a periodic wake-and-
                 # recheck costs nothing when they're disabled.
-                self._wake_event.wait(timeout=_PARKED_TIMER_POLL_SECONDS)
+                # Shortened (never lengthened) so the scheduled Robinhood
+                # login fires within seconds of its time; unchanged when off.
+                self._wake_event.wait(
+                    timeout=self._bounded_wait_timeout(_PARKED_TIMER_POLL_SECONDS)
+                )
                 continue
-            if self._wake_event.wait(timeout=interval):
+            # _wait_out_interval is one _wake_event.wait(interval) unless the
+            # scheduled Robinhood login falls inside this interval; then it
+            # wakes for it and resumes waiting to the SAME deadline, so the
+            # interval-cycle cadence is not shortened.
+            if self._wait_out_interval(interval):
                 continue  # interval changed OR shutting down -- re-check at the top
             if self._stop_event.is_set():
                 break
             if settings.RUNTIME_FLAGS_REFRESH_ENABLED:
                 self.maybe_refresh_settings()
-            self.maybe_update_circuit_breaker()
             self.maybe_refresh_google_trends()
             self.maybe_dispatch_weekly_digest()
             self.maybe_alert_on_pipeline_stall()
+            self.maybe_run_scheduled_robinhood_login()
             # ALREADY_RUNNING (previous interval cycle still in flight) is
             # expected and fine -- just proceed to the next wait.
             if is_automatic_run_gated(
@@ -1403,18 +1511,6 @@ class OrchestratorDaemon:
             ):
                 logger.debug("Market-hours gate: skipping interval cycle (outside 4am-8pm ET weekday window).")
                 continue
-            # Periodically evaluate and manage 0DTE exits (F5) during market hours.
-            # Runs on every interval tick during market hours for fast response
-            # to intraday profit targets and stop losses. Full options lifecycle
-            # (auto-exits, strategy auto-execution, delta hedging) runs on each
-            # full pipeline cycle in _run_one_cycle.
-            if getattr(settings, "OPTIONS_0DTE_ENABLED", False):
-                try:
-                    from pilots.zero_dte_engine import manage_0dte_exits
-                    manage_0dte_exits()
-                except Exception as exc:  # noqa: BLE001 - defensive only (CONSTRAINT #6)
-                    logger.debug("0DTE daemon periodic exit evaluation skipped: %s", exc)
-
             self.trigger_run(reason="interval")
 
     # ------------------------------------------------------------------

@@ -1,0 +1,980 @@
+"""Options-specific technical metrics (IV rank, GJR-GARCH volatility, options IV edge) plus the build_premium_directive helper that fuses GARCH sigma, an IVR proxy, Aroon+Coppock trend bias, ATM Black-Scholes Greeks, and a deterministic strategy directive into one hydrated row, and validate_directive_integrity which enforces the strike-grid and delta-target invariants. Uncomputable primitives degrade to NaN, never fabricated zeros."""
+
+# ==============================================================================
+# MODULE: TECHNICAL INDICATORS & OPTIONS STRATEGY ENGINE
+# File: technical_options_engine.py
+# Description: Implements advanced indicators (Aroon Oscillator, Coppock Curve, 
+#              Chandelier Exit), scaled GJR-GARCH(1,1) volatility models,
+#              Implied Volatility Rank (IVR), and Option Strategy Matrix matching config.py.
+# ==============================================================================
+
+import logging
+import math
+import numpy as np
+import pandas as pd
+from pilots.options_risk import calculate_black_scholes_greeks
+
+from typing import Dict, Any, List, Optional, Sequence
+from scipy.stats import norm
+from scipy.optimize import brentq
+
+from settings import settings
+
+# --- GLOBAL CONSTANTS ---
+RISK_FREE_RATE = settings.RISK_FREE_RATE
+TRADING_DAYS_PER_YEAR = 252
+
+
+# GJR-GARCH now lives in volatility/garch.py (2026-09, step 3d); the
+# arch import and its availability flag come from there.
+from volatility.garch import ARCH_AVAILABLE, GarchVolatilityEstimator  # noqa: F401
+
+# Set up module logger
+logger = logging.getLogger("TechnicalOptionsEngine")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+
+# The chandelier_exit pandas_ta patch is registered by trend_indicators
+# (moved there 2026-09, step 3d) on import.
+from trend_indicators import calculate_trend_exit_indicators  # noqa: E402
+
+
+class OptionsPricingRecommender:
+    def __init__(self, stock_price: float, risk_free_rate: float = RISK_FREE_RATE):
+        """
+        Initializes the options pricing engine.
+        
+        Variables:
+        stock_price (float): The current spot price of the underlying asset.
+        risk_free_rate (float): The annualized risk-free interest rate.
+        """
+        self.S = float(stock_price)
+        self.r = float(risk_free_rate)
+
+    def black_scholes_pricing_and_greeks(self, K: float, T: float, sigma: float, option_type: str = 'call') -> dict:
+        """
+        Analytically computes the theoretical option price and Greeks using the Black-Scholes PDE.
+        Delegates to the canonical pilots.options_risk implementation.
+        """
+        if option_type.lower() not in ['call', 'put']:
+            raise ValueError("option_type must be 'call' or 'put'")
+
+        # Prevent division by zero errors for expired options. Delta collapses
+        # to the ITM indicator (matching pilots/options_risk.py's canonical
+        # 0DTE/degenerate-sigma branches) rather than being hardcoded to 0.0.
+        if T <= 0:
+            delta = 1.0 if (option_type.lower() == 'call' and self.S > K) else (-1.0 if (option_type.lower() == 'put' and self.S < K) else 0.0)
+            return {'Price': max(0.0, self.S - K) if option_type.lower() == 'call' else max(0.0, K - self.S),
+                    'Delta': delta, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0, 'Rho': 0.0, 'ChanceOfProfit': 0.0}
+
+        if sigma <= 0 or np.isnan(sigma):
+            delta = 1.0 if (option_type.lower() == 'call' and self.S > K) else (-1.0 if (option_type.lower() == 'put' and self.S < K) else 0.0)
+            return {'Price': max(0.0, self.S - K) if option_type.lower() == 'call' else max(0.0, K - self.S),
+                    'Delta': delta, 'Gamma': 0.0, 'Vega': 0.0, 'Theta_Daily': 0.0, 'Rho': 0.0, 'ChanceOfProfit': 0.0}
+
+        greeks = calculate_black_scholes_greeks(spot=self.S, strike=K, t_years=T, sigma=sigma, option_type=option_type.lower(), r=self.r)
+        
+        # Chance of Profit (Probability of exceeding Break-Even)
+        chance_of_profit = 0.0
+        price = greeks['price']
+        if option_type.lower() == 'call':
+            break_even = K + price
+            d2_be = (np.log(self.S / break_even) + (self.r - 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+            chance_of_profit = norm.cdf(d2_be)
+        else:
+            break_even = K - price
+            if break_even <= 0:
+                chance_of_profit = 1.0
+            else:
+                d2_be = (np.log(self.S / break_even) + (self.r - 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+                chance_of_profit = norm.cdf(-d2_be)
+
+        return {
+            'Price': greeks['price'],
+            'Delta': greeks['delta'],
+            'Gamma': greeks['gamma'],
+            'Vega': greeks['vega_raw'],
+            'Theta_Daily': greeks['theta_daily'],
+            'Rho': greeks['rho'],
+            'ChanceOfProfit': chance_of_profit
+        }
+
+    def find_strike_for_delta(self, target_delta: float, T: float, sigma: float, option_type: str = 'call') -> float:
+        """
+        Uses SciPy's Brentq root-finding algorithm to find the exact strike price (K) 
+        that corresponds to the target Delta parameter.
+        """
+        def delta_difference(K_guess):
+            greeks = self.black_scholes_pricing_and_greeks(K_guess, T, sigma, option_type)
+            return greeks['Delta'] - target_delta
+
+        # Establish bracketing boundaries for the solver (10% of stock price to 300% of stock price)
+        lower_bound = self.S * 0.10
+        upper_bound = self.S * 3.00
+
+        try:
+            # Brentq finds the root (where delta_difference == 0)
+            optimal_strike = brentq(delta_difference, lower_bound, upper_bound)
+            # Round to the nearest $0.50 strike standard interval
+            return round(optimal_strike * 2) / 2
+        except ValueError:
+            # Fallback to current spot price if algorithm fails to converge
+            return round(self.S * 2) / 2
+
+    def calculate_realizable_theta(self, theoretical_theta: float, dte: int) -> float:
+        """
+        Applies empirical execution friction to theoretical theta.
+        Based on institutional decay hair-cuts varying inversely with DTE.
+        """
+        if dte <= 1:
+            haircut = 0.40 # 40% drag on 1 DTE
+        elif dte <= 7:
+            haircut = 0.22 # 22% drag on 7 DTE
+        elif dte <= 30:
+            haircut = 0.12 # 12% drag on 30 DTE
+        else:
+            haircut = 0.05 # 5% baseline drag
+
+        return theoretical_theta * (1.0 - haircut)
+
+    def generate_strategy_pricing_matrix(
+        self,
+        true_ivr: float,
+        current_iv: float,
+        trend_bias: str,
+        target_dte: int = 30,
+        vrp: Optional[float] = None,
+        macro_dto: Optional[Any] = None,
+        *,
+        ivr_sell_threshold: float = 50.0,
+        ivr_buy_threshold: float = 30.0,
+        delta_target_scale: float = 1.0,
+    ) -> dict:
+        """
+        Deterministic Options Matrix synthesizing Trend, True IVR, and Target Deltas
+        to output specific recommended Call and Put prices, gated by Volatility Risk Premium (VRP).
+
+        Optional (keyword-only) operator overrides — ALL default to the historical
+        hardcoded constants so the output is byte-identical when untouched:
+          * ``ivr_sell_threshold`` (default 50.0): true-IVR above which the engine
+            enters the premium-SELLING regime.
+          * ``ivr_buy_threshold`` (default 30.0): true-IVR below which the engine
+            enters the premium-BUYING (debit) regime.
+          * ``delta_target_scale`` (default 1.0): multiplies the short/long leg
+            delta targets (0.30/0.15 credit, 0.16/0.05 condor). The ATM target
+            (0.50) is definitional and stays fixed. ``validate_directive_integrity``
+            must receive the SAME scale so the delta-tolerance check stays consistent.
+        """
+        T = target_dte / 365.0
+        sigma = current_iv
+        
+        # The ultimate returned dictionary payload
+        directive = {
+            "Strategy": "Cash",
+            "Action": "Wait",
+            "Legs": [],
+            "Net_Premium": 0.0,
+            # NaN, not 0.0: only the CREDIT branches (Put/Call Credit Spread,
+            # Iron Condor) below ever compute a realizable theta. Debit
+            # spreads, Covered Call, and Cash never touch this key, so a 0.0
+            # initializer would read as "zero realizable theta" when the
+            # truth is "not computed for this strategy" (CONSTRAINT #4).
+            "Realizable_Daily_Theta": float("nan"),
+        }
+
+        if not math.isfinite(current_iv) or not math.isfinite(true_ivr):
+            return directive
+
+        # Defined Risk Parameters (Standard Target Deltas). ``delta_target_scale``
+        # (default 1.0 → byte-identical) widens/narrows the short/long leg deltas;
+        # ATM stays 0.50 by definition (scaling an at-the-money leg is meaningless).
+        SHORT_DELTA_TARGET = 0.30 * delta_target_scale
+        LONG_DELTA_TARGET = 0.15 * delta_target_scale
+        CONDOR_SHORT_TARGET = 0.16 * delta_target_scale
+        CONDOR_LONG_TARGET = 0.05 * delta_target_scale
+        ATM_DELTA_TARGET = 0.50
+
+        # Enforce VRP regime gate: only sell premium if true_ivr > 50, vrp > OPTIONS_VRP_THRESHOLD, vix < 30, not CREDIT EVENT
+        # `vrp is None` deliberately still SKIPS this gate (callers with no options
+        # chain to derive VRP from pass None explicitly to opt out of this one
+        # condition -- see the 3-of-4-gate callers in gui/panels/options_matrix.py,
+        # reporting/options_snapshot.py, investyo_mcp_server.py, options_ondemand.py,
+        # api/metrics_api.py). But a *computed* VRP that came back NaN (get_vrp()
+        # couldn't resolve an options-chain-derived IV) must fail closed (CONSTRAINT
+        # #6) rather than silently pass: `nan <= threshold` is always False in
+        # Python, so without this isfinite check an unmeasurable VRP looked
+        # identical to "comfortably above threshold". Matches the pattern already
+        # used correctly in execution/options_queue_builder.py::passes_premium_gate.
+        sell_premium_allowed = True
+        if vrp is not None and (not math.isfinite(vrp) or vrp <= settings.OPTIONS_VRP_THRESHOLD):
+            sell_premium_allowed = False
+        if macro_dto is not None:
+            vix = getattr(macro_dto, 'vix', 15.0)
+            regime = getattr(macro_dto, 'market_regime', 'RISK ON')
+            if vix >= 30.0 or regime == 'CREDIT EVENT':
+                sell_premium_allowed = False
+
+            # If HMM indicates high bear probability while market is not in full RECESSION, adapt options strategy pricing
+            risk_on_prob = getattr(macro_dto, 'hmm_risk_on_probability', 1.0)
+            if risk_on_prob is not None and risk_on_prob < 0.30 and regime != 'RECESSION':
+                trend_bias = 'Bearish'
+
+        if true_ivr > ivr_sell_threshold:
+            if not sell_premium_allowed:
+                return directive  # high IV but gated -> Cash / Wait (do not buy expensive options)
+            # HIGH IVR REGIME: Premium Selling Environment
+            if trend_bias == 'Bullish':
+                directive["Strategy"] = "Put Credit Spread"
+                directive["Action"] = "Sell to Open"
+                
+                # Leg 1: Short Put
+                k_short = self.find_strike_for_delta(-SHORT_DELTA_TARGET, T, sigma, 'put')
+                short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'put')
+                
+                # Leg 2: Long Put (Protection)
+                k_long = self.find_strike_for_delta(-LONG_DELTA_TARGET, T, sigma, 'put')
+                long_metrics = self.black_scholes_pricing_and_greeks(k_long, T, sigma, 'put')
+
+                directive["Legs"] = [
+                    {"Side": "Short", "Type": "Put", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)},
+                    {"Side": "Long", "Type": "Put", "Strike": k_long, "Price": round(long_metrics['Price'], 2), "Delta": round(long_metrics['Delta'], 2)}
+                ]
+                directive["Net_Premium"] = round(short_metrics['Price'] - long_metrics['Price'], 2)
+                raw_theta = short_metrics['Theta_Daily'] - long_metrics['Theta_Daily']
+                directive["Realizable_Daily_Theta"] = round(self.calculate_realizable_theta(raw_theta, target_dte), 4)
+
+            elif trend_bias == 'Bearish':
+                directive["Strategy"] = "Call Credit Spread"
+                directive["Action"] = "Sell to Open"
+                
+                # Leg 1: Short Call
+                k_short = self.find_strike_for_delta(SHORT_DELTA_TARGET, T, sigma, 'call')
+                short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'call')
+                
+                # Leg 2: Long Call (Protection)
+                k_long = self.find_strike_for_delta(LONG_DELTA_TARGET, T, sigma, 'call')
+                long_metrics = self.black_scholes_pricing_and_greeks(k_long, T, sigma, 'call')
+
+                directive["Legs"] = [
+                    {"Side": "Short", "Type": "Call", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)},
+                    {"Side": "Long", "Type": "Call", "Strike": k_long, "Price": round(long_metrics['Price'], 2), "Delta": round(long_metrics['Delta'], 2)}
+                ]
+                directive["Net_Premium"] = round(short_metrics['Price'] - long_metrics['Price'], 2)
+                raw_theta = short_metrics['Theta_Daily'] - long_metrics['Theta_Daily']
+                directive["Realizable_Daily_Theta"] = round(self.calculate_realizable_theta(raw_theta, target_dte), 4)
+
+            else: # Neutral Trend Bias
+                directive["Strategy"] = "Iron Condor"
+                directive["Action"] = "Sell to Open"
+                
+                # Put Spread Side
+                k_short_put = self.find_strike_for_delta(-CONDOR_SHORT_TARGET, T, sigma, 'put')
+                short_put_metrics = self.black_scholes_pricing_and_greeks(k_short_put, T, sigma, 'put')
+                k_long_put = self.find_strike_for_delta(-CONDOR_LONG_TARGET, T, sigma, 'put')
+                long_put_metrics = self.black_scholes_pricing_and_greeks(k_long_put, T, sigma, 'put')
+                
+                # Call Spread Side
+                k_short_call = self.find_strike_for_delta(CONDOR_SHORT_TARGET, T, sigma, 'call')
+                short_call_metrics = self.black_scholes_pricing_and_greeks(k_short_call, T, sigma, 'call')
+                k_long_call = self.find_strike_for_delta(CONDOR_LONG_TARGET, T, sigma, 'call')
+                long_call_metrics = self.black_scholes_pricing_and_greeks(k_long_call, T, sigma, 'call')
+
+                directive["Legs"] = [
+                    {"Side": "Short", "Type": "Put", "Strike": k_short_put, "Price": round(short_put_metrics['Price'], 2)},
+                    {"Side": "Long", "Type": "Put", "Strike": k_long_put, "Price": round(long_put_metrics['Price'], 2)},
+                    {"Side": "Short", "Type": "Call", "Strike": k_short_call, "Price": round(short_call_metrics['Price'], 2)},
+                    {"Side": "Long", "Type": "Call", "Strike": k_long_call, "Price": round(long_call_metrics['Price'], 2)}
+                ]
+                
+                credit_put = short_put_metrics['Price'] - long_put_metrics['Price']
+                credit_call = short_call_metrics['Price'] - long_call_metrics['Price']
+                directive["Net_Premium"] = round(credit_put + credit_call, 2)
+                
+                raw_theta = (short_put_metrics['Theta_Daily'] - long_put_metrics['Theta_Daily']) + (short_call_metrics['Theta_Daily'] - long_call_metrics['Theta_Daily'])
+                directive["Realizable_Daily_Theta"] = round(self.calculate_realizable_theta(raw_theta, target_dte), 4)
+
+        elif true_ivr < ivr_buy_threshold:
+            # LOW IVR REGIME: Premium Buying Environment
+            if trend_bias == 'Bullish':
+                directive["Strategy"] = "Call Debit Spread"
+                directive["Action"] = "Buy to Open"
+                
+                # Leg 1: Long Call (ATM)
+                k_long = self.find_strike_for_delta(ATM_DELTA_TARGET, T, sigma, 'call')
+                long_metrics = self.black_scholes_pricing_and_greeks(k_long, T, sigma, 'call')
+                
+                # Leg 2: Short Call (Out of the Money to finance)
+                k_short = self.find_strike_for_delta(SHORT_DELTA_TARGET, T, sigma, 'call')
+                short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'call')
+                
+                directive["Legs"] = [
+                    {"Side": "Long", "Type": "Call", "Strike": k_long, "Price": round(long_metrics['Price'], 2), "Delta": round(long_metrics['Delta'], 2)},
+                    {"Side": "Short", "Type": "Call", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)}
+                ]
+                directive["Net_Premium"] = round((long_metrics['Price'] - short_metrics['Price']) * -1.0, 2)
+
+            elif trend_bias == 'Bearish':
+                directive["Strategy"] = "Put Debit Spread"
+                directive["Action"] = "Buy to Open"
+
+                k_long = self.find_strike_for_delta(-ATM_DELTA_TARGET, T, sigma, 'put')
+                long_metrics = self.black_scholes_pricing_and_greeks(k_long, T, sigma, 'put')
+
+                k_short = self.find_strike_for_delta(-SHORT_DELTA_TARGET, T, sigma, 'put')
+                short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'put')
+
+                directive["Legs"] = [
+                    {"Side": "Long", "Type": "Put", "Strike": k_long, "Price": round(long_metrics['Price'], 2), "Delta": round(long_metrics['Delta'], 2)},
+                    {"Side": "Short", "Type": "Put", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)}
+                ]
+                directive["Net_Premium"] = round((long_metrics['Price'] - short_metrics['Price']) * -1.0, 2)
+            else:
+                directive["Strategy"] = "Cash"
+                directive["Action"] = "Wait"
+
+        else:
+            # NEUTRAL IVR REGIME
+            if trend_bias == 'Bullish':
+                if sell_premium_allowed:
+                    directive["Strategy"] = "Covered Call"
+                    directive["Action"] = "Sell to Open"
+                    
+                    k_short = self.find_strike_for_delta(SHORT_DELTA_TARGET, T, sigma, 'call')
+                    short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'call')
+                    
+                    directive["Legs"] = [
+                        {"Side": "Short", "Type": "Call", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)}
+                    ]
+                    directive["Net_Premium"] = round(short_metrics['Price'], 2)
+                else:
+                    directive["Strategy"] = "Cash"
+                    directive["Action"] = "Wait"
+            elif trend_bias == 'Bearish':
+                directive["Strategy"] = "Put Debit Spread"
+                directive["Action"] = "Buy to Open"
+                
+                k_long = self.find_strike_for_delta(-ATM_DELTA_TARGET, T, sigma, 'put')
+                long_metrics = self.black_scholes_pricing_and_greeks(k_long, T, sigma, 'put')
+                
+                k_short = self.find_strike_for_delta(-SHORT_DELTA_TARGET, T, sigma, 'put')
+                short_metrics = self.black_scholes_pricing_and_greeks(k_short, T, sigma, 'put')
+                
+                directive["Legs"] = [
+                    {"Side": "Long", "Type": "Put", "Strike": k_long, "Price": round(long_metrics['Price'], 2), "Delta": round(long_metrics['Delta'], 2)},
+                    {"Side": "Short", "Type": "Put", "Strike": k_short, "Price": round(short_metrics['Price'], 2), "Delta": round(short_metrics['Delta'], 2)}
+                ]
+                directive["Net_Premium"] = round((long_metrics['Price'] - short_metrics['Price']) * -1.0, 2)
+            else:
+                directive["Strategy"] = "Cash"
+                directive["Action"] = "Wait"
+
+        return directive
+
+
+class TechnicalOptionsEngine:
+    """
+    Orchestrates calculation of advanced technical indicators, GJR-GARCH volatility modeling,
+    Implied Volatility Rank (IVR), and option strategy recommendations.
+    """
+
+    # sanitize_ohlcv, the GJR-GARCH estimators and calculate_indicators moved
+    # to core modules in 2026-09 (step 3d) so the equity path stops importing
+    # this options engine. These delegates keep the options desk working until
+    # it moves to legacy/ in step 4.
+    sanitize_ohlcv = staticmethod(GarchVolatilityEstimator.sanitize_ohlcv)
+
+    def calculate_indicators(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Aroon/Coppock/Chandelier -- see ``trend_indicators``."""
+        return calculate_trend_exit_indicators(df)
+
+    def estimate_gjr_garch_volatility(self, df: pd.DataFrame) -> float:
+        """Day-ahead GJR-GARCH vol -- see ``volatility.garch``."""
+        return GarchVolatilityEstimator().estimate_gjr_garch_volatility(df)
+
+    def estimate_gjr_garch_volatility_term_structure(
+        self, df: pd.DataFrame, horizons: Sequence[int] = (1,)
+    ) -> Dict[int, float]:
+        """Per-horizon GJR-GARCH vol -- see ``volatility.garch``."""
+        return GarchVolatilityEstimator().estimate_gjr_garch_volatility_term_structure(df, horizons=horizons)
+
+    def calculate_realized_vol_rank(self, df: pd.DataFrame, current_vol: float) -> float:
+        """
+        Calculates the Realized Volatility Rank proxy by comparing current annualized
+        volatility against the 52-week historical rolling annualized volatility range (252 trading days).
+        """
+        df_clean = self.sanitize_ohlcv(df)
+        if len(df_clean) < 22:
+            return 50.0
+
+        returns = df_clean['Close'].pct_change().dropna()
+        if len(returns) < 20:
+            return 50.0
+
+        # Calculate 20-day rolling historical annualized volatility series over the last 252 days
+        rolling_vol = returns.rolling(window=20).std() * np.sqrt(252)
+        rolling_vol = rolling_vol.dropna().tail(252)
+
+        if rolling_vol.empty:
+            return 50.0
+
+        vol_min = rolling_vol.min()
+        vol_max = rolling_vol.max()
+
+        if vol_max == vol_min:
+            return 50.0
+
+        # Rank the current volatility within the range
+        realized_vol_rank = ((current_vol - vol_min) / (vol_max - vol_min)) * 100.0
+        return float(max(0.0, min(100.0, realized_vol_rank)))
+
+
+    def generate_option_strategy_matrix(
+        self, 
+        true_ivr: float, 
+        aroon_osc: float, 
+        coppock_val: float, 
+        stock_price: float = 100.0, 
+        current_iv: float = 0.20,
+        target_dte: int = 30,
+        risk_free_rate: float = RISK_FREE_RATE,
+        vrp: Optional[float] = None,
+        macro_dto: Optional[Any] = None
+    ) -> str:
+        """
+        Automated Option Strategy Matrix upgraded to Quantitative Option Pricing and Strike Recommendation.
+        Returns detailed quantitative recommendations based on Black-Scholes pricing and Delta root-finding.
+        """
+        # Determine Trend
+        if aroon_osc > 0 and coppock_val > 0:
+            trend_bias = "Bullish"
+        elif aroon_osc < 0 and coppock_val < 0:
+            trend_bias = "Bearish"
+        else:
+            trend_bias = "Neutral"
+
+        # Instantiate recommender
+        recommender = OptionsPricingRecommender(stock_price=stock_price, risk_free_rate=risk_free_rate)
+        
+        # Get option directive dictionary
+        directive = recommender.generate_strategy_pricing_matrix(
+            true_ivr=true_ivr, current_iv=current_iv, trend_bias=trend_bias, target_dte=target_dte,
+            vrp=vrp, macro_dto=macro_dto
+        )
+        
+        strategy = directive.get("Strategy", "Cash")
+        action = directive.get("Action", "Wait")
+        net_prem = directive.get("Net_Premium", 0.0)
+        theta = directive.get("Realizable_Daily_Theta", 0.0)
+        legs = directive.get("Legs", [])
+        
+        if not legs or strategy == "Cash":
+            return f"Cash (Wait)"
+            
+        legs_str = ", ".join([
+            f"{leg['Side']} {leg['Type']} K={leg['Strike']:.2f} @ ${leg['Price']:.2f}"
+            for leg in legs
+        ])
+        
+        if np.isfinite(theta) and theta != 0.0:
+            return f"{action} {strategy}: {legs_str} (Net Premium: ${net_prem:.2f}, Realizable Daily Theta: ${theta:.4f})"
+        else:
+            return f"{action} {strategy}: {legs_str} (Net Premium: ${net_prem:.2f})"
+
+
+# =============================================================================
+# PREMIUM DIRECTIVE HELPER
+# Public, GUI- and audit-friendly wrapper that fuses GJR-GARCH sigma, realized-
+# vol IVR proxy, Aroon+Coppock trend bias, full ATM Black-Scholes Greeks, and
+# the deterministic strategy matrix into a single dict suitable for hydrating a
+# DataGrid row.  Centralised here (rather than duplicated in gui/panels.py) so
+# the Gravity AI Review Suite can call the *exact same* code path and assert
+# the matrix integrity invariants (strike grid, delta targets, regime gate).
+# =============================================================================
+
+# Conventional Black-Scholes deltas for each (strategy, side, type) tuple.
+# Iron Condor short/long deltas (0.16 / 0.05) and credit-spread deltas
+# (0.30 / 0.15) mirror the targets used inside
+# ``OptionsPricingRecommender.generate_strategy_pricing_matrix``.
+EXPECTED_DELTA_TARGETS: Dict[tuple, float] = {
+    ("Put Credit Spread", "Short", "Put"): -0.30,
+    ("Put Credit Spread", "Long", "Put"): -0.15,
+    ("Call Credit Spread", "Short", "Call"): 0.30,
+    ("Call Credit Spread", "Long", "Call"): 0.15,
+    ("Iron Condor", "Short", "Put"): -0.16,
+    ("Iron Condor", "Long", "Put"): -0.05,
+    ("Iron Condor", "Short", "Call"): 0.16,
+    ("Iron Condor", "Long", "Call"): 0.05,
+    ("Covered Call", "Short", "Call"): 0.30,
+    ("Call Debit Spread", "Long", "Call"): 0.50,
+    ("Call Debit Spread", "Short", "Call"): 0.30,
+    ("Put Debit Spread", "Long", "Put"): -0.50,
+    ("Put Debit Spread", "Short", "Put"): -0.30,
+}
+
+# Standard equity option strike grid in USD.  Real exchange grids vary by
+# underlying price (often $1 / $2.50 / $5 above $100), but $0.50 is the
+# tightest grid commonly listed for liquid names; any rounded strike that
+# satisfies the $0.50 grid is, by definition, also on every coarser grid.
+STRIKE_GRID_USD: float = 0.50
+
+
+def _on_strike_grid(strike: float, grid: float = STRIKE_GRID_USD) -> bool:
+    """True iff ``strike`` lies on a multiple of ``grid`` (within FP epsilon)."""
+    if not np.isfinite(strike) or grid <= 0:
+        return False
+    remainder = abs(strike / grid - round(strike / grid))
+    return remainder < 1e-6
+
+
+def validate_directive_integrity(
+    directive: Dict[str, Any],
+    *,
+    delta_tolerance: float = 0.05,
+    strike_grid: float = STRIKE_GRID_USD,
+    delta_target_scale: float = 1.0,
+) -> Dict[str, Any]:
+    """Audit a strategy directive against the matrix-integrity invariants.
+
+    Returns a dict ``{"ok": bool, "issues": list[str], "checks": dict}`` so
+    callers can both branch on the boolean and display a per-leg breakdown.
+    Cash / Wait directives are treated as trivially valid.
+
+    Invariants enforced:
+      * Every leg strike lies on the ``strike_grid`` (default $0.50).
+      * Where the leg carries a resolved ``Delta`` and the strategy/side/type
+        combination has a conventional target in
+        :data:`EXPECTED_DELTA_TARGETS`, ``|delta - target| <= delta_tolerance``.
+
+    The delta check is skipped (not failed) when the leg dict omits ``Delta``
+    — Iron Condor legs in the current engine intentionally omit it.  This
+    means callers should treat the function as a strict *upper-bound* check:
+    a PASS guarantees correctness for the present leg payload, but never
+    fabricates a verdict against a missing field (CONSTRAINT #4).
+    """
+    issues: list[str] = []
+    checks: list[Dict[str, Any]] = []
+    strategy = directive.get("Strategy", "Cash")
+    legs = directive.get("Legs", []) or []
+
+    if strategy == "Cash" or not legs:
+        return {"ok": True, "issues": [], "checks": []}
+
+    for leg in legs:
+        strike = float(leg.get("Strike", float("nan")))
+        side = str(leg.get("Side", ""))
+        typ = str(leg.get("Type", ""))
+        on_grid = _on_strike_grid(strike, strike_grid)
+        delta_ok: Optional[bool] = None
+        target = EXPECTED_DELTA_TARGETS.get((strategy, side, typ))
+        # Mirror ``generate_strategy_pricing_matrix``'s ``delta_target_scale``:
+        # scale non-ATM targets by the same factor so an operator-widened target
+        # delta stays consistent between generation and validation. ATM legs
+        # (|target| == 0.50) are definitional and never scaled.
+        if target is not None and abs(abs(target) - 0.50) > 1e-9:
+            target = target * delta_target_scale
+        if "Delta" in leg and target is not None:
+            delta = float(leg["Delta"])
+            delta_ok = abs(delta - target) <= delta_tolerance
+            if not delta_ok:
+                issues.append(
+                    f"{strategy} {side} {typ} K={strike:.2f}: delta {delta:+.3f} "
+                    f"deviates from target {target:+.2f} by > {delta_tolerance:.2f}"
+                )
+        if not on_grid:
+            issues.append(
+                f"{strategy} {side} {typ} K={strike:.4f} is off the ${strike_grid:.2f} grid"
+            )
+        checks.append(
+            {
+                "Side": side,
+                "Type": typ,
+                "Strike": strike,
+                "OnGrid": on_grid,
+                "DeltaOK": delta_ok,
+                "Delta": leg.get("Delta"),
+                "Target": target,
+            }
+        )
+
+    return {"ok": not issues, "issues": issues, "checks": checks}
+
+
+def _determine_trend_bias(aroon_osc: float, coppock_val: float) -> str:
+    """Deterministic trend bias from Aroon Oscillator + Coppock Curve sign."""
+    if aroon_osc > 0 and coppock_val > 0:
+        return "Bullish"
+    if aroon_osc < 0 and coppock_val < 0:
+        return "Bearish"
+    return "Neutral"
+
+
+def build_premium_directive(
+    symbol: str,
+    bars: pd.DataFrame,
+    *,
+    spot_price: float,
+    is_stale: bool = False,
+    target_dte: int = 30,
+    macro_dto: Optional[Any] = None,
+    vrp: Optional[float] = None,
+    risk_free_rate: float = RISK_FREE_RATE,
+    ivr_sell_threshold: float = 50.0,
+    ivr_buy_threshold: float = 30.0,
+    delta_target_scale: float = 1.0,
+    delta_tolerance: float = 0.05,
+    strike_grid: float = STRIKE_GRID_USD,
+    true_ivr_enabled: Optional[bool] = None,
+    data_engine: Optional[Any] = None,
+    iv_history_store: Optional[Any] = None,
+    as_of_date: Optional[str] = None,
+    altman_z_score: Optional[float] = None,
+    piotroski_f_score: Optional[int] = None,
+    net_debt_ebitda: Optional[float] = None,
+    fcf_yield: Optional[float] = None,
+    days_to_earnings: Optional[int] = None,
+    realized_vol_30d: Optional[float] = None,
+    analyst_target_consensus: Optional[float] = None,
+    analyst_target_upside: Optional[float] = None,
+    analyst_grade_score: Optional[float] = None,
+    news_snippets: Optional[List[Dict[str, Any]]] = None,
+    peers_list: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Compute a fully-hydrated premium-selling row for one symbol.
+
+    Wraps :class:`TechnicalOptionsEngine` + :class:`OptionsPricingRecommender`
+    into a single dict containing both the diagnostic feature columns the
+    Command Center renders (sigma, IVR proxy, trend bias, ATM Greeks) and the
+    actionable strategy directive (legs, net premium, realizable daily theta).
+
+    Parameters
+    ----------
+    symbol :
+        Ticker label (used only for display / dead-letter logging).
+    bars :
+        OHLCV DataFrame with at least 22 rows; the same shape returned by
+        :meth:`data.market_data.CompositeProvider.get_intraday_bars`.
+    spot_price :
+        Latest mid price for the underlying.
+    is_stale :
+        Surfaced verbatim into the row so the GUI can flag delayed quotes.
+    target_dte, macro_dto, vrp, risk_free_rate :
+        Forwarded to
+        :meth:`OptionsPricingRecommender.generate_strategy_pricing_matrix`.
+    ivr_sell_threshold, ivr_buy_threshold, delta_target_scale :
+        Optional operator overrides forwarded to the recommender (see that
+        method's docstring). ``delta_target_scale`` is ALSO forwarded to
+        :func:`validate_directive_integrity` so the integrity verdict stays
+        consistent with the (scaled) target deltas. All default to the engine
+        constants → byte-identical output when untouched.
+    delta_tolerance, strike_grid :
+        Forwarded to :func:`validate_directive_integrity` so the per-run
+        matrix-integrity check (delta-target tolerance + strike grid) is
+        operator-adjustable. Default to the engine constants.
+    true_ivr_enabled :
+        Tri-state override for ``settings.OPTIONS_TRUE_IVR_ENABLED``: ``None``
+        (default) reads the live setting; an explicit ``True``/``False`` lets
+        callers/tests force the branch without monkeypatching settings. When
+        effectively ``False`` (the platform default), the real-IVR block below
+        never runs and this function is byte-identical to before the flag
+        existed.
+    data_engine, iv_history_store :
+        Injection points for the real-IVR path (mainly for tests). When the
+        flag is on and either is left ``None``, a fresh, lightweight
+        ``data_engine.DataEngine(fred_api_key="")`` (no network calls at
+        construction — only ``fetch_options_chain`` touches the network) and
+        ``volatility.iv_engine.IVHistoryStore()`` (the SAME on-disk table
+        ``pipeline/production_steps.py::OptionsAnalysisStep`` already writes
+        to) are constructed. ``data/market_data.py``'s ``CompositeProvider`` —
+        the convention-mandated provider for GUI/MCP-path quote/bar/
+        fundamentals fetches — exposes no chain-shaped method at all, so
+        reusing/extending it here would contradict its own contract; a fresh
+        ``DataEngine`` scoped to this one call is the least-invasive fit that
+        matches what ``OptionsAnalysisStep`` already does.
+    as_of_date :
+        Explicit ``YYYY-MM-DD`` cutoff for the real-IVR lookup (mainly for
+        tests / historical replays). Defaults to ``bars.index[-1]`` — the
+        latest bar date — matching ``OptionsAnalysisStep``'s own convention.
+    altman_z_score, piotroski_f_score, net_debt_ebitda, fcf_yield :
+        FMP-sourced fundamental-health overlays (``/financial-scores`` and
+        ``/ratios-ttm``), gated end-to-end by ``settings.
+        FMP_OPTIONS_HEALTH_ENABLED`` (default ``False``). This function is a
+        PURE, no-I/O helper — it never fetches these itself; the one
+        production caller, ``reporting/options_snapshot.py::write_options_matrix``,
+        fetches them via ``data.fmp_feeds_company.fetch_financial_scores`` /
+        ``fetch_key_ratios_ttm`` when the flag is on and passes them through
+        as plain kwargs. All four default to ``None`` and are copied verbatim
+        onto the returned row (``Altman_Z_Score``, ``Piotroski_F_Score``,
+        ``Net_Debt_EBITDA``, ``FCF_Yield``) — never fabricated, never
+        recomputed here (CONSTRAINT #4).
+    days_to_earnings :
+        Days until the symbol's next scheduled earnings event, as of the
+        caller's "as of" date. Sourced from the EXISTING earnings-events
+        store (``settings.FMP_EARNINGS_ENABLED`` — see
+        ``pipeline/production_steps.py``'s earnings write-back for the
+        identical read pattern), not re-fetched here. A publicly scheduled
+        future date is not lookahead (see that module's docstring for the
+        four-rule contract); optional, defaults to ``None`` when the flag is
+        off or no upcoming event is known. Drives ``Earnings_Risk`` and the
+        earnings-proximity entry in ``Integrity_Issues`` below — see the
+        step-6 comment for how that interacts with ``Integrity_OK``.
+    realized_vol_30d :
+        FMP's 30-day realized-volatility/standard-deviation reading
+        (``/standard-deviation``, ``data.fmp_feeds_market.fetch_realized_volatility``
+        → ``hv_30``), gated by the same ``FMP_OPTIONS_HEALTH_ENABLED`` flag.
+        Diagnostic passthrough only — copied verbatim onto
+        ``Realized_Vol_30D``. NOT used as a third fallback tier ahead of the
+        hardcoded 50.0 neutral default in step 5 below: FMP's endpoint
+        returns a single current standard-deviation reading with no
+        historical baseline this function can rank it against locally, and
+        fabricating a percentile from one data point would violate
+        CONSTRAINT #4. Defaults to ``None``.
+    analyst_target_consensus, analyst_target_upside, analyst_grade_score :
+        FMP-sourced analyst price-target consensus + upside-vs-spot + grade
+        score, gated by the pre-existing ``settings.FMP_ANALYST_ENABLED``
+        (no new flag — this reuses the SAME feature FMP_ANALYST_ENABLED
+        already gates for the main dashboard's diagnostic columns). Unlike
+        the FMP-health kwargs above, these are NOT fetched fresh for the
+        options matrix at all — ``reporting/options_snapshot.py::
+        write_options_matrix`` reads the EXISTING durable analyst-snapshot
+        table (``HistoricalStore.get_analyst_snapshot``, populated earlier in
+        the same cycle by ``pipeline/production_steps.py::_apply_fmp_
+        analyst``) and computes ``analyst_target_upside`` locally from that
+        snapshot's ``target_consensus`` against the current quote price,
+        mirroring ``_apply_fmp_analyst``'s own upside calculation exactly.
+        This function remains a PURE, no-I/O passthrough — all three default
+        to ``None`` and are copied verbatim onto the returned row
+        (``Analyst_Target_Consensus``, ``Analyst_Target_Upside``,
+        ``Analyst_Grade_Score``), never recomputed here (CONSTRAINT #4).
+    news_snippets, peers_list :
+        Optional pass-throughs (FMP stock-news headlines / peer-group
+        tickers) surfaced verbatim onto ``News_Snippets`` (default ``[]``,
+        never ``None``) and ``Peers`` (default ``[]``, never ``None``) for
+        GUI/MCP display. Never fetched by this function — no production
+        caller wires these yet, so they are permanently empty unless a
+        future caller passes them explicitly.
+
+    Returns
+    -------
+    dict
+        Always a *complete* row; numeric fields are ``float('nan')`` when the
+        underlying primitive could not be computed (never fabricated as 0.0,
+        CONSTRAINT #4).  The ``"integrity"`` sub-dict is the output of
+        :func:`validate_directive_integrity` so callers can show pass/fail
+        without re-walking the legs. ``True_IVR`` is the opt-in real,
+        options-chain-derived IV rank (NaN unless
+        ``settings.OPTIONS_TRUE_IVR_ENABLED`` is on AND a chain fetch +
+        history lookup both succeeded) — surfaced ALONGSIDE ``IVR_Proxy``
+        (the realized-vol proxy, untouched) rather than replacing it, so
+        provenance stays honest.
+    """
+    toe = TechnicalOptionsEngine()
+    nan = float("nan")
+    has_earnings_risk = bool(days_to_earnings is not None and 0 <= days_to_earnings <= target_dte)
+    row: Dict[str, Any] = {
+
+        "Symbol": symbol,
+        "Price": float(spot_price) if np.isfinite(spot_price) else nan,
+        "Stale": bool(is_stale),
+        "Sigma_GARCH": nan,
+        "IVR_Proxy": nan,
+        "True_IVR": nan,
+        "Aroon_Oscillator": nan,
+        "Coppock_Curve": nan,
+        "Trend_Bias": "Neutral",
+        "Strategy": "Cash",
+        "Action": "Wait",
+        "Net_Premium": nan,
+        "Realizable_Daily_Theta": nan,
+        "ATM_Delta": nan,
+        "ATM_Gamma": nan,
+        "ATM_Vega": nan,
+        "ATM_Theta_Daily": nan,
+        "Short_Strike": nan,
+        "Long_Strike": nan,
+        "Short_Delta": nan,
+        "Long_Delta": nan,
+        "Legs": [],
+        "Integrity_OK": True,
+        "Integrity_Issues": [],
+        "Altman_Z_Score": altman_z_score,
+        "Piotroski_F_Score": piotroski_f_score,
+        "Net_Debt_EBITDA": net_debt_ebitda,
+        "FCF_Yield": fcf_yield,
+        "Days_To_Earnings": days_to_earnings,
+        "Earnings_Risk": has_earnings_risk,
+        "Realized_Vol_30D": realized_vol_30d,
+        "Analyst_Target_Consensus": analyst_target_consensus,
+        "Analyst_Target_Upside": analyst_target_upside,
+        "Analyst_Grade_Score": analyst_grade_score,
+        "News_Snippets": news_snippets or [],
+        "Peers": peers_list or [],
+    }
+
+    # 1) Volatility (GJR-GARCH) — falls back to 20-day realized inside the engine.
+    try:
+        sigma = float(toe.estimate_gjr_garch_volatility(bars))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("GJR-GARCH failed for %s: %s", symbol, exc)
+        sigma = nan
+    row["Sigma_GARCH"] = sigma
+
+    # 2) Realized-Vol IVR proxy (true IVR requires an options chain).
+    if np.isfinite(sigma):
+        try:
+            row["IVR_Proxy"] = float(toe.calculate_realized_vol_rank(bars, sigma))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("IVR proxy failed for %s: %s", symbol, exc)
+
+    # 2b) True IVR (opt-in, real options-chain-derived — settings.
+    # OPTIONS_TRUE_IVR_ENABLED). Independent of the GARCH sigma computed in
+    # step 1 above: a live options chain is a different data source entirely,
+    # so this attempts a real IV rank even on a GARCH failure. Degrades to NaN
+    # (never fabricated, never raises — CONSTRAINT #4/#6) on ANY failure: no
+    # chain data, an empty/warm-start iv_history table, a network error, or
+    # any other exception. Flag off (the default) => this block never runs =>
+    # byte-identical to the pre-existing IVR_Proxy-only behavior.
+    true_ivr_flag = (
+        settings.OPTIONS_TRUE_IVR_ENABLED if true_ivr_enabled is None else bool(true_ivr_enabled)
+    )
+    if true_ivr_flag and np.isfinite(row["Price"]) and bars is not None and not bars.empty:
+        try:
+            from volatility.iv_engine import IVHistoryStore, calculate_true_ivr, get_30d_atm_iv
+
+            de = data_engine
+            if de is None:
+                from data_engine import DataEngine
+
+                de = DataEngine(fred_api_key="")
+            store = iv_history_store
+            if store is None:
+                store = IVHistoryStore()
+
+            resolved_as_of = as_of_date or bars.index[-1].strftime("%Y-%m-%d")
+            current_iv = get_30d_atm_iv(de, symbol, resolved_as_of, spot_price=row["Price"])
+            if np.isfinite(current_iv):
+                store.record_iv(symbol, resolved_as_of, current_iv)
+                ranked = calculate_true_ivr(symbol, current_iv, resolved_as_of, store)
+                row["True_IVR"] = float(ranked) if np.isfinite(ranked) else nan
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("True IVR computation failed for %s: %s", symbol, exc)
+
+    # 3) Trend bias (Aroon + Coppock).
+    try:
+        indicators = toe.calculate_indicators(bars)
+        row["Aroon_Oscillator"] = float(indicators.get("Aroon_Oscillator", nan))
+        row["Coppock_Curve"] = float(indicators.get("Coppock_Curve", nan))
+        row["Trend_Bias"] = _determine_trend_bias(
+            row["Aroon_Oscillator"], row["Coppock_Curve"]
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Trend indicators failed for %s: %s", symbol, exc)
+
+    # If we have no price or no sigma we cannot price anything — return the
+    # diagnostic columns and let the caller render a Cash/Wait row.
+    if not np.isfinite(row["Price"]) or not np.isfinite(sigma):
+        return row
+
+    # 4) ATM Greeks (informational; independent of the directive).
+    recommender = OptionsPricingRecommender(
+        stock_price=row["Price"], risk_free_rate=risk_free_rate
+    )
+    T = max(int(target_dte), 1) / 365.0
+    try:
+        atm = recommender.black_scholes_pricing_and_greeks(
+            K=row["Price"], T=T, sigma=sigma, option_type="call"
+        )
+        row["ATM_Delta"] = float(atm.get("Delta", nan))
+        row["ATM_Gamma"] = float(atm.get("Gamma", nan))
+        row["ATM_Vega"] = float(atm.get("Vega", nan))
+        row["ATM_Theta_Daily"] = float(atm.get("Theta_Daily", nan))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ATM Greeks failed for %s: %s", symbol, exc)
+
+    # 5) Strategy directive (already VRP / regime-gated inside the engine).
+    # Prefer the real, options-chain-derived True_IVR over the realized-vol
+    # proxy when the flag produced a finite value this call; otherwise fall
+    # back to IVR_Proxy exactly as before True_IVR existed (byte-identical
+    # when the flag is off, since True_IVR is always NaN in that case).
+    #
+    # NOT a third tier here: `realized_vol_30d` (FMP's /standard-deviation,
+    # gated by FMP_OPTIONS_HEALTH_ENABLED) was investigated as a possible
+    # honest replacement for the hardcoded 50.0 "neutral" default below, for
+    # thinly-traded/newer symbols where calculate_realized_vol_rank's local
+    # 252-day rolling-vol window returns NaN. Rejected: FMP's endpoint
+    # returns a single current standard-deviation reading with no historical
+    # series this function can rank it against, so any "percentile" derived
+    # from one data point would be fabricated, not measured (CONSTRAINT #4).
+    # realized_vol_30d is therefore surfaced only as a diagnostic passthrough
+    # (row["Realized_Vol_30D"] above), never consulted here.
+    if true_ivr_flag and np.isfinite(row["True_IVR"]):
+        ivr_value = row["True_IVR"]
+        logger.debug("build_premium_directive(%s): IVR source = True_IVR (chain-derived)", symbol)
+    elif np.isfinite(row["IVR_Proxy"]):
+        ivr_value = row["IVR_Proxy"]
+        logger.debug("build_premium_directive(%s): IVR source = IVR_Proxy (local realized-vol rank)", symbol)
+    else:
+        ivr_value = 50.0
+        logger.debug("build_premium_directive(%s): IVR source = neutral 50.0 default (no proxy/chain data)", symbol)
+    try:
+        directive = recommender.generate_strategy_pricing_matrix(
+            true_ivr=float(ivr_value),
+            current_iv=float(sigma),
+            trend_bias=row["Trend_Bias"],
+            target_dte=int(target_dte),
+            vrp=vrp,
+            macro_dto=macro_dto,
+            ivr_sell_threshold=ivr_sell_threshold,
+            ivr_buy_threshold=ivr_buy_threshold,
+            delta_target_scale=delta_target_scale,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Strategy directive failed for %s: %s", symbol, exc)
+        return row
+
+    row["Strategy"] = str(directive.get("Strategy", "Cash"))
+    row["Action"] = str(directive.get("Action", "Wait"))
+    row["Net_Premium"] = float(directive.get("Net_Premium", nan))
+    row["Realizable_Daily_Theta"] = float(
+        directive.get("Realizable_Daily_Theta", nan)
+    )
+    legs = directive.get("Legs", []) or []
+    row["Legs"] = legs
+
+    short_legs = [l for l in legs if l.get("Side") == "Short"]
+    long_legs = [l for l in legs if l.get("Side") == "Long"]
+    if short_legs:
+        row["Short_Strike"] = float(short_legs[0].get("Strike", nan))
+        row["Short_Delta"] = float(short_legs[0].get("Delta", nan))
+    if long_legs:
+        row["Long_Strike"] = float(long_legs[0].get("Strike", nan))
+        row["Long_Delta"] = float(long_legs[0].get("Delta", nan))
+
+    # 6) Matrix integrity (strike grid + delta-target tolerance). ``delta_target_scale``
+    # is passed through so the tolerance check compares against the SAME scaled
+    # targets the directive was generated with.
+    integrity = validate_directive_integrity(
+        directive,
+        delta_tolerance=delta_tolerance,
+        strike_grid=strike_grid,
+        delta_target_scale=delta_target_scale,
+    )
+    # NOTE — Integrity_OK carries TWO distinct meanings on purpose: a
+    # structural verdict (strike-grid + delta-target tolerance, from
+    # validate_directive_integrity above) AND a timing verdict (whether a
+    # scheduled earnings event falls inside this trade's DTE window). Both
+    # fold into the same boolean because the one production consumer,
+    # execution/options_queue_builder.py::passes_premium_gate, wants a single
+    # "is this directive safe to queue for execution" signal and already
+    # treats Integrity_OK=False as an exclusion reason regardless of
+    # cause — matching this PR's stated intent of protecting credit spreads
+    # from execution right before earnings. Gravity AI Review Suite.py's
+    # step_38_options_matrix_integrity_audit is NOT affected: its fixtures
+    # never pass days_to_earnings, so has_earnings_risk is always False there
+    # and its checks continue to exercise the structural verdict only.
+    issues = list(integrity["issues"])
+    if has_earnings_risk:
+        issues.append(f"⚠️ Earnings Announcement scheduled in {days_to_earnings} days (within target DTE {target_dte})")
+    row["Integrity_OK"] = bool(integrity["ok"]) and not has_earnings_risk
+    row["Integrity_Issues"] = issues
+    return row
+

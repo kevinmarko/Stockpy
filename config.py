@@ -1,11 +1,11 @@
-"""Single Source of Truth (SSOT) for the platform's tabular schema. COLUMN_SCHEMA defines every dashboard column's Google Sheets header, internal dict key, and display format, and this module derives the Pandera validation schemas plus header/internal-key accessors from it. Any new field must be added here first before use elsewhere."""
+"""Single Source of Truth (SSOT) for the platform's tabular schema. COLUMN_SCHEMA defines every dashboard column's display header, internal dict key, and display format, and this module derives the Pandera validation schemas plus the internal-key accessor from it. Any new field must be added here first before use elsewhere."""
 
 # ==============================================================================
 # MODULE: CONFIGURATION & SCHEMA REGISTRY
 # File: config.py
 # Description: The Single Source of Truth (SSOT) for the dashboard structure.
-#              Defines the mapping between Python internal keys and 
-#              Google Sheets display headers. Also provides Pandera schemas
+#              Defines the mapping between Python internal keys and
+#              display headers. Also provides Pandera schemas
 #              for strict type safety and data quality validation.
 # ==============================================================================
 
@@ -20,7 +20,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 """ 
 COLUMN_SCHEMA defines the strict order and mapping of data.
-*  'header': The column name as it appears in Google Sheets.
+*  'header': The human-readable column name (the Google Sheet sink that
+   used it was archived in 2026-09; see legacy/reporting/).
 *  'key': The dictionary key used in internal quant engines.
 *  'format': Formatting type for the frontend.
 """
@@ -70,9 +71,6 @@ COLUMN_SCHEMA = [
     {"header": "Relative Strength", "key": "RS vs SPY", "format": "number"},
     {"header": "RS Momentum Slope", "key": "RS-MACD", "format": "number"},
     {"header": "GARCH Vol", "key": "GARCH_Vol", "format": "number"},
-    {"header": "Realized Vol Rank", "key": "Realized_Vol_Rank", "format": "number"},
-    {"header": "True IVR", "key": "True_IVR", "format": "number"},
-    {"header": "Volatility Risk Premium", "key": "VRP", "format": "percent"},
     {"header": "Options IV Edge", "key": "Options IV Edge", "format": "percent"},
     {"header": "ROC 12M", "key": "ROC_12M", "format": "percent"},
     {"header": "ROC 6M", "key": "ROC_6M", "format": "percent"},
@@ -115,22 +113,10 @@ COLUMN_SCHEMA = [
     # data/portfolio_sync.py::resolve_universe / main.py::_build_universe.
     {"header": "Symbol Rating Bad Cycles", "key": "Symbol_Rating_Consecutive_Bad_Cycles", "format": "number"},
     {"header": "Symbol Rating Excluded", "key": "Symbol_Rating_Excluded", "format": "string"},
-    # ETF-arbitrage volatility-transmission derate applied to this name's
-    # sizing weight this cycle (risk/etf_transmission.py, composed in
-    # sizing/position_sizer.py::size_position step 3 alongside the HMM
-    # Regime_Multiplier). 1.0 = no derating. NaN -- never a fabricated 1.0 --
-    # when settings.ETF_TRANSMISSION_SIZING_ENABLED is False, i.e. the
-    # multiplier was never computed at all (CONSTRAINT #4); consumers of the
-    # column degrade THAT to the 1.0 no-op themselves. Deliberately NOT
-    # reflected in Sizing_Was_Capped / Sizing_Binding_Constraint: a continuous
-    # risk derate is not a hard-ceiling event, exactly as for the regime
-    # multiplier -- see sizing/position_sizer.py's module docstring.
-    {"header": "ETF Transmission Multiplier", "key": "ETF_Transmission_Multiplier", "format": "number"},
-    {"header": "Option Strategy", "key": "Option Strategy", "format": "string"},
     {"header": "Buy Range", "key": "buyRange", "format": "string"},
     # Dedicated sell-side range produced by strategy_engine.apply_sell_side_range.
     # Always populated (every Action Signal yields a sellRange string) so the
-    # dashboard / Google Sheets sink can render a resting take-profit + trailing-stop
+    # dashboard / HTML report can render a resting take-profit + trailing-stop
     # plan alongside the buy corridor. See strategy_engine.apply_sell_side_range
     # for level construction (1.5σ / 3σ ATR envelope, forecast-aware upper bound,
     # Chandelier-anchored trailing stop).
@@ -178,7 +164,7 @@ COLUMN_SCHEMA = [
     # ==========================================================
     # --- NEWS CATALYST (Tier 2.4, signals/news_catalyst.py) ---
     # Populated by NewsCatalystSignal.pre_compute() via orchestrator
-    # writeback; NaN / "" when Finnhub is not configured or the
+    # writeback; NaN / "" when the news provider is not configured or the
     # module hasn't run for a symbol this cycle.
     # ==========================================================
     {"header": "News Sentiment", "key": "News_Sentiment", "format": "number"},
@@ -190,7 +176,7 @@ COLUMN_SCHEMA = [
     # aggregating the current trading day's sentiment_ingestion_audit rows
     # (data/sentiment_sources.py, data/historical_store.py). NaN when no
     # multi-source social documents exist for a symbol this cycle -- distinct
-    # from News_Sentiment (Finnhub-headline-only), never a fabricated 0.0.
+    # from News_Sentiment (news-headline-only), never a fabricated 0.0.
     # ==========================================================
     {"header": "Credibility Weighted Sentiment", "key": "Credibility_Weighted_Sentiment", "format": "number"},
     {"header": "Bot Activity Ratio", "key": "Bot_Activity_Ratio", "format": "percent"},
@@ -215,30 +201,12 @@ COLUMN_SCHEMA = [
     {"header": "Google Trends ASVI", "key": "Google_Trends_ASVI", "format": "number"},
 
     # ==========================================================
-    # --- ETF VOLATILITY TRANSMISSION (risk/etf_transmission.py) ---
-    # Ben-David, Franzoni & Moussawi (2018) "Do ETFs Increase Volatility?".
-    # DIAGNOSTIC ONLY as of this commit -- populated by
-    # pipeline/production_steps.py::_apply_etf_transmission and read by
-    # nothing in scoring, sizing, or execution. NaN (never fabricated --
-    # CONSTRAINT #4) whenever settings.ETF_TRANSMISSION_ENABLED is False, the
-    # ticker is in no covered basket, the holdings fetch failed, the ticker is
-    # itself an ETF, Market Cap/Price can't yield shares outstanding, or the
-    # aligned return overlap is shorter than the full R2 window.
-    # ETF_Ownership_Pct is a FRACTION of shares outstanding (0.07 = 7%),
-    # matching the dividendYield fraction convention in data/market_data.py.
-    # ==========================================================
-    {"header": "ETF Ownership Pct", "key": "ETF_Ownership_Pct", "format": "percent"},
-    {"header": "ETF Comovement R2", "key": "ETF_Comovement_R2", "format": "number"},
-    {"header": "ETF Primary Wrapper", "key": "ETF_Primary_Wrapper", "format": "string"},
-
-    # ==========================================================
     # --- FMP DIAGNOSTIC FEEDS (Financial Modeling Prep, data/fmp_client.py) ---
     # Four new feeds surfaced as dashboard columns only: analyst consensus,
     # earnings calendar/surprises, insider transaction statistics, and sector
     # PE / 1-day performance snapshots.
     #
-    # DIAGNOSTIC ONLY, and structurally so -- exactly the ETF-transmission
-    # precedent above. NO SignalModule reads any of these, NO SIGNAL_WEIGHTS
+    # DIAGNOSTIC ONLY, and structurally so. NO SignalModule reads any of these, NO SIGNAL_WEIGHTS
     # entry exists for any of them, and none enters dto_models.py or signals/.
     # That is deliberate and is also the no-lookahead guarantee mechanism:
     # nothing new enters the perturbation harness because nothing new enters
@@ -255,7 +223,7 @@ COLUMN_SCHEMA = [
     #
     # NOTE: the earnings feed deliberately does NOT add an "Earnings Date"
     # column -- it becomes a SECOND source for the existing news-catalyst
-    # "Earnings Date" key above (unlike Finnhub it is not limited to a 30-day
+    # "Earnings Date" key above (FMP is not limited to a 30-day
     # forward window).
     # ==========================================================
     # --- Analyst (FMP_ANALYST_ENABLED) ---
@@ -286,14 +254,9 @@ COLUMN_SCHEMA = [
 
     # ==========================================================
     # --- ADVISORY METADATA (docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1) ---
-    # Five fields that reporting/sheet_publisher.py::rec_to_sheet_row()
-    # already computed from engine.advisory.Recommendation but which were
-    # silently dropped before reaching the Sheet because they matched
-    # neither a COLUMN_SCHEMA key nor header (write_recommendations()'s
-    # `df[[h for h in final_headers if h in df.columns]]` filter step).
-    # Confirmed genuinely new information, not duplicates of any existing
-    # column (see the PR description for the full case-by-case audit of
-    # all 8 originally-dropped keys). Advisory-path-only: the orchestrator
+    # Five fields computed from engine.advisory.Recommendation. (They were
+    # added so the since-archived Google Sheet sink stopped dropping them;
+    # see legacy/reporting/sheet_publisher.py.) Advisory-path-only: the orchestrator
     # path (main_orchestrator.py / pipeline/production_steps.py) blank/NaN
     # fills these, matching the established pattern used for every other
     # advisory-vs-orchestrator asymmetric column (e.g. "Macro Status").
@@ -301,7 +264,10 @@ COLUMN_SCHEMA = [
     # Raw StrategyEngine weighted-sum score (0-100 scale) — distinct from
     # "Quality Score" (a fundamentals-only metric) and from "Kelly Target"
     # (post-Kelly position sizing); this is the signal-aggregation score
-    # that gates BUY/SELL/HOLD before sizing is applied.
+    # that gates BUY/SELL/HOLD before sizing is applied. Unlike the other four
+    # columns in this section it is populated on BOTH paths (the daemon writes
+    # it from StrategyEngine output via
+    # pipeline/production_steps.py::_apply_strategy_score_column).
     {"header": "Advisory Score", "key": "Score", "format": "number"},
     # 30-day forecast expressed as a fractional % change from current price
     # (Forecast_30 is the dollar price target; this is the derived percent).
@@ -320,17 +286,9 @@ COLUMN_SCHEMA = [
     {"header": "Advisory Data Quality", "key": "Advisory_Data_Quality", "format": "string"},
 ]
 
-def get_headers() -> list[str]:
-    """Returns list of display headers for gspread/Google Sheets."""
-    return [col["header"] for col in COLUMN_SCHEMA]
-
 def get_internal_keys() -> list[str]:
     """Returns list of internal dictionary keys for DataFrame construction."""
     return [col["key"] for col in COLUMN_SCHEMA]
-
-def get_rename_mapping() -> dict[str, str]:
-    """Returns dict mapping internal keys to external headers."""
-    return {col["key"]: col["header"] for col in COLUMN_SCHEMA}
 
 # --- PANDERA SCHEMA DEFINITIONS ---
 

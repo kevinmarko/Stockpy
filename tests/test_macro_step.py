@@ -1,0 +1,179 @@
+"""
+tests/test_macro_step.py
+========================
+Regression coverage for pipeline/production_steps.py::MacroStep.run()'s (split
+out of the old options step in 2026-09, step 3d)
+MacroEconomicDTO construction -- the async-orchestrator (main_orchestrator.py)
+production path whose ctx.macro_dto is what execution/risk_gate.py's
+PreTradeRiskGate actually reads for real order approval.
+
+Fixing macro_engine.py's run_macro_killswitch()/dto_models.py's
+MacroEconomicDTO alone is not enough -- this file proves the fix is actually
+wired into the live construction site: ctx.macro_raw missing T10Y2Y/
+BAMLH0A0HYM2/VIXCLS, or MacroEngine.calculate_sahm_rule's own fallback firing,
+must set ctx.macro_dto.data_unavailable=True (and therefore killSwitch=True),
+never silently compute off substituted benign defaults (CONSTRAINT #4/#6).
+
+MacroStep has no per-ticker loop (that half of the old options step is now
+TrendVolatilityStep, covered by tests/test_trend_volatility_step.py), so
+ctx.symbols is left empty in every test here.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pandas as pd
+import pytest
+
+from data_engine import MockDataEngine
+from macro_engine import MacroEngine
+from main_orchestrator import EngineContext
+from pipeline.context import RunContext
+from pipeline.production_steps import MacroStep
+
+
+class _FakeFred:
+    """Minimal stand-in for fredapi.Fred with a controllable get_series."""
+
+    def __init__(self, series_map=None, raise_on=None):
+        self._series_map = series_map or {}
+        self._raise_on = raise_on or set()
+
+    def get_series(self, series_id, limit=None):
+        if series_id in self._raise_on:
+            raise RuntimeError(f"FRED unavailable for {series_id}")
+        return self._series_map.get(series_id, pd.Series(dtype=float))
+
+
+class _FakeEngineWithFred:
+    def __init__(self, fred):
+        self.fred = fred
+
+
+def _make_ctx(macro_raw, macro_engine, market=None) -> RunContext:
+    """Minimal RunContext exercising only MacroStep.run()'s macro
+    DTO construction -- symbols=[] keeps every downstream engine untouched."""
+    return RunContext(
+        force_account=False,
+        started_at=datetime.now(timezone.utc),
+        watchlist_file="watchlist.txt",
+        fetch_account_snapshot_fn=lambda *a, **k: None,
+        build_universe_fn=lambda *a, **k: [],
+        build_macro_dto_fn=lambda: None,
+        get_provider_fn=lambda: None,
+        fetch_bars_fn=lambda *a, **k: {},
+        build_context_extras_fn=lambda *a, **k: {},
+        advisory_evaluate_fn=lambda *a, **k: None,
+        symbols=[],
+        market=market,
+        tech_raw={},
+        macro_raw=macro_raw,
+        engine_context=EngineContext(macro_engine=macro_engine),
+    )
+
+
+class TestMacroStepMacroDataUnavailable:
+    def test_healthy_macro_raw_and_real_sahm_reading_is_available(self):
+        """The byte-identical-when-healthy regression guard: a fully populated
+        macro_raw plus a real (non-fallback) Sahm reading must NOT set
+        data_unavailable -- this is the case the original fix's landmine
+        (an always-True formula) would have silently broken."""
+        fred = _FakeFred(series_map={"SAHMREALTIME": pd.Series([0.1, 0.2, 0.15])})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 16.0}
+
+        ctx = _make_ctx(macro_raw, me)
+        MacroStep().run(ctx)
+
+        assert ctx.macro_dto.data_unavailable is False
+        assert ctx.macro_dto.killSwitch is False
+
+    def test_empty_macro_raw_sets_data_unavailable(self):
+        fred = _FakeFred(series_map={"SAHMREALTIME": pd.Series([0.1, 0.2, 0.15])})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+
+        ctx = _make_ctx({}, me)
+        MacroStep().run(ctx)
+
+        assert ctx.macro_dto.data_unavailable is True
+        assert ctx.macro_dto.killSwitch is True
+        assert ctx.macro_dto.market_regime == "RECESSION"
+
+    def test_missing_vixcls_alone_sets_data_unavailable(self):
+        fred = _FakeFred(series_map={"SAHMREALTIME": pd.Series([0.1, 0.2, 0.15])})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0}  # no VIXCLS
+
+        ctx = _make_ctx(macro_raw, me)
+        MacroStep().run(ctx)
+
+        assert ctx.macro_dto.data_unavailable is True
+        assert ctx.macro_dto.killSwitch is True
+
+    def test_sahm_fallback_alone_sets_data_unavailable_even_with_complete_macro_raw(self):
+        """calculate_sahm_rule's own internal fallback firing (FRED
+        unreachable for the Sahm read specifically) must set
+        data_unavailable even when macro_raw itself is fully populated --
+        the two signals are independent and either alone is sufficient."""
+        me = MacroEngine(data_engine=MockDataEngine())  # no .fred attribute at all
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 16.0}
+
+        ctx = _make_ctx(macro_raw, me)
+        MacroStep().run(ctx)
+
+        assert ctx.macro_dto.data_unavailable is True
+        assert ctx.macro_dto.killSwitch is True
+
+    def test_fabricated_but_populated_macro_raw_sets_data_unavailable(self):
+        """The populated-but-fabricated blind spot: ctx.macro_raw is FULLY
+        POPULATED (as DataEngine's hardcoded emergency fallback would leave
+        it -- every key present, non-None) but ctx.market reports those keys
+        as fabricated via last_macro_raw_fabricated_keys. Plain key-presence
+        checking alone (the pre-existing PR #854 fix) can't see this."""
+        fred = _FakeFred(series_map={"SAHMREALTIME": pd.Series([0.1, 0.2, 0.15])})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.5, "UNRATE": 3.8, "VIXCLS": 15.0}
+
+        class _FakeMarket:
+            last_macro_raw_fabricated_keys = frozenset(
+                {"T10Y2Y", "BAMLH0A0HYM2", "UNRATE", "VIXCLS"}
+            )
+
+        ctx = _make_ctx(macro_raw, me, market=_FakeMarket())
+        MacroStep().run(ctx)
+
+        assert ctx.macro_dto.data_unavailable is True
+        assert ctx.macro_dto.killSwitch is True
+        assert ctx.macro_dto.market_regime == "RECESSION"
+
+    def test_market_with_no_fabricated_keys_attribute_is_unaffected(self):
+        """ctx.market lacking last_macro_raw_fabricated_keys entirely (an
+        older/duck-typed provider) must degrade to frozenset() via getattr's
+        default, not raise -- byte-identical to today's behavior."""
+        fred = _FakeFred(series_map={"SAHMREALTIME": pd.Series([0.1, 0.2, 0.15])})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 16.0}
+
+        class _BareMarket:
+            pass
+
+        ctx = _make_ctx(macro_raw, me, market=_BareMarket())
+        MacroStep().run(ctx)
+
+        assert ctx.macro_dto.data_unavailable is False
+        assert ctx.macro_dto.killSwitch is False
+
+    def test_sahm_rule_indicator_reflects_real_fred_value_not_fallback(self):
+        """ctx.macro_dto.sahm_rule_indicator must carry the actual FRED-derived
+        reading when available, not a hardcoded 0.0 -- confirms
+        MacroStep correctly threads _calculate_sahm_rule_detailed's
+        value through, mirroring the wiring already fixed in main.py."""
+        fred = _FakeFred(series_map={"SAHMREALTIME": pd.Series([0.1, 0.2, 0.37])})
+        me = MacroEngine(data_engine=_FakeEngineWithFred(fred))
+        macro_raw = {"T10Y2Y": 0.5, "BAMLH0A0HYM2": 3.0, "VIXCLS": 16.0}
+
+        ctx = _make_ctx(macro_raw, me)
+        MacroStep().run(ctx)
+
+        assert ctx.macro_dto.sahm_rule_indicator == 0.37
+        assert ctx.macro_dto.data_unavailable is False

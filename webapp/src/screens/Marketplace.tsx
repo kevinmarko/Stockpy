@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router";
 import { api, apiMeta } from "../api/client";
 import type { PilotSummary, RadarItem } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { PilotCard, PopularCard } from "../components/PilotCard";
+import { PilotCard } from "../components/PilotCard";
 import { RadarCard } from "../components/RadarCard";
 import { SymbolInput } from "../components/SymbolInput";
 import { ErrorState, Loading, StaleDataNotice, InfoTip } from "../components/ui";
@@ -209,12 +209,10 @@ function Rail({
   title,
   sub,
   pilots,
-  variant = "perf",
 }: {
   title: string;
   sub?: string;
   pilots: PilotSummary[];
-  variant?: "perf" | "popular";
 }) {
   if (pilots.length === 0) return null;
   return (
@@ -224,13 +222,9 @@ function Rail({
         {sub && <span className="rail-sub">{sub}</span>}
       </div>
       <div className="rail">
-        {pilots.map((p) =>
-          variant === "popular" ? (
-            <PopularCard key={p.id} pilot={p} />
-          ) : (
-            <PilotCard key={p.id} pilot={p} />
-          )
-        )}
+        {pilots.map((p) => (
+          <PilotCard key={p.id} pilot={p} />
+        ))}
       </div>
     </section>
   );
@@ -263,11 +257,6 @@ export function Marketplace() {
     [pilots]
   );
 
-  const mostPopular = useMemo(
-    () => [...pilots].sort(byDesc((p) => p.aum_proxy + p.followers_proxy)),
-    [pilots]
-  );
-
   const byCategory = useMemo(() => {
     const groups = new Map<string, PilotSummary[]>();
     for (const p of pilots) {
@@ -297,7 +286,7 @@ export function Marketplace() {
         <div>
           <h1 className="screen-title">Pilots</h1>
           <p className="screen-sub">
-            Copyable Stockpy strategies, ranked by honest backtests.
+            Stockpy quant strategies, ranked by honest backtests.
           </p>
         </div>
         {apiMeta.useMock && (
@@ -352,12 +341,6 @@ export function Marketplace() {
                 sub="by Sharpe / DSR"
                 pilots={topPerformers}
               />
-              <Rail
-                title="Most Popular"
-                sub="by AUM & followers"
-                pilots={mostPopular}
-                variant="popular"
-              />
 
               <div className="rail-head" style={{ marginTop: "var(--s-6)" }}>
                 <h2>Browse by category</h2>
@@ -391,20 +374,6 @@ export function Marketplace() {
               <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>The models</div>
               <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 CPCV-gated ML registry
-              </div>
-            </Link>
-            <Link to="/pairs" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🔗</div>
-              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Pairs radar</div>
-              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
-                Cointegrated stat-arb candidates
-              </div>
-            </Link>
-            <Link to="/options" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🎯</div>
-              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Options premium</div>
-              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
-                Per-symbol premium directives
               </div>
             </Link>
             <Link to="/attribution" className="card card-pad" style={{ textDecoration: "none" }}>
@@ -489,13 +458,6 @@ export function Marketplace() {
               <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Sector selection</div>
               <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
                 Semantic related-sector ranking
-              </div>
-            </Link>
-            <Link to="/research/trends-stitcher" className="card card-pad" style={{ textDecoration: "none" }}>
-              <div style={{ fontSize: "var(--t-display)" }} aria-hidden>🧵</div>
-              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Trends stitcher</div>
-              <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
-                Overlapping-window SVI stitching demo
               </div>
             </Link>
           </div>

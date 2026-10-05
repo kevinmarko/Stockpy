@@ -28,12 +28,11 @@ import pytest
 from data_engine import MockDataEngine
 from main_orchestrator import EngineContext, run_pipeline
 from macro_engine import MacroEngine
-from technical_options_engine import TechnicalOptionsEngine
+from volatility.garch import GarchVolatilityEstimator
 from processing_engine import ProcessingEngine
 from forecasting_engine import ForecastingEngine
 from strategy_engine import StrategyEngine
 from evaluation_engine import EvaluationEngine
-from volatility.iv_engine import IVHistoryStore
 
 
 def _fixture_data():
@@ -49,8 +48,7 @@ class TestEngineContextBuild:
     def test_build_constructs_one_of_each_engine(self) -> None:
         ctx = EngineContext.build(data_engine=None)
         assert isinstance(ctx.macro_engine, MacroEngine)
-        assert isinstance(ctx.technical_options_engine, TechnicalOptionsEngine)
-        assert isinstance(ctx.iv_history_store, IVHistoryStore)
+        assert isinstance(ctx.garch_estimator, GarchVolatilityEstimator)
         assert isinstance(ctx.processing_engine, ProcessingEngine)
         assert isinstance(ctx.forecasting_engine, ForecastingEngine)
         assert isinstance(ctx.strategy_engine, StrategyEngine)
@@ -59,8 +57,7 @@ class TestEngineContextBuild:
     def test_default_context_is_all_none(self) -> None:
         ctx = EngineContext()
         assert ctx.macro_engine is None
-        assert ctx.technical_options_engine is None
-        assert ctx.iv_history_store is None
+        assert ctx.garch_estimator is None
         assert ctx.processing_engine is None
         assert ctx.forecasting_engine is None
         assert ctx.strategy_engine is None
@@ -130,8 +127,7 @@ class TestRunPipelineEngineReuse:
                 )
 
             with mock.patch("main_orchestrator.MacroEngine", side_effect=_explode), \
-                 mock.patch("main_orchestrator.TechnicalOptionsEngine", side_effect=_explode), \
-                 mock.patch("main_orchestrator.IVHistoryStore", side_effect=_explode), \
+                 mock.patch("main_orchestrator.GarchVolatilityEstimator", side_effect=_explode), \
                  mock.patch("main_orchestrator.ProcessingEngine", side_effect=_explode), \
                  mock.patch("main_orchestrator.ForecastingEngine", side_effect=_explode), \
                  mock.patch("main_orchestrator.StrategyEngine", side_effect=_explode), \

@@ -43,7 +43,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   "slippage":
     "The difference between the expected price of a trade and the actual price at which it executes, simulated to reflect real-world execution costs.",
   "advisory only":
-    "The platform recommends; you decide. It is in advisory mode by default — no order is ever sent to a broker automatically. Every action signal, size, and options directive is informational.",
+    "The platform recommends; you decide. It is in advisory mode by default — no order is ever sent to a broker automatically. Every action signal and size is informational.",
   "action signal":
     "The system's recommendation for each ticker: STRONG BUY, BUY, HOLD, RISK REDUCE, or AVOID. Purely informational — act on your own judgment.",
   conviction:
@@ -102,41 +102,19 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "A GJR-GARCH volatility estimate that weights recent bad days more than good ones (the leverage effect) — more accurate than a plain moving standard deviation. It's the primary vol input for sizing and options.",
   "attention weight":
     "How much the BERT-LLA forecaster's self-attention layer weighted each day in its lookback window when forming a forecast — shaded on the price chart, darker means higher weight. This reflects which days the model itself found most informative, not a buy/sell signal or a claim about future importance. Only appears when BERT-LLA actually ran for that request; absent otherwise, never a fabricated overlay.",
-  "put credit spread":
-    "Sells a put and buys a lower-strike protective put, collecting premium if the stock stays above the short put; max loss is the spread width minus premium. Suggested only when IVR, VRP, and macro are all favorable. Advisory only.",
-  "iron condor":
-    "A put credit spread below the market plus a call credit spread above it, profiting if the stock stays in a range until expiry. Requires favorable IV. Advisory only.",
-  "iv rank":
-    // IVR/VRP/VIX gate values here are literal constants inside
-    // technical_options_engine.py (not settings-derived) — gui/help_content.py
-    // hard-codes them too for the same reason, so this matches its precedent
-    // rather than being an inconsistency with the live-threshold entries above.
-    "Implied Volatility Rank — where current IV sits in its past-year range. IVR 80 = top 20% of the year, historically a good time to sell premium. Credit spreads require IVR > 50.",
-  vrp:
-    "Volatility Risk Premium — implied volatility in excess of realized. When options charge more than the stock actually moves, there's premium to collect. A VRP > 0.02 is required before recommending a premium-selling strategy.",
   "brinson-fachler":
     "Attribution that splits benchmark out-/under-performance into Allocation (right sectors?), Selection (right stocks within a sector?), and Interaction (the combined effect).",
   "execution mode":
-    "The Robinhood order queue's posture: 'off' builds nothing, 'review' builds a dry-run queue for you to confirm, 'live' still requires the same per-trade human confirmation before any order reaches the broker — no mode ever places an order automatically.",
+    "The Robinhood order queue's posture (shown as the 'Robinhood: <mode>' chip; distinct from the 'Broker: <mode>' chip, which is the in-app paper-broker execution mode): 'off' builds nothing, 'review' builds a dry-run queue for you to confirm, 'live' still requires the same per-trade human confirmation before any order reaches the broker — no mode ever places an order automatically.",
   "kill switch":
-    "A global, file-based safety switch. While active, the execution queue adds no new orders and Pilot follows are paused. Pausing does not stop the pipeline schedule — cycles keep running, they just produce no actionable output.",
+    "A global, file-based safety switch. While active, the execution queue adds no new orders. Pausing does not stop the pipeline schedule — cycles keep running, they just produce no actionable output.",
   "notional cap": (t) => {
     const cap = t?.robinhood_max_notional_per_order;
     const rendered = cap != null && cap > 0 ? fmtUsd(cap) : "not configured";
     return `The hard per-order USD ceiling the execution queue enforces before an intent is marked placeable: ${rendered}. An intent above the cap is blocked, never silently resized.`;
   },
-  "follow minimum": (t) =>
-    `The smallest dollar amount the Follow modal accepts for a Pilot allocation: ${fmtUsd(t?.follow_min_amount)}. A UX floor, not a broker constraint — the gated queue itself is bounded by the per-order notional cap.`,
   "opportunity scan": (t) =>
     `A Robinhood broker scan run by the agentic-discovery skill, cross-referenced against this platform's own advisory engine — never run automatically. Results are capped at ${fmtNum(t?.agentic_max_candidates, 0)} candidates regardless of how many the scan matches; a candidate with no computed action shows '—', never a guessed one.`,
-  cointegration:
-    "Two symbols whose price spread is stationary — it mean-reverts instead of wandering — tested via the Engle-Granger method. The basis for every pair on the Pairs radar screen; a broken cointegration (rolling ADF p-value > 0.10) exits the trade.",
-  "half-life":
-    // Fixed algorithm parameter (signals/pairs_trading.py-equivalent), not a
-    // Thresholds API field — same "documented literal" precedent as "iv rank"/vrp below.
-    "How many trading days a pair's spread takes to close half the distance back to its rolling mean, from an Ornstein-Uhlenbeck fit. Pairs radar only surfaces pairs with a half-life between 5 and 60 days — too fast is noise, too slow ties up capital.",
-  "z-score":
-    "How many standard deviations the current spread sits from its rolling mean. Pairs radar enters at |z| > 2, exits on a 0-cross, and stops out at |z| > 4.",
   "correlation cluster":
     // 30% concentration flag is a local frontend constant (Attribution.tsx's
     // HEAVY_CONCENTRATION_THRESHOLD), not a Thresholds API field.
@@ -150,7 +128,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   "circuit breaker":
     // The 24h dedup window is a documented literal default (gui/circuit_breakers.py
     // ::collect_circuit_breaker_trips's `window` parameter), not a Thresholds API
-    // field — same "documented literal" precedent as "half-life"/"iv rank" above.
+    // field — same "documented literal" precedent as "half-life" above.
     "The kill switch plus every risk-gate block, merged into one severity-classified view: CRITICAL (halts everything, e.g. the kill switch or a daily loss limit) or WARNING (a single order blocked). Deduped to the most recent trip per breaker within a rolling 24h window so a chatty block log doesn't bury the signal — an unresolved trip stays visible until a newer one for that same breaker supersedes it.",
   "skill decay":
     "How much a symbol's pooled forecast skill (inverse-RMSE, all models combined) has changed between an older baseline half of the lookback window and the most recent half. Positive means skill is degrading — recent forecasts have been less accurate than the baseline; negative means it improved. Shown as 'insufficient history' rather than a fabricated number when either half has too few completed, actualized forecasts to trust its RMSE.",
@@ -160,13 +138,11 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "The always-on background process that keeps the platform's heavy engines warm between cycles instead of paying full startup cost on every run. Its own internal timer can run cycles on a schedule independent of a manual trigger from the Pipeline screen.",
   "sizing cap":
     "A durable log of every time the platform's automatic position-sizing guardrails shrank a trade below what the raw signal called for. The 'Constraint' column names which limit did it — kelly_cap (the per-position Kelly ceiling), vol_target_leverage, max_position_weight, portfolio_gross (the whole-book exposure cap), or escalation (a symbol capped for several cycles running gets derated further). This is capacity management, not a sign anything is wrong: a symbol showing up here often is being sized smaller than its signal alone would suggest, on purpose.",
-  "etf transmission":
-    "A non-fundamental risk source: a stock heavily owned by ETFs can absorb a shock to one of its basket-mates purely through ETF arbitrage, even when nothing about the stock itself changed (Ben-David, Franzoni & Moussawi, 2018). Shown per symbol as ownership %, and comovement R² with its primary wrapper after removing the shared market-factor effect — a high reading can mean its position size is being quietly derated to compensate.",
   "symbol rating":
     // SYMBOL_RATING_AUTO_DROP_ENABLED / SYMBOL_RATING_DROP_THRESHOLD_CYCLES
     // are settings.py fields, not Thresholds API fields (GET /thresholds
     // doesn't surface them) -- same "documented literal" precedent as
-    // "iv rank"/"half-life"/"circuit breaker" above.
+    // "half-life"/"circuit breaker" above.
     "Every tracked symbol gets a GOOD/BAD rating from the platform's scoring engine each cycle. After enough consecutive BAD-rated cycles (5 by default), a symbol CAN be automatically excluded from tracking and buying — but this auto-drop behavior is off by default, and even when it's on, it never applies to anything you currently hold. An excluded symbol shows an 'Excluded' badge on Tracked Universe; 'Re-include' immediately undoes the exclusion by hand.",
   "analyst note":
     "An on-demand Claude-written narrative for one symbol — a one-sentence headline, a why-now catalyst paragraph, 1-3 key-risk bullets, and an invalidation condition that would void the thesis. Grounded in the platform's own deterministic numbers, never inventing new ones, and only generated when you click Generate — nothing here runs automatically.",
@@ -182,7 +158,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     // docs/signals/sector_heat_factor.md's "Two features, one name" section
     // for the full disambiguation. This entry describes the Sector
     // Selection screen's own SHF specifically.
-    "A Gaussian response to how much news + investor-forum volume a candidate sector is seeing, normalized against every OTHER candidate sector over a trailing 22-trading-day window — not a raw volume count. When investor-forum (Reddit/StockTwits) volume has never been observed, this degrades honestly to news-volume-only, flagged 'Investor-forum volume unavailable' rather than showing a fabricated number.",
+    "A Gaussian response to how much news + investor-forum volume a candidate sector is seeing, normalized against every OTHER candidate sector over a trailing 22-trading-day window — not a raw volume count. When investor-forum (StockTwits) volume has never been observed, this degrades honestly to news-volume-only, flagged 'Investor-forum volume unavailable' rather than showing a fabricated number.",
   "sector correlation coefficient":
     "Semantic Related Sector Selection's ranking score: cosine similarity × Sector Heat Factor. Sectors are ranked by this number and the top N are selected as the most relevant related sectors for a target stock. '—' whenever either input side is unavailable — never computed from a partial or guessed value.",
   "sentiment score":
@@ -212,12 +188,6 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "Whether the primary US equity market is open right now, computed locally from the current time against the exchange's trading calendar rather than fetched from the server. Auto-refresh's 'pause when market closed' option reads this to decide whether background polling should pause or keep running.",
   "safety telemetry":
     "A switch separate from the auto-refresh master above, governing only the kill-switch and heartbeat readout in the top bar. It keeps polling on its own schedule even when auto-refresh is turned off or the market is closed — a stale safety reading is treated as a risk here, not as something worth pausing to save a background request.",
-  "tax loss harvesting":
-    "Selling securities at a loss to offset a capital gains tax liability. The Cache Long/Short strategy flags these opportunities automatically based on settings, holding them in a 'tax bank' tally.",
-  "proxy hedge":
-    "A highly correlated alternative security (like a sector ETF) bought when selling the original asset for tax-loss harvesting to maintain market exposure while waiting out the wash-sale rule window.",
-  "correlation drift":
-    "When a proxy security stops tracking its target asset closely enough. A background process continually monitors this correlation and flags if the proxy relationship weakens below a safety threshold.",
   "tracked universe":
     "The core set of symbols the pipeline processes every run, assembled from your holdings and watchlists. These are the symbols that get daily action signals and size recommendations.",
   "forecast-covered":
@@ -228,16 +198,6 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "The slide-over drawer opened via the ⓘ button on the Tracked Universe table. It breaks down exactly why a symbol is tracked (is it held? on a watchlist? the fallback sheet?), what its current coverage is, and if it's dropping, how many bad cycles it has accumulated.",
   "symbol screener":
     "Search FMP's full symbol universe by name or ticker, or filter it by sector, industry, market cap, price, beta, or dividend yield — independent of your tracked watchlist.",
-  "options delta":
-    "The rate of change of an option's price per $1 move in the underlying stock. Calls have positive delta (0 to 1), puts have negative delta (-1 to 0). A delta of 0.30 means the option price moves ~$0.30 for each $1 stock move.",
-  "options theta":
-    "The daily time-decay of an option's price — how much value the option loses each day just from the passage of time, all else equal. Always negative for long positions.",
-  "options gamma":
-    "The rate of change of delta per $1 move in the underlying. High gamma means delta changes rapidly, making the position more sensitive to large stock moves.",
-  "implied volatility":
-    "The market's forward-looking expectation of the underlying's annualized volatility, backed out of the option's current market price via the Black-Scholes model. Higher IV means pricier options.",
-  "chance of profit":
-    "The estimated probability that an option position is profitable at expiration, accounting for the premium paid. Derived from Black-Scholes: for a call, it is N(d2) where d2 uses the break-even price (strike + premium) instead of the strike alone.",
   liveness:
     "How and when a settings change takes effect: immediately (live in the running process), on next daemon restart (captured by runtime code or components), no effect (unreferenced setting), or env pinned (overridden by an active shell environment variable).",
   "settings reference":
@@ -245,7 +205,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   "universe coverage":
     "Tracked symbols are every symbol in this report — held positions plus Robinhood/file-backed watchlists. Forecast-covered are the subset with a price forecast recorded recently (the pipeline's forecast-tracking database — not a fixed sector or model list); a symbol can be tracked without one, e.g. if it's new or hasn't had a pipeline cycle run for it yet. Full coverage means a live check — run right now, not read from a cached pipeline artifact — confirmed price quotes, historical bars, and fundamental data are all available for the symbol.",
   "uncovered symbols":
-    "Why isn't symbol X covered? A symbol shows as Uncovered, Quotes-only, or Equity-only when the upstream data provider (e.g. FMP or Alpaca) doesn't have fundamental data or historical bars for it, or the ticker was delisted/renamed.",
+    "Why isn't symbol X covered? A symbol shows as Uncovered, Quotes-only, or Equity-only when the upstream data provider (FMP, with yfinance as the fallback) doesn't have fundamental data or historical bars for it, or the ticker was delisted/renamed.",
   "weekly digest":
     "A periodic 'names worth a look' panel that reuses Today's Radar's ranking rather than a second scoring system. Each pick is tagged with which rule selected it (Personalized, Sector Gap, or Today's Radar) and a confidence tier — a Personalized pick only appears once real view-tracking history exists; otherwise the digest honestly falls back to plain Radar picks rather than pretending to know your habits.",
   "decision snapshot":
@@ -278,14 +238,13 @@ export const TAB_HELP: Record<string, TabHelp> = {
   pilots: {
     title: "Pilots",
     description:
-      "Browse strategy 'Pilots' you can follow, and view curated recommendations in Today's Radar and the Weekly Digest. Each Pilot now shows its actual current BUY/SELL/HOLD call per holding, with buy and sell/stop ranges. The honesty badges (Deployable / Not deployable) and the PBO · DSR · Sharpe · Max-DD row show whether a Pilot actually cleared its backtest gates — never a marketing number.",
+      "Browse strategy 'Pilots' — the platform's own quant strategies, for research and comparison — and view curated recommendations in Today's Radar and the Weekly Digest. Each Pilot now shows its actual current BUY/SELL/HOLD call per holding, with buy and sell/stop ranges. The honesty badges (Deployable / Not deployable) and the PBO · DSR · Sharpe · Max-DD row show whether a Pilot actually cleared its backtest gates — never a marketing number.",
     keyConcepts: [
       "deployable",
       "pbo",
       "dsr",
       "sharpe ratio",
       "max drawdown",
-      "follow minimum",
       "buy range",
       "sell/stop range",
       "today's radar",
@@ -372,23 +331,16 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "Ranks candidate upstream/downstream industry sectors by how relevant they are to a target stock — combining semantic similarity (SBERT, cosine similarity) with each sector's Sector Heat Factor (recent news + investor-forum volume). The top N ranked sectors are the ones this platform's research treats as most relevant for supplementing a thin single-stock signal. Every field is '—' when it honestly couldn't be computed, never a fabricated number — and a persistent banner explains when investor-forum volume specifically is unavailable.",
     keyConcepts: ["semantic similarity", "sector heat factor", "sector correlation coefficient"],
   },
-  options: {
-    title: "Options Matrix",
-    description:
-      "Premium-selling strategy directives per active symbol: recommended structure (Put Credit Spread, Iron Condor, or Cash/Wait), strikes, net premium, and Greeks. Gated by IVR > 50, VRP > 0.02, VIX < 30, and no CREDIT EVENT — Cash/Wait is returned when any gate fails. All informational.",
-    keyConcepts: ["put credit spread", "iron condor", "iv rank", "vrp", "garch vol"],
-  },
   agentic: {
     title: "Agentic Trading",
     description:
-      "The consolidated command center for the platform's Robinhood-backed loop: Pilot follows, the gated dry-run order queue, scan-based candidate discovery, and the decision journal. Every control here is advisory-only or paper-first — placing a real order always requires a separate, human-confirmed step outside this screen.",
+      "The consolidated command center for the platform's Robinhood-backed loop: the gated dry-run order queue, scan-based candidate discovery, and the decision journal. Every control here is advisory-only or paper-first — placing a real order always requires a separate, human-confirmed step outside this screen.",
     keyConcepts: [
       "advisory only",
       "execution mode",
       "kill switch",
       "notional cap",
       "opportunity scan",
-      "follow minimum",
     ],
   },
   activity: {
@@ -400,20 +352,14 @@ export const TAB_HELP: Record<string, TabHelp> = {
   compare: {
     title: "Pilot Strategy Comparison",
     description:
-      "Pick up to 5 Pilots to overlay their performance curves and compare Sharpe, PBO, DSR, and follower count side by side — the same honesty metrics as the Pilots screen, just side by side. Also surfaces the platform's current recommended-stock picks.",
-    keyConcepts: ["sharpe ratio", "pbo", "dsr", "follow minimum"],
+      "Pick up to 5 Pilots to overlay their performance curves and compare Sharpe, PBO, DSR, and max drawdown side by side — the same honesty metrics as the Pilots screen, just side by side. Also surfaces the platform's current recommended-stock picks.",
+    keyConcepts: ["sharpe ratio", "pbo", "dsr", "max drawdown"],
   },
   models: {
     title: "The models",
     description:
       "The ML model registry behind the platform's forecasts — each model's honest CPCV-validated DSR and PBO, training date, and sample size. A model that fails a gate is shown as not deployable, never loosened to force a green badge.",
     keyConcepts: ["deployable", "dsr", "pbo"],
-  },
-  pairs: {
-    title: "Pairs radar",
-    description:
-      "Cointegrated stat-arb pairs and their current spread state — z-score, half-life, hedge ratio, and cointegration p-value per pair. A cointegration break (rolling ADF p-value > 0.10) exits the trade even without a stop. Advisory only.",
-    keyConcepts: ["cointegration", "z-score", "half-life"],
   },
   "data-explorer": {
     title: "Data explorer",
@@ -424,7 +370,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "symbol-screener": {
     title: "Symbol screener",
     description:
-      "Search FMP's full symbol universe by name or ticker, or filter it by sector, industry, market cap, price, beta, or dividend yield — independent of your tracked watchlist. Send a discovered symbol straight to Paper Broker's Quick Trade, or a whole selection to its Strategy Scan.",
+      "Search FMP's full symbol universe by name or ticker, or filter it by sector, industry, market cap, price, beta, or dividend yield — independent of your tracked watchlist. Send a discovered symbol straight to Paper Broker's Quick Trade.",
     keyConcepts: [],
   },
   "trade-history": {
@@ -454,8 +400,8 @@ export const TAB_HELP: Record<string, TabHelp> = {
   observability: {
     title: "Mission Control",
     description:
-      "An attention summary up top flags anything that actually needs a look — circuit-breaker trips, risk-gate blocks, a sizing-cap escalation, a stale heartbeat, the macro gate being off — with an honest 'All clear' when nothing does. Below that, always visible: the macro regime gate control (VIX, Sahm Rule, HY OAS, yield curve, HMM risk-on probability, and the toggle that vetoes new BUYs during a bad regime) and portfolio risk/equity history. Everything else — forecast-model skill (portfolio-wide and per-symbol), the circuit-breaker dashboard, the raw risk-gate block log, system telemetry, per-symbol quote latency, the sizing-cap audit trail, ETF volatility transmission, heartbeat, strategy P&L, and the log tail — lives in a collapsed 'Background telemetry' section below, expandable on demand.",
-    keyConcepts: ["hmm regime", "risk gate", "circuit breaker", "sizing cap", "etf transmission", "skill decay", "mc band coverage"],
+      "An attention summary up top flags anything that actually needs a look — circuit-breaker trips, risk-gate blocks, a sizing-cap escalation, a stale heartbeat, the macro gate being off — with an honest 'All clear' when nothing does. Below that, always visible: the macro regime gate control (VIX, Sahm Rule, HY OAS, yield curve, HMM risk-on probability, and the toggle that vetoes new BUYs during a bad regime) and portfolio risk/equity history. Everything else — forecast-model skill (portfolio-wide and per-symbol), the circuit-breaker dashboard, the raw risk-gate block log, system telemetry, per-symbol quote latency, the sizing-cap audit trail, heartbeat, strategy P&L, and the log tail — lives in a collapsed 'Background telemetry' section below, expandable on demand.",
+    keyConcepts: ["hmm regime", "risk gate", "circuit breaker", "sizing cap", "skill decay", "mc band coverage"],
   },
   pipeline: {
     title: "Pipeline",
@@ -508,7 +454,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "settings-modules": {
     title: "Modules & Integrations",
     description:
-      "Entry points to every `.env`-write surface and sub-system: the Strategy Matrix (per-module signal weights), general runtime tunables, the scoped sentiment/sector-selection/FMP/ETF-transmission editors, the Prompt Registry, the AI Control Center, and your active Pilot follows.",
+      "Entry points to every `.env`-write surface and sub-system: the Strategy Matrix (per-module signal weights), general runtime tunables, the scoped sentiment/sector-selection/FMP editors, the Prompt Registry, and the AI Control Center.",
     keyConcepts: ["signal weight", "prompt registry"],
   },
   "settings-feature-flags": {
@@ -523,12 +469,6 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "General platform settings governing position sizing, risk limits, HMM regime detection, forecasting models, and operations. All modifications are advisory only — tuning changes what the platform computes and suggests, never placing broker orders automatically.",
     keyConcepts: ["kelly target", "regime multiplier", "risk gate", "circuit breaker"],
   },
-  "settings-cache-long-short": {
-    title: "Cache Long/Short Settings",
-    description:
-      "Configuration for the Cache Long/Short tax-loss harvesting engine. Controls scan frequency, maximum beta drift, proxy hedge correlation thresholds, and wash-sale safety windows.",
-    keyConcepts: ["tax loss harvesting", "proxy hedge", "correlation drift"],
-  },
   "settings-paper-broker": {
     title: "Paper Broker Settings",
     description:
@@ -538,7 +478,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "settings-sentiment": {
     title: "Sentiment & News Ingestion Settings",
     description:
-      "Parameters for news ingestion pipelines and sentiment scoring. Manages active news providers (FMP, StockTwits, Reddit, EDGAR, GDELT), FinBERT model batching, and attention proxy feeds.",
+      "Parameters for news ingestion pipelines and sentiment scoring. Manages active news providers (FMP, StockTwits, EDGAR, GDELT), FinBERT model batching, and attention proxy feeds.",
     keyConcepts: ["finbert classification", "news provider", "sentiment score"],
   },
   "settings-sector-selection": {
@@ -553,22 +493,16 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "API keys, rate limits, endpoints, and adjustment modes for the primary market data provider (FMP). Ensure FMP_BARS_ADJUSTMENT matches your analytical expectations (dividend-adjusted vs. unadjusted).",
     keyConcepts: ["advisory only", "auto-refresh", "safety telemetry"],
   },
-  "settings-etf-transmission": {
-    title: "ETF Volatility Transmission Settings",
-    description:
-      "Measurement and risk overlay settings for ETF arbitrage volatility transmission (Ben-David, Franzoni & Moussawi 2018). Controls ownership reference thresholds, comovement R² windows, and sizing derate bounds.",
-    keyConcepts: ["etf transmission", "market session", "risk gate"],
-  },
   "settings-reference": {
     title: "Settings Reference",
     description:
-      "A complete read-only catalog of all 464 platform configuration settings across 14 functional domains. Surfaces default values, live process values (secrets masked), liveness behavior (immediately, restart required, no-op, or env-pinned), and direct links to active settings editor screens.",
+      "A complete read-only catalog of every platform configuration setting across 13 functional domains. Surfaces default values, live process values (secrets masked), liveness behavior (immediately, restart required, no-op, or env-pinned), and direct links to active settings editor screens.",
     keyConcepts: ["advisory only", "liveness", "settings reference"],
   },
   "symbol-detail": {
     title: "Symbol Detail",
     description:
-      "Deep dive on one symbol: the advisory recommendation, the regime-multiplier sizing breakdown behind that Kelly Target, factor exposure, risk & regime, rolling beta, forecast skill, and the persisted options directive — plus three on-demand AI generation cards you can trigger yourself: a Claude analyst note, a Gemini chart-pattern read, and an Opal research brief. Each AI card is independent and generated only when you click its Generate button; an honest, provider-specific message explains why a card has nothing to show (e.g. a disabled capability or a missing API key) rather than a generic error.",
+      "Deep dive on one symbol: the advisory recommendation, the regime-multiplier sizing breakdown behind that Kelly Target, factor exposure, risk & regime, rolling beta, and forecast skill — plus three on-demand AI generation cards you can trigger yourself: a Claude analyst note, a Gemini chart-pattern read, and an Opal research brief. Each AI card is independent and generated only when you click its Generate button; an honest, provider-specific message explains why a card has nothing to show (e.g. a disabled capability or a missing API key) rather than a generic error.",
     keyConcepts: [
       "advisory only",
       "kelly target",
@@ -578,18 +512,6 @@ export const TAB_HELP: Record<string, TabHelp> = {
       "chart-pattern read",
       "research brief",
     ],
-  },
-  "cache-long-short": {
-    title: "Cache Long/Short",
-    description:
-      "A systematic tax-loss harvesting (TLH) overlay. It monitors concentrated equity positions for TLH opportunities, generating a proxy hedge (like a highly-correlated sector ETF) to maintain beta exposure while avoiding wash-sale rules. Pending trades are routed here for approval before taking effect.",
-    keyConcepts: ["tax loss harvesting", "proxy hedge", "correlation drift"],
-  },
-  "options-chain": {
-    title: "Options Chain Explorer",
-    description:
-      "Interactive options chain for a single symbol — browse available expirations, inspect bid/ask/IV/Greeks per strike, and see the statistically-grounded Chance of Profit for each contract. Chain data comes from yfinance; the underlying spot price for Greek calculations comes from the FMP quote endpoint for reliability. Use Builder mode to construct common multi-leg strategies (spreads, straddles, calendars) from the chain, then review the combined order in the ticket — Paper orders simulate a fill, and Live orders require an explicit confirmation and remain subject to advisory-only constraints (no order is actually routed to a broker yet).",
-    keyConcepts: ["options delta", "options theta", "implied volatility", "chance of profit"],
   },
   universe: {
     title: "Universe Transparency",

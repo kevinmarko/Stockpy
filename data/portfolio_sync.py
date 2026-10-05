@@ -6,7 +6,7 @@ Task 1.4 — Portfolio & Watchlist Synchronization Engine.
 Single-purpose module that takes the **union** of (a) every active Robinhood
 holding and (b) every user-defined Robinhood watchlist + plain-text watchlist
 files, and reconciles it against the platform's market-data feeds
-(``data.market_data`` → Alpaca quotes/bars + Finnhub fundamentals).
+(``data.market_data`` → FMP/yfinance quotes/bars + Yahoo/FMP fundamentals).
 
 Why this exists
 ---------------
@@ -48,7 +48,7 @@ Public API
 
 CONSTRAINTS honoured
 --------------------
-* No paid dependencies — Alpaca / Finnhub / yfinance via the existing
+* No new dependencies — FMP / yfinance via the existing
   ``data.market_data`` layer; no new vendors.
 * No fabricated metrics — when a quote / bar / fundamental fetch fails the
   symbol is marked ``UNCOVERED`` / ``EQUITY_ONLY`` and a NaN is propagated
@@ -65,13 +65,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from settings import settings
+
+# Worker threads for build_sync_report's per-symbol coverage probes.
+_SYNC_PROBE_WORKERS = 8
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +136,7 @@ class SymbolStatus:
     cost_basis_delta_per_share: float        # current_price - avg_cost (signed)
     market_value: float                      # quantity * current_price (NaN if either side NaN)
     is_stale_quote: bool                     # surfaced from MarketDataProvider.Quote.is_stale
-    quote_source: str                        # "alpaca"/"yfinance"/"" when no quote
+    quote_source: str                        # "fmp"/"yfinance"/"" when no quote
     has_fundamentals: bool
     forecast_available: bool                 # True when a Forecast_30 (or analogous) value exists
     watchlists: tuple[str, ...]              # names of RH lists containing this symbol
@@ -239,6 +243,9 @@ def _isfinite(x: float) -> bool:
 def _probe_symbol_coverage(
     symbol: str,
     provider: Any,
+    *,
+    fundamentals_lookup: Optional[Callable[[str], Tuple[bool, str]]] = None,
+    price_lookup: Optional[Callable[[str], Optional[Tuple[float, bool]]]] = None,
 ) -> Dict[str, Any]:
     """Probe one symbol against the market-data provider.
 
@@ -250,6 +257,20 @@ def _probe_symbol_coverage(
       - ``source``       : str, "" on no-quote
       - ``has_funds``    : bool
       - ``diagnostic``   : str, "" on full success
+
+    ``fundamentals_lookup``, when given, replaces the live
+    ``provider.get_fundamentals`` call. It returns ``(has_funds, diag)``,
+    where ``diag`` is "" on success. Read endpoints pass a database-only
+    lookup so a page load never waits on per-symbol FMP fundamentals calls.
+
+    ``price_lookup``, when given, is tried first for the quote and bars legs.
+    It returns ``(last_close, is_outdated)`` from the stored daily bars, or
+    ``None`` when the symbol has no stored bars. A stored close is reported
+    with ``is_stale=True`` and source ``"price_bars (stored close)"``, because
+    it is not a live price. Coverage is downgraded to STALE only when the
+    stored bar itself is outdated (``is_outdated``), so a symbol whose bars
+    are current still counts as FULL. A ``None`` result falls back to the
+    live quote and bars probes for that symbol only.
     """
     diag: List[str] = []
     quote_ok = False
@@ -258,20 +279,36 @@ def _probe_symbol_coverage(
     price = float("nan")
     is_stale = False
     source = ""
+    coverage_stale: Optional[bool] = None  # None = follow is_stale
 
-    # --- quote probe ---
-    try:
-        q = provider.get_latest_quote(symbol)
-        quote_ok = True
-        price = float(q.price)
-        is_stale = bool(q.is_stale)
-        source = str(q.source)
-    except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
-        diag.append(f"quote:{type(exc).__name__}")
+    stored = None
+    if price_lookup is not None:
+        try:
+            stored = price_lookup(symbol)
+        except Exception as exc:  # noqa: BLE001 - fall back to the live probe
+            logger.debug("sync probe: stored price read failed for %s: %s", symbol, exc)
+            stored = None
+
+    if stored is not None:
+        price, coverage_stale = float(stored[0]), bool(stored[1])
+        quote_ok = bars_ok = True
+        is_stale = True
+        source = "price_bars (stored close)"
+
+    # --- quote probe (skipped when the stored close already answered it) ---
+    if stored is None:
+        try:
+            q = provider.get_latest_quote(symbol)
+            quote_ok = True
+            price = float(q.price)
+            is_stale = bool(q.is_stale)
+            source = str(q.source)
+        except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
+            diag.append(f"quote:{type(exc).__name__}")
 
     # --- bars probe (only if quote succeeded — bar fetch is the heavier call
     # and we don't pay it for symbols we already know aren't covered) ---
-    if quote_ok:
+    if stored is None and quote_ok:
         try:
             bars = provider.get_intraday_bars(symbol, lookback_days=5)
             bars_ok = bars is not None and not bars.empty
@@ -282,13 +319,22 @@ def _probe_symbol_coverage(
 
     # --- fundamentals probe — empty dict is a legitimate "no coverage"
     # outcome (the get_fundamentals contract never raises). ---
-    try:
-        funds = provider.get_fundamentals(symbol) or {}
-        fund_ok = bool(funds)
-        if not fund_ok:
-            diag.append("fundamentals:empty")
-    except Exception as exc:  # noqa: BLE001 - defensive; provider says it doesn't raise
-        diag.append(f"fundamentals:{type(exc).__name__}")
+    if fundamentals_lookup is not None:
+        try:
+            fund_ok, fund_diag = fundamentals_lookup(symbol)
+            if fund_diag:
+                diag.append(fund_diag)
+        except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
+            fund_ok = False
+            diag.append(f"fundamentals:{type(exc).__name__}")
+    else:
+        try:
+            funds = provider.get_fundamentals(symbol) or {}
+            fund_ok = bool(funds)
+            if not fund_ok:
+                diag.append("fundamentals:empty")
+        except Exception as exc:  # noqa: BLE001 - defensive; provider says it doesn't raise
+            diag.append(f"fundamentals:{type(exc).__name__}")
 
     # --- classify ---
     if quote_ok and bars_ok and fund_ok:
@@ -298,7 +344,9 @@ def _probe_symbol_coverage(
         # works, and it's fresh" apart from "everything works, but don't
         # trust this price for time-sensitive decisions". Bars/fundamentals
         # coverage is unaffected -- only the quote leg drives this flag.
-        coverage = CoverageStatus.STALE if is_stale else CoverageStatus.FULL
+        # A stored close sets coverage_stale from the bar's own age instead.
+        stale_for_coverage = is_stale if coverage_stale is None else coverage_stale
+        coverage = CoverageStatus.STALE if stale_for_coverage else CoverageStatus.FULL
     elif quote_ok and bars_ok and not fund_ok:
         coverage = CoverageStatus.QUOTES_ONLY
     elif not quote_ok and not fund_ok:
@@ -317,6 +365,108 @@ def _probe_symbol_coverage(
         "has_funds": fund_ok,
         "diagnostic": ",".join(diag),
     }
+
+
+def _stored_fundamentals_lookup() -> Callable[[str], Tuple[bool, str]]:
+    """Return a database-only fundamentals check for the coverage probe.
+
+    Reads the newest ``fundamentals_history`` row through a read-only
+    ``HistoricalStore``; it never calls a provider. The daemon pipeline keeps
+    these rows current every cycle. A symbol counts as having fundamentals
+    when its newest row carries at least one real typed value or a non-empty
+    raw payload. A symbol with no row reports ``fundamentals:not_in_store``,
+    and an unreadable store reports ``fundamentals:store_unavailable``.
+    Neither is ever reported as covered.
+    """
+    try:
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(readonly=True)
+    except Exception as exc:  # noqa: BLE001 - degrade honestly, never fetch live
+        logger.warning("sync probe: fundamentals store unavailable: %s", exc)
+
+        def _unavailable(_symbol: str) -> Tuple[bool, str]:
+            return False, "fundamentals:store_unavailable"
+
+        return _unavailable
+
+    def _lookup(symbol: str) -> Tuple[bool, str]:
+        try:
+            row = store._read_fundamentals_row(symbol.upper())
+        except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
+            logger.debug("sync probe: fundamentals row read failed for %s: %s", symbol, exc)
+            return False, "fundamentals:store_unavailable"
+        if row is None:
+            return False, "fundamentals:not_in_store"
+        _as_of, typed, raw_json = row
+        has_value = any(
+            isinstance(v, (int, float)) and _isfinite(float(v)) for v in typed.values()
+        )
+        has_raw = bool(raw_json) and str(raw_json).strip() not in ("", "{}", "null")
+        if has_value or has_raw:
+            return True, ""
+        return False, "fundamentals:empty"
+
+    return _lookup
+
+
+# A stored bar counts as current when it is no more than this many business
+# days old. Two, not one, so the session after an exchange holiday (whose
+# previous business day had no bar) does not read as outdated.
+_STORED_BAR_MAX_AGE_BDAYS = 2
+
+
+def _stored_price_lookup(
+    *, today: Optional[Any] = None
+) -> Callable[[str], Optional[Tuple[float, bool]]]:
+    """Return a database-only last-close lookup for the coverage probe.
+
+    Reads the newest ``price_bars`` row through a read-only
+    ``HistoricalStore``; it never calls a provider. The daemon pipeline tops
+    these bars up every cycle. Returns ``(close, is_outdated)``, where
+    ``is_outdated`` is True when the bar is older than
+    ``_STORED_BAR_MAX_AGE_BDAYS`` business days before *today* (US/Eastern).
+    Returns ``None`` when the symbol has no usable stored bar, or the store
+    is unreadable; the probe then falls back to live calls for that symbol.
+    """
+    import pandas as pd
+
+    if today is None:
+        today = pd.Timestamp.now(tz="America/New_York").tz_localize(None)
+    cutoff = (pd.Timestamp(today).normalize()
+              - pd.tseries.offsets.BDay(_STORED_BAR_MAX_AGE_BDAYS))
+
+    try:
+        from data.historical_store import HistoricalStore
+
+        store = HistoricalStore(readonly=True)
+    except Exception as exc:  # noqa: BLE001 - live probe takes over
+        logger.warning("sync probe: price store unavailable: %s", exc)
+        return lambda _symbol: None
+
+    def _lookup(symbol: str) -> Optional[Tuple[float, bool]]:
+        try:
+            with store._lock:
+                row = store._get_conn().execute(
+                    "SELECT date, close FROM price_bars WHERE symbol = ? "
+                    "AND close IS NOT NULL ORDER BY date DESC LIMIT 1",
+                    (symbol.upper(),),
+                ).fetchone()
+        except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
+            logger.debug("sync probe: stored close read failed for %s: %s", symbol, exc)
+            return None
+        if not row:
+            return None
+        try:
+            close = float(row[1])
+            bar_date = pd.Timestamp(row[0]).normalize()
+        except Exception:  # noqa: BLE001 - unparseable row, use live probe
+            return None
+        if not (_isfinite(close) and close > 0):
+            return None
+        return close, bool(bar_date < cutoff)
+
+    return _lookup
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +492,8 @@ def build_sync_report(
     watchlist_files: Optional[Iterable[Path]] = None,
     forecast_symbols: Optional[Iterable[str]] = None,
     probe_market: bool = True,
+    fundamentals_from_store: bool = False,
+    prices_from_store: bool = False,
 ) -> SyncReport:
     """Build a :class:`SyncReport` reconciling all sources for the current run.
 
@@ -370,6 +522,21 @@ def build_sync_report(
         When ``False``, skip the market-data probe entirely and return all
         symbols as ``CoverageStatus.UNKNOWN``.  Useful for fast offline
         sanity tests.
+    fundamentals_from_store:
+        When ``True``, the fundamentals leg of each probe reads the stored
+        ``fundamentals_history`` rows instead of calling the provider.
+        Read endpoints set this: after a restart the in-process fundamentals
+        cache is empty, and live per-symbol FMP fundamentals calls made the
+        first ``GET /data/sync-report`` take about 95 s. Quote and bars
+        probes stay live unless ``prices_from_store`` is also set. Default
+        ``False`` keeps the explicit sync path (``async_sync_now``), the MCP
+        and Gravity on live probes.
+    prices_from_store:
+        When ``True``, the quote and bars legs use the last stored daily close
+        from ``price_bars`` (reported as a stale quote) and only fall back to
+        live calls for symbols with no stored bar. This plan has no bulk
+        quote endpoint, so live quotes cost one throttled FMP call per symbol
+        (about 23 s for 29 symbols on a cold start). Read endpoints set this.
 
     Returns
     -------
@@ -451,7 +618,7 @@ def build_sync_report(
             provider = get_provider()
             provider_source = getattr(provider, "quote_source", "unknown")
             # Fundamentals now come from the Yahoo statement-computed engine
-            # (source_name "yahoo_computed"), no longer Finnhub. Read the label
+            # (source_name "yahoo_computed"), not Finnhub. Read the label
             # off the active provider so the sync-report provenance stays honest.
             fundamentals_source = getattr(provider, "source_name", "yfinance")
         except Exception as exc:  # noqa: BLE001
@@ -461,6 +628,43 @@ def build_sync_report(
 
     forecast_set = {s.upper() for s in (forecast_symbols or [])}
 
+    # ----- per-symbol coverage probes, in parallel -----
+    # Each probe is three network calls (quote, intraday bars, fundamentals)
+    # and used to run one symbol at a time: ~2.5 s x 29 symbols made
+    # GET /data/sync-report take over a minute. FMP's module-level throttle
+    # still paces FMP calls across threads; each probe dead-letters its own
+    # failures, and the wrapper below catches anything else per symbol.
+    probes: Dict[str, Dict[str, Any]] = {}
+    if provider is not None and probe_market:
+        fund_lookup = _stored_fundamentals_lookup() if fundamentals_from_store else None
+        if fundamentals_from_store:
+            fundamentals_source = "fundamentals_history (stored)"
+
+        price_lookup = _stored_price_lookup() if prices_from_store else None
+
+        def _safe_probe(sym: str) -> Dict[str, Any]:
+            try:
+                return _probe_symbol_coverage(
+                    sym,
+                    provider,
+                    fundamentals_lookup=fund_lookup,
+                    price_lookup=price_lookup,
+                )
+            except Exception as exc:  # noqa: BLE001 - per-symbol dead-letter
+                logger.warning("sync probe failed for %s: %s", sym, exc)
+                return {
+                    "coverage": CoverageStatus.UNKNOWN,
+                    "current_price": float("nan"),
+                    "is_stale": False,
+                    "source": "",
+                    "has_funds": False,
+                    "diagnostic": f"probe:{type(exc).__name__}",
+                }
+
+        ordered = sorted(universe)
+        with ThreadPoolExecutor(max_workers=_SYNC_PROBE_WORKERS) as pool:
+            probes = dict(zip(ordered, pool.map(_safe_probe, ordered)))
+
     # ----- per-symbol assembly -----
     symbols: Dict[str, SymbolStatus] = {}
     for sym in sorted(universe):
@@ -469,8 +673,8 @@ def build_sync_report(
         qty = float(getattr(pos, "quantity", 0.0) or 0.0) if held else 0.0
         avg = float(getattr(pos, "average_cost", float("nan"))) if held else float("nan")
 
-        if provider is not None and probe_market:
-            probe = _probe_symbol_coverage(sym, provider)
+        if sym in probes:
+            probe = probes[sym]
         else:
             probe = {
                 "coverage": CoverageStatus.UNKNOWN,
@@ -691,10 +895,10 @@ def compute_tracked_universe(
     optionally rating-excluded, falling back to ``default_tickers`` only when
     that whole union is empty.
 
-    This is the shared core of ``main.py::_build_universe()`` — callers there
-    still layer their own Robinhood-snapshot ``held`` set, their own
-    ``pilots.discovery.discovery()`` call, and (main.py only) a Google-Sheet
-    fallback tier on top of this function's result. It intentionally does
+    This is the shared core of ``pipeline.advisory_inputs.build_universe_detailed()``
+    (used by main.py and, since step 5.1, the daemon), which layers its own
+    Robinhood-snapshot ``held`` set, ``pilots.discovery.discovery()`` call and
+    closed-position retention on top of this function's result. It intentionally does
     **not** attempt to also cover ``resolve_universe()``'s CLI/MCP semantics
     above, whose ``DEFAULT_TICKERS`` handling is unconditional-union rather
     than fallback-only by design (see that function's own docstring) — the

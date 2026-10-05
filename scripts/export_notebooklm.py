@@ -4,11 +4,12 @@ Formats the platform's current state into a modular multi-source knowledge
 pack for NotebookLM ingestion:
 
   - ``output/notebooklm_source.md`` -- the original consolidated export
-    (macro/portfolio/follows), plus a trailing note pointing at the 5
+    (macro/portfolio), plus a trailing note pointing at the 5
     modular files below.
   - ``output/notebooklm/01_macro_and_regime.md`` -- macro & regime detail.
-  - ``output/notebooklm/02_portfolio_and_greeks.md`` -- portfolio & options
-    Greeks detail.
+  - ``output/notebooklm/02_portfolio_and_greeks.md`` -- portfolio holdings
+    detail (the options-Greeks half was removed with the options desk in
+    2026-09, step 4a; the filename is kept for stability).
   - ``output/notebooklm/03_strategy_signals_and_picks.md`` -- strategy
     signals & picks.
   - ``output/notebooklm/04_trade_journal_and_ledger.md`` -- the trade
@@ -42,7 +43,6 @@ from scripts._bootstrap import bootstrap  # noqa: E402
 bootstrap()
 
 from data.historical_store import HistoricalStore  # noqa: E402
-from pilots.follows_store import FollowsStore  # noqa: E402
 from pilots.portfolio import serialize_portfolio  # noqa: E402
 from settings import settings  # noqa: E402
 
@@ -65,7 +65,7 @@ logger = logging.getLogger("notebooklm_export")
 #
 # A test exercising the modular path monkeypatches these names onto this
 # module the same way the existing test suite already monkeypatches
-# `HistoricalStore`/`FollowsStore`.
+# `HistoricalStore`.
 # ---------------------------------------------------------------------------
 
 _MODULAR_SECTION_FILENAMES: Tuple[str, ...] = (
@@ -81,7 +81,7 @@ _MODULAR_SECTION_FILENAMES: Tuple[str, ...] = (
 # "plain" sections receive (out_dir) alone).
 _SECTION_SPECS: Tuple[Tuple[str, str, str, str], ...] = (
     ("macro", "01_macro_and_regime.md", "Macro & Regime Context", "store"),
-    ("portfolio", "02_portfolio_and_greeks.md", "Portfolio & Options Greeks", "store"),
+    ("portfolio", "02_portfolio_and_greeks.md", "Portfolio Holdings & Allocation", "store"),
     ("signals", "03_strategy_signals_and_picks.md", "Strategy Signals & Picks", "plain"),
     ("trades", "04_trade_journal_and_ledger.md", "Trade Journal & Ledger", "plain"),
     ("options", "05_options_directives_and_matrix.md", "Options Directives & Pricing Matrix", "plain"),
@@ -467,40 +467,32 @@ def generate_macro_regime_source(store, output_dir: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Generator 2: Portfolio & Greeks (02_portfolio_and_greeks.md)
+# Generator 2: Portfolio holdings (02_portfolio_and_greeks.md)
 # ---------------------------------------------------------------------------
 
 def generate_portfolio_greeks_source(store, output_dir: Path) -> str:
-    """Generate the Portfolio Holdings & Net Risk Greeks source document
-    (02_portfolio_and_greeks.md).
+    """Generate the Portfolio Holdings & Allocation source document
+    (02_portfolio_and_greeks.md -- filename kept for stability).
 
     ``store`` is an already-constructed ``HistoricalStore(readonly=True)``,
     or ``None`` if construction failed upstream. ``output_dir`` is accepted
     for signature parity with the other modular-knowledge-pack generators.
 
-    Three independent sections, each with its own try/except so a failure
+    Two independent sections, each with its own try/except so a failure
     in one can never blank another:
 
     1. Account Liquidity & Capital Summary -- reuses the existing
        ``store.latest_account_snapshot()`` -> ``serialize_portfolio()`` path.
-    2. Net Portfolio Greeks & Beta Sensitivity -- calls
-       ``pilots.paper_broker.get_portfolio_greeks()`` (lazy import, NO
-       arguments passed to it -- it resolves its own store + SPY quote
-       internally). This is the fix for a CONFIRMED bug: a now-abandoned
-       prior attempt at this feature called
-       ``pilots.options_risk.calculate_portfolio_greeks()`` directly with
-       zero arguments, which silently takes the "no positions" branch
-       (``positions`` stays ``None``) and returns an all-zero-looking result
-       with no exception and no indication anything is wrong, even against
-       a real, sizeable account (CONSTRAINT #4 violation). The correct
-       wiring already lives in ``pilots.paper_broker.get_portfolio_greeks``,
-       so it is called directly rather than reinvented here.
-    3. Open Positions & Basis -- a markdown table over the *same* portfolio
+    2. Open Positions & Basis -- a markdown table over the *same* portfolio
        payload used in section 1 (not re-fetched), so it only renders when
        section 1 actually succeeded.
+
+    The former "Net Portfolio Greeks & Beta Sensitivity" section was removed
+    with the options desk (2026-09, step 4a); nothing here imports an
+    options module.
     """
     lines: List[str] = []
-    lines.append("# Portfolio Holdings, Allocation & Net Risk Greeks")
+    lines.append("# Portfolio Holdings & Allocation")
     lines.append(f"**Generated At (UTC):** {datetime.now(timezone.utc).isoformat()}")
     lines.append("")
 
@@ -530,62 +522,17 @@ def generate_portfolio_greeks_source(store, output_dir: Path) -> str:
         if source:
             section_lines.append(f"- **Source**: {source}")
         lines.extend(section_lines)
-        # Only commit `port` (used by section 3 below) once the whole
+        # Only commit `port` (used by section 2 below) once the whole
         # section rendered successfully.
         port = port_local
     except Exception as exc:
-        logger.warning(f"Failed to fetch portfolio snapshot for Greeks export: {exc}")
+        logger.warning(f"Failed to fetch portfolio snapshot for NotebookLM export: {exc}")
         lines.append("Portfolio snapshot is unavailable.")
         port = None
     lines.append("")
 
     # ------------------------------------------------------------------
-    # 2. Net Portfolio Greeks & Beta Sensitivity
-    # ------------------------------------------------------------------
-    lines.append("## Net Portfolio Greeks & Beta Sensitivity")
-    lines.append(
-        "_Greeks are computed over the platform's paper-trading engine "
-        "positions (`PaperAccountStore`), which is a separate book from "
-        "the live brokerage account summarized above -- the two may hold "
-        "different positions._"
-    )
-    try:
-        # Lazy import matching this repo's convention for optional/heavy
-        # dependencies. Deliberately calling the ALREADY-CORRECT wiring
-        # instead of `pilots.options_risk.calculate_portfolio_greeks()`
-        # directly -- see the docstring above for why that call would
-        # silently fabricate an all-zero-looking result (CONSTRAINT #4).
-        from pilots.paper_broker import get_portfolio_greeks
-        greeks = get_portfolio_greeks()
-
-        section_lines = []
-        section_lines.append(f"- **Net Delta (Shares)**: {_fmt_num(greeks.get('net_delta_shares'))}")
-        section_lines.append(f"- **Net Dollar Delta ($)**: {_fmt_money(greeks.get('net_dollar_delta'))}")
-        section_lines.append(f"- **Net Gamma**: {_fmt_num(greeks.get('net_gamma'))}")
-        section_lines.append(f"- **Net Daily Theta ($/day)**: {_fmt_money(greeks.get('net_theta_daily'))}")
-        section_lines.append(f"- **Net Vega (1% IV Shock)**: {_fmt_money(greeks.get('net_vega_1pct'))}")
-        section_lines.append(f"- **Beta-Weighted SPY Delta**: {_fmt_num(greeks.get('beta_weighted_delta_spy'))}")
-        spy_spot = greeks.get("spy_spot")
-        if spy_spot is not None:
-            section_lines.append(f"- **Benchmark SPY Spot**: {_fmt_money(spy_spot)}")
-        missing = greeks.get("positions_with_missing_data") or []
-        if missing:
-            section_lines.append(
-                f"- **Positions with Missing Greeks Data**: {', '.join(str(m) for m in missing)}"
-            )
-        estimated_beta = greeks.get("symbols_with_estimated_beta") or []
-        if estimated_beta:
-            section_lines.append(
-                f"- **Symbols Using Estimated Beta**: {', '.join(str(s) for s in estimated_beta)}"
-            )
-        lines.extend(section_lines)
-    except Exception as exc:
-        logger.warning(f"Failed to compute portfolio Greeks for NotebookLM export: {exc}")
-        lines.append("Portfolio Greeks calculation is currently unavailable.")
-    lines.append("")
-
-    # ------------------------------------------------------------------
-    # 3. Open Positions & Basis
+    # 2. Open Positions & Basis
     # ------------------------------------------------------------------
     lines.append("## Open Positions & Basis")
     try:
@@ -671,8 +618,9 @@ def _fmt_bool_honest(value: Any) -> str:
 
 
 def generate_signals_picks_source(output_dir: Path) -> str:
-    """Generate the Strategy Signals, Tactical Execution & Pilot Follows
-    source document (03_strategy_signals_and_picks.md).
+    """Generate the Strategy Signals & Tactical Execution source document
+    (03_strategy_signals_and_picks.md). (Its "Active Pilot Strategy
+    Subscriptions" section went with Follow-a-Pilot, 2026-09, step 4c.)
 
     ``output_dir`` is the directory containing ``state_snapshot.json`` (i.e.
     ``settings.OUTPUT_DIR``) -- passed explicitly by the caller, never read
@@ -681,40 +629,18 @@ def generate_signals_picks_source(output_dir: Path) -> str:
 
     Never raises past this function's boundary (CONSTRAINT #6): every
     section degrades to an honest "unavailable"/"N/A" message on any failure
-    rather than propagating, and a failure in one section (e.g. the Follows
-    store) never prevents the others (state_snapshot-derived sections) from
-    rendering, and vice versa.
+    rather than propagating, and a failure in one section never prevents
+    the others from rendering.
     """
     lines: List[str] = []
-    lines.append("# Quantitative Strategy Signals, Tactical Execution & Pilot Follows")
+    lines.append("# Quantitative Strategy Signals & Tactical Execution")
     lines.append(f"**Generated At (UTC):** {datetime.now(timezone.utc).isoformat()}")
-    lines.append("")
-
-    # ------------------------------------------------------------------
-    # 1. Active Pilot Strategy Subscriptions
-    # ------------------------------------------------------------------
-    lines.append("## Active Pilot Strategy Subscriptions")
-    try:
-        follows = FollowsStore(path=str(Path(output_dir) / "follows.json")).list_active()
-        if follows:
-            lines.append("| Pilot ID | Allocated Amount | Status |")
-            lines.append("|---|---|---|")
-            for f in follows:
-                pilot_id = _md_escape(f.get("pilot_id", "Unknown"))
-                amount_str = _fmt_money(f.get("amount"))
-                status = _md_escape(f.get("status", "Unknown"))
-                lines.append(f"| {pilot_id} | {amount_str} | {status} |")
-        else:
-            lines.append("No active pilot follows.")
-    except Exception as exc:
-        logger.warning(f"Failed to fetch active pilot follows: {exc}")
-        lines.append("Active pilot follows are unavailable.")
     lines.append("")
 
     # ------------------------------------------------------------------
     # Load state_snapshot.json ONCE, shared by all three signal-derived
     # sections below -- a load failure degrades every one of them
-    # identically and independently of the Follows section above.
+    # identically.
     # ------------------------------------------------------------------
     snapshot = _load_json_file(Path(output_dir) / "state_snapshot.json")
     raw_signals = snapshot.get("signals") if snapshot else None
@@ -723,7 +649,7 @@ def generate_signals_picks_source(output_dir: Path) -> str:
     )
 
     # ------------------------------------------------------------------
-    # 2. Daily Tactical Recommendations (BUY / SELL / HOLD)
+    # 1. Daily Tactical Recommendations (BUY / SELL / HOLD)
     # ------------------------------------------------------------------
     lines.append("## Daily Tactical Recommendations (BUY / SELL / HOLD)")
     if signals is None:
@@ -752,7 +678,7 @@ def generate_signals_picks_source(output_dir: Path) -> str:
     lines.append("")
 
     # ------------------------------------------------------------------
-    # 3. Multifactor Z-Score Attribution -- only rendered when the signals
+    # 2. Multifactor Z-Score Attribution -- only rendered when the signals
     #    table above rendered (same `signals is None` gate).
     # ------------------------------------------------------------------
     lines.append("## Multifactor Z-Score Attribution")
@@ -777,18 +703,16 @@ def generate_signals_picks_source(output_dir: Path) -> str:
     lines.append("")
 
     # ------------------------------------------------------------------
-    # 4. Sizing Guardrails & ETF Transmission Impact -- same gate again.
-    #    `etf_transmission_multiplier` is ORCHESTRATOR-ONLY (written by
-    #    main_orchestrator.py's separate _write_state_snapshot() path) --
-    #    absent on the advisory-path snapshot is expected/correct and
-    #    renders "N/A" honestly, not a bug.
+    # 3. Sizing Guardrails -- same gate again. (The ETF-transmission
+    #    multiplier column was dropped when that feature was archived,
+    #    2026-09 step 4d.)
     # ------------------------------------------------------------------
-    lines.append("## Sizing Guardrails & ETF Transmission Impact")
+    lines.append("## Sizing Guardrails")
     if signals is None:
         lines.append("Sizing guardrail telemetry is currently unavailable.")
     else:
-        lines.append("| Symbol | Was Capped | Binding Constraint | ETF Transmission Multiplier |")
-        lines.append("|---|---|---|---|")
+        lines.append("| Symbol | Was Capped | Binding Constraint |")
+        lines.append("|---|---|---|")
         for sig in signals:
             if not isinstance(sig, dict):
                 continue
@@ -798,8 +722,7 @@ def generate_signals_picks_source(output_dir: Path) -> str:
             binding_constraint = _md_escape(
                 binding_constraint_raw if binding_constraint_raw is not None else "None"
             )
-            etf_mult = _fmt_signal_num(sig.get("etf_transmission_multiplier"))
-            lines.append(f"| {symbol} | {was_capped} | {binding_constraint} | {etf_mult} |")
+            lines.append(f"| {symbol} | {was_capped} | {binding_constraint} |")
 
     return "\n".join(lines)
 
@@ -1107,7 +1030,8 @@ def generate_consolidated_source(store, output_dir: Path) -> str:
     """Renders the consolidated Markdown export as a string.
 
     This is the original single-file ``build_export()`` logic (Macro
-    Context / Current Portfolio / Active Pilot Follows), extracted
+    Context / Current Portfolio; the Active Pilot Follows section went with
+    Follow-a-Pilot, 2026-09, step 4c), extracted
     VERBATIM except that it now returns the rendered Markdown instead of
     writing it directly -- the actual atomic write is the caller's
     responsibility (see ``build_export()``). Behavior for every existing
@@ -1196,35 +1120,13 @@ def generate_consolidated_source(store, output_dir: Path) -> str:
         lines.append("Portfolio snapshot is unavailable.")
     lines.append("")
 
-    # 3. Active Follows
-    lines.append("## Active Pilot Follows")
-    try:
-        follows = FollowsStore().list_active()
-        if follows:
-            # Same buffer-then-commit discipline as the Portfolio section
-            # above: a later follow row that fails to format must not leave
-            # earlier real follow lines in the document.
-            section_lines = []
-            for f in follows:
-                pilot_id = f.get('pilot_id', 'Unknown')
-                amount = _fmt_money(f.get('amount'))
-                status = f.get('status', 'Unknown')
-                section_lines.append(f"- **Pilot ID**: {pilot_id} | **Amount**: {amount} | **Status**: {status}")
-            lines.extend(section_lines)
-        else:
-            lines.append("No active pilot follows.")
-    except Exception as exc:
-        logger.warning(f"Failed to fetch active follows: {exc}")
-        lines.append("Active pilot follows are unavailable.")
-
-    # 4. NEW: Modular Sources Note -- the only behavioral addition vs. the
+    # 3. NEW: Modular Sources Note -- the only behavioral addition vs. the
     # pre-refactor single-file export.
-    lines.append("")
     lines.append("## Modular Sources Note")
     lines.append(
-        "This consolidated file summarizes core account/macro/follows "
-        "state. For deeper per-domain detail (regime diagnostics, options "
-        "Greeks, strategy signals, the trade ledger, and the options "
+        "This consolidated file summarizes core account/macro "
+        "state. For deeper per-domain detail (regime diagnostics, portfolio "
+        "holdings, strategy signals, the trade ledger, and the options "
         f"pricing matrix), see the modular files under `{output_dir / 'notebooklm'}`:"
     )
     lines.append("")
@@ -1297,7 +1199,7 @@ def build_export(
     # --- Consolidated export -------------------------------------------------
     # NOTE: deliberately NOT wrapped in its own try/except here, unlike the 5
     # modular sections below. `generate_consolidated_source()` already has
-    # its own internal per-subsection try/excepts (macro/portfolio/follows),
+    # its own internal per-subsection try/excepts (macro/portfolio),
     # so in practice this only ever raises on a genuine I/O failure inside
     # `_atomic_write_file` -- and that failure is meant to propagate out of
     # `build_export()` exactly as it did pre-refactor (see

@@ -5,7 +5,7 @@ PR5 — persistent-daemon GUI cutover, behind settings.ORCHESTRATOR_DAEMON_ENABL
 (default False). Two distinct cutover points, both in gui/orchestrator_runner.py:
 
 1. launch_daemon_engine() — the always-on desktop-shell refresh loop, spawned
-   by desktop/engine_supervisor.py's start_engine() when the flag is True.
+   when the flag is True.
    This reuses the EXACT SAME Popen/RunHandle/stop_run mechanics as
    launch_scheduled_advisory (backend="subprocess") -- just a different
    command. No dual-backend logic needed for this path.
@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import sys
 import time
-from unittest import mock
 
 import pytest
 
@@ -121,88 +120,6 @@ class TestLaunchDaemonEngine:
         fake._polled = 0
         assert handle.is_running() is False
         assert handle.returncode() == 0
-
-
-# ---------------------------------------------------------------------------
-# 2. desktop/engine_supervisor.start_engine — flag branching
-# ---------------------------------------------------------------------------
-
-class TestEngineSupervisorFlagBranching:
-    def test_flag_off_routes_to_launch_scheduled_advisory(self, monkeypatch):
-        import shared.orchestrator_runner as orchestrator_runner
-        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import start_engine
-
-        monkeypatch.setattr(orchestrator_runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", False)
-        sentinel = object()
-        captured = {}
-
-        def fake_launch_scheduled_advisory(mode, interval_seconds, *, refresh_account=False):
-            captured["called"] = True
-            return sentinel
-
-        def fake_launch_daemon_engine(*a, **k):
-            captured["daemon_called"] = True
-            return sentinel
-
-        monkeypatch.setattr(orchestrator_runner, "launch_scheduled_advisory", fake_launch_scheduled_advisory)
-        monkeypatch.setattr(orchestrator_runner, "launch_daemon_engine", fake_launch_daemon_engine)
-
-        result = start_engine(120)
-
-        assert captured.get("called") is True
-        assert "daemon_called" not in captured
-        assert result is sentinel
-
-    def test_flag_on_routes_to_launch_daemon_engine(self, monkeypatch):
-        import shared.orchestrator_runner as orchestrator_runner
-        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import start_engine
-
-        monkeypatch.setattr(orchestrator_runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
-        sentinel = object()
-        captured = {}
-
-        def fake_launch_daemon_engine(interval_seconds, *, refresh_account=False):
-            captured["interval_seconds"] = interval_seconds
-            captured["refresh_account"] = refresh_account
-            return sentinel
-
-        def fake_launch_scheduled_advisory(*a, **k):
-            captured["scheduled_called"] = True
-            return sentinel
-
-        monkeypatch.setattr(orchestrator_runner, "launch_daemon_engine", fake_launch_daemon_engine)
-        monkeypatch.setattr(orchestrator_runner, "launch_scheduled_advisory", fake_launch_scheduled_advisory)
-
-        result = start_engine(90, refresh_account=True)
-
-        assert captured == {"interval_seconds": 90, "refresh_account": True}
-        assert "scheduled_called" not in captured
-        assert result is sentinel
-
-    def test_stop_engine_explicit_timeout_still_passes_through_unchanged(self, monkeypatch):
-        """An EXPLICITLY passed timeout is still a pure pass-through to
-        stop_run() regardless of backend or flag state (2026-07 update: this
-        no longer means stop_engine is flag/backend-UNAWARE overall -- when
-        timeout is OMITTED, it now resolves per-backend via `handle.mode`;
-        see tests/test_engine_supervisor.py's dedicated coverage for that.
-        This test only pins the narrower, still-true claim: an explicit
-        caller-supplied timeout is never second-guessed)."""
-        import shared.orchestrator_runner as orchestrator_runner
-        from legacy.streamlit_command_center.desktop_shell.engine_supervisor import stop_engine
-
-        captured = {}
-
-        def fake_stop_run(handle, *, timeout=5.0):
-            captured["handle"] = handle
-            captured["timeout"] = timeout
-            return True
-
-        monkeypatch.setattr(orchestrator_runner, "stop_run", fake_stop_run)
-        handle = object()
-        result = stop_engine(handle, timeout=3.0)
-
-        assert captured == {"handle": handle, "timeout": 3.0}
-        assert result is True
 
 
 # ---------------------------------------------------------------------------

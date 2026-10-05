@@ -1,12 +1,8 @@
 import { Link } from "react-router";
 import { api } from "../api/client";
-import type { Follow, LlmStatus, PromptListResponse, StrategyMatrix, TunablesResponse, SettingsReferenceResponse } from "../api/types";
+import type { LlmStatus, PromptListResponse, StrategyMatrix, TunablesResponse, SettingsReferenceResponse } from "../api/types";
 import { useApi } from "../hooks/useApi";
-import { useMutation } from "../hooks/useMutation";
 import { theme } from "../theme";
-import { SectionCard } from "../components/SectionCard";
-import { Button, Loading, ErrorState, EmptyState } from "../components/ui";
-import { fmtUsd } from "../format";
 import { TabGuide } from "../components/TabGuide";
 
 export function SettingsModules() {
@@ -26,14 +22,10 @@ export function SettingsModules() {
       <SentimentLink />
       <SectorSelectionLink />
       <FmpLink />
-      <EtfTransmissionLink />
-      <CacheLongShortLink />
-        <PaperBrokerLink />
+      <PaperBrokerLink />
       <PromptRegistryLink />
       <AiControlCenterLink />
       <SettingsReferenceLink />
-      
-      <ActiveFollowsSection />
     </div>
   );
 }
@@ -178,32 +170,6 @@ function FmpLink() {
 }
 
 
-function EtfTransmissionLink() {
-  const { data } = useApi<TunablesResponse>(() => api.getEtfTransmissionSettings(), []);
-  const fieldCount = data?.groups.reduce((acc, g) => acc + g.fields.length, 0) ?? null;
-  return (
-    <Link
-      to="/settings/etf-transmission"
-      className="card card-pad"
-      style={{ display: "block", textDecoration: "none" }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>ETF Volatility Transmission</div>
-          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
-            {fieldCount == null
-              ? "Holdings ingestion, residualization & derates"
-              : `${fieldCount} ETF transmission settings`}
-          </div>
-        </div>
-        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
-      </div>
-    </Link>
-  );
-}
-
-
-
 function PaperBrokerLink() {
   const { data } = useApi<TunablesResponse>(() => api.getPaperBrokerSettings(), []);
   const fieldCount = data?.groups.reduce((acc, g) => acc + g.fields.length, 0) ?? null;
@@ -227,31 +193,6 @@ function PaperBrokerLink() {
     </Link>
   );
 }
-
-function CacheLongShortLink() {
-  const { data } = useApi<TunablesResponse>(() => api.getCacheLongShortSettings(), []);
-  const fieldCount = data?.groups.reduce((acc, g) => acc + g.fields.length, 0) ?? null;
-  return (
-    <Link
-      to="/settings/cache-long-short"
-      className="card card-pad"
-      style={{ display: "block", textDecoration: "none" }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <div style={{ fontSize: "var(--t-title)", fontWeight: 700 }}>Cache Long/Short Strategy</div>
-          <div style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: "var(--s-0-5)" }}>
-            {fieldCount == null
-              ? "Proxy modeling, correlation bounds & TLH"
-              : `${fieldCount} strategy settings`}
-          </div>
-        </div>
-        <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
-      </div>
-    </Link>
-  );
-}
-
 
 /**
  * Entry point to the Prompt Registry screen — a `.env`-write-adjacent surface
@@ -354,79 +295,5 @@ function SettingsReferenceLink() {
         <span style={{ color: theme.textMuted, fontSize: "var(--t-title)" }}>›</span>
       </div>
     </Link>
-  );
-}
-
-
-/**
- * Per-pilot "Re-plan" over the EXISTING POST /pilots/{id}/follow endpoint --
- * zero new backend code. "Re-plan all" was cut from this feature: cross-
- * Pilot netting doesn't exist, so a naive loop would emit duplicate intents
- * for a symbol held by two Pilots (see the Data & Automation plan).
- */
-function ActiveFollowsSection() {
-  const {
-    data: follows,
-    loading,
-    error,
-    status: httpStatus,
-    reload,
-  } = useApi<Follow[]>(() => api.getFollows(), []);
-
-  return (
-    <SectionCard
-      title="Active follows"
-      sub="Re-plan recomputes and replaces output/execution_queue.json for that Pilot only."
-    >
-      {loading && <Loading lines={2} />}
-      {!loading && error && (
-        <ErrorState message={error} status={httpStatus} onRetry={reload} />
-      )}
-      {!loading && !error && follows && (
-        follows.length === 0 ? (
-          <EmptyState title="No active follows" />
-        ) : (
-          <div className="list">
-            {follows.map((f) => (
-              <FollowRow key={f.pilot_id} follow={f} />
-            ))}
-          </div>
-        )
-      )}
-    </SectionCard>
-  );
-}
-
-
-function FollowRow({ follow }: { follow: Follow }) {
-  const { run, pending, result, error } = useMutation(() =>
-    api.follow(follow.pilot_id, follow.amount)
-  );
-
-  return (
-    <div className="row" style={{ alignItems: "flex-start" }}>
-      <div className="row-main">
-        <span className="row-title">{follow.pilot_id}</span>
-        <span className="row-sub">{fmtUsd(follow.amount)}</span>
-        {result && (
-          <span
-            className="row-sub"
-            style={{ color: result.queue_written ? theme.growth : theme.textMuted }}
-          >
-            {result.queue_written
-              ? `Re-planned — ${result.planned_intents.length} order(s) queued.`
-              : "Preview only — execution mode is off, nothing was written."}
-          </span>
-        )}
-        {error && (
-          <span className="row-sub" style={{ color: theme.decline }}>
-            {error}
-          </span>
-        )}
-      </div>
-      <Button variant="neutral" pending={pending} onClick={() => run()}>
-        Re-plan
-      </Button>
-    </div>
   );
 }

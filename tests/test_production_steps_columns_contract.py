@@ -3,7 +3,7 @@ tests/test_production_steps_columns_contract.py
 =================================================
 Shared CONSTRAINT #4 writeback contract, proved once and applied to both of
 pipeline/production_steps.py's per-ticker dict -> dashboard_df column
-writers: ``_apply_forecast_columns`` and ``_apply_options_columns``.
+writers: ``_apply_forecast_columns`` and ``_apply_trend_vol_columns``.
 Formerly two structural-twin files (tests/test_production_steps_forecast_columns.py,
 tests/test_production_steps_options_columns.py) independently re-proving the
 same five-scenario contract for two different writers -- consolidated here
@@ -26,9 +26,10 @@ dict onto Target_Days/ARIMA/MC_Target/MC_Lower/MC_Upper/Forecast_10/
 Forecast_30/Forecast_60/Forecast_90/Forecast_30_Prophet_Lower/
 Forecast_30_Prophet_Upper -- source keys equal column names.
 
-``_apply_options_columns`` maps OptionsAnalysisStep's per-ticker
-tech_opt_indicators dict onto GARCH_Vol/Realized_Vol_Rank/True_IVR/VRP/
-Aroon Oscillator/Coppock Curve/Chandelier Exit -- three source keys
+``_apply_trend_vol_columns`` maps TrendVolatilityStep's per-ticker
+trend_vol_indicators dict onto GARCH_Vol/Aroon Oscillator/Coppock Curve/
+Chandelier Exit (Realized_Vol_Rank/True_IVR/VRP were dropped from the map and
+from COLUMN_SCHEMA in the 2026-09 schema trim, step 4f) -- three source keys
 (Aroon_Oscillator, Coppock_Curve, Chandelier_Long) are deliberately renamed
 onto differently-spelled/named dashboard columns, preserved exactly in the
 ``full_expected``/``partial_expected_present`` mappings below.
@@ -46,15 +47,16 @@ from typing import Callable
 import pandas as pd
 import pytest
 
-from pipeline.production_steps import _apply_forecast_columns, _apply_options_columns
+from pipeline.production_steps import _apply_forecast_columns, _apply_trend_vol_columns
 
 FORECAST_COLS = [
     'Target_Days', 'ARIMA', 'MC_Target', 'MC_Lower', 'MC_Upper',
     'Forecast_10', 'Forecast_30', 'Forecast_60', 'Forecast_90',
     'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper',
 ]
+# Realized_Vol_Rank / True_IVR / VRP left this map with the step-4f schema trim.
 OPTIONS_COLUMNS = (
-    "GARCH_Vol", "Realized_Vol_Rank", "True_IVR", "VRP",
+    "GARCH_Vol",
     "Aroon Oscillator", "Coppock Curve", "Chandelier Exit",
 )
 
@@ -122,35 +124,32 @@ CASES = [
         mixed_healthy_expected_value=101.0,
     ),
     WritebackCase(
-        id="options",
-        apply=lambda df, src: _apply_options_columns(df, src),
+        id="trend_vol",
+        apply=lambda df, src: _apply_trend_vol_columns(df, src),
         columns=OPTIONS_COLUMNS,
         full_source_symbol="AAPL",
         full_source={"AAPL": {
-            "GARCH_Vol": 0.25, "Realized_Vol_Rank": 60.0, "True_IVR": 55.0,
-            "VRP": 0.03, "Aroon_Oscillator": 40.0, "Coppock_Curve": 12.0,
+            "GARCH_Vol": 0.25, "Aroon_Oscillator": 40.0, "Coppock_Curve": 12.0,
             "Chandelier_Long": 180.5,
         }},
         full_expected={
-            "GARCH_Vol": 0.25, "Realized_Vol_Rank": 60.0, "True_IVR": 55.0,
-            "VRP": 0.03, "Aroon Oscillator": 40.0, "Coppock Curve": 12.0,
+            "GARCH_Vol": 0.25, "Aroon Oscillator": 40.0, "Coppock Curve": 12.0,
             "Chandelier Exit": 180.5,
         },
         partial_source_symbol="PARTIAL",
-        partial_source={"PARTIAL": {"GARCH_Vol": 0.30, "True_IVR": 45.0}},
-        partial_expected_present={"GARCH_Vol": 0.30, "True_IVR": 45.0},
+        partial_source={"PARTIAL": {"GARCH_Vol": 0.30, "Aroon_Oscillator": 45.0}},
+        partial_expected_present={"GARCH_Vol": 0.30, "Aroon Oscillator": 45.0},
         partial_expected_nan=(
-            "Realized_Vol_Rank", "VRP", "Aroon Oscillator", "Coppock Curve", "Chandelier Exit",
+            "Coppock Curve", "Chandelier Exit",
         ),
         mixed_healthy_symbol="OK",
         mixed_dead_symbol="FAILED",
         mixed_healthy_source={"OK": {
-            "GARCH_Vol": 0.20, "Realized_Vol_Rank": 70.0, "True_IVR": 65.0,
-            "VRP": 0.05, "Aroon_Oscillator": 20.0, "Coppock_Curve": 8.0,
+            "GARCH_Vol": 0.20, "Aroon_Oscillator": 20.0, "Coppock_Curve": 8.0,
             "Chandelier_Long": 99.0,
         }},
-        mixed_healthy_expected_col='VRP',
-        mixed_healthy_expected_value=0.05,
+        mixed_healthy_expected_col='Coppock Curve',
+        mixed_healthy_expected_value=8.0,
     ),
 ]
 

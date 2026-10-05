@@ -55,11 +55,11 @@ function baseSentimentTunables(overrides: Partial<TunablesResponse> = {}): Tunab
         ],
       },
       {
-        name: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+        name: "Sources — StockTwits, EDGAR, GDELT, Google News",
         fields: [
           {
-            key: "Sentiment Sources", value: "yahoo_rss,gdelt,reddit,edgar", type: "string",
-            default: "yahoo_rss,gdelt,reddit,edgar", description: "Enabled sentiment-source provider names.",
+            key: "Sentiment Sources", value: "yahoo_rss,gdelt,edgar", type: "string",
+            default: "yahoo_rss,gdelt,edgar", description: "Enabled sentiment-source provider names.",
           },
         ],
       },
@@ -184,7 +184,7 @@ describe("SentimentSettings screen", () => {
     renderScreen();
     const field = (await screen.findByLabelText("Sentiment Sources")) as HTMLInputElement;
     expect(field.tagName).toBe("INPUT");
-    expect(field.value).toBe("yahoo_rss,gdelt,reddit,edgar");
+    expect(field.value).toBe("yahoo_rss,gdelt,edgar");
   });
 
   it("editing a comma-separated string field sends the raw string on save", async () => {

@@ -12,7 +12,6 @@ import { loadThresholds } from "../help/thresholds";
 import { fmtDate, fmtNum, fmtPct } from "../format";
 import { theme } from "../theme";
 import SignalDriverWeights from "../components/SignalDriverWeights";
-import ModelComparisonChart from "../components/ModelComparisonChart";
 
 type DeployFilter = "all" | "deployable" | "not_deployable" | "needs_retrain";
 
@@ -109,7 +108,7 @@ function ModelCard({
   const isBackfill = isBackfillStub(m.name);
   const canRetrain =
     !isBackfill &&
-    (m.role === "cross_sectional_ranker" || m.role === "meta_labeler" || m.role === "options_meta_labeler");
+    (m.role === "cross_sectional_ranker" || m.role === "meta_labeler");
   return (
     <section className="card card-pad" style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "hidden", padding: 0 }}>
       <div className="drag-handle" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "var(--s-2)", padding: "var(--s-3)", borderBottom: "1px solid var(--border)" }}>
@@ -317,24 +316,19 @@ export function Models() {
     setRetrainErrors((prev) => ({ ...prev, [m.name]: undefined }));
     setSubmitting((prev) => ({ ...prev, [m.name]: true }));
     try {
-      if (m.role === "options_meta_labeler") {
-        await api.retrainOptionsMetaModel();
-        reload();
-      } else {
-        const job =
-          m.role === "cross_sectional_ranker"
-            ? await api.createJob("train_lgbm")
-            : await api.createJob("train_meta", { signal: metaLabelerSignal(m.name) });
-        setTrainingJobs((prev) => ({ ...prev, [m.name]: job.job_id }));
-        if (timeoutsRef.current[m.name]) clearTimeout(timeoutsRef.current[m.name]);
-        // Last-resort safety net on top of the WS push and the GET /jobs/{id}
-        // poll above: if BOTH somehow never observe a terminal status (every
-        // poll request itself failing, a dropped connection, a server
-        // restart mid-job, ...), the button must not stay disabled forever.
-        timeoutsRef.current[m.name] = setTimeout(() => {
-          clearTrainingJob(m.name, job.job_id);
-        }, 10 * 60 * 1000);
-      }
+      const job =
+        m.role === "cross_sectional_ranker"
+          ? await api.createJob("train_lgbm")
+          : await api.createJob("train_meta", { signal: metaLabelerSignal(m.name) });
+      setTrainingJobs((prev) => ({ ...prev, [m.name]: job.job_id }));
+      if (timeoutsRef.current[m.name]) clearTimeout(timeoutsRef.current[m.name]);
+      // Last-resort safety net on top of the WS push and the GET /jobs/{id}
+      // poll above: if BOTH somehow never observe a terminal status (every
+      // poll request itself failing, a dropped connection, a server
+      // restart mid-job, ...), the button must not stay disabled forever.
+      timeoutsRef.current[m.name] = setTimeout(() => {
+        clearTrainingJob(m.name, job.job_id);
+      }, 10 * 60 * 1000);
     } catch (err: any) {
       if (err instanceof JobConflictError) {
         setRetrainErrors((prev) => ({
@@ -424,13 +418,6 @@ export function Models() {
           ) : (
             <div style={{ flex: 1, minHeight: 0 }}>
               <div className="dashboard-layout" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)" }}>
-                <div key="comparison-chart" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
-                  <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)" }}>Model Comparison</div>
-                  <div style={{ flex: 1, minHeight: 0, padding: "var(--s-3)" }}>
-                    <ModelComparisonChart />
-                  </div>
-                </div>
-
                 <div key="signal-weights" className="card card-pad" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: 0 }}>
                   <div className="drag-handle" style={{ padding: "var(--s-3)", fontWeight: 600, borderBottom: "1px solid var(--border)" }}>Signal Drivers</div>
                   <div style={{ flex: 1, minHeight: 0, padding: "var(--s-3)" }}>

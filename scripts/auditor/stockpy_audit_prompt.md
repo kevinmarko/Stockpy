@@ -69,7 +69,7 @@ any DTO-bypass in calc code.
 
 **Goal:** no secret material in the tree, ever.
 
-- **Hardcoded secrets:** FRED keys (32 hex), Alpaca/Finnhub keys, bearer tokens,
+- **Hardcoded secrets:** FRED keys (32 hex), FMP/vendor API keys, bearer tokens,
   Slack/Discord webhook URLs, Postgres DSNs with `user:pass@host`, private-key
   blocks, generic `api_key = "…"` / `password = "…"` literals. Distinguish real
   secrets from `os.environ`/`settings.` references, `Field(...)` declarations,
@@ -106,7 +106,7 @@ rotation/remediation step.
 
 **Goal:** fetches are resilient and provider-agnostic; no cache cross-contamination.
 
-- **Provider fallback:** Alpaca → yfinance quote/bar selection; Yahoo-computed →
+- **Provider fallback:** FMP → yfinance quote/bar selection; Yahoo-computed →
   yfinance `.info` fundamentals fallback. Confirm each hop degrades gracefully.
 - **Dead-letter resilience (CONSTRAINT #6):** per-ticker loops wrap each symbol in
   try/except so one bad symbol can't abort a batch. Network/file I/O sits inside

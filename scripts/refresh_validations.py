@@ -1165,7 +1165,7 @@ def _build_sortino_drawdown_adapter(
     # (not an exact `> 0`) guards against a near-zero-but-nonzero downside_std
     # that's floating-point noise from a near-constant downside window, not
     # real signal -- the same degenerate-std convention as
-    # risk/etf_transmission.py and validation/metrics.py::sharpe_ratio.
+    # legacy/risk/etf_transmission.py and validation/metrics.py::sharpe_ratio.
     sortino = (avg_return * 252.0) / (downside_std * np.sqrt(252.0))
     sortino = sortino.where(downside_std >= 1e-12)
 
@@ -1589,7 +1589,7 @@ def _build_macro_regime_adapter(
     """
     from data.historical_store import HistoricalStore
 
-    _DEGENERATE_STD = 1e-12  # repo convention -- see risk/etf_transmission.py's _DEGENERATE_STD
+    _DEGENERATE_STD = 1e-12  # repo convention -- see legacy/risk/etf_transmission.py's _DEGENERATE_STD
 
     tradeable = [t for t in closes.columns if t != "SPY"]
     spy_close_raw = closes["SPY"] if "SPY" in closes.columns else None
@@ -1878,7 +1878,7 @@ def _build_forecast_direction_adapter(
 
 # Excluded for the FULL backtest window (see _build_signal_replay_adapter's
 # docstring for the full rationale of each):
-#   news_catalyst      -- its live Finnhub call lives in pre_compute(), which
+#   news_catalyst      -- its live news-provider call lives in pre_compute(), which
 #                         this adapter never calls for it (only for
 #                         multifactor/cross_sectional_momentum) -- so
 #                         including it would NOT itself trigger a network
@@ -1919,23 +1919,8 @@ def _build_forecast_direction_adapter(
 #                         without a real contribution, keeping it in the
 #                         "surviving" set would just waste weight mass on a
 #                         module that is a constant 0.0 for the whole replay.
-#   vrp_premium_selling -- this adapter's historical DataFrame never
-#                         computes True_IVR/VRP (that's OptionsAnalysisStep's
-#                         job, not run here) — signals/vrp_premium_selling.py
-#                         degrades honestly to score=0.0/confidence=0.0 on
-#                         every row when those columns are absent (verified:
-#                         tests/test_vrp_premium_selling.py::
-#                         test_columns_entirely_absent_degrades_honestly), so
-#                         it would never crash the replay, only waste its
-#                         weight mass — same forward-safety +
-#                         weight-redistribution reasoning as the three
-#                         entries above. Has its own dedicated,
-#                         non-price-only real backtest instead
-#                         (validation/options_selling_backtest.py — see
-#                         docs/signals/vrp_premium_selling.md).
 _REPLAY_EXCLUDED_MODULES = {
     "news_catalyst", "lgbm_ranker", "forecast_alignment", "sector_quality_rank",
-    "vrp_premium_selling", "options_flow_sentiment",
 }
 
 _AROON_LENGTH = 25
@@ -3137,92 +3122,6 @@ def _build_pairs_trading_adapter(
     return X, y, precomputed
 
 
-def _build_copula_stat_arb_adapter(
-    closes: pd.DataFrame,
-    shares: Optional[Dict[str, float]] = None,
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """Non-linear copula statistical arbitrage on a cointegrated pair (default: KO/PEP),
-    validated via ``pilots/copula_stat_arb.py``'s real Clayton/Gumbel/Frank/Gaussian
-    MLE copula fitting + Kalman-filter dynamic hedge ratio -- NOT the linear
-    Engle-Granger + static-band z-score logic ``_build_pairs_trading_adapter`` above
-    validates (a different, unrelated ``signals/pairs_trading.py`` module). Added
-    2026-08 to correct a prior documentation error in ``docs/signals/copula_stat_arb.md``
-    that cited ``pairs_trading``'s STRATEGY_REGISTRY numbers as if they validated this
-    module's actual copula/Kalman logic -- see that file's "Current Status" note and
-    ``docs/VALIDATION_STRATEGY_FIX_LOG.md``'s corresponding entry.
-
-    Academic basis & methodology:
-      * Empirical-rank pseudo-observations + best-fit bivariate Archimedean copula
-        (Clayton/Gumbel/Frank) or Gaussian, refit on a strictly trailing window every
-        ``copula_cache_interval`` bars for lookahead-free per-bar tail-risk gating
-        (``pilots/copula_stat_arb.py::generate_copula_stat_arb_signals``).
-      * Dynamic 2-state Kalman filter (alpha intercept, beta slope) for the hedge
-        ratio, recursive and therefore causal by construction.
-      * Rolling spread z-score entry/exit/stop (``settings.OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD``
-        default entry, 0-cross exit, |Z| >= 4.0 stop), gated additionally on OU
-        half-life bounds (5-60 days) and lower-tail copula dependence
-        (``lambda_L <= 0.85``) -- a position is only taken when BOTH the mean-reversion
-        speed and the crash-co-movement risk are within acceptable bounds at that bar.
-
-    Universe:
-      Requires a cointegrated pair (default: ["KO", "PEP"] -- a distinct pair from
-      ``_build_pairs_trading_adapter``'s XOM/CVX, deliberately chosen so this
-      adapter validates copula-specific behavior rather than duplicating the
-      linear pairs-trading pair).
-    """
-    from pilots.copula_stat_arb import generate_copula_stat_arb_signals
-
-    if isinstance(closes, pd.Series):
-        raise ValueError("copula_stat_arb adapter requires a multi-column DataFrame with at least two asset prices.")
-
-    if "KO" in closes.columns and "PEP" in closes.columns:
-        y_col, x_col = "KO", "PEP"
-    else:
-        tradeable = list(closes.columns)
-        if len(tradeable) < 2:
-            raise RuntimeError("copula_stat_arb requires at least two assets to form a pair.")
-        y_col, x_col = tradeable[0], tradeable[1]
-
-    y_prices = closes[y_col].dropna()
-    x_prices = closes[x_col].dropna()
-    common_idx = y_prices.index.intersection(x_prices.index)
-    if len(common_idx) < 60:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    y_prices = y_prices.loc[common_idx]
-    x_prices = x_prices.loc[common_idx]
-
-    # Generate signals via the production pilots.copula_stat_arb module -- the
-    # SAME entry point the Pilots PWA's copula screen calls, not a re-implementation.
-    result = generate_copula_stat_arb_signals(y_col, x_col, y_prices, x_prices)
-    signals_df = result.signals_df
-    if signals_df.empty or "strategy_returns" not in signals_df.columns:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    strategy_returns = signals_df["strategy_returns"].fillna(0.0)
-    # Drop rows where any required copula metric is genuinely missing instead of fabricating zeros (Constraint #4)
-    valid_idx = signals_df.dropna(subset=["spread", "z_score", "beta", "position"]).index
-    if len(valid_idx) > 30:
-        valid_idx = valid_idx[30:]  # drop the copula/OU warmup window (see module docstring)
-    if len(valid_idx) < 30:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    X = pd.DataFrame(index=valid_idx)
-    X["Z_Score"] = signals_df["z_score"].loc[valid_idx]
-    X["Spread"] = signals_df["spread"].loc[valid_idx]
-    X["Beta"] = signals_df["beta"].loc[valid_idx]
-    X["Position"] = signals_df["position"].loc[valid_idx]
-
-    # Benchmark return: equal-weighted pair buy-and-hold, matching
-    # _build_pairs_trading_adapter's convention above.
-    y = ((y_prices.pct_change() + x_prices.pct_change()) / 2.0).loc[valid_idx].fillna(0.0)
-
-    precomputed = {
-        "Copula_StatArb_DynamicHedge": strategy_returns.loc[valid_idx],
-    }
-    return X, y, precomputed
-
-
 def _aroon(series: pd.Series, window: int = 25) -> Tuple[pd.Series, pd.Series, pd.Series]:
     """Calculates Aroon Up, Aroon Down, and Aroon Oscillator over a rolling window.
 
@@ -3373,250 +3272,8 @@ def _make_strategy_fn(
 # New strategies: add an entry here and implement the adapter above.
 # ---------------------------------------------------------------------------
 
-def _build_vrp_premium_selling_adapter(
-    spy_close: pd.Series,
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """VRP Iron Condor premium-selling proxy on SPY (``vrp_premium_selling``
-    Pilot, ``vrp-premium-selling`` in ``pilots/catalog.py``).
-
-    See ``validation/options_selling_backtest.py``'s module docstring for the
-    full honesty contract: no historical options-chain data exists anywhere
-    in this codebase, so True_IVR/VRP are honestly-labeled real-price-driven
-    proxies (the same fallback tier ``build_premium_directive`` itself uses
-    in production absent a live chain), real macro (VIX/CREDIT EVENT) gating
-    via ``HistoricalStore``-backed FRED history, constant entry-sigma per
-    cycle, and gross (pre-cost) returns.
-
-    Unlike every other adapter in this registry, this one's ``precomputed``
-    return series comes from a REAL options-selling simulation — genuine
-    Black-Scholes leg pricing via the SAME ``OptionsPricingRecommender`` the
-    live pipeline uses, marked to market daily against the real historical
-    spot path — not a closed-form formula applied to the underlying's own
-    returns. No further ``.shift(1)`` is applied here: the simulator is
-    already point-in-time correct by construction (every day's mark uses
-    only that day's spot price, the cycle's fixed entry-day sigma, and legs
-    constructed using only data up to and including the cycle's entry date).
-    """
-    from validation.options_selling_backtest import simulate_vrp_iron_condor_returns
-
-    daily_ret = spy_close.pct_change()
-    valid_idx = spy_close.dropna().index
-    if len(valid_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    strategy_returns = simulate_vrp_iron_condor_returns(
-        str(valid_idx[0].date()), str(valid_idx[-1].date()),
-        ticker="SPY", closes=spy_close,
-    )
-    if strategy_returns.empty:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    common_idx = valid_idx.intersection(strategy_returns.index)
-    if len(common_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    y = daily_ret.loc[common_idx].fillna(0.0)
-    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
-    precomputed = {
-        "VRP_IronCondor": strategy_returns.loc[common_idx].fillna(0.0),
-    }
-    return X, y, precomputed
-
-
-def _build_vol_mispricing_adapter(
-    spy_close: pd.Series,
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """``pilots/vol_mispricing.py``'s market_iv-vs-fair_iv mispricing signal
-    on SPY (``vol-mispricing`` Pilot). Unlike the proxy-IVR strategies above,
-    every input is real -- market_iv is the real VIX, fair_iv is the pilot's
-    own Corsi HAR-RV forecast on real SPY log-returns. See
-    ``validation/options_selling_backtest.py``'s honesty-contract comment
-    block immediately above ``simulate_vol_mispricing_returns`` for the full
-    write-up, including the one documented narrowing (delta-targeted strikes
-    in place of a historically-unreplayable live chain rank).
-    """
-    from validation.options_selling_backtest import simulate_vol_mispricing_returns
-
-    daily_ret = spy_close.pct_change()
-    valid_idx = spy_close.dropna().index
-    if len(valid_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    strategy_returns = simulate_vol_mispricing_returns(
-        str(valid_idx[0].date()), str(valid_idx[-1].date()),
-        ticker="SPY", closes=spy_close,
-    )
-    if strategy_returns.empty:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    common_idx = valid_idx.intersection(strategy_returns.index)
-    if len(common_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    y = daily_ret.loc[common_idx].fillna(0.0)
-    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
-    precomputed = {
-        "VolMispricing": strategy_returns.loc[common_idx].fillna(0.0),
-    }
-    return X, y, precomputed
-
-
-def _build_options_spread_adapter(
-    spy_close: pd.Series,
-    sim_fn: Callable[..., pd.Series],
-    precomputed_label: str,
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """Shared body for the five options-spread adapters below -- they differ
-    only in which ``simulate_*_returns`` wrapper they call and the label their
-    single precomputed return series is keyed under; everything else
-    (download-empty check, index intersection, X/y construction) is identical.
-    """
-    daily_ret = spy_close.pct_change()
-    valid_idx = spy_close.dropna().index
-    if len(valid_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    strategy_returns = sim_fn(
-        str(valid_idx[0].date()), str(valid_idx[-1].date()),
-        ticker="SPY", closes=spy_close,
-    )
-    if strategy_returns.empty:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    common_idx = valid_idx.intersection(strategy_returns.index)
-    if len(common_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    y = daily_ret.loc[common_idx].fillna(0.0)
-    X = pd.DataFrame({"SPY_Close": spy_close.loc[common_idx]}, index=common_idx)
-    precomputed = {
-        precomputed_label: strategy_returns.loc[common_idx].fillna(0.0),
-    }
-    return X, y, precomputed
-
-
-def _build_put_credit_spread_adapter(
-    spy_close: pd.Series,
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """Put Credit Spread options-selling proxy on SPY (Bullish trend, High IVR).
-
-    Short Put ~0.30 Delta, Long Put ~0.15 Delta, marked-to-market daily with
-    stop-loss risk control.
-    """
-    from validation.options_selling_backtest import simulate_put_credit_spread_returns
-
-    return _build_options_spread_adapter(spy_close, simulate_put_credit_spread_returns, "PutCreditSpread")
-
-
-def _build_call_credit_spread_adapter(
-    spy_close: pd.Series,
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """Call Credit Spread options-selling proxy on SPY (Bearish trend, High IVR).
-
-    Short Call ~0.30 Delta, Long Call ~0.15 Delta, marked-to-market daily with
-    stop-loss risk control.
-    """
-    from validation.options_selling_backtest import simulate_call_credit_spread_returns
-
-    return _build_options_spread_adapter(spy_close, simulate_call_credit_spread_returns, "CallCreditSpread")
-
-
-def _build_call_debit_spread_adapter(
-    spy_close: pd.Series,
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """Call Debit Spread options proxy on SPY (Bullish trend, Low IVR).
-
-    Long Call ~0.50 Delta, Short Call ~0.30 Delta, marked-to-market daily with
-    stop-loss risk control.
-    """
-    from validation.options_selling_backtest import simulate_call_debit_spread_returns
-
-    return _build_options_spread_adapter(spy_close, simulate_call_debit_spread_returns, "CallDebitSpread")
-
-
-def _build_put_debit_spread_adapter(
-    spy_close: pd.Series,
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """Put Debit Spread options proxy on SPY (Bearish trend, Low/Neutral IVR).
-
-    Long Put ~0.50 Delta, Short Put ~0.30 Delta, marked-to-market daily with
-    stop-loss risk control.
-    """
-    from validation.options_selling_backtest import simulate_put_debit_spread_returns
-
-    return _build_options_spread_adapter(spy_close, simulate_put_debit_spread_returns, "PutDebitSpread")
-
-
-def _build_covered_call_adapter(
-    spy_close: pd.Series,
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """Covered Call options proxy on SPY (Bullish trend, Neutral IVR).
-
-    Long Stock + Short Call ~0.30 Delta, marked-to-market daily with stop-loss
-    risk control.
-    """
-    from validation.options_selling_backtest import simulate_covered_call_returns
-
-    return _build_options_spread_adapter(spy_close, simulate_covered_call_returns, "CoveredCall")
-
-
-def _build_options_flow_sentiment_adapter(
-    spy_close: pd.Series,
-) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-    """Options Flow Sentiment proxy adapter on SPY.
-
-    Evaluates multi-horizon momentum and flow velocity regimes, applying trend gating
-    and directional positioning with zero lookahead bias (1-day lagged signals).
-    """
-    daily_ret = spy_close.pct_change()
-    valid_idx = spy_close.dropna().index
-    if len(valid_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    roc5 = spy_close.pct_change(5)
-    roc20 = spy_close.pct_change(20)
-    sma200 = spy_close.rolling(200).mean()
-
-    # Flow pressure: bullish flow when fast 5d velocity breaks upward above SMA200
-    signal_bullish = ((roc5 > 0.005) & (spy_close > sma200)).astype(float)
-    signal_bearish = ((roc5 < -0.005) & (spy_close < sma200)).astype(float)
-    pos = signal_bullish - signal_bearish
-    pos_lag = pos.shift(1).fillna(0.0)
-
-    strat_ret = pos_lag * daily_ret
-    common_idx = valid_idx.intersection(strat_ret.dropna().index)
-    if len(common_idx) == 0:
-        return pd.DataFrame(), pd.Series(dtype=float), {}
-
-    y = daily_ret.loc[common_idx].fillna(0.0)
-    X = pd.DataFrame(
-        {
-            "SPY_Close": spy_close.loc[common_idx],
-            "ROC_5": roc5.loc[common_idx].fillna(0.0),
-            "ROC_20": roc20.loc[common_idx].fillna(0.0),
-        },
-        index=common_idx,
-    )
-    precomputed = {
-        "OptionsFlow_SweepLong": (signal_bullish.shift(1) * daily_ret).loc[common_idx].fillna(0.0),
-        "OptionsFlow_NetDirectional": strat_ret.loc[common_idx].fillna(0.0),
-    }
-    return X, y, precomputed
-
-
-
-def _build_ungateable_adapter(reason: str) -> Callable[[pd.Series], Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]]:
-    """Returns a dummy adapter that always raises RuntimeError with the
-    given reason, forcing the strategy to gracefully record an ERROR
-    status during validation.
-    """
-    def adapter(_spy: pd.Series) -> Tuple[pd.DataFrame, pd.Series, Dict[str, pd.Series]]:
-        raise RuntimeError(f"UNGATEABLE_DATA_GAP: {reason}")
-    return adapter
-
 STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, Union[List[str], Callable[[], List[str]]]]] = {
 
-    "options_flow_sentiment": (_build_options_flow_sentiment_adapter, 0.04, ["SPY"]),
     # Turnover corrected 2026-08 (empirical measurement): Connors RSI(2) on SPY
     # trades ~10-12 days/year, holding 2-4 days. Mean daily turnover is ~0.008/day.
     # 0.01 is a conservative round number aligning with real trade frequency.
@@ -3763,40 +3420,13 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, Union[List[str], Callable[[]
     # estimate) — the 0.03 here is unused by run_validations' dispatch for a
     # callable adapter but kept non-zero/documented rather than a misleading 0.
     "lgbm_ranker": (_build_lgbm_ranker_adapter, 0.03, _XSEC_UNIVERSE_CAPPED),
-    # Real Black-Scholes Iron Condor simulation (see
-    # _build_vrp_premium_selling_adapter's docstring and
-    # validation/options_selling_backtest.py's module docstring for the full
-    # honesty contract). turnover=0.05: a full position rolls roughly every
-    # CYCLE_TRADING_DAYS=21 trading days ~= 1/21 ~= 4.8%/day -- a reasoned
-    # estimate matching the sibling weekly-cadence adapters
-    # (forecast_direction_arima_hw), not an independent measurement of this
-    # adapter's own weight series.
-    "vrp_premium_selling": (_build_vrp_premium_selling_adapter, 0.05, ["SPY"]),
-    # Real VIX-vs-HAR-RV mispricing signal (audit F4 fix, 2026-08) -- see
-    # _build_vol_mispricing_adapter's docstring. turnover=0.05: same
-    # ~21-trading-day cycle cadence as vrp_premium_selling above, same
-    # reasoning (not an independent measurement).
-    "vol_mispricing": (_build_vol_mispricing_adapter, 0.05, ["SPY"]),
-    "put_credit_spread": (_build_put_credit_spread_adapter, 0.05, ["SPY"]),
-    "call_credit_spread": (_build_call_credit_spread_adapter, 0.05, ["SPY"]),
-    "call_debit_spread": (_build_call_debit_spread_adapter, 0.05, ["SPY"]),
-    "put_debit_spread": (_build_put_debit_spread_adapter, 0.05, ["SPY"]),
-    "covered_call": (_build_covered_call_adapter, 0.03, ["SPY"]),
     "pairs_trading": (_build_pairs_trading_adapter, 0.04, ["SPY", "XOM", "CVX"]),
-    # turnover=0.04: the entry/exit/stop z-score gate (entry |Z|>=~2.0, exit at
-    # 0-cross, stop at |Z|>=4.0) produces roughly one full round-trip every
-    # ~25 trading days on a KO/PEP-scale mean-reversion cycle -- 1/25 ~= 0.04,
-    # matching pairs_trading's own turnover order of magnitude above (same
-    # entry/exit/stop shape, same asset-class liquidity), not an independently
-    # re-measured value for this specific pair.
-    "copula_stat_arb": (_build_copula_stat_arb_adapter, 0.04, ["KO", "PEP"]),
     "aroon_trend": (_build_aroon_trend_adapter, 0.02, ["SPY"]),
 
     # news_catalyst / regime_multiplier / forecast_alignment were briefly added
-    # here as _build_ungateable_adapter() stubs and removed again in the same
+    # here as permanently-erroring "ungateable" stubs and removed again in the same
     # PR that introduced this comment (2026-08 audit-branch cleanup): none of
-    # the three is an order-submitting Pilot the way earnings_crush/
-    # dispersion_trading/zero_dte_engine/gamma_scalper below are, so a
+    # the three is an order-submitting Pilot, so a
     # permanently-erroring registry stub bought nothing and broke two real
     # things instead -- (1) pilots/catalog.py's news-catalyst Pilot has an
     # explicit, documented validation_strategy_id=None ("stays None until
@@ -3811,26 +3441,6 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Callable, float, Union[List[str], Callable[[]
     # test_pilot_without_backtest_is_honest_never_fabricated and
     # tests/test_refresh_validations.py::TestRegistryStructure for the
     # invariants this preserves.
-    "earnings_crush": (
-        _build_ungateable_adapter("No historical single-name IV exists in data layer to perform walk-forward validation."),
-        0.01,
-        ["SPY"],
-    ),
-    "dispersion_trading": (
-        _build_ungateable_adapter("Index IV (VIX) is historical; constituent single-name IVs are substituted (+1.18 vol-pt substitution bias)."),
-        0.01,
-        ["SPY"],
-    ),
-    "zero_dte_engine": (
-        _build_ungateable_adapter("No 1-minute intraday history exists for mandatory historical stress windows outside 30-day retention."),
-        0.01,
-        ["SPY"],
-    ),
-    "gamma_scalper": (
-        _build_ungateable_adapter("Excluded — not a strategy (no scan/evaluate/execute path, no PaperAccountStore import, its only threshold is a hedge band)."),
-        0.01,
-        ["SPY"],
-    ),
 }
 
 
@@ -3845,103 +3455,6 @@ def _resolve_registry_universe(name: str) -> List[str]:
     ``callable(...)`` check ad hoc."""
     universe = STRATEGY_REGISTRY[name][2]
     return universe() if callable(universe) else universe
-
-
-# The subset of STRATEGY_REGISTRY entries that simulate a real, production
-# options strategy shape via validation/options_selling_backtest.py's
-# OptionsPricingRecommender-driven simulators -- i.e. the same VRP/IVR/VIX/
-# trend-bias-gated logic technical_options_engine.py::generate_strategy_pricing_matrix
-# uses to build the live directives execution/options_paper_executor.py scans
-# and actually trades in the Paper Broker. This is deliberately NOT the same
-# list as validation/options_harness.py's STANDARD_OPTIONS_STRATEGIES (the
-# webapp's other options-strategy picker, for validation.harness --strategies):
-# that harness is a simpler, ungated simulator that blindly re-enters a fixed
-# strike/DTE shape every ~35-42 days regardless of regime, and its results do
-# not reflect what the Paper Broker would actually trade -- see
-# docs/VALIDATION_STRATEGY_FIX_LOG.md's 2026-08-22 entries and
-# docs/architecture/webapp-and-gui.md's "options-strategy realism" bullet for
-# the full comparison. Also note the naming doesn't line up 1:1: the naive
-# harness's directional "Bull Call Spread"/"Bear Put Spread" correspond to
-# this registry's "call_debit_spread"/"put_debit_spread" (delta-targeted
-# strikes, gated on cheap IV + matching trend -- not a fixed %-OTM offset
-# entered unconditionally), and its "Long Straddle" has no production
-# equivalent here at all (the live engine never emits a long-volatility
-# directive).
-#
-# Sourced by scripts/build_command_manifest.py into the webapp Commands
-# screen's manifest (the `paper_broker_options_strategy_registry` field) so
-# an operator can run a "does this reflect live trading" bulk validation
-# instead of (or alongside) the naive one. Every name here MUST also be a
-# STRATEGY_REGISTRY key -- tests/test_command_manifest_freshness.py enforces
-# both that and drift against this exact list.
-PAPER_BROKER_OPTIONS_STRATEGIES: List[str] = [
-    "call_credit_spread",
-    "call_debit_spread",
-    "covered_call",
-    "put_credit_spread",
-    "put_debit_spread",
-    "vol_mispricing",
-    "vrp_premium_selling",
-]
-
-
-def _resolve_options_selling_stress_fn(name: str) -> Optional[Callable[[str, str], pd.Series]]:
-    """Returns the ``stress_returns_fn`` (``validation.stress_scenarios.ReturnsFn``)
-    for options-selling ``STRATEGY_REGISTRY`` entries, or ``None`` for every
-    other entry — today's exact ``is_options_selling=False`` behavior for all
-    non-options-selling entries, unchanged.
-
-    A plain ``if name == ...`` dispatch (not a module-level dict literal) so
-    the ``validation.options_selling_backtest`` import stays fully lazy —
-    matching this module's own convention of keeping heavy business-logic
-    imports out of the module-parse-time top-level block (see
-    ``StrategyValidationHarness``'s own lazy import inside
-    ``run_validations()`` for the precedent) — and imposes zero import cost
-    on every strategy that isn't options-selling.
-    """
-    if name in ("vrp_premium_selling", "iron_condor"):
-        from validation.options_selling_backtest import simulate_vrp_iron_condor_returns
-
-        return simulate_vrp_iron_condor_returns
-    if name == "vol_mispricing":
-        from validation.options_selling_backtest import simulate_vol_mispricing_returns
-
-        return simulate_vol_mispricing_returns
-    if name == "put_credit_spread":
-        from validation.options_selling_backtest import simulate_put_credit_spread_returns
-
-        return simulate_put_credit_spread_returns
-    if name == "call_credit_spread":
-        from validation.options_selling_backtest import simulate_call_credit_spread_returns
-
-        return simulate_call_credit_spread_returns
-    if name == "covered_call":
-        from validation.options_selling_backtest import simulate_covered_call_returns
-
-        return simulate_covered_call_returns
-    # `copula_stat_arb` is deliberately absent from this dispatch, not merely
-    # not-yet-wired. CLAUDE.md's tail-scenario stress-gate addendum applies
-    # only to "options-selling strategies", and `pilots/copula_stat_arb.py`
-    # is a pure equity pairs/stat-arb strategy: `execute_copula_spread_trade`
-    # buys/sells SHARES of the pair's two legs (`sym_y`/`sym_x`) via
-    # `PaperAccountStore.apply_multi_leg_fill` -- no options contract is ever
-    # constructed, priced, or written anywhere in that module (confirmed by
-    # reading the trade-construction code, not inferred from the name; see
-    # that function's own inline comment: "`qty` here is SHARES, not options
-    # contracts"). It also does not appear in `PAPER_BROKER_OPTIONS_STRATEGIES`
-    # above, which enumerates every strategy that actually sells option
-    # premium in the live Paper Broker. Forcing a `stress_returns_fn` onto it
-    # here would misapply a gate designed for short-premium tail risk (a
-    # dated-shock-window survival test) to a strategy whose only risk is a
-    # cointegration breakdown between two equity legs -- see
-    # `docs/signals/copula_stat_arb.md`'s "Backtest Validation" section and
-    # `docs/VALIDATION_STRATEGY_FIX_LOG.md`'s 2026-08-19 entry (addended
-    # 2026-09) for the full reasoning. Contrast with `zero_dte_engine`/
-    # `gamma_scalper`, which ARE options-selling-shaped strategies excluded
-    # from the gate for a DIFFERENT reason (no reachable historical data to
-    # run the gate against) -- `docs/signals/zero_dte_engine.md`'s "NOT
-    # GATEABLE" section documents that distinct case.
-    return None
 
 
 # =============================================================================
@@ -4214,7 +3727,6 @@ def _validate_single_strategy(
             start_date_str = str(X.index[0].date())
             end_date_str = str(X.index[-1].date())
 
-        stress_fn = _resolve_options_selling_stress_fn(name)
         harness = harness_cls(
             strategy_fn=strategy_fn,
             universe_fn=lambda _, u=available: u,
@@ -4222,8 +3734,6 @@ def _validate_single_strategy(
             n_cpcv_splits=n_cpcv_splits,
             n_test_splits=n_test_splits,
             reports_dir=str(output_dir),
-            is_options_selling=stress_fn is not None,
-            stress_returns_fn=stress_fn,
         )
 
         report = harness.run(

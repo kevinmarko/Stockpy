@@ -1,0 +1,223 @@
+# legacy/
+
+Archived code: working code moved out of the active codebase so it can be
+restored if needed. Nothing in the active platform imports from here, and
+pytest does not collect it (`pytest.ini` sets `testpaths = tests`). Files keep
+their original relative path under `legacy/`, and the archived tests still use
+the original import paths (`from risk.etf_transmission import ...`), so to run
+one you need to put the moved module back first.
+
+Add to this directory only when archiving, and record each move below.
+
+## Step 4d: ETF volatility transmission (2026-09)
+
+Why: the operator decided to archive it. Every ETF flag
+(`ETF_TRANSMISSION_ENABLED`, `ETF_TRANSMISSION_SIZING_ENABLED`,
+`ETF_TRANSMISSION_PORTFOLIO_ENABLED`, `ETF_HOLDINGS_ENABLED`,
+`ETF_HOLDINGS_ISSUER_CSV_ENABLED`) was off in the live config, so the feature
+never ran and removing it did not change a pipeline cycle.
+
+Moved:
+- `risk/__init__.py`, `risk/etf_transmission.py` (the package held nothing else)
+- `data/etf_holdings.py`
+- `tests/test_etf_holdings.py`, `tests/test_etf_transmission.py`,
+  `tests/test_etf_transmission_lookahead.py`, `tests/test_etf_transmission_portfolio.py`,
+  `tests/test_etf_transmission_sensitivity_sweep.py`,
+  `tests/test_production_steps_etf_transmission.py`,
+  `tests/test_production_steps_etf_transmission_multiplier.py`,
+  `tests/test_production_steps_etf_transmission_portfolio.py`
+- `tests/fixtures/nport_sample.xml` (used only by `test_etf_holdings.py`)
+- `tests/test_etf_transmission_multiplier_shape.py`: new file holding the former
+  section 8 of `tests/test_position_sizer.py`, which tested
+  `transmission_multiplier` directly
+- `webapp/src/screens/EtfTransmissionSettings.tsx` and its `.test.tsx`
+
+The pipeline functions that called these (`_apply_etf_transmission`,
+`_apply_etf_transmission_multiplier`, `_build_etf_transmission_cov_matrix` in
+`pipeline/production_steps.py`) were deleted rather than moved; git history has
+them. Still in the active tree until step 4f: the four `ETF_*`
+`config.COLUMN_SCHEMA` columns (written as NaN), the `ETF_*` settings fields,
+`size_position()`'s `etf_transmission_multiplier` kwarg, and the
+`etf_holdings` table in `data/historical_store.py`.
+
+## Step 4e: Google Sheet publisher (2026-09)
+
+The operator decided to retire the Google Sheet output sink — the Pilots PWA
+(`webapp/`) is the platform's only frontend, and nothing reads the Sheet
+anymore.
+
+- `reporting/sheet_publisher.py` → `legacy/reporting/sheet_publisher.py`
+  (the `RunResult` → Sheet row mapping, `write_recommendations()`, and the
+  conditional-formatting rules).
+- `reporting/sheets_client.py` → `legacy/reporting/sheets_client.py` (the
+  `gspread` service-account client + `SHEET_NAME`/`TAB_NAME_OUTPUT`
+  constants).
+- The Sheets half of `tests/test_reporting_package.py`
+  (`TestSheetsClient`, `TestSheetPublisher`) → `legacy/tests/test_sheet_publisher.py`.
+  The HTML-publisher tests in that file (`TestHtmlPublisher`) are unaffected
+  and stayed in `tests/`.
+- `tests/test_config.py`'s `TestAdvisoryColumnCoverage` (exercised
+  `rec_to_sheet_row`) → `legacy/tests/test_advisory_column_coverage.py`.
+
+`main.py` no longer imports `reporting.sheet_publisher`/`reporting.sheets_client`,
+no longer calls the Sheet sink, and no longer has a Sheet2-column-A universe
+fallback (`_load_tickers_from_sheet2`) — an empty `held ∪ watchlist ∪
+discovered` universe now falls straight through to
+`compute_tracked_universe()`'s existing `DEFAULT_TICKERS` fallback, and stays
+empty if that's empty too. `pipeline/steps.py` no longer imports `SHEET_NAME`.
+`requirements.txt` no longer lists `gspread`/`gspread-dataframe` (nor
+`google-auth-oauthlib`, which only `gspread` needed); `google-auth` itself is
+kept — it's still a transitive dependency of `google-genai` (Gemini) and
+`google-cloud-language`.
+
+**`credentials.json` is no longer used by any active code.** It was the
+Google Sheets service-account key; the real-vs-mock `DataEngine` gate that
+used to key off its presence was already switched to
+`data_engine.live_data_configured()` (a FRED-key check) in PR #1065, before
+this Sheets retirement landed. The file itself was never tracked by git and
+is left alone — the operator manages it and may still hold a copy on disk,
+but nothing reads it anymore.
+
+## Step 4b: options desk (2026-09)
+
+Per `.claude/shrink_step4_archive_implementation_plan.md`'s operator
+decision to archive the options desk, 0DTE, ETF volatility transmission, the
+Google Sheet publisher, and Follow-a-Pilot (PRs 4a-4f). This PR (4b) moved
+the 50 modules and 50 dedicated test files below — the orphans, the
+cluster-only modules, and the "still wired" modules 4a (`#1067`) already
+unwired — plus deleted `conftest.py`'s `_isolate_execution_audit_db_in_tests`
+fixture (its subject, `data/execution_audit_store.py`, moved with the rest).
+`data/option_symbols.py` (the OCC parser + Black-Scholes pricer 4a extracted
+for paper option marking) and `volatility/garch.py`/`trend_indicators.py`
+(GJR-GARCH and Aroon/Coppock/Chandelier, extracted from
+`technical_options_engine.py` back in step 3d) are **not** archived — both
+are core, actively used by the kept equity pipeline and paper broker.
+
+Modules (with their `legacy/`-relative path unchanged from their original
+repo-root-relative path):
+
+- `data/execution_audit_store.py`
+- `execution/almgren_chriss_router.py`, `execution/dynamic_circuit_breaker.py`,
+  `execution/fix_gateway.py`, `execution/multi_broker_gateway.py`,
+  `execution/options_analytics.py`, `execution/options_lifecycle.py`,
+  `execution/options_paper_executor.py`, `execution/options_queue_builder.py`,
+  `execution/sec_rule_606_reporter.py`
+- `llm/research_copilot.py`
+- `ml/drl_market_maker.py`, `ml/drl_market_maker_ppo.py`,
+  `ml/options_meta_labeler.py`, `ml/transformer_vol_forecaster.py`,
+  `ml/vrp_premium_selling_proxy_signal.py`
+- `options_ondemand.py`, `technical_options_engine.py` (both repo-root)
+- `pilots/copula_stat_arb.py`, `pilots/dispersion_trading.py`,
+  `pilots/earnings_crush.py`, `pilots/gamma_scalper.py`,
+  `pilots/har_volatility.py`, `pilots/lob_simulator.py`,
+  `pilots/multi_leg_pricing.py`, `pilots/options.py`,
+  `pilots/options_alerts.py`, `pilots/options_gex.py`,
+  `pilots/options_hedging.py`, `pilots/options_risk.py`,
+  `pilots/options_sor.py`, `pilots/options_vpin.py`,
+  `pilots/paper_broker_options_order.py`, `pilots/realtime_risk_streamer.py`,
+  `pilots/scenario_matrix.py`, `pilots/unusual_options_flow.py`,
+  `pilots/vol_mispricing.py`, `pilots/volatility_surface.py`,
+  `pilots/zero_dte_engine.py`
+- `reporting/options_snapshot.py`
+- `scripts/purge_corrupt_paper_options.py`
+- `signals/options_flow_sentiment.py`, `signals/vrp_premium_selling.py`
+- `sizing/hrp_cvar_optimizer.py`
+- `validation/autonomous_backtest_runner.py`, `validation/options_harness.py`,
+  `validation/options_selling_backtest.py`,
+  `validation/synthetic_diffusion_engine.py`
+- `volatility/bootstrap_iv_history.py`, `volatility/iv_engine.py`
+
+Their 50 dedicated test files moved to `legacy/tests/` alongside them (same
+filenames, e.g. `legacy/tests/test_options_risk.py`). Two of those weren't
+pure 1:1 moves:
+
+- `legacy/tests/test_dynamic_circuit_breaker.py` had one test,
+  `test_soft_halt_alert_dispatch`, extracted out FIRST (it exercises
+  `GlobalKillSwitch`/`observability.alerts`, not the archived circuit
+  breaker) — it now lives in the active `tests/test_kill_switch.py`.
+- `legacy/tests/test_options_selling_backtest_margin.py` is a new file, split
+  out of the active `tests/test_walk_forward.py` (which mixed kept
+  `validation/walk_forward.py` coverage with two
+  `validation/options_selling_backtest.py`-only tests).
+
+`tests/test_options_archive_import_smoke.py` (kept, active) is the
+regression guard proving no active entry point (`main.py`,
+`main_orchestrator.py`, `investyo_mcp_server.py`,
+`broker_live_execution_mcp.py`, the three `api/*.py` services,
+`execution/fmp_paper_broker.py`, `data/paper_account_store.py`,
+`pipeline/production_steps.py`) needs any of the 50 modules above.
+
+## Step 4c: Follow-a-Pilot (2026-09)
+
+The operator dropped Follow-a-Pilot and every follow had already been
+cancelled. The Pilots catalog/marketplace (browse, compare, pilot detail), the
+advisory execution queue, agentic Robinhood trading and the MCP server all
+stay; `FOLLOW_API_TOKEN` stays as the general command token.
+
+| Moved | Why |
+|---|---|
+| `pilots/mirror.py` | Follow planner (`plan_follow`, `build_follow_targets`/`_intents`). Its only callers were the removed `/pilots/{id}/follow` route and the retired `follow_pilot` MCP tool. |
+| `pilots/follows_store.py` | `output/follows.json` store. Readers were the removed `/follows` routes, the `/pilots` AUM/follower proxies, `/agentic/status`'s follows block, `execution/compose.py`'s follow enumeration, the NotebookLM export's follow sections and the retired MCP tools. |
+| `pilots/portfolio_attribution.py` | Per-Pilot P&L attribution built from follow targets; only used by the retired `get_portfolio_by_pilot` MCP tool. |
+| `tests/test_pilots_mirror.py`, `tests/test_pilots_follows.py`, `tests/test_pilots_portfolio_attribution.py` | The suites for the three modules above. |
+
+## Step 4f: settings and schema trim (2026-09)
+
+The last step-4 PR removed settings fields, `COLUMN_SCHEMA` columns and
+helpers that only archived code still used (see CLAUDE.md's step-4f bullet for
+the full list). One test file moved because every key it pinned is gone:
+
+| Moved | Why |
+|---|---|
+| `tests/test_gui_env_io_etf_transmission_keys.py` | Pinned the 19 `ETF_TRANSMISSION_*`/`ETF_HOLDINGS_*` keys as GUI-writable `shared/env_io.py` allowlist entries. Those `Settings` fields and allowlist entries were retired in 4f. |
+
+`data/historical_store.py` no longer creates or reads the `etf_holdings`
+table (its `save_etf_holdings`/`get_etf_holdings`/`latest_etf_holdings_date`
+accessors were deleted, not moved; git history has them). Nothing drops the
+table: an existing `quant_platform.db` keeps it and its rows as they were.
+
+## Vendor removal: Finnhub, Reddit, Sentry (2026-09)
+
+Operator-approved removal of unused third-party integrations. Each was dormant or an unreached fallback on the live config (`FMP_NEWS_ENABLED=true` with an FMP key, no `REDDIT_CLIENT_ID`, no `SENTRY_DSN`), so no pipeline cycle changed. Finnhub (`FinnhubProvider`, `FinnhubSentimentSource`, `build_finnhub_client`, the `FINNHUB_*` settings, `finnhub-python`) and Reddit (`RedditSource`, the `REDDIT_*` settings) were deleted rather than moved (git history has them). Only Sentry was archived:
+
+| Moved | Why |
+|---|---|
+| `observability/sentry_integration.py` -> `legacy/observability/sentry_integration.py` | `init_sentry()` was called once at daemon startup and was a no-op without `SENTRY_DSN`. The `SENTRY_*` settings, their `shared/env_io.py` entries and the `sentry-sdk` optional dependency were removed with it. |
+| `tests/test_sentry_integration.py` -> `legacy/tests/test_sentry_integration.py` | The suite for the module above (still imports `observability.sentry_integration`; put the module back first to run it). |
+
+## Alpaca removal (2026-09-30)
+
+Operator-approved removal of Alpaca (broker and market data). The pipeline's
+only automated broker is now the local FMP paper ledger
+(`execution/fmp_paper_broker.py`); `BROKER_BACKEND` accepts only `fmp_paper`,
+and going live (`ADVISORY_ONLY=False` and `PAPER_TRADING=False`) places no
+pipeline orders at all: real trades go only through the Robinhood execution
+queue. `ALPACA_PAPER` was renamed `PAPER_TRADING` (the old name is still read
+as an alias). Quotes/bars are FMP with a yfinance fallback. The `ALPACA_*` and
+`MARKET_DATA_WS_*` settings, the two Alpaca preflight checks
+(`alpaca_configured`, `alpaca_key_rotation_recent`) and the `alpaca-py`
+dependency were removed; `shared/env_io.py` keeps `ALPACA_API_KEY` /
+`ALPACA_SECRET_KEY` in `SECRET_KEYS` only so a key left in an old `.env` stays
+masked.
+
+| Moved | Why |
+|---|---|
+| `execution/alpaca_broker.py` -> `legacy/execution/alpaca_broker.py` | `AlpacaBroker`, the only live broker. `resolve_broker_backend()` now returns `None` when going live instead of forcing Alpaca. |
+| `data/alpaca_http.py` -> `legacy/data/alpaca_http.py` | `mount_timeout_adapter` for alpaca-py's REST session; its only users were `AlpacaBroker` and `AlpacaProvider`. |
+| `data/market_data_ws.py` -> `legacy/data/market_data_ws.py` | Opt-in Alpaca `StockDataStream` quote cache (`MARKET_DATA_WS_ENABLED`, default off). |
+| `data/websocket_streamer.py` -> `legacy/data/websocket_streamer.py` | Alpaca WebSocket streamer wired into the daemon, `api/data_api.py`'s lifespan and `api/ws_api.py`'s tick fast path (`source: "alpaca-ws"`). Ticks now always come from the quote provider. |
+| `AlpacaProvider` (from `data/market_data.py`) -> `legacy/data/alpaca_provider.py` | The Alpaca quote/bar provider, cut out of `data/market_data.py`. The FMP fallback tail is now `[YFinanceProvider]` and `MARKET_DATA_PROVIDER='alpaca'` raises "unknown value". |
+| `tests/test_alpaca_broker.py`, `tests/test_alpaca_http.py`, `tests/test_alpaca_paper_smoke.py`, `tests/test_alpaca_stream.py`, `tests/test_market_data_ws.py`, `tests/test_websocket_streamer.py` -> `legacy/tests/` | The suites for the modules above (they still import the original module paths; put the module back first to run one). The `AlpacaProvider` tests in `tests/test_market_data.py` were deleted, not moved. |
+
+## Dead webapp tabs (2026-10)
+
+Operator-approved removal of three Pilots PWA tabs that were switched on but never produced anything on the live install (`output/pairs.json` held 0 pairs; `cache_ls_positions` and `cache_ls_tax_lots` were empty), plus the SVI stitching demo. The `cache_ls_*` DB tables were left in place, untouched. The `CACHE_LONG_SHORT_*` and `PAIRS_SNAPSHOT_*` settings, their `shared/env_io.py` entries and their settings editors were removed (an old `.env` that still sets them is ignored). The demo endpoint `GET /data/trends/stitch-demo`, `POST /data/pairs/{analyze,scan}`, `POST /data/cache-long-short/simulate`, `GET /pairs` and the `/pilots/cache-long-short/*` and `/settings/cache-long-short` routes were deleted, not moved.
+
+| Moved | Why |
+|---|---|
+| `engine/cache_long_short_engine.py` -> `legacy/engine/cache_long_short_engine.py` | Cache Long/Short tax-loss-harvesting advisory engine; its background worker in `main_orchestrator.py::main()` was removed. |
+| `data/cache_long_short_store.py` -> `legacy/data/cache_long_short_store.py` | Its position / tax-lot / proxy store. |
+| `pilots/cache_long_short.py` -> `legacy/pilots/cache_long_short.py` | The Pilots API read helper for its dashboard. |
+| `pilots/pairs.py` -> `legacy/pilots/pairs.py` | The `GET /pairs` reader for `output/pairs.json`. |
+| `reporting/pairs_snapshot.py` -> `legacy/reporting/pairs_snapshot.py` | The pipeline writer of `output/pairs.json` (called from `StateSnapshotStep`). `pairs_ondemand.py` stays for the MCP pairs tools. |
+| `tests/test_cache_long_short_{api,engine,store}.py` -> `legacy/tests/` | The suites for the modules above. |

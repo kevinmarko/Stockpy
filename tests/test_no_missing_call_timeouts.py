@@ -50,7 +50,7 @@ SUBPROCESS_METHODS = ("run", "call", "check_call", "check_output")
 REQUESTS_METHODS = ("get", "post", "put", "delete", "head", "patch", "request")
 
 ALLOWLIST = [
-    ("main.py", 70),
+    ("main.py", 68),
     ("main_orchestrator.py", 23),
     ("Gravity AI Review Suite.py", 39),
     ("_bootstrap.py", 123),
@@ -74,7 +74,7 @@ def _resolve_module_aliases(tree: ast.AST) -> dict:
 def check_for_missing_timeouts(directory: Path):
     errors = []
     for filepath in directory.rglob("*.py"):
-        if "node_modules" in filepath.parts or ".venv" in filepath.parts or "tests" in filepath.parts or filepath.name.startswith("test_"):
+        if "node_modules" in filepath.parts or ".venv" in filepath.parts or "tests" in filepath.parts or "legacy" in filepath.parts or filepath.name.startswith("test_"):
             continue
         try:
             content = filepath.read_text(encoding="utf-8")

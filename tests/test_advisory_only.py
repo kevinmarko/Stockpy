@@ -10,8 +10,8 @@ gate.  Three layers must honour it simultaneously:
    without importing the broker stack.
 2. The GUI Strategy Matrix mode toggle does NOT render the radio +
    confirm button.
-3. ``scripts/preflight_check`` drops the three broker-readiness checks
-   (alpaca_configured / alpaca_paper_mode / dry_run_disabled) and the
+3. ``scripts/preflight_check`` drops the broker-readiness checks
+   (paper_trading_mode / dry_run_disabled) and the
    paper-trading-duration check from the gate.
 
 These tests prove all three are wired so a future refactor that loosens
@@ -21,13 +21,9 @@ any one of them fails CI immediately.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from unittest import mock
 
 import pandas as pd
-import pytest
 
-from settings import settings
 
 
 # ---------------------------------------------------------------------------
@@ -80,39 +76,13 @@ def test_execute_broker_orders_does_not_log_quarantine_when_flag_disabled(monkey
 # Layer 2: GUI Strategy Matrix mode toggle gate
 # ---------------------------------------------------------------------------
 
-def test_strategy_mode_toggle_source_references_advisory_only():
-    """AST-level guard: ``_render_strategy_mode_toggle`` must read
-    ``ADVISORY_ONLY`` and skip the radio/confirm controls when it is True.
-    Lightweight grep is enough — we just need to detect a regression that
-    removes the gate entirely."""
-    # gui/panels.py was converted to a package (Phase 4a extracted
-    # gui/panels/__init__.py into per-tab modules; __init__.py is now a
-    # thin re-export stub). ``_render_strategy_mode_toggle`` now lives in
-    # legacy/streamlit_command_center/panels/strategy_matrix.py (formerly
-    # gui/panels/strategy_matrix.py, moved by the gui -> shared/legacy split)
-    # — see tests/test_ai_insights_panel.py for the same fix pattern applied
-    # to the AI Insights tab.
-    src = Path("legacy/streamlit_command_center/panels/strategy_matrix.py").read_text(encoding="utf-8")
-    # The function must contain BOTH the setting reference and the explicit
-    # caller-visible "Advisory mode — broker execution disabled" banner string.
-    assert 'ADVISORY_ONLY' in src
-    assert 'Advisory mode — broker execution disabled' in src
-
-
-def test_app_banner_advisory_only_branch_present():
-    """``gui/app.py`` must render an ADVISORY MODE banner when the flag is
-    True.  Source-grep guard."""
-    src = Path("legacy/streamlit_command_center/app.py").read_text(encoding="utf-8")
-    assert "ADVISORY_ONLY" in src
-    assert "ADVISORY MODE" in src
-
 
 # ---------------------------------------------------------------------------
 # Layer 3: preflight check gate
 # ---------------------------------------------------------------------------
 
 def test_preflight_skips_broker_checks_when_advisory_only(monkeypatch):
-    """When ADVISORY_ONLY is True, the four broker-dependent checks are
+    """When ADVISORY_ONLY is True, the broker-dependent checks are
     auto-skipped (PASS with reason)."""
     from scripts import preflight_check
 
@@ -136,15 +106,13 @@ def test_preflight_runs_broker_checks_when_advisory_only_false(monkeypatch):
     monkeypatch.setattr(preflight_check.settings, "ADVISORY_ONLY", False, raising=False)
     # Make sure the underlying checks see "clean" deterministic input that
     # is not driven by the test environment.
-    monkeypatch.setattr(preflight_check.settings, "ALPACA_API_KEY", "TEST_KEY", raising=False)
-    monkeypatch.setattr(preflight_check.settings, "ALPACA_SECRET_KEY", "TEST_SECRET", raising=False)
-    monkeypatch.setattr(preflight_check.settings, "ALPACA_PAPER", True, raising=False)
+    monkeypatch.setattr(preflight_check.settings, "PAPER_TRADING", True, raising=False)
     monkeypatch.setattr(preflight_check.settings, "DRY_RUN", False, raising=False)
 
     results = preflight_check.run_checks(skip=[])
     by_name = {r.name: r for r in results}
 
-    for check_name in ("alpaca_configured", "alpaca_paper_mode", "dry_run_disabled"):
+    for check_name in ("paper_trading_mode", "dry_run_disabled"):
         r = by_name[check_name]
         assert "ADVISORY_ONLY" not in r.reason, (
             f"{check_name} was auto-skipped despite ADVISORY_ONLY=False: {r.reason}"

@@ -581,36 +581,50 @@ async def test_confirm_live_trade_passes_real_risk_gate_when_within_limits():
 
 
 # ---------------------------------------------------------------------------
-# _get_broker() -- ported from the pre-rename test suite. Confirms
-# broker_live_execution_mcp.py's _get_broker() genuinely delegates to
-# execution.broker_selection.resolve_broker_backend() (the single source of
-# truth shared with main_orchestrator.py::_execute_broker_orders) rather than
-# re-deriving the fmp_paper/live-trading safety check independently. Without
-# this, this file's _get_broker() would silently construct FMPPaperBroker (a
-# local paper ledger) instead of the real AlpacaBroker for
-# confirm_live_trade/cancel_order during a genuinely-going-live run.
+# _get_broker() -- confirms broker_live_execution_mcp.py's _get_broker()
+# delegates to execution.broker_selection.resolve_broker_backend() (the single
+# source of truth shared with main_orchestrator.py::_execute_broker_orders).
+# Alpaca was removed 2026-09-30: going live has NO automated broker, so
+# _get_broker() raises and the MCP tools return a JSON error instead of
+# silently routing a "live" trade onto the paper ledger.
 # ---------------------------------------------------------------------------
 
-def test_get_broker_forces_alpaca_when_going_live_with_fmp_paper():
+def test_get_broker_raises_when_going_live():
     from broker_live_execution_mcp import _get_broker
     from settings import settings as _settings
 
-    mock_alpaca_instance = MagicMock()
-
-    with patch.object(_settings, "BROKER_BACKEND", "fmp_paper"), \
-         patch.object(_settings, "ADVISORY_ONLY", False), \
-         patch.object(_settings, "ALPACA_PAPER", False), \
+    with patch.object(_settings, "ADVISORY_ONLY", False), \
+         patch.object(_settings, "PAPER_TRADING", False), \
          patch("observability.alerts.send_alert") as mock_alert, \
          patch("diagnostics_and_visuals.telemetry.error") as mock_err, \
-         patch("execution.alpaca_broker.AlpacaBroker", return_value=mock_alpaca_instance) as mock_alpaca_cls, \
          patch("execution.fmp_paper_broker.FMPPaperBroker") as mock_fmp_cls:
-        broker = _get_broker()
+        with pytest.raises(RuntimeError, match="Robinhood"):
+            _get_broker()
 
     mock_alert.assert_called_once()
     mock_err.assert_called_once()
-    mock_alpaca_cls.assert_called_once()
     mock_fmp_cls.assert_not_called()
-    assert broker is mock_alpaca_instance
+
+
+@pytest.mark.anyio
+async def test_confirm_live_trade_going_live_returns_json_error_and_submits_nothing():
+    store = _store()
+    token = store.create_proposal(symbol="MSFT", side="buy", qty=5.0, order_type="market")
+    store.approve_proposal(token)
+
+    with patch.object(settings, "ADVISORY_ONLY", False), \
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch("observability.alerts.send_alert"), \
+         patch("diagnostics_and_visuals.telemetry.error"), \
+         patch("execution.fmp_paper_broker.FMPPaperBroker") as mock_fmp_cls, \
+         patch("broker_live_execution_mcp.OrderManager") as mock_om_cls:
+        result = await confirm_live_trade(token)
+
+    data = json.loads(result)
+    assert data["status"] == "error"
+    assert "Robinhood" in data["message"]
+    mock_fmp_cls.assert_not_called()
+    mock_om_cls.assert_not_called()
 
 
 def test_get_broker_uses_fmp_paper_when_not_going_live():
@@ -623,7 +637,7 @@ def test_get_broker_uses_fmp_paper_when_not_going_live():
 
     with patch.object(_settings, "BROKER_BACKEND", "fmp_paper"), \
          patch.object(_settings, "ADVISORY_ONLY", True), \
-         patch.object(_settings, "ALPACA_PAPER", True):
+         patch.object(_settings, "PAPER_TRADING", True):
         broker = _get_broker()
 
     assert isinstance(broker, FMPPaperBroker)

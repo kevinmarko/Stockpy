@@ -9,7 +9,7 @@ Run standalone::
     uvicorn api.data_api:app --port 8603
 
 Auth posture: every GET endpoint, plus the compute-only ``POST /data/pairs/*``
-/ ``POST /data/options/recompute`` endpoints (no side effects — they read
+endpoints (no side effects — they read
 market data and return a computed result, never persist anything), use
 ``require_token`` (``api.auth.require_read_token``, copied from
 ``api/state_api.py``) — a **fail-open** bearer token when
@@ -33,15 +33,17 @@ from __future__ import annotations
 import base64
 import logging
 import math
+import threading
+import time
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import json
 import asyncio
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from api._redact import install_redacting_exception_handler, redact_line
 
 from dotenv import load_dotenv as _load_dotenv
@@ -66,8 +68,6 @@ from data.robinhood_portfolio import fetch_account_snapshot
 from data.portfolio_sync import async_sync_now, build_sync_report
 from data.symbol_view_store import SymbolViewStore
 from data_engine import DataEngine
-import options_ondemand
-import pairs_ondemand
 
 # ── On-demand AI generation (Section: /data/ai/*) ──────────────────────────
 # Imported by NAME (not by submodule reference) so tests can monkeypatch each
@@ -100,31 +100,10 @@ from pilots.symbols import _clean_str, find_signal
 
 logger = logging.getLogger(__name__)
 
-from contextlib import asynccontextmanager
-
-
-@asynccontextmanager
-async def _lifespan(app):
-    """Start/stop the WebSocket streamer with the FastAPI process."""
-    try:
-        from data.websocket_streamer import start_streamer, stop_streamer
-        if getattr(settings, "ALPACA_API_KEY", None):
-            start_streamer()
-    except Exception as _e:
-        logger.warning("WebSocketStreamer startup skipped: %s", _e)
-    yield
-    try:
-        from data.websocket_streamer import stop_streamer
-        stop_streamer()
-    except Exception:
-        pass
-
-
 app = FastAPI(
     title="InvestYo Data API",
     description="Data ingestion and market-data endpoints for the Web App.",
     version="0.1.0",
-    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -379,13 +358,8 @@ def get_peer_group(symbol: str) -> Dict[str, Any]:
     powering the webapp's "Suggest peers for this ticker" affordance on
     ``SymbolComparison.tsx``.
 
-    Gated by ``settings.FMP_PEERS_ENABLED`` (default ``False``) — a
-    DIFFERENT gate from ``FMP_OPTIONS_CONTEXT_ENABLED``, which already
-    covers a per-cycle BATCH ``fetch_peer_group`` call across the whole
-    options-matrix universe; this is a single, per-click, operator-triggered
-    fetch with its own rate-limit/cadence shape (mirrors the
-    ``FMP_INSIDER_ENABLED``/``FMP_SECTOR_SNAPSHOT_ENABLED`` precedent of one
-    flag per call-site shape). ``fetch_peer_group`` itself already never
+    Gated by ``settings.FMP_PEERS_ENABLED`` — a single, per-click,
+    operator-triggered fetch. ``fetch_peer_group`` itself already never
     raises (CONSTRAINT #6 — it degrades to ``[]`` on any failure), so the
     flag-off path and any live fetch/parse failure both degrade to an
     honest empty list + ``reason`` string here, never a 500.
@@ -820,8 +794,30 @@ def get_quotes(symbols: str) -> Dict[str, Any]:
     return out
 
 
+# GET /data/sync-report probes every universe symbol over the network, so the
+# finished response is cached briefly. Only successful builds are cached, and
+# the lock makes concurrent requests share one rebuild instead of each
+# starting their own.
+_SYNC_REPORT_TTL_SECONDS = 120.0
+_SYNC_REPORT_CACHE: Optional[Tuple[float, Dict[str, Any]]] = None
+_SYNC_REPORT_LOCK = threading.Lock()
+
+
 @app.get("/data/sync-report", dependencies=[Depends(require_token)])
 def get_sync_report() -> Dict[str, Any]:
+    """Portfolio & watchlist coverage report, cached for
+    ``_SYNC_REPORT_TTL_SECONDS`` (see :func:`_build_sync_report_response`)."""
+    global _SYNC_REPORT_CACHE
+    with _SYNC_REPORT_LOCK:
+        cached = _SYNC_REPORT_CACHE
+        if cached is not None and time.monotonic() - cached[0] < _SYNC_REPORT_TTL_SECONDS:
+            return cached[1]
+        resp = _build_sync_report_response()  # raises 503 -> nothing cached
+        _SYNC_REPORT_CACHE = (time.monotonic(), resp)
+        return resp
+
+
+def _build_sync_report_response() -> Dict[str, Any]:
     """Portfolio & watchlist coverage report (holdings ∪ watchlists).
 
     Enriches each symbol entry with two rating fields sourced from
@@ -836,8 +832,13 @@ def get_sync_report() -> Dict[str, Any]:
     (``data/portfolio_sync.py`` is untouched) — a rating-store failure
     (missing DB, import error, etc.) degrades to leaving the two keys off
     every symbol rather than failing the whole endpoint (CONSTRAINT #6)."""
+    # Cached snapshot only (allow_live_fetch=False), like GET /data/universe:
+    # a read endpoint must never start a Robinhood device-approval login.
+    # With ROBINHOOD_AUTO_REFRESH_ENABLED and a stale snapshot, the default
+    # path spawned a login and blocked this request for up to
+    # RH_LOGIN_DEADLINE_SECONDS while pushing an approval prompt to the phone.
     try:
-        snapshot = fetch_account_snapshot(force=False)
+        snapshot = fetch_account_snapshot(allow_live_fetch=False)
     except Exception as exc:
         logger.warning("data_api: account snapshot unavailable for sync report: %s", exc)
         snapshot = None
@@ -849,7 +850,12 @@ def get_sync_report() -> Dict[str, Any]:
         forecast_symbols = []
 
     try:
-        report = build_sync_report(snapshot, forecast_symbols=forecast_symbols)
+        report = build_sync_report(
+            snapshot,
+            forecast_symbols=forecast_symbols,
+            fundamentals_from_store=True,
+            prices_from_store=True,
+        )
     except Exception as exc:
         logger.warning("data_api: sync report failed: %s", exc)
         raise HTTPException(status_code=503, detail="Sync report unavailable")
@@ -981,7 +987,9 @@ def explain_ticker(symbol: str) -> Dict[str, Any]:
     # ── 2. Universe Tracking ─────────────────────────────────────────────
     snapshot = None
     try:
-        snapshot = fetch_account_snapshot(force=False)
+        # Cached only -- never start a Robinhood login from a read (see
+        # get_sync_report).
+        snapshot = fetch_account_snapshot(allow_live_fetch=False)
     except Exception as exc:
         logger.warning("data_api: account snapshot unavailable for explain %s: %s", sym, exc)
 
@@ -1227,369 +1235,6 @@ def get_account() -> Dict[str, Any]:
     if snapshot is None:
         raise HTTPException(status_code=404, detail="No account snapshot available")
     return _clean_nan(snapshot.to_dict())
-
-
-# ---------------------------------------------------------------------------
-# On-demand Options / Pairs recompute — /data/options/recompute,
-# /data/pairs/analyze, /data/pairs/scan
-# ---------------------------------------------------------------------------
-# Backlog items 8a/8b: the persisted-snapshot views (GET /options, GET /pairs
-# on api/pilots_api.py) only ever serve the LAST PIPELINE-WRITTEN artifact —
-# there was no way for an operator to recompute against parameters/symbols
-# they choose. These heavy engines (technical_options_engine,
-# pairs.cointegration / signals.pairs_trading / statsmodels) must live here,
-# not on the AST-guarded api/pilots_api.py. Mirrors GET /symbols/compare's
-# (PR #379) "cap the input, stay synchronous, 422 outside the cap" convention
-# rather than building a job/poll pattern — these are single-request,
-# bounded-size computations, not a whole-pipeline run.
-
-
-def _dedupe_symbols(symbols: List[str]) -> List[str]:
-    """Upper-case + de-dup a symbol list, first occurrence wins, order
-    preserved. Never raises on malformed input (a non-string entry is
-    stringified)."""
-    seen: set = set()
-    out: List[str] = []
-    for s in symbols or []:
-        u = str(s or "").strip().upper()
-        if u and u not in seen:
-            seen.add(u)
-            out.append(u)
-    return out
-
-
-class PairsAnalyzeRequest(BaseModel):
-    """Body for ``POST /data/pairs/analyze``. One named pair — the wedge for
-    backlog item 8a. ``symbol_y`` is the dependent leg, ``symbol_x`` the hedge
-    leg (mirrors ``gui/panels/pairs.py``'s "Analyze a pair" mode)."""
-
-    symbol_y: str = Field(..., min_length=1, max_length=12)
-    symbol_x: str = Field(..., min_length=1, max_length=12)
-
-
-class PairsScanRequest(BaseModel):
-    """Body for ``POST /data/pairs/scan``. An operator-chosen symbol list —
-    2-15 after de-dup (422 with a stable tag outside that range, see
-    ``pairs_ondemand.SCAN_MIN_SYMBOLS``/``SCAN_MAX_SYMBOLS``)."""
-
-    symbols: List[str] = Field(..., min_length=1, max_length=64)
-    p_threshold: float = Field(0.05, ge=0.01, le=0.10)
-    max_pairs: int = Field(20, ge=1, le=50)
-
-
-class OptionsRecomputeRequest(BaseModel):
-    """Body for ``POST /data/options/recompute``. A capped, operator-chosen
-    symbol list (1-8 after de-dup — see
-    ``options_ondemand.RECOMPUTE_MIN_SYMBOLS``/``RECOMPUTE_MAX_SYMBOLS``) plus
-    the same directive controls ``gui/panels/options_matrix.py`` exposes.
-    Every field defaults to the engine constant, so an untouched request
-    reproduces the pipeline writer's own defaults byte-for-byte."""
-
-    symbols: List[str] = Field(..., min_length=1, max_length=64)
-    target_dte: int = Field(30, ge=1, le=120)
-    delta_target_scale: float = Field(1.0, ge=0.25, le=2.0)
-    ivr_sell_threshold: float = Field(50.0, ge=0.0, le=100.0)
-    ivr_buy_threshold: float = Field(30.0, ge=0.0, le=100.0)
-    risk_free_rate_pct: Optional[float] = Field(
-        None, ge=0.0, le=15.0,
-        description="Annualized %, e.g. 4.5. None -> settings.RISK_FREE_RATE.",
-    )
-    strike_grid: float = Field(0.50, ge=0.5, le=10.0)
-    delta_tolerance: float = Field(0.05, ge=0.01, le=0.25)
-
-
-class CacheLongShortSimulateRequest(BaseModel):
-    ticker: str = Field(..., min_length=1, max_length=10)
-    allocation: float = Field(..., gt=0)
-
-
-@app.post("/data/cache-long-short/simulate", dependencies=[Depends(require_token)])
-def simulate_cache_long_short(body: CacheLongShortSimulateRequest) -> Dict[str, Any]:
-    from engine.cache_long_short_engine import CacheLongShortEngine
-    sym = body.ticker.strip().upper()
-    
-    beta = CacheLongShortEngine.calculate_beta(sym)
-    proxy, corr = CacheLongShortEngine.find_correlated_proxy(sym)
-    
-    if proxy is None or beta is None:
-        return {
-            "found": False,
-            "reason": "Insufficient price history for ticker or suitable proxy",
-            "beta": None,
-            "proxy_ticker": None,
-            "correlation_coefficient": None
-        }
-        
-    return {
-        "found": True,
-        "reason": None,
-        "beta": beta,
-        "proxy_ticker": proxy,
-        "correlation_coefficient": corr
-    }
-
-
-@app.post("/data/pairs/analyze", dependencies=[Depends(require_token)])
-def analyze_pairs_ondemand(body: PairsAnalyzeRequest) -> Dict[str, Any]:
-    """On-demand cointegration + spread-signal analysis for ONE named pair.
-
-    Ports ``gui/panels/pairs.py``'s "Analyze a pair" mode to a stateless HTTP
-    call. Advisory only (CONSTRAINT: no order code). Symbol Y and Symbol X
-    must differ and both be non-empty (422 with a stable tag) — beyond that,
-    this never 422s on an unresolved/degenerate pair: "no cointegration" or
-    "insufficient history" is an honest, common, EXPECTED outcome for
-    statistical arbitrage, surfaced as ``found: false`` + a ``reason``, not a
-    client error (CONSTRAINT #6). Every numeric leaf is ``null`` when the
-    underlying primitive is unavailable (CONSTRAINT #4).
-    """
-    sym_y = body.symbol_y.strip().upper()
-    sym_x = body.symbol_x.strip().upper()
-    if not sym_y or not sym_x:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "missing_symbol",
-                "message": "Both Symbol Y and Symbol X are required.",
-            },
-        )
-    if sym_y == sym_x:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "identical_symbols",
-                "message": "Symbol Y and Symbol X must be different tickers.",
-            },
-        )
-
-    provider = get_provider()
-    result = pairs_ondemand.analyze_pair(sym_y, sym_x, provider)
-    return _clean_nan(result)
-
-
-@app.post("/data/pairs/scan", dependencies=[Depends(require_token)])
-def scan_pairs_ondemand(body: PairsScanRequest) -> Dict[str, Any]:
-    """On-demand cointegration scan over an operator-chosen symbol list.
-
-    Ports ``gui/panels/pairs.py``'s "Scan for pairs" mode. 2-15 distinct
-    symbols after upper-casing + de-dup (422 with a stable tag outside that
-    range, mirroring ``GET /symbols/compare``'s convention). A symbol that
-    fails to fetch is dead-lettered into the response's ``missing`` list
-    rather than aborting the whole scan (CONSTRAINT #6); an honest empty
-    ``pairs: []`` + ``reason`` is a valid 200, not an error (statistical
-    arbitrage candidates are genuinely rare).
-    """
-    deduped = _dedupe_symbols(body.symbols)
-    if len(deduped) < pairs_ondemand.SCAN_MIN_SYMBOLS:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "too_few_symbols",
-                "message": f"Enter at least {pairs_ondemand.SCAN_MIN_SYMBOLS} distinct symbols to scan.",
-                "min": pairs_ondemand.SCAN_MIN_SYMBOLS,
-            },
-        )
-    if len(deduped) > pairs_ondemand.SCAN_MAX_SYMBOLS:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "too_many_symbols",
-                "message": f"Enter at most {pairs_ondemand.SCAN_MAX_SYMBOLS} symbols to scan.",
-                "max": pairs_ondemand.SCAN_MAX_SYMBOLS,
-            },
-        )
-
-    provider = get_provider()
-    result = pairs_ondemand.scan_pairs(
-        deduped, provider, p_threshold=body.p_threshold, max_pairs=body.max_pairs
-    )
-    return _clean_nan(result)
-
-
-@app.post("/data/options/recompute", dependencies=[Depends(require_token)])
-def recompute_options_ondemand(body: OptionsRecomputeRequest) -> Dict[str, Any]:
-    """On-demand premium-selling directive recompute over a capped symbol
-    list, with adjustable delta-scale/IVR/risk-free-rate/strike-grid/DTE
-    controls.
-
-    Ports ``gui/panels/options_matrix.py``'s controls form + per-symbol
-    compute loop to a stateless HTTP call. 1-8 symbols after de-dup (422 with
-    a stable tag outside that range — each symbol pays a GJR-GARCH MLE fit,
-    the heaviest per-symbol compute in this codebase). A bad symbol
-    dead-letters into its own error-shaped row in ``directives`` (never aborts
-    the batch — CONSTRAINT #6); its message is also collected into
-    ``errors``. The VRP regime gate (VIX>=30 / CREDIT EVENT) is forwarded from
-    the latest persisted snapshot's macro state, exactly as the live pipeline
-    does — no premium-selling advice in a stress regime.
-    """
-    deduped = _dedupe_symbols(body.symbols)
-    if len(deduped) < options_ondemand.RECOMPUTE_MIN_SYMBOLS:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "too_few_symbols",
-                "message": f"Enter at least {options_ondemand.RECOMPUTE_MIN_SYMBOLS} symbol.",
-                "min": options_ondemand.RECOMPUTE_MIN_SYMBOLS,
-            },
-        )
-    if len(deduped) > options_ondemand.RECOMPUTE_MAX_SYMBOLS:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "too_many_symbols",
-                "message": f"Enter at most {options_ondemand.RECOMPUTE_MAX_SYMBOLS} symbols.",
-                "max": options_ondemand.RECOMPUTE_MAX_SYMBOLS,
-            },
-        )
-
-    snapshot = load_snapshot()
-    vix, market_regime = options_ondemand.macro_from_snapshot(snapshot)
-    risk_free_rate_pct = (
-        body.risk_free_rate_pct
-        if body.risk_free_rate_pct is not None
-        else float(settings.RISK_FREE_RATE) * 100.0
-    )
-
-    provider = get_provider()
-    rows: List[Dict[str, Any]] = []
-    errors: List[str] = []
-    for sym in deduped:
-        result = options_ondemand.compute_directive_row(
-            sym,
-            provider=provider,
-            target_dte=body.target_dte,
-            vix=vix,
-            market_regime=market_regime,
-            risk_free_rate=risk_free_rate_pct / 100.0,
-            ivr_sell_threshold=body.ivr_sell_threshold,
-            ivr_buy_threshold=body.ivr_buy_threshold,
-            delta_target_scale=body.delta_target_scale,
-            delta_tolerance=body.delta_tolerance,
-            strike_grid=body.strike_grid,
-        )
-        rows.append(result["row"])
-        if result["error"]:
-            errors.append(result["error"])
-
-    return _clean_nan(
-        {
-            "directives": rows,
-            "errors": errors,
-            "vix": vix,
-            "market_regime": market_regime,
-            "target_dte": body.target_dte,
-        }
-    )
-
-
-@app.get("/data/options/chain/{symbol}", dependencies=[Depends(require_token)])
-def get_options_chain(symbol: str, expiration: Optional[str] = None) -> Dict[str, Any]:
-    """On-demand full options chain fetcher.
-    If `expiration` is omitted, returns a list of available expiration dates.
-    If `expiration` is provided, returns the calls and puts for that date, enriched with Greeks.
-    """
-    symbol = symbol.upper()
-    from data.market_data import get_options_provider, get_provider
-    options_provider = get_options_provider()
-    provider = get_provider()
-    
-    if expiration is None:
-        expirations = options_provider.fetch_options_chain(symbol)
-        return _clean_nan({
-            "symbol": symbol,
-            "expirations": expirations
-        })
-    
-    chain = options_provider.fetch_options_chain(symbol, expiration)
-    if chain is None:
-        raise HTTPException(status_code=404, detail=f"Option chain not found for {symbol} at {expiration}")
-        
-    try:
-        # We rely on the configured provider (which we prefer to be FMP based on config)
-        # to fetch a reliable spot price for the Greek calculations.
-        quote = provider.get_latest_quote(symbol)
-        spot_price = quote.price
-        if spot_price is not None and isinstance(spot_price, float) and math.isnan(spot_price):
-            spot_price = None
-    except Exception:
-        spot_price = None
-
-    if spot_price is None:
-        # CONSTRAINT #4 (never fabricate): every Greek below is derived from
-        # `spot_price` -- silently substituting $0.00 here would compute a
-        # deeply-in-the-money Delta≈1 for every strike and present it as real,
-        # with no signal to the caller that the underlying quote never
-        # actually loaded. Fail honestly instead of returning invented Greeks.
-        raise HTTPException(status_code=503, detail=f"Unable to fetch a live spot price for {symbol}; cannot compute option Greeks.")
-
-
-    from technical_options_engine import OptionsPricingRecommender
-    import datetime
-    
-    # Calculate DTE
-    try:
-        exp_date = datetime.datetime.strptime(expiration, "%Y-%m-%d").date()
-        today = datetime.date.today()
-        dte = max(1, (exp_date - today).days)
-    except Exception:
-        dte = 30
-        
-    T = dte / 365.0
-    recommender = OptionsPricingRecommender(stock_price=spot_price, risk_free_rate=float(settings.RISK_FREE_RATE))
-    
-    def enrich_contract(row, option_type):
-        iv = float(row.get('impliedVolatility', 0.0))
-        strike = float(row.get('strike', 0.0))
-        greeks = recommender.black_scholes_pricing_and_greeks(strike, T, iv, option_type)
-        
-        # CONSTRAINT #4 (never fabricate): a contract with genuinely unreported
-        # volume/open-interest (common for far-OTM/illiquid strikes) must stay
-        # `null`, not be coerced to a fabricated `0` that's indistinguishable
-        # from a verified-zero reading. `_clean_nan` below only nulls actual
-        # NaN floats, so the "missing" case is passed through as `None` here
-        # rather than defaulted to `0` up front.
-        vol = row.get("volume", None)
-        vol = None if vol is None or (isinstance(vol, float) and math.isnan(vol)) else int(vol)
-
-        oi = row.get("openInterest", None)
-        oi = None if oi is None or (isinstance(oi, float) and math.isnan(oi)) else int(oi)
-
-        return {
-            "contractSymbol": row.get("contractSymbol"),
-            "strike": strike,
-            "lastPrice": float(row.get("lastPrice", 0.0)),
-            "bid": float(row.get("bid", 0.0)),
-            "ask": float(row.get("ask", 0.0)),
-            "volume": vol,
-            "openInterest": oi,
-            "impliedVolatility": iv,
-            "inTheMoney": bool(row.get("inTheMoney", False)),
-            "greeks": {
-                "delta": float(greeks['Delta']),
-                "gamma": float(greeks['Gamma']),
-                "theta": float(greeks['Theta_Daily']),
-                # OptionsPricingRecommender.black_scholes_pricing_and_greeks
-                # returns raw Black-Scholes vega (per 1.00/100% IV change) --
-                # rescale to the "per 1% IV" convention this chain response
-                # displays here, at this boundary only, so the shared engine
-                # primitive (and its existing ATM_Vega consumer) stays on its
-                # original scale.
-                "vega": float(greeks['Vega']) / 100.0,
-                "rho": float(greeks['Rho']),
-                "chanceOfProfit": float(greeks['ChanceOfProfit']),
-            }
-        }
-    
-    calls = [enrich_contract(row, 'call') for _, row in chain.calls.iterrows()] if not chain.calls.empty else []
-    puts = [enrich_contract(row, 'put') for _, row in chain.puts.iterrows()] if not chain.puts.empty else []
-    
-    return _clean_nan({
-        "symbol": symbol,
-        "expiration": expiration,
-        "spot_price": spot_price,
-        "calls": calls,
-        "puts": puts
-    })
-
 
 
 # ---------------------------------------------------------------------------
@@ -2167,8 +1812,8 @@ def get_order_book_ladder(symbol: str) -> Dict[str, Any]:
     api/ws_api.py's REST fallback uses) when available. The depth ladder
     itself (bid/ask sizes at each price level) is SYNTHETIC
     (``is_synthetic: True``) -- this platform has no Level 2 / consolidated
-    order book feed to compute real depth from (CLAUDE.md: Alpaca's free
-    IEX feed and yfinance are both top-of-book only). Never present the
+    order book feed to compute real depth from (FMP and yfinance quotes are
+    both top-of-book only). Never present the
     sizes as real liquidity.
     """
     sym = symbol.upper()
@@ -2739,228 +2384,3 @@ async def chat_endpoint(req: ChatMessageRequest):
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream")
-
-
-@app.get(
-    "/risk/circuit-breaker/status",
-    dependencies=[Depends(require_token)],
-)
-async def get_circuit_breaker_status():
-    """Get the active dynamic circuit breaker status.
-
-    Reads ``output/circuit_breaker_state.json`` or queries DynamicCircuitBreaker.
-    Degrades gracefully to NORMAL state if uninitialized or file is missing.
-    Never fabricates or raises (CONSTRAINT #4 / #6).
-    """
-    from datetime import datetime, timezone
-    from pathlib import Path
-
-    # 1. Try reading persisted output/circuit_breaker_state.json
-    try:
-        output_dir = getattr(settings, "OUTPUT_DIR", None) or Path("output")
-        cb_path = Path(output_dir) / "circuit_breaker_state.json"
-        if cb_path.exists():
-            with open(cb_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                return {
-                    "state": data.get("state", "NORMAL"),
-                    "volatility_zscore": float(data.get("volatility_zscore", 0.0) or 0.0),
-                    "vpin": float(data.get("vpin", 0.0) or 0.0),
-                    "ofi": float(data.get("ofi", 0.0) or 0.0),
-                    "loss_velocity_per_min": float(data.get("loss_velocity_per_min", 0.0) or 0.0),
-                    "reason": data.get("reason"),
-                    "updated_at": data.get("updated_at") or datetime.now(timezone.utc).isoformat(),
-                }
-    except Exception as exc:
-        logger.warning("data_api: Failed to read circuit breaker state file: %s", exc)
-
-    # 2. Try querying DynamicCircuitBreaker if available in memory
-    try:
-        from execution.dynamic_circuit_breaker import DynamicCircuitBreaker  # type: ignore
-        cb = DynamicCircuitBreaker()
-        status = cb.load_metrics()
-        if status is not None:
-            s_dict = status.to_dict() if hasattr(status, "to_dict") else status
-            return {
-                "state": s_dict.get("state", "NORMAL"),
-                "volatility_zscore": float(s_dict.get("volatility_zscore", 0.0) or 0.0),
-                "vpin": float(s_dict.get("vpin", 0.0) or 0.0),
-                "ofi": float(s_dict.get("ofi", 0.0) or 0.0),
-                "loss_velocity_per_min": float(s_dict.get("loss_velocity_per_min", 0.0) or 0.0),
-                "reason": s_dict.get("reason"),
-                "updated_at": s_dict.get("updated_at") or datetime.now(timezone.utc).isoformat(),
-            }
-    except (ImportError, AttributeError, Exception) as exc:
-        logger.debug("data_api: DynamicCircuitBreaker in-memory status not available: %s", exc)
-
-    # 3. Fallback to NORMAL
-    return {
-        "state": "NORMAL",
-        "volatility_zscore": 0.0,
-        "vpin": 0.0,
-        "ofi": 0.0,
-        "loss_velocity_per_min": 0.0,
-        "reason": None,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-@app.get("/data/trends/stitch-demo", dependencies=[Depends(require_token)])
-def get_trends_stitch_demo() -> Dict[str, Any]:
-    """
-    Demonstrates the Google Trends SVI overlapping-window stitching algorithm
-    (data.trends_stitcher.GoogleTrendsStitcher).
-
-    Prefers real, already-persisted Google Trends SVI data from
-    data/trends_store.py::TrendsStore -- populated by the opt-in daemon job
-    (data/google_trends_client.py, settings.GOOGLE_TRENDS_ENABLED; see CLAUDE.md's
-    "Google Trends Live Fetching & Persistence" section) and already consumed
-    elsewhere in this codebase (POST /pilots/ml/lstm-attention-forecast in
-    api/pilots_api.py). Most deployments won't have that daemon job enabled/warmed
-    up yet, though, so when no real SVI windows are on file for this query term,
-    this endpoint falls back to real SPY trading volume (via HistoricalStore) as an
-    honestly-labeled PROXY input to exercise the real stitching algorithm end-to-end.
-    Per CONSTRAINT #4 (never fabricate a metric), it never synthesizes a fake SVI
-    series in either case -- every proxy curve name in the response discloses the
-    substitution explicitly ("SPY Volume Proxy"), never presented as if it were real
-    Google Trends data. Note the three proxy windows are non-independent overlapping
-    slices of ONE real series (not three independently-collected Google Trends
-    downloads), so they demonstrate the rescaling math correctly but not every
-    real-world artifact of independently-collected windows.
-
-    Raises HTTPException(503) -- rather than returning a fabricated placeholder
-    series -- if neither real SVI data nor sufficient SPY bar history is available.
-    """
-    import pandas as pd
-
-    from data.trends_stitcher import GoogleTrendsStitcher
-
-    def to_curve(name: str, series: pd.Series) -> Dict[str, Any]:
-        points: List[List[float]] = []
-        for ts, val in series.items():
-            if val is None or (isinstance(val, float) and math.isnan(val)):
-                continue
-            points.append([int(ts.timestamp() * 1000), float(val)])
-        return {"name": name, "data": points}
-
-    # 1. Prefer real, already-persisted Google Trends SVI data over the SPY-volume
-    #    proxy below -- gated on settings.GOOGLE_TRENDS_ENABLED so a default
-    #    deployment (the daemon job is opt-in, and its tables are typically never
-    #    created) doesn't pay for a DB engine + queries on every single request.
-    if settings.GOOGLE_TRENDS_ENABLED:
-        query_term: Optional[str] = None
-        raw_rows: List[Any] = []
-        try:
-            from data.trends_store import TrendsStore
-
-            trends_store = TrendsStore(readonly=True)
-            # Discover which symbol(s) the daemon has actually populated rather than
-            # guessing a single hardcoded term -- desktop/daemon_runtime.py's
-            # maybe_refresh_google_trends ingests settings.DEFAULT_TICKERS, an
-            # operator-configured universe with no fixed member.
-            populated_terms = trends_store.get_query_terms_with_raw_windows()
-            if populated_terms:
-                query_term = populated_terms[0]
-                raw_rows = trends_store.load_raw_windows(query_term)
-        except Exception as exc:
-            logger.warning(
-                "get_trends_stitch_demo: TrendsStore unavailable, falling back to SPY volume "
-                "proxy (%s): %s",
-                type(exc).__name__,
-                exc,
-            )
-
-        if raw_rows:
-            # A failure past this point is a genuine defect in this reconstruction
-            # logic, not "no real data available yet" -- log it distinctly (ERROR +
-            # traceback) rather than at the same WARNING level as the routine
-            # not-yet-populated case above, then still degrade to the honest proxy
-            # below (CONSTRAINT #6: never a raw, unhandled 500 from this endpoint).
-            try:
-                windowed_series = GoogleTrendsStitcher.group_raw_windows_into_series(raw_rows)
-                raw_curves = [
-                    to_curve(f"Google Trends SVI ({query_term}) — {window_id}", series)
-                    for window_id, series in windowed_series
-                ]
-                stitched_rows = trends_store.get_stitched_series(query_term)
-                if stitched_rows:
-                    stitched_series = GoogleTrendsStitcher.rows_to_series(stitched_rows)
-                else:
-                    # No persisted stitched series yet for this term (a real timing gap --
-                    # desktop/daemon_runtime.py only calls save_stitched_series when
-                    # `if not stitched.empty:`) -- compute one from the raw windows we
-                    # already have instead of discarding real data for the proxy below.
-                    stitched_series = GoogleTrendsStitcher.stitch_multiple_intervals(
-                        [series for _, series in windowed_series]
-                    )
-                return {
-                    "raw_curves": raw_curves,
-                    "stitched_curve": to_curve(f"Stitched Google Trends SVI ({query_term})", stitched_series),
-                }
-            except Exception:
-                logger.error(
-                    "get_trends_stitch_demo: unexpected failure building real-SVI curves for "
-                    "query_term=%r -- falling back to SPY volume proxy",
-                    query_term,
-                    exc_info=True,
-                )
-
-    # 2. Fall back to the real-SPY-volume proxy.
-    n_bars = 240
-
-    try:
-        store = HistoricalStore(readonly=True)
-        bars = store.get_bars("SPY", lookback_days=n_bars)
-        if bars.empty or len(bars) < n_bars:
-            raise ValueError(f"Insufficient SPY bar history: {len(bars)} rows (need >= {n_bars})")
-        # Keep the real tz-naive DatetimeIndex intact -- GoogleTrendsStitcher.stitch_intervals
-        # aligns overlapping periods via index intersection, and the response needs real
-        # calendar dates as epoch-ms timestamps, not a fabricated/positional index.
-        true_series = bars["Volume"].tail(n_bars)
-
-        # Slicing/scaling/stitching stays inside the same try block as the fetch above --
-        # any exception here (e.g. GoogleTrendsStitcher raising on a malformed overlap)
-        # must degrade to the same honest 503 this endpoint is built around, never an
-        # unhandled raw 500. A degenerate all-zero slice is guarded explicitly (per this
-        # codebase's degenerate-std guard convention, < 1e-12) since slice / 0.0 would
-        # otherwise silently produce NaN -- not an exception -- and to_curve() would drop
-        # every NaN point, returning an honest-looking 200 with an empty curve instead.
-        def _scale_period(period_slice: pd.Series) -> pd.Series:
-            peak = float(period_slice.max())
-            if peak < 1e-12:
-                raise ValueError("Degenerate SPY volume window: max() is ~0, cannot scale")
-            return period_slice / peak * 100.0
-
-        slice_a = true_series.iloc[0:90]
-        period_a = _scale_period(slice_a)
-
-        slice_b = true_series.iloc[75:165]
-        period_b = _scale_period(slice_b)
-
-        slice_c = true_series.iloc[150:240]
-        period_c = _scale_period(slice_c)
-
-        stitched_all = GoogleTrendsStitcher.stitch_multiple_intervals([period_a, period_b, period_c])
-    except Exception as exc:
-        logger.warning(
-            "get_trends_stitch_demo: unable to build SPY-volume-proxy SVI stitching demo (%s): %s",
-            type(exc).__name__,
-            exc,
-        )
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Neither real Google Trends SVI data (opt-in via GOOGLE_TRENDS_ENABLED) nor "
-                "sufficient SPY bar history for the honest SPY-volume-proxy fallback is "
-                "currently available to build this demo. Use mock mode to view the demo."
-            ),
-        )
-
-    return {
-        "raw_curves": [
-            to_curve("SPY Volume Proxy — Period A", period_a),
-            to_curve("SPY Volume Proxy — Period B", period_b),
-            to_curve("SPY Volume Proxy — Period C", period_c),
-        ],
-        "stitched_curve": to_curve("Stitched SPY Volume Proxy", stitched_all),
-    }

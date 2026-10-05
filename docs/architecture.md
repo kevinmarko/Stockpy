@@ -15,8 +15,8 @@ flowchart TD
     subgraph SOURCES["External Data Sources"]
         YF["Yahoo Finance\n(OHLCV, statement-derived fundamentals)"]
         FRED["FRED API\n(VIX, yield curve, Sahm Rule,\nHY OAS, CPI, DGS10)"]
-        ALP["Alpaca IEX\n(real-time quotes & bars)"]
-        FHB["Finnhub\n(news catalyst headlines only)"]
+        ALP["FMP (yfinance fallback)\n(quotes & bars)"]
+        FHB["FMP\n(news catalyst headlines)"]
         RH["Robinhood\n(account snapshot — ADVISORY ONLY)"]
     end
 
@@ -138,12 +138,14 @@ flowchart TD
         HTML["output/daily_report.html\nHoldings & P/L · Δ Since Last Run\nSignals table · Rationale · Gravity audit"]
         SS["output/state_snapshot.json\n(+ rotated history/ copies)"]
         DL["output/decision_log.jsonl\nOperator acted / passed / modified"]
-        GS["Google Sheet\n(FidelityData_Automated tab)\nlegacy sink via main.py"]
         NTFY_OUT["Phone push notification\nntfy.sh topic"]
     end
 
-    REC --> HTML & SS & DL & GS
+    REC --> HTML & SS & DL
     WE --> NTFY_OUT
+
+    %% Google Sheet sink (FidelityData_Automated tab) retired to legacy/
+    %% in step 4e (2026-09) -- see legacy/README.md.
 
     %% ── Diff / Briefing ───────────────────────────────────────────────────
     subgraph DIFF["Δ Diff & Briefing"]
@@ -159,7 +161,7 @@ flowchart TD
         direction LR
         OM["OrderManager\nexecution/order_manager.py\nIdempotency · risk gate · retry"]
         RG["PreTradeRiskGate\nexecution/risk_gate.py\n10-check pipeline"]
-        BB["BrokerBase / AlpacaBroker\nexecution/broker_base.py\nexecution/alpaca_broker.py"]
+        BB["BrokerBase / FMPPaperBroker\nexecution/broker_base.py\nexecution/fmp_paper_broker.py"]
         KSW["GlobalKillSwitch\nexecution/kill_switch.py\noutput/KILL_SWITCH file"]
     end
 
@@ -200,7 +202,7 @@ flowchart TD
 |---|-----------|
 | 1 | **DTO boundary** — all data crossing into calculation code must be coerced into `dto_models.py` types. No raw-dict lookups in signal or strategy code. |
 | 2 | **Single sizing SSOT** — Kelly Target is computed **only** in `StrategyEngine._calculate_kelly_sizing()` → `sizing/kelly.py` / `sizing/vol_target.py`. No score-derived win-probability formulas anywhere else. On a remote-backend outage where `TransactionsStore()` construction fails, the Kelly path falls back through `transactions_store._OfflineTransactionsStore` (empty closed-trades → `volatility_target_weight`) rather than raising. |
-| 3 | **Source-of-truth separation** — Robinhood is the source of truth for account state (qty, cost basis, dividends, equity). Market data providers (Alpaca / yfinance) are the source of truth for prices, bars, and fundamentals — fundamentals are Yahoo statement-derived (`data/yahoo_fundamentals.py`), with raw yfinance `.info` as the fallback; Finnhub feeds the news_catalyst signal only. These roles never cross. |
+| 3 | **Source-of-truth separation** — Robinhood is the source of truth for account state (qty, cost basis, dividends, equity). Market data providers (FMP / yfinance) are the source of truth for prices, bars, and fundamentals — fundamentals are Yahoo statement-derived (`data/yahoo_fundamentals.py`), with raw yfinance `.info` as the fallback; FMP feeds the news_catalyst signal (Finnhub removed 2026-09). These roles never cross. |
 | 4 | **No fabricated data** — missing fields are `NaN`, never `0.0`. Held symbols without live quotes get `EQUITY_ONLY` coverage; their equity view uses `qty × avg_cost`, not a fabricated current price. |
 | 5 | **Dead-letter resilience** — every per-symbol calculation is wrapped in try/except. One symbol's failure never aborts the run; it is captured in the dead-letter queue (`output/dead_letter.json`). On a **DB-backend outage**, Kelly position-sizing specifically **degrades** to a read-only `transactions_store._OfflineTransactionsStore` (empty trade history → vol-target fallback, per CONSTRAINT #6) instead of dead-lettering every symbol's advisory evaluation over an optional sizing refinement. |
 | 6 | **Broker quarantine** — `ADVISORY_ONLY=true` (the project default) causes `main_orchestrator._execute_broker_orders` to return immediately before any broker import. The OrderManager / BrokerBase path (shown in red above) is never reached. |
@@ -222,20 +224,20 @@ misrepresent the actual arrangement. Any agent may touch any file for the task i
 |-------------|-------------|----------------|
 | `python3 main.py` | Advisory refresh — fastest, broker-free | Calls `engine/advisory.py` directly; writes `output/daily_report.html` + `output/state_snapshot.json` |
 | `python3 main_orchestrator.py` | Full async pipeline with schema validation | Runs all 50+ dashboard columns through Pandera; writes `output/daily_report_dashboard.html` |
-| `streamlit run legacy/streamlit_command_center/app.py` | Visual control panel | Launches orchestrator as subprocess; reads file-backed state; never calls broker directly |
+| `./launch_webapp.command` | Visual control panel (Pilots PWA, `webapp/`) | Starts the web app and, in live mode, the backend APIs it needs |
 | `python scripts/preflight_check.py` | Readiness gate | 17 checks; advisory-mode auto-skips 8 broker/false-positive checks |
 
 ---
 
 ## Cross-cutting & extracted modules
 
-* **`reporting/progress.py`** — file-backed 0–100% pipeline-progress contract. `ProgressReporter(stages, …)` is instantiated once per cycle by the orchestrator (`start_stage` / `advance_symbol` / `finish`), atomically writing `output/progress.json`; module-level `read_progress()` is the dead-letter-safe read side (missing/malformed → `None`, never a fabricated partial). Consumed by the GUI Launcher tab's live `st.progress` bar via `shared/orchestrator_runner.py::compute_run_progress`, polling at `settings.PROGRESS_POLL_SECONDS` (default 5 s).
+* **`reporting/progress.py`** — file-backed 0–100% pipeline-progress contract. `ProgressReporter(stages, …)` is instantiated once per cycle by the orchestrator (`start_stage` / `advance_symbol` / `finish`), atomically writing `output/progress.json`; module-level `read_progress()` is the dead-letter-safe read side (missing/malformed → `None`, never a fabricated partial). Read by `shared/orchestrator_runner.py::compute_run_progress`; the Streamlit Launcher tab's progress bar that displayed it was deleted in 2026-09.
 * **`reporting/html_publisher.py`** — the HTML publish layer extracted out of `main.py`, so the advisory orchestrator's report-writing path is a standalone, independently-testable module rather than an inline `main.py` helper.
 * **`pipeline/steps.py`** — `run_once()` recast as a command/mediator pipeline of discrete steps (including `KillSwitchGateStep`, the advisory pause gate) instead of one monolithic function body.
 
 ---
 
-*Last updated: 2026-07-10. Reflects the Yahoo statement-derived fundamentals engine (`data/yahoo_fundamentals.py`, replacing Finnhub as the fundamentals source; Finnhub is now news_catalyst-only), the Robinhood Execution Bridge (Tier 8), `data/portfolio_sync.py` (Task 1.4), `data/robinhood_orders.py` (Tier 7), the `lgbm_ranker` signal module, Tier 5.3 advisory pause gate, Tier 4 validation cadence, Tier 2.4 news catalyst, and the ADVISORY_ONLY=true default. Also reconciles the Kelly-sizing DB-outage degrade path (`_OfflineTransactionsStore` → vol-target fallback), `reporting/progress.py` live pipeline-progress telemetry, and the `reporting/html_publisher.py` + `pipeline/steps.py` reporting/pipeline extractions.*
+*Last updated: 2026-07-10. Reflects the Yahoo statement-derived fundamentals engine (`data/yahoo_fundamentals.py`, replacing Finnhub as the fundamentals source; Finnhub was later removed entirely, 2026-09, and FMP now serves news_catalyst), the Robinhood Execution Bridge (Tier 8), `data/portfolio_sync.py` (Task 1.4), `data/robinhood_orders.py` (Tier 7), the `lgbm_ranker` signal module, Tier 5.3 advisory pause gate, Tier 4 validation cadence, Tier 2.4 news catalyst, and the ADVISORY_ONLY=true default. Also reconciles the Kelly-sizing DB-outage degrade path (`_OfflineTransactionsStore` → vol-target fallback), `reporting/progress.py` live pipeline-progress telemetry, and the `reporting/html_publisher.py` + `pipeline/steps.py` reporting/pipeline extractions.*
 
 
 ## Recent Architecture Updates

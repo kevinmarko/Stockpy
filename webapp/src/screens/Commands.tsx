@@ -14,7 +14,6 @@ import {
   Button,
   EmptyState,
   ErrorState,
-  InfoTip,
   Loading,
   StaleDataNotice,
 } from "../components/ui";
@@ -50,42 +49,22 @@ export function Commands() {
     useApi<CommandManifest>(() => api.getCommands(), []);
 
   const strategyRegistry = data?.strategy_registry ?? [];
-  const optionsStrategyRegistry = data?.options_strategy_registry ?? [];
-  const paperBrokerOptionsStrategyRegistry =
-    data?.paper_broker_options_strategy_registry ?? [];
 
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<"launcher" | "queue">("launcher");
   const [builderCommand, setBuilderCommand] = useState<CommandSpec | null>(null);
-  // Set alongside builderCommand only by the "paper-broker realistic" quick
-  // action below -- narrows CommandFormBuilder's --strategies prefill to
-  // paperBrokerOptionsStrategyRegistry instead of the command's usual
-  // "everything in the relevant registry" default. Cleared whenever the
-  // builder opens via any other path (the other two buttons, the free-text
-  // Command Bar, or the Cmd+K palette) so it never leaks into an unrelated
-  // open.
-  const [builderInitialStrategies, setBuilderInitialStrategies] = useState<
-    string[] | null
-  >(null);
-
   // Only render the bulk-validate entry point when the manifest actually
   // exposes the command it targets -- an older/degraded manifest without
   // refresh_validations.py must not show a button that opens nothing useful.
   const bulkValidateCommand =
     data?.commands.find((c) => c.name === "refresh_validations.py") ?? null;
-  // Same guard, for validation.harness's own bulk (options-only) mode.
-  const bulkValidateOptionsCommand =
-    data?.commands.find((c) => c.name === "validation.harness") ?? null;
 
   // Check URL query parameters for builderCommand trigger (e.g. ?builder=validation.harness)
   useEffect(() => {
     const builderParam = searchParams.get("builder");
     if (builderParam && data?.commands) {
       const matched = data.commands.find((c) => c.name === builderParam);
-      if (matched) {
-        setBuilderCommand(matched);
-        setBuilderInitialStrategies(null);
-      }
+      if (matched) setBuilderCommand(matched);
     }
   }, [searchParams, data]);
 
@@ -128,7 +107,7 @@ export function Commands() {
         </div>
       </div>
 
-      {(bulkValidateCommand || bulkValidateOptionsCommand) && (
+      {bulkValidateCommand && (
         <div
           style={{
             display: "flex",
@@ -139,67 +118,12 @@ export function Commands() {
             flexWrap: "wrap",
           }}
         >
-          {bulkValidateCommand && (
-            <Button
-              variant="primary"
-              onClick={() => {
-                setBuilderCommand(bulkValidateCommand);
-                setBuilderInitialStrategies(null);
-              }}
-            >
-              🧪 Bulk Validate All Strategies
-            </Button>
-          )}
-          {bulkValidateCommand && paperBrokerOptionsStrategyRegistry.length > 0 && (
-            <span style={{ display: "flex", alignItems: "center", gap: "var(--s-1)" }}>
-              <Button
-                variant="primary"
-                onClick={() => {
-                  setBuilderCommand(bulkValidateCommand);
-                  setBuilderInitialStrategies(paperBrokerOptionsStrategyRegistry);
-                }}
-              >
-                🧪 Validate Options Strategies (Paper-Broker Realistic)
-              </Button>
-              <InfoTip
-                ariaLabel="What does 'paper-broker realistic' mean?"
-                content={
-                  <>
-                    Runs <code>refresh_validations.py</code> against the <code>STRATEGY_REGISTRY</code>{" "}
-                    entries backed by the same VRP/IV-rank/VIX/trend-bias-gated{" "}
-                    <code>OptionsPricingRecommender</code> logic the Paper Broker actually trades off
-                    of — not the always-on, ungated shapes the &ldquo;Structural&rdquo; backtest below
-                    tests.
-                  </>
-                }
-              />
-            </span>
-          )}
-          {bulkValidateOptionsCommand && (
-            <span style={{ display: "flex", alignItems: "center", gap: "var(--s-1)" }}>
-              <Button
-                variant="neutral"
-                onClick={() => {
-                  setBuilderCommand(bulkValidateOptionsCommand);
-                  setBuilderInitialStrategies(null);
-                }}
-              >
-                🧪 Bulk Validate Options Strategies (Structural)
-              </Button>
-              <InfoTip
-                ariaLabel="What is the 'structural' options backtest?"
-                content={
-                  <>
-                    Runs <code>validation.harness</code>&apos;s simpler, ungated simulator — it blindly
-                    re-enters a fixed strike/DTE shape every ~35–42 days regardless of trend, IV rank,
-                    or VIX. Useful for testing a strategy&apos;s raw structural shape, but its results
-                    don&apos;t reflect what the Paper Broker would actually trade. Use the
-                    &ldquo;Paper-Broker Realistic&rdquo; button for that.
-                  </>
-                }
-              />
-            </span>
-          )}
+          <Button
+            variant="primary"
+            onClick={() => setBuilderCommand(bulkValidateCommand)}
+          >
+            🧪 Bulk Validate All Strategies
+          </Button>
         </div>
       )}
 
@@ -227,12 +151,8 @@ export function Commands() {
             {activeTab === "launcher" && (
               <CommandLauncher
                 commands={data.commands}
-                onOpenBuilder={(cmd) => {
-                  setBuilderCommand(cmd);
-                  setBuilderInitialStrategies(null);
-                }}
+                onOpenBuilder={(cmd) => setBuilderCommand(cmd)}
                 strategyRegistry={strategyRegistry}
-                optionsStrategyRegistry={optionsStrategyRegistry}
               />
             )}
             {(activeTab === "queue" || activeTab === "launcher") && (
@@ -249,11 +169,8 @@ export function Commands() {
         <CommandFormBuilder
           command={builderCommand}
           strategyRegistry={strategyRegistry}
-          optionsStrategyRegistry={optionsStrategyRegistry}
-          initialStrategiesOverride={builderInitialStrategies ?? undefined}
           onClose={() => {
             setBuilderCommand(null);
-            setBuilderInitialStrategies(null);
             if (searchParams.has("builder")) {
               searchParams.delete("builder");
               setSearchParams(searchParams);
@@ -269,12 +186,10 @@ function CommandLauncher({
   commands,
   onOpenBuilder,
   strategyRegistry,
-  optionsStrategyRegistry,
 }: {
   commands: CommandManifest["commands"];
   onOpenBuilder: (cmd: CommandSpec) => void;
   strategyRegistry: string[];
-  optionsStrategyRegistry: string[];
 }) {
   const [selectedCategory, setSelectedCategory] = useState<CommandCategory | "all">("all");
   const [favorites, setFavorites] = useState<string[]>(() => getFavoriteCommands());
@@ -300,7 +215,6 @@ function CommandLauncher({
         commands={commands}
         onOpenBuilder={onOpenBuilder}
         strategyRegistry={strategyRegistry}
-        optionsStrategyRegistry={optionsStrategyRegistry}
       />
 
       {/* Category Badges Filter */}
@@ -450,12 +364,10 @@ function CommandBar({
   commands,
   onOpenBuilder,
   strategyRegistry,
-  optionsStrategyRegistry,
 }: {
   commands: CommandManifest["commands"];
   onOpenBuilder: (cmd: CommandSpec) => void;
   strategyRegistry: string[];
-  optionsStrategyRegistry: string[];
 }) {
   const [input, setInput] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -463,8 +375,8 @@ function CommandBar({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const parsed = useMemo(
-    () => parseCommandLine(input, commands, strategyRegistry, optionsStrategyRegistry),
-    [input, commands, strategyRegistry, optionsStrategyRegistry]
+    () => parseCommandLine(input, commands, strategyRegistry),
+    [input, commands, strategyRegistry]
   );
   const suggestions = parsed.suggestions;
   const errors = parsed.hints.filter((h) => h.level === "error");

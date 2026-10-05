@@ -27,7 +27,6 @@ All writes are redirected to a temp ``.env`` via monkeypatching
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 
@@ -104,15 +103,6 @@ def test_ntfy_topic_masking_matches_mask_secret(monkeypatch, tmp_path):
     settings_view = env_io.read_settings()
     assert settings_view["NTFY_TOPIC"] != "my-real-unguessable-topic"
     assert settings_view["NTFY_TOPIC"] == env_io.mask_secret("my-real-unguessable-topic")
-
-
-def test_secrets_expander_shows_source():
-    # gui/panels/settings_manager.py's "🔒 Secrets (masked, read-only)"
-    # expander iterates env_io.SECRET_KEYS directly — membership above is
-    # sufficient for it to render a row, but pin the wiring explicitly so
-    # a future refactor of that panel can't silently drop the iteration.
-    source = Path("legacy/streamlit_command_center/panels/settings_manager.py").read_text(encoding="utf-8")
-    assert "env_io.SECRET_KEYS" in source
 
 
 # ---------------------------------------------------------------------------

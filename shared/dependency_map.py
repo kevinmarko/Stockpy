@@ -13,7 +13,7 @@ Why declarative
 Inferring this graph from imports would over-couple it to the call sites
 (half the consumers only use a source on a code path that's gated by a
 config flag). A short, hand-curated table is more honest about what the
-operator actually loses when (say) Finnhub is rate-limited mid-run, AND it
+operator actually loses when (say) FMP is rate-limited mid-run, AND it
 puts the map on every reviewer's screen during code review.
 
 Add a new consumer of an existing source: append to ``CONSUMERS`` for that
@@ -53,9 +53,8 @@ class DataSource(str, Enum):
     YFINANCE = "yfinance"          # delayed bars + Yahoo statement-derived fundamentals (+ .info fallback)
     FRED = "fred"                  # macro series (VIX, yield curve, Sahm)
 
-    # Paid-tier-but-free APIs we already use
-    ALPACA = "alpaca"              # real-time IEX quotes/bars (free tier)
-    FINNHUB = "finnhub"            # company news / earnings headlines (news_catalyst signal)
+    # Paid APIs we already use (Alpaca was removed 2026-09-30)
+    FMP = "fmp"                    # primary quotes/bars + company news / earnings headlines
 
     # Account state
     ROBINHOOD = "robinhood"        # holdings, cost basis, dividends (read-only)
@@ -74,8 +73,7 @@ class DataSource(str, Enum):
 _LABELS: Dict[DataSource, str] = {
     DataSource.YFINANCE:         "yfinance (delayed quotes/bars + Yahoo statement-derived fundamentals)",
     DataSource.FRED:             "FRED (macro series)",
-    DataSource.ALPACA:           "Alpaca IEX (real-time quotes/bars)",
-    DataSource.FINNHUB:          "Finnhub (news catalyst headlines)",
+    DataSource.FMP:              "FMP (primary quotes/bars, news catalyst headlines)",
     DataSource.ROBINHOOD:        "Robinhood (account snapshot, dividends)",
     DataSource.TRANSACTIONS_DB:  "TransactionsStore (closed-trade ledger)",
     DataSource.STATE_SNAPSHOT:   "state_snapshot.json (last orchestrator run)",
@@ -124,8 +122,11 @@ _QUOTE_CONSUMERS: tuple[Consumer, ...] = (
              "ARIMA / Monte Carlo / Holt-Winters / CNN-LSTM forecasts."),
     Consumer("processing_engine",    "engine",
              "Technical indicators (RSI, MACD, ATR, Aroon, RSI-2, SMA-5)."),
-    Consumer("technical_options_engine", "engine",
-             "GJR-GARCH σ, IVR proxy, premium-selling matrix."),
+    Consumer("volatility.garch / trend_indicators", "engine",
+             "GJR-GARCH σ / Aroon-Coppock-Chandelier indicators (moved out of "
+             "technical_options_engine.py in step 3d; that module and its "
+             "options-only IVR/premium-selling matrix were archived to "
+             "legacy/ in step 4b)."),
     Consumer("Strategy Matrix tab",  "tab",
              "Live weights/preview rely on most-recent quote data."),
     Consumer("Reports tab",          "tab",
@@ -143,7 +144,7 @@ _FUNDAMENTALS_CONSUMERS: tuple[Consumer, ...] = (
 
 _NEWS_CONSUMERS: tuple[Consumer, ...] = (
     Consumer("news_catalyst signal", "strategy",
-             "Company news / earnings headline sentiment (Finnhub company_news)."),
+             "Company news / earnings headline sentiment (FMP company news)."),
 )
 
 _MACRO_CONSUMERS: tuple[Consumer, ...] = (
@@ -188,17 +189,17 @@ _SNAPSHOT_CONSUMERS: tuple[Consumer, ...] = (
 
 
 # Final map: source -> consumers. Sources marked with a tuple of
-# CONSUMERS share the same list (e.g. Alpaca and yfinance both feed the
+# CONSUMERS share the same list (e.g. FMP and yfinance both feed the
 # quote consumers — we record both edges so the operator sees that
-# yfinance going down still leaves a path via Alpaca, and vice versa).
+# FMP going down still leaves the yfinance fallback, and vice versa).
 CONSUMERS: Dict[DataSource, tuple[Consumer, ...]] = {
     # yfinance now backs BOTH quotes/bars AND fundamentals: the primary
     # Yahoo statement-derived engine (data/yahoo_fundamentals.py) and the raw
     # .info fallback both draw on yfinance, so every fundamentals consumer maps
-    # here. Finnhub is no longer a fundamentals source — it feeds news only.
+    # here. FMP is the primary quote/bar provider (yfinance is its fallback)
+    # and also feeds the news catalyst.
     DataSource.YFINANCE:        _QUOTE_CONSUMERS + _FUNDAMENTALS_CONSUMERS,
-    DataSource.ALPACA:          _QUOTE_CONSUMERS,
-    DataSource.FINNHUB:         _NEWS_CONSUMERS,
+    DataSource.FMP:             _QUOTE_CONSUMERS + _NEWS_CONSUMERS,
     DataSource.FRED:            _MACRO_CONSUMERS,
     DataSource.ROBINHOOD:       _ACCOUNT_CONSUMERS,
     DataSource.TRANSACTIONS_DB: _TXN_CONSUMERS,

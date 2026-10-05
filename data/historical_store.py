@@ -15,7 +15,7 @@ Phase 2 — account_snapshots / account_positions
     ``data/robinhood_portfolio.fetch_account_snapshot``: DB → JSON cache → live.
 
 Phase 3 — fundamentals_history + macro_history
-    Persist Finnhub/yfinance fundamentals snapshots (daily) and FRED macro series
+    Persist FMP/Yahoo fundamentals snapshots (daily) and FRED macro series
     (incremental by date) so the pipeline avoids redundant provider calls on every
     run.  ``get_fundamentals()`` caches typed columns + raw_json for PIT replay.
     ``get_macro()`` tops up only the missing date range from FRED.
@@ -76,14 +76,12 @@ finbert_score_cache — content-hash (SHA-256 of headline text) cache of a
                        the DDL comment above for why this is not a lookahead
                        risk. Unrelated to sentiment_llm_verification_cache
                        (that one caches an LLM credibility verdict).
-etf_holdings        — ETF constituent basket keyed by (etf_symbol,
-                       holding_symbol, as_of_date), where as_of_date is the
-                       SOURCE's own report date (the PIT anchor), separate
-                       from the fetched_at cache-freshness stamp. Written by
-                       data/etf_holdings.py (SEC N-PORT primary); read back
-                       through get_etf_holdings(), whose as_of_date filter is
-                       the storage-layer no-lookahead guarantee. Nothing in
-                       the platform consumes it yet.
+etf_holdings        — NO LONGER CREATED OR READ (2026-09, step 4f). It held
+                       the ETF constituent baskets written by the archived
+                       legacy/data/etf_holdings.py. This module stopped
+                       creating the table and dropped its accessors; an
+                       existing DB keeps the table and its rows untouched
+                       (nothing drops it).
 """
 
 from __future__ import annotations
@@ -101,17 +99,21 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+# Module-level binding (not a lazy import inside __init__) so the root
+# conftest.py's _isolate_historical_store_db_in_tests fixture can redirect
+# bare HistoricalStore() constructions away from the operator's live DB by
+# patching ``data.historical_store.resolve_database_url`` -- the same
+# _isolate_*_db_in_tests pattern every sibling store uses.
+from db_config import resolve_database_url
+
 if TYPE_CHECKING:
     from data.robinhood_portfolio import AccountSnapshot
-    # Type-only: data/etf_holdings.py lazily imports THIS module, so a runtime
-    # import here would be circular. save_etf_holdings duck-types its rows.
-    from data.etf_holdings import ETFHolding
 
 logger = logging.getLogger(__name__)
 
 # Fundamentals key mapping: yfinance .info key → typed DB column name.
-# Finnhub keys are already mapped to yfinance-style keys by FinnhubProvider
-# before arriving at this layer (see data/market_data.py FinnhubProvider._METRIC_MAP).
+# Provider payloads are already mapped to yfinance-style keys before arriving
+# at this layer (Yahoo/FMP fundamentals providers in data/market_data.py).
 _FUND_KEY_MAP: Dict[str, str] = {
     "trailingPE":         "pe_ratio",
     "priceToBook":        "pb_ratio",
@@ -431,11 +433,11 @@ CREATE TABLE IF NOT EXISTS sentiment_llm_verification_cache (
 # Caches a headline's FinBERT (or lexicon-fallback) 3-class softmax score by
 # a SHA-256 content hash of the headline text
 # (signals.news_catalyst._content_hash), so a headline seen again in a later
-# cycle's Finnhub lookback window is not re-scored. Deliberately a SEPARATE
+# cycle's news lookback window is not re-scored. Deliberately a SEPARATE
 # table from sentiment_llm_verification_cache above -- that table caches an
 # LLM's credibility VERIFICATION verdict for a social-sentiment document
 # (Sentiment Pipeline Phase 2 PR2); this table caches a FinBERT/lexicon
-# SENTIMENT score for a news headline (Finnhub-sourced). Same content-hash
+# SENTIMENT score for a news headline (FMP-sourced). Same content-hash
 # pattern, unrelated purpose and unrelated callers.
 #
 # Content-hash, NOT date/cycle-keyed -- and this is NOT a lookahead risk.
@@ -445,7 +447,7 @@ CREATE TABLE IF NOT EXISTS sentiment_llm_verification_cache (
 # which trading cycle reads the cache. A lookahead bug would require a
 # cache READ to surface information from a cycle that hasn't happened yet;
 # here a cycle can only ever look up a hash for a headline it has ALREADY
-# fetched (Finnhub-sourced) THIS cycle, so there is no channel through
+# fetched (FMP-sourced) THIS cycle, so there is no channel through
 # which a future cycle's headline could leak into an earlier cycle's read.
 # See tests/test_news_catalyst.py::TestFinbertScoreCacheLookaheadSafety for
 # the explicit proof.
@@ -460,51 +462,6 @@ CREATE TABLE IF NOT EXISTS finbert_score_cache (
     negative          REAL,
     scored_at         TEXT NOT NULL
 )
-"""
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DDL — etf_holdings (ETF constituent-holdings cache)
-#
-# One row per (ETF, underlying, report date). Written by
-# ``data/etf_holdings.py``'s SEC N-PORT (and opt-in iShares CSV) ingestion;
-# nothing in the platform consumes it yet.
-#
-# ``as_of_date`` is the SOURCE's own report/holdings date -- the point-in-time
-# anchor -- and is part of the primary key, so successive quarterly baskets
-# accumulate side by side rather than overwriting each other. ``fetched_at`` is
-# the separate, non-key wall-clock stamp used only for cache-freshness
-# decisions; the two must never be conflated (a row fetched today can easily
-# carry an as_of_date five months old -- N-PORT publishes ~60 days after
-# quarter end).
-#
-# ``get_etf_holdings(..., as_of_date=X)`` filters ``as_of_date <= X`` in SQL,
-# which is the module's no-lookahead guarantee at the storage layer: a row
-# written by a later cycle can never surface in an earlier-dated read. The
-# secondary index exists for the reverse join a consumer needs -- "which ETFs
-# held THIS symbol, as of when" -- which is the actual shape of an
-# ETF-ownership exposure measure (Ben-David, Franzoni & Moussawi 2018).
-#
-# NaN handling: SQLite has no NaN, so an unreported weight/shares_held is
-# stored as NULL and read back as NaN -- never as 0.0 (CONSTRAINT #4). A
-# genuinely zero weight and an unreported weight stay distinguishable.
-# ─────────────────────────────────────────────────────────────────────────────
-
-_ETF_HOLDINGS_DDL = """
-CREATE TABLE IF NOT EXISTS etf_holdings (
-    etf_symbol      TEXT NOT NULL,
-    holding_symbol  TEXT NOT NULL,
-    as_of_date      TEXT NOT NULL,
-    weight          REAL,
-    shares_held     REAL,
-    source          TEXT,
-    fetched_at      TEXT NOT NULL,
-    PRIMARY KEY (etf_symbol, holding_symbol, as_of_date)
-)
-"""
-
-_ETF_HOLDINGS_INDEX_DDL = """
-CREATE INDEX IF NOT EXISTS idx_etf_holdings_holding
-    ON etf_holdings (holding_symbol, as_of_date)
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -701,6 +658,14 @@ CREATE INDEX IF NOT EXISTS idx_sector_snapshots_date
 
 CURRENT_SCHEMA_VERSION = 1
 
+# (db_path, db_version) pairs already warned about as NEWER in this process.
+# HistoricalStore is constructed per call site (thousands of times a day in
+# the daemon), so an unthrottled warning floods the log with one identical
+# line per construction. The stamp cannot change without a restart-worthy
+# event, so once per process per (DB, version) carries all the signal.
+_NEWER_SCHEMA_WARNED: set = set()
+_NEWER_SCHEMA_WARNED_LOCK = threading.Lock()
+
 _SCHEMA_VERSION_DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
@@ -750,7 +715,6 @@ class HistoricalStore:
 
     def __init__(self, db_path: Optional[str] = None, *, readonly: bool = False) -> None:
         if db_path is None:
-            from db_config import resolve_database_url
             db_path = resolve_database_url()
         self._db_path = db_path
         self._readonly = readonly
@@ -844,8 +808,6 @@ class HistoricalStore:
                 conn.execute(_FINBERT_SCORE_CACHE_DDL)
                 conn.execute(_RAG_INDEXED_DOCS_DDL)
                 conn.execute(_RAG_INDEXED_DOCS_INDEX_DDL)
-                conn.execute(_ETF_HOLDINGS_DDL)
-                conn.execute(_ETF_HOLDINGS_INDEX_DDL)
                 # FMP feed tables (analyst / earnings / insider / sector).
                 # Purely additive CREATE TABLE IF NOT EXISTS — no
                 # CURRENT_SCHEMA_VERSION bump needed (see that constant's
@@ -897,13 +859,19 @@ class HistoricalStore:
                     db_version, CURRENT_SCHEMA_VERSION,
                 )
             elif db_version > CURRENT_SCHEMA_VERSION:
-                logger.warning(
-                    "HistoricalStore: quant_platform.db schema_version=%d is NEWER than "
+                key = (self._db_path, db_version)
+                with _NEWER_SCHEMA_WARNED_LOCK:
+                    first = key not in _NEWER_SCHEMA_WARNED
+                    _NEWER_SCHEMA_WARNED.add(key)
+                logger.log(
+                    logging.WARNING if first else logging.DEBUG,
+                    "HistoricalStore: %s schema_version=%d is NEWER than "
                     "this build's CURRENT_SCHEMA_VERSION=%d. This DB was written by a "
                     "newer version of this codebase; reads against it from this older "
                     "build may silently return wrong values instead of an error. "
-                    "Update this checkout before trusting cached reads.",
-                    db_version, CURRENT_SCHEMA_VERSION,
+                    "Update this checkout before trusting cached reads. "
+                    "(Logged once per process.)",
+                    self._db_path, db_version, CURRENT_SCHEMA_VERSION,
                 )
         except Exception as exc:
             logger.warning("HistoricalStore._ensure_schema_version failed: %s", exc)
@@ -2031,7 +1999,7 @@ class HistoricalStore:
         ``data/`` and ``validation/``) so the date-recovery logic lives in
         exactly one place. Returns ``None`` (never fabricated) when the
         payload carries no usable date field — this is the expected,
-        common case for Finnhub-sourced payloads and is NOT an error.
+        common case for vendor payloads that carry no report date and is NOT an error.
         """
         try:
             from validation.pit_fundamentals import _extract_report_date
@@ -2383,7 +2351,7 @@ class HistoricalStore:
             return 0
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Public API — etf_holdings (ETF constituent-holdings cache)
+    # Shared helper — NaN/inf -> NULL for REAL columns
     # ─────────────────────────────────────────────────────────────────────────
 
     @staticmethod
@@ -2404,181 +2372,6 @@ class HistoricalStore:
         if math.isnan(as_float) or math.isinf(as_float):
             return None
         return as_float
-
-    def save_etf_holdings(self, holdings: List["ETFHolding"]) -> int:
-        """Persist a batch of ``data.etf_holdings.ETFHolding`` rows.
-
-        Returns the number of rows written, or ``0`` on ANY failure
-        (CONSTRAINT #6 — never raises; a cache-write failure must not block
-        the live ingestion that already parsed these rows).
-
-        Idempotent overwrite (``INSERT OR REPLACE``) on the
-        ``(etf_symbol, holding_symbol, as_of_date)`` primary key: re-ingesting
-        the same filing refreshes ``fetched_at`` and leaves the basket
-        unchanged. Successive report dates accumulate as separate rows — this
-        method never deletes prior baskets, which is what makes the
-        point-in-time read in ``get_etf_holdings`` possible.
-
-        ``weight``/``shares_held`` that are NaN are stored as NULL, never 0.0
-        (see ``_nan_to_null``). Rows are duck-typed rather than isinstance-
-        checked so this module never has to import ``data.etf_holdings``
-        (which imports this module).
-        """
-        if not holdings:
-            return 0
-        try:
-            now_ts = self._now_utc_iso()
-            rows = []
-            for holding in holdings:
-                as_of = getattr(holding, "as_of_date", None)
-                if as_of is None:
-                    # No point-in-time anchor => uncacheable (it could never be
-                    # causality-filtered on read). Skip rather than default.
-                    continue
-                rows.append(
-                    (
-                        str(getattr(holding, "etf_symbol", "")).strip().upper(),
-                        str(getattr(holding, "holding_symbol", "")).strip().upper(),
-                        as_of.isoformat() if hasattr(as_of, "isoformat") else str(as_of),
-                        self._nan_to_null(getattr(holding, "weight", None)),
-                        self._nan_to_null(getattr(holding, "shares_held", None)),
-                        str(getattr(holding, "source", "")) or None,
-                        now_ts,
-                    )
-                )
-            rows = [row for row in rows if row[0] and row[1]]
-            if not rows:
-                return 0
-
-            from db_config import session_scope, get_dbapi_connection
-            with self._lock:
-                with session_scope(self.Session) as session:
-                    raw_conn = session.connection().connection
-                    conn = get_dbapi_connection(raw_conn)
-                    conn.executemany(
-                        """
-                        INSERT OR REPLACE INTO etf_holdings
-                            (etf_symbol, holding_symbol, as_of_date,
-                             weight, shares_held, source, fetched_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        rows,
-                    )
-            logger.debug("HistoricalStore: upserted %d etf_holdings rows.", len(rows))
-            return len(rows)
-        except Exception as exc:
-            logger.warning("HistoricalStore.save_etf_holdings failed: %s", exc)
-            self._safe_rollback()
-            return 0
-
-    def get_etf_holdings(
-        self, etf_symbol: str, *, as_of_date: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """Return one ETF's basket as of *as_of_date*, as a list of dicts.
-
-        **Causality guarantee (has a dedicated test):** rows whose
-        ``as_of_date`` is AFTER the supplied cutoff are never returned. This
-        is the storage-layer half of ``data/etf_holdings.py``'s no-lookahead
-        contract — a basket written by a later cycle cannot surface in an
-        earlier-dated read.
-
-        Returns the SINGLE most recent report date at or before the cutoff,
-        not a union across quarters: "holdings as of X" is one basket, and
-        mixing two quarters' rows would produce weights that sum past 1.0 and
-        double-count names that appear in both. Use
-        ``latest_etf_holdings_date()`` plus repeated calls to walk history.
-
-        With ``as_of_date=None`` the newest stored basket is returned (the
-        live-use case).
-
-        Each dict carries ``etf_symbol``, ``holding_symbol``, ``as_of_date``,
-        ``weight``, ``shares_held``, ``source``, ``fetched_at``. ``weight``
-        and ``shares_held`` are ``None`` when the source did not report them —
-        the caller rehydrates ``None`` to NaN, never to 0.0 (CONSTRAINT #4).
-
-        ``[]`` on an empty cache OR any read failure (CONSTRAINT #6).
-        """
-        sym = (etf_symbol or "").strip().upper()
-        if not sym:
-            return []
-        try:
-            from db_config import session_scope, get_dbapi_connection
-
-            params: List[Any] = [sym]
-            date_clause = ""
-            if as_of_date:
-                date_clause = " AND as_of_date <= ?"
-                params.append(str(as_of_date))
-
-            with self._lock:
-                with session_scope(self.Session) as session:
-                    raw_conn = session.connection().connection
-                    conn = get_dbapi_connection(raw_conn)
-                    target = conn.execute(
-                        "SELECT MAX(as_of_date) FROM etf_holdings "
-                        f"WHERE etf_symbol = ?{date_clause}",  # nosec B608
-                        tuple(params),
-                    ).fetchone()
-                    if not target or target[0] is None:
-                        return []
-                    target_date = str(target[0])
-                    rows = conn.execute(
-                        """
-                        SELECT etf_symbol, holding_symbol, as_of_date,
-                               weight, shares_held, source, fetched_at
-                        FROM etf_holdings
-                        WHERE etf_symbol = ? AND as_of_date = ?
-                        ORDER BY holding_symbol
-                        """,
-                        (sym, target_date),
-                    ).fetchall()
-
-            return [
-                {
-                    "etf_symbol": row[0],
-                    "holding_symbol": row[1],
-                    "as_of_date": row[2],
-                    "weight": row[3],
-                    "shares_held": row[4],
-                    "source": row[5],
-                    "fetched_at": row[6],
-                }
-                for row in rows
-            ]
-        except Exception as exc:
-            logger.warning("HistoricalStore.get_etf_holdings(%s) failed: %s", sym, exc)
-            return []
-
-    def latest_etf_holdings_date(self, etf_symbol: str) -> Optional[str]:
-        """Return the most recent stored ``as_of_date`` for *etf_symbol*.
-
-        ISO ``YYYY-MM-DD`` string, or ``None`` when nothing is stored OR on any
-        read failure (CONSTRAINT #6). Deliberately unfiltered by any cutoff —
-        this answers "how current is the cache", which callers use to decide
-        whether to re-fetch; the causality filtering happens in
-        ``get_etf_holdings``.
-        """
-        sym = (etf_symbol or "").strip().upper()
-        if not sym:
-            return None
-        try:
-            from db_config import session_scope, get_dbapi_connection
-            with self._lock:
-                with session_scope(self.Session) as session:
-                    raw_conn = session.connection().connection
-                    conn = get_dbapi_connection(raw_conn)
-                    row = conn.execute(
-                        "SELECT MAX(as_of_date) FROM etf_holdings WHERE etf_symbol = ?",
-                        (sym,),
-                    ).fetchone()
-            if not row or row[0] is None:
-                return None
-            return str(row[0])
-        except Exception as exc:
-            logger.warning(
-                "HistoricalStore.latest_etf_holdings_date(%s) failed: %s", sym, exc
-            )
-            return None
 
     # ─────────────────────────────────────────────────────────────────────────
     # Public API — FMP feeds (analyst / earnings / insider / sector)
@@ -2659,8 +2452,7 @@ class HistoricalStore:
         """Return the most recent archived analyst observation for *symbol*.
 
         With ``as_of`` supplied, rows dated AFTER the cutoff are excluded — the
-        storage-layer half of the causality contract, matching
-        ``get_etf_holdings``. With ``as_of=None`` the newest row is returned.
+        storage-layer half of the causality contract. With ``as_of=None`` the newest row is returned.
 
         ``{}`` when nothing is archived OR on any read failure (CONSTRAINT #6).
         Unreported figures come back as ``None`` (the caller rehydrates to NaN,
@@ -3261,7 +3053,7 @@ class HistoricalStore:
         ``source_name``, ``text_content``, ``raw_sentiment_score``. Optional
         credibility keys (``author_handle``, ``s_authority``, ``s_humanity``,
         ``s_verification``, ``credibility_weight``, ``is_bot``) default to
-        ``None``/``0`` for sources with no credibility signal (e.g. Finnhub
+        ``None``/``0`` for sources with no credibility signal (e.g. FMP
         headlines) -- never fabricated (CONSTRAINT #4). ``final_weighted_score``
         defaults to ``raw_sentiment_score`` when no ``credibility_weight`` is
         supplied. ``verification_method`` (``'placeholder'`` | ``'heuristic'``
@@ -3591,9 +3383,9 @@ class HistoricalStore:
         grouped by ``source_name``.
 
         Lets a future validation gate check institutional-source depth
-        (GDELT/EDGAR/Finnhub -- policy-trusted, genuinely backfillable, zero
-        credibility bias) SEPARATELY from social-source depth (Reddit --
-        backfillable but with degraded historical credibility, since a
+        (GDELT/EDGAR -- policy-trusted, genuinely backfillable, zero
+        credibility bias) SEPARATELY from social-source depth (comment sources --
+        backfillable only with degraded historical credibility, since a
         backfilled post's ``S_authority`` can only reflect the author's
         CURRENT account state; Yahoo RSS -- not backfillable at all, live-
         only) rather than one blended ``settings.SENTIMENT_PIT_MIN_MONTHS``
@@ -3976,7 +3768,7 @@ class HistoricalStore:
         n = len(df)
         # Column-wise build instead of df.iterrows() (avoids constructing a
         # Series per row). itertuples() isn't a fit here: "Adj Close" isn't a
-        # valid Python identifier and some providers (e.g. Alpaca) omit that
+        # valid Python identifier and some providers omit that
         # column entirely, so per-column optional-missing handling below
         # mirrors the old row.get(...) per-key default of None.
         dates = pd.to_datetime(df.index).strftime("%Y-%m-%d")

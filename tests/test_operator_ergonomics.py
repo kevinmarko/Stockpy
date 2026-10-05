@@ -17,10 +17,9 @@ import json
 import sys
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from unittest import mock
 
-import pytest
 
 # ── ensure repo root is on sys.path ─────────────────────────────────────────
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -297,12 +296,12 @@ class TestKeyRotationCheck:
         assert result.warning is False
 
     def test_check_in_all_checks(self):
-        from scripts.preflight_check import ALL_CHECKS, check_key_rotation_recent
+        from scripts.preflight_check import ALL_CHECKS
         names = [fn.__name__ for fn in ALL_CHECKS]
         assert "check_key_rotation_recent" in names
 
     def test_check_is_before_advisory_only(self):
-        from scripts.preflight_check import ALL_CHECKS, check_key_rotation_recent, check_advisory_only_active
+        from scripts.preflight_check import ALL_CHECKS
         names = [fn.__name__ for fn in ALL_CHECKS]
         assert names.index("check_key_rotation_recent") < names.index("check_advisory_only_active")
 
@@ -314,26 +313,6 @@ class TestKeyRotationCheck:
             mock_s.FRED_KEY_ROTATED_DATE = "2000-01-01"
             result = check_key_rotation_recent(max_age_days=90)
         assert result.passed is True  # warning only, never fails
-
-    def test_alpaca_keys_not_checked(self):
-        """The check must not look up any settings attribute for Alpaca key rotation.
-
-        The docstring may mention ALPACA_KEY_ROTATED_DATE in a "we don't check this"
-        note, but the function logic must never access settings.ALPACA_KEY_ROTATED_DATE.
-        """
-        # Run the check with a mock settings that has NO alpaca rotation attribute —
-        # if the function tries to access it, AttributeError would propagate (since we
-        # do NOT set it).  The check should complete without error.
-        from scripts.preflight_check import check_key_rotation_recent
-
-        with mock.patch("scripts.preflight_check.settings") as mock_s:
-            mock_s.FRED_KEY_ROTATED_DATE = None
-            # If this raises AttributeError on ALPACA_KEY_ROTATED_DATE it means
-            # the check is incorrectly reading that attribute.
-            del mock_s.ALPACA_KEY_ROTATED_DATE  # ensure attribute is absent
-            result = check_key_rotation_recent()
-        # Must succeed regardless
-        assert result.passed is True
 
     def test_settings_field_exists(self):
         """settings.FRED_KEY_ROTATED_DATE must be declared in Settings."""
@@ -424,24 +403,3 @@ class TestWatchlistQuickAdd:
                 fh.write(f"{ticker}\n")
         assert wl.exists()
         assert "GOOG" in wl.read_text(encoding="utf-8")
-
-    def test_render_live_inventory_defines_add_button(self):
-        """Source guard: render_live_inventory must reference the watchlist add button."""
-        import inspect
-        from legacy.streamlit_command_center import panels
-        src = inspect.getsource(panels.render_live_inventory)
-        assert "watchlist_add_btn" in src or "Add to watchlist" in src
-        assert "watchlist.txt" in src
-
-    def test_write_to_file_not_env(self):
-        """The quick-add must write to watchlist.txt, never to .env."""
-        import inspect
-        from legacy.streamlit_command_center import panels
-        src = inspect.getsource(panels.render_live_inventory)
-        # Must reference watchlist.txt
-        assert "watchlist.txt" in src
-        # Must not write to .env directly (write_setting is allowed for Sync Now,
-        # but the quick-add path must NOT call it for ticker addition)
-        # We check that the add button code does not call write_setting
-        # by looking for watchlist.txt in the same code block
-        assert "watchlist.txt" in src

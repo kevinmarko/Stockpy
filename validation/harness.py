@@ -8,8 +8,6 @@ computes DSR/PBO, and enforces strict deployability gates.
 
 import os
 import argparse
-import concurrent.futures
-import json
 import logging
 import threading
 from datetime import datetime, date
@@ -763,6 +761,7 @@ class StrategyValidationHarness:
         is_options_selling: bool = False,
         stress_returns_fn: Optional[Callable[[str, str], pd.Series]] = None,
         reports_dir: str = "reports",
+        record_to_history_db: bool = True,
     ):
         """
         Args:
@@ -784,6 +783,14 @@ class StrategyValidationHarness:
                 Tests and audit sandboxes MUST override this to an isolated
                 tmp directory so smoke-test/negative-control runs never
                 clobber real strategy reports.
+            record_to_history_db: When False, skip the durable copy in the
+                ``validation_runs`` DB table. ``reports_dir`` only isolates the
+                FILES a run writes; the DB lives at the shared
+                ``settings.LOCAL_DATA_ROOT``, so audit sandboxes running
+                synthetic controls (e.g. the Gravity suite's Random_Audit /
+                Trending_Audit) MUST pass False or their fake strategies land
+                in the operator's real validation history and read back as
+                real deployability results.
         """
         self.strategy_fn = strategy_fn
         self.universe_fn = universe_fn
@@ -793,6 +800,7 @@ class StrategyValidationHarness:
         self.is_options_selling = is_options_selling
         self.stress_returns_fn = stress_returns_fn
         self.reports_dir = reports_dir
+        self.record_to_history_db = record_to_history_db
 
     def run(
         self,
@@ -1302,6 +1310,9 @@ class StrategyValidationHarness:
         a DB hiccup must never abort an otherwise-successful validation run,
         matching ``_append_validation_history``'s own contract.
         """
+        # getattr: some tests build the harness via __new__ without __init__.
+        if not getattr(self, "record_to_history_db", True):
+            return
         try:
             from validation.validation_history_store import ValidationHistoryStore
 
@@ -1427,324 +1438,49 @@ class StrategyValidationHarness:
             f.write(html_out)
         logger.info(f"CPCV overfitting-audit HTML report successfully written to {report_filename}")
 
-    @classmethod
-    def run_options_validation(
-        cls,
-        strategy_name: str = "Put Credit Spread",
-        ticker: str = "SPY",
-        start_date: str = "2020-01-01",
-        end_date: str = "2024-01-01",
-        initial_capital: float = 100000.0,
-        price_df: Optional[pd.DataFrame] = None,
-        reports_dir: str = "reports",
-    ) -> ValidationReport:
-        """
-        Runs full validation for a multi-leg options strategy using OptionsValidationHarness
-        and writes reports/summaries.
-        """
-        from validation.options_harness import OptionsValidationHarness
-        opt_harness = OptionsValidationHarness()
-        opt_result = opt_harness.run_backtest(
-            strategy=strategy_name,
-            ticker=ticker,
-            start_date=start_date,
-            end_date=end_date,
-            initial_capital=initial_capital,
-            price_df=price_df,
-        )
-
-        report = ValidationReport(
-            name=f"{strategy_name}_{ticker}",
-            start_date=start_date,
-            end_date=end_date,
-            sharpe=opt_result.sharpe_ratio,
-            sortino=opt_result.sortino_ratio,
-            calmar=0.0,
-            max_dd=opt_result.max_drawdown_pct / 100.0,
-            turnover=0.05,
-            hit_rate=opt_result.win_rate_pct / 100.0,
-            avg_trade_pct=opt_result.avg_win / max(1.0, initial_capital),
-            dsr=opt_result.dsr,
-            pbo=opt_result.pbo,
-            bias_report={"data_unavailable": False},
-            walk_forward_60_40=opt_result.sharpe_ratio,
-            walk_forward_70_30=opt_result.sharpe_ratio,
-            walk_forward_80_20=opt_result.sharpe_ratio,
-            distribution=np.array([]),
-            paths=[],
-            n_trials=opt_result.total_trades,
-            mean_oos_sharpe=opt_result.sharpe_ratio,
-            is_options_selling=True,
-            stress_test_results=opt_result.stress_results,
-            equity_curve=opt_result.equity_curve,
-            benchmark_curve=[],
-            macro_benchmark_curve=[],
-        )
-
-        # universe_fn/cost_model are required constructor args but are never
-        # actually read by the three persistence methods called below (they
-        # only touch self.reports_dir / the report object itself) -- this
-        # instance exists solely to reuse those methods, so placeholders are
-        # correct here (pre-existing bug fix: this call previously omitted
-        # both, which raised TypeError on every invocation -- confirmed via
-        # `git stash` against main before this module's other changes).
-        # universe_fn/cost_model are required constructor args but are never
-        # actually read by the three persistence methods called below (they
-        # only touch self.reports_dir / the report object itself) -- this
-        # instance exists solely to reuse those methods, so placeholders are
-        # correct here (pre-existing bug fix: this call previously omitted
-        # both, which raised TypeError on every invocation -- confirmed via
-        # `git stash` against main before this module's other changes).
-        harness_inst = cls(
-            strategy_fn=lambda *args: [],
-            universe_fn=lambda *args: [],
-            cost_model=TieredCostModel(),
-            reports_dir=reports_dir,
-        )
-        harness_inst._write_json_summary(report)
-        harness_inst._append_validation_history(report)
-        harness_inst._record_validation_run_to_db(report)
-        return report
-
-def _fail_reason(report: "ValidationReport") -> str:
-    """Re-derive which deployability gate(s) a FAIL report missed.
-
-    Mirrors ``scripts/refresh_validations.py``'s ``_fail_reason`` (same thresholds,
-    same reasoning), scoped to a single in-memory ``ValidationReport`` instead of a
-    dict summary since bulk mode here never persists an intermediate dict form.
-    Returns a compact ``, ``-joined string (empty if nothing tripped).
-    """
-    reasons: List[str] = []
-
-    if np.isnan(report.max_dd):
-        reasons.append("MaxDD n/a")
-    elif report.max_dd >= MAX_DRAWDOWN_MAX:
-        reasons.append(f"MaxDD {report.max_dd * 100:.0f}%>{MAX_DRAWDOWN_MAX * 100:.0f}%")
-
-    if not np.isnan(report.pbo) and report.pbo >= PBO_MAX:
-        reasons.append(f"PBO {report.pbo:.2f}>{PBO_MAX:.2f}")
-
-    if not np.isnan(report.dsr) and report.dsr <= DSR_MIN:
-        reasons.append(f"DSR {report.dsr:.2f}<{DSR_MIN:.2f}")
-
-    if np.isnan(report.sharpe):
-        reasons.append("Sharpe n/a")
-    elif report.sharpe <= NET_SHARPE_MIN:
-        reasons.append(f"Sharpe {report.sharpe:.2f}<{NET_SHARPE_MIN:.2f}")
-
-    if not report.stress_gate_passed:
-        reasons.append("stress")
-
-    return ", ".join(reasons)
-
-
-def _print_options_bulk_summary(results: "Dict[str, Any]") -> None:
-    """Print a compact ASCII pass/fail table for a bulk options-strategy run.
-
-    ``results`` maps strategy name -> either a ``ValidationReport`` (ran) or an
-    ``Exception`` (raised while validating that name -- dead-letter, don't crash,
-    per CONSTRAINT #6). Mirrors ``scripts/refresh_validations.py``'s
-    ``_print_summary_table`` shape, scoped to the always-options-selling case (the
-    stress-gate reason is always applicable here).
-    """
-    hdr = (
-        f"  {'Strategy':<24} {'Status':<10} {'Sharpe':>7} {'PBO':>7} "
-        f"{'DSR':>7} {'MaxDD':>8}  {'Reason'}"
-    )
-    print()
-    print(hdr)
-    print("  " + "-" * (len(hdr) - 2))
-
-    def _fmt(v: float) -> str:
-        return "   —  " if v is None or (isinstance(v, float) and np.isnan(v)) else f"{v:.3f}"
-
-    def _fmt_pct(v: float) -> str:
-        return "   —  " if v is None or (isinstance(v, float) and np.isnan(v)) else f"{v * 100:.1f}%"
-
-    any_fail = False
-    for name, result in results.items():
-        if isinstance(result, Exception):
-            status, reason, sharpe, pbo, dsr, max_dd = "ERROR", str(result), float("nan"), float("nan"), float("nan"), float("nan")
-            any_fail = True
-        else:
-            sharpe, pbo, dsr, max_dd = result.sharpe, result.pbo, result.dsr, result.max_dd
-            if result.deployable:
-                status, reason = "✅ PASS", ""
-            else:
-                status, reason = "❌ FAIL", _fail_reason(result)
-                any_fail = True
-
-        print(
-            f"  {name:<24} {status:<10} "
-            f"{_fmt(sharpe):>7} {_fmt(pbo):>7} {_fmt(dsr):>7} {_fmt_pct(max_dd):>8}  {reason}"
-        )
-
-    print()
-    if any_fail:
-        print("⚠️  One or more strategies did not meet deployability thresholds.")
-    else:
-        print("✅  All strategies passed validation gates.")
-    print()
-
-
-def _run_options_bulk(
-    names: List[str], *, ticker: str, start_date: str, end_date: str, max_workers: int
-) -> "Dict[str, Any]":
-    """Run ``run_options_validation`` for every name in ``names``.
-
-    Sequential when ``max_workers <= 1`` or there's only one name; otherwise a
-    ``ThreadPoolExecutor`` (order-preserving via ``executor.map``, mirroring
-    ``scripts/refresh_validations.py::run_validations``' own convention). A
-    per-strategy exception is caught and recorded rather than aborting the batch
-    (dead-letter, don't crash -- CONSTRAINT #6).
-    """
-    def _one(name: str):
-        try:
-            return name, StrategyValidationHarness.run_options_validation(
-                strategy_name=name, ticker=ticker, start_date=start_date, end_date=end_date,
-            )
-        except Exception as exc:  # noqa: BLE001 - recorded, never crashes the batch
-            logger.error("validation.harness bulk: %s failed: %s", name, exc)
-            return name, exc
-
-    results: Dict[str, Any] = {}
-    workers = max(1, int(max_workers))
-    if workers > 1 and len(names) > 1:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, len(names))) as executor:
-            for name, result in executor.map(_one, names):
-                results[name] = result
-    else:
-        for name in names:
-            _, result = _one(name)
-            results[name] = result
-    return results
-
 
 def main() -> None:
     """CLI endpoint for strategy validation harness.
 
-    Single-strategy mode (``--strategy NAME``) is unchanged: an options-strategy
-    name routes to ``OptionsValidationHarness`` via ``run_options_validation``;
-    any other name runs a placeholder Buy-and-Hold-SPY strategy (this CLI has no
-    access to ``scripts.refresh_validations.STRATEGY_REGISTRY``'s real per-strategy
-    adapters -- use ``python -m scripts.refresh_validations --strategy NAME`` for
-    those).
+    ``--strategy NAME`` runs a placeholder Buy-and-Hold-SPY strategy (this CLI
+    has no access to ``scripts.refresh_validations.STRATEGY_REGISTRY``'s real
+    per-strategy adapters -- use ``python -m scripts.refresh_validations
+    --strategy NAME`` for those).
 
-    Bulk mode (``--strategies NAME[,NAME...]``, mirroring
-    ``scripts.refresh_validations``'s own ``--strategies``) validates MULTIPLE
-    strategies in one invocation -- but ONLY options strategies (the names in
-    ``validation.options_harness.STANDARD_OPTIONS_STRATEGIES``), since those are
-    the only ones this CLI ever gives real, name-specific results for; anything
-    else silently repeating the identical placeholder N times would be
-    meaningless, so an unknown name is a hard, clear error instead (fail closed --
-    CONSTRAINT #6). Exits 0 iff every requested strategy is deployable, else 1,
-    matching ``scripts.refresh_validations.main()``'s own exit-code convention.
+    The options-strategy path (``run_options_validation``, the options-only
+    ``--strategies`` bulk mode and ``--ticker``) was removed with the options
+    desk (2026-09, step 4a).
     """
     parser = argparse.ArgumentParser(description="InvestYo Strategy Validation Harness")
-    strategy_group = parser.add_mutually_exclusive_group(required=True)
-    strategy_group.add_argument("--strategy", type=str, help="Name of a single strategy to validate")
-    strategy_group.add_argument(
-        "--strategies", type=str,
-        help=(
-            "Comma-separated OPTIONS strategy names to validate in bulk. Only "
-            "names registered in validation.options_harness.STANDARD_OPTIONS_STRATEGIES "
-            "are supported here -- for equity/cross-sectional strategies use "
-            "`python -m scripts.refresh_validations --strategies ...` instead."
-        ),
-    )
+    parser.add_argument("--strategy", type=str, required=True, help="Name of the strategy to validate")
     parser.add_argument("--start", type=str, default="2020-01-01", help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, default="2023-12-31", help="End date (YYYY-MM-DD)")
-    parser.add_argument("--ticker", type=str, default="SPY", help="Ticker for options strategy validation")
-    parser.add_argument(
-        "--workers", "-w", dest="max_workers", type=int, default=1,
-        help="Number of concurrent workers for bulk (--strategies) validation (default: 1 for sequential).",
-    )
-    parser.add_argument(
-        "--json", dest="as_json", action="store_true",
-        help=(
-            "In bulk mode, also print ONE machine-readable JSON line (the LAST line "
-            "of stdout) mapping strategy name -> {deployable, pbo, dsr, sharpe, "
-            "max_drawdown[, error]}. The human pass/fail table is still printed above it."
-        ),
-    )
     args = parser.parse_args()
 
-    from validation.options_harness import STANDARD_OPTIONS_STRATEGIES
-
-    if args.strategies:
-        names = [s.strip() for s in args.strategies.split(",") if s.strip()]
-        unknown = [n for n in names if n not in STANDARD_OPTIONS_STRATEGIES]
-        if unknown:
-            print(
-                f"Unknown options strategy name(s): {unknown}. "
-                f"validation.harness --strategies only supports options strategies: "
-                f"{sorted(STANDARD_OPTIONS_STRATEGIES)}. "
-                f"For equity/cross-sectional strategies, use "
-                f"`python -m scripts.refresh_validations --strategies ...` instead."
-            )
-            raise SystemExit(2)
-
-        results = _run_options_bulk(
-            names, ticker=args.ticker, start_date=args.start, end_date=args.end,
-            max_workers=args.max_workers,
-        )
-        _print_options_bulk_summary(results)
-
-        if args.as_json:
-            json_out = {
-                name: (
-                    {"deployable": False, "error": str(result)}
-                    if isinstance(result, Exception)
-                    else {
-                        "deployable": bool(result.deployable),
-                        "pbo": result.pbo,
-                        "dsr": result.dsr,
-                        "sharpe": result.sharpe,
-                        "max_drawdown": result.max_dd,
-                    }
-                )
-                for name, result in results.items()
+    # Define a default mock strategy (Buy-and-Hold SPY) for CLI invocation
+    def default_spy_bh_strategy(X_train, y_train, X_test, y_test):
+        return [
+            {
+                "params": "SPY_Buy_and_Hold",
+                "train_returns": y_train,
+                "test_returns": y_test
             }
-            print(json.dumps(json_out))
+        ]
 
-        any_fail = any(
-            isinstance(r, Exception) or not r.deployable for r in results.values()
-        )
-        raise SystemExit(1 if any_fail else 0)
+    cost_model = TieredCostModel()
+    from universe_engine import get_sp500_constituents
 
-    # Single-strategy mode -- unchanged.
-    if args.strategy in STANDARD_OPTIONS_STRATEGIES:
-        report = StrategyValidationHarness.run_options_validation(
-            strategy_name=args.strategy,
-            ticker=args.ticker,
-            start_date=args.start,
-            end_date=args.end,
-        )
-    else:
-        # Define a default mock strategy (Buy-and-Hold SPY) for CLI invocation
-        def default_spy_bh_strategy(X_train, y_train, X_test, y_test):
-            return [
-                {
-                    "params": "SPY_Buy_and_Hold",
-                    "train_returns": y_train,
-                    "test_returns": y_test
-                }
-            ]
+    harness = StrategyValidationHarness(
+        strategy_fn=default_spy_bh_strategy,
+        universe_fn=get_sp500_constituents,
+        cost_model=cost_model
+    )
 
-        cost_model = TieredCostModel()
-        from universe_engine import get_sp500_constituents
-
-        harness = StrategyValidationHarness(
-            strategy_fn=default_spy_bh_strategy,
-            universe_fn=get_sp500_constituents,
-            cost_model=cost_model
-        )
-
-        report = harness.run(
-            start_date=args.start,
-            end_date=args.end,
-            strategy_name=args.strategy
-        )
+    report = harness.run(
+        start_date=args.start,
+        end_date=args.end,
+        strategy_name=args.strategy
+    )
 
     print("\n" + "=" * 60)
     print(f" STRATEGY VALIDATION COMPLETE: {args.strategy}")

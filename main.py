@@ -17,10 +17,8 @@ Pipeline stages (per cycle)
                           cross-sectional data rather than the 0-score fallback
   E. Per-symbol evaluate— market data + advisory engine; dead-letter error
                           capture per symbol; never aborts the run
-  F. Sheet sink         — write RunResult to Google Sheets (skipped when
-                          credentials.json is absent)
-  G. HTML report        — generate daily HTML report (skipped on IO error)
-  H. Run summary        — structured log line; return RunResult
+  F. HTML report        — generate daily HTML report (skipped on IO error)
+  G. Run summary        — structured log line; return RunResult
 
 Two-tier refresh cadence
 ------------------------
@@ -32,15 +30,15 @@ Two-tier refresh cadence
                   run_once() from the live market-data provider.
 
 NOTE — Double-fetch for pre-compute
-  _fetch_bars_for_universe() fetches OHLCV history once for the full universe
-  to build the cross-sectional pre-compute context.  engine.advisory.evaluate()
+  advisory_inputs.fetch_bars_for_universe() fetches OHLCV once for the whole
+  universe for the cross-sectional pre-compute. engine.advisory.evaluate()
   will then fetch bars again per symbol internally (the market provider does not
   cache bars, only quotes).  This is a known tradeoff accepted for correctness:
   pre-compute requires the full universe before the per-symbol loop, so bars
   must be fetched upfront.  Future optimisation: extend MarketDataProvider with
   a bars cache or pass bars through to advisory via context_extras.
 
-  _fetch_fundamentals_for_universe() has the same shape (fetched once upfront
+  fetch_fundamentals_for_universe() has the same shape (fetched once upfront
   for the multifactor pre-compute pass, then evaluate() fetches fundamentals
   again per symbol in its own Step 3) but with a much smaller real cost: when
   HISTORICAL_STORE_ENABLED (the default), the pre-compute pass's fetch writes
@@ -128,17 +126,15 @@ import pandas as pd
 # Project imports
 # ---------------------------------------------------------------------------
 import config
-from data.market_data import get_provider, MarketDataProvider
+from data.market_data import get_provider
 from data.robinhood_portfolio import (
     AccountSnapshot,
     PortfolioPosition,
     fetch_account_snapshot,
 )
-from dto_models import FundamentalDataDTO, MacroEconomicDTO, MarketBarDTO
+from dto_models import MacroEconomicDTO
 from engine.advisory import Recommendation, evaluate as advisory_evaluate
 from settings import ENV_PATH, settings
-from signals import global_registry
-from signals.base import SignalContext
 
 # ---------------------------------------------------------------------------
 # Module-level logger (root logger is configured at runtime by setup_logging()
@@ -155,68 +151,36 @@ from pipeline.steps import (
     PrecomputeStep,
     UniverseStep,
 )
-from reporting.sheets_client import (
-    CREDENTIALS_FILE,
-    SHEET_NAME,
-    TAB_NAME_OUTPUT,
-    get_service_account_client,
-)
-from reporting.sheet_publisher import write_recommendations as _write_to_sheet
 from reporting.html_publisher import write_html_report as _write_html_report
 from reporting.progress import ProgressReporter
 
 logger = logging.getLogger("InvestYo.main")
 
 # ---------------------------------------------------------------------------
-# Constants
+# Advisory input builders (re-exported from pipeline/advisory_inputs.py)
 # ---------------------------------------------------------------------------
-WATCHLIST_FILE = "watchlist.txt"      # one ticker per line; '#' lines ignored
-
-
-# ---------------------------------------------------------------------------
-# Per-process MacroEngine reuse (Task A4)
-# ---------------------------------------------------------------------------
-# _build_macro_dto() is called once per run_once() cycle. In --interval / agent
-# loop mode, run_once() is called repeatedly WITHIN THE SAME PROCESS. The
-# regime/hmm_regime.py HMMRegimeDetector.fit() gate (retrain_freq_days) is only
-# meaningful if the SAME detector instance persists across those cycles --
-# constructing a fresh MacroEngine (and therefore a fresh, never-fitted
-# HMMRegimeDetector) every cycle makes the gate a no-op and forces a full
-# EM refit every single cycle. This module-level cache keeps one MacroEngine
-# (and its DataEngine) alive for the lifetime of the process, keyed by the
-# FRED API key so a mid-process key rotation still gets a correctly-scoped
-# engine instead of silently reusing one built for a stale key.
-_MACRO_ENGINE_CACHE: Dict[str, Any] = {}
-
-
-def _get_macro_engine(fred_key: str):
-    """Return a process-lifetime MacroEngine for ``fred_key``, constructing it
-    once and reusing it on subsequent calls so the HMMRegimeDetector's
-    retrain_freq_days gate is honored across --interval / agent-loop cycles.
-
-    A distinct cache entry per fred_key means rotating the key mid-process
-    (rare, but handled) gets a fresh engine/detector rather than silently
-    reusing one fit against the old key's data.
-    """
-    cached = _MACRO_ENGINE_CACHE.get(fred_key)
-    if cached is not None:
-        return cached
-
-    from data_engine import DataEngine
-    from macro_engine import MacroEngine
-
-    de = DataEngine(fred_key)
-    me = MacroEngine(data_engine=de)
-    _MACRO_ENGINE_CACHE.clear()  # only one key's engine needs to live at a time
-    _MACRO_ENGINE_CACHE[fred_key] = me
-    return me
-
-
-def _reset_macro_engine_cache() -> None:
-    """Test-only helper: clears the process-lifetime MacroEngine cache so each
-    test gets a fresh engine/detector instead of bleeding HMM fit state across
-    tests."""
-    _MACRO_ENGINE_CACHE.clear()
+# The advisory input builders (universe, macro DTO, bars/fundamentals
+# pre-fetch, cross-sectional/multifactor pre-compute) live in
+# pipeline/advisory_inputs.py since step 5.0, so the orchestrator daemon can
+# import them without importing main. They are re-exported here under their old
+# underscore names: run_once() binds the injected ones from THIS module's
+# globals at call time, so patch("main._build_universe") etc. keep working. A
+# call made inside pipeline/advisory_inputs.py (e.g. build_universe ->
+# discovery) is patched at pipeline.advisory_inputs.<name> instead.
+from pipeline.advisory_inputs import (  # noqa: E402,F401  (re-exports)
+    WATCHLIST_FILE,
+    _MACRO_ENGINE_CACHE,
+    build_context_extras as _build_context_extras,
+    build_macro_dto as _build_macro_dto,
+    build_realized_vol_60d_map as _build_realized_vol_60d_map,
+    build_universe as _build_universe,
+    fetch_bars_for_universe as _fetch_bars_for_universe,
+    fetch_fundamentals_for_universe as _fetch_fundamentals_for_universe,
+    get_macro_engine as _get_macro_engine,
+    load_watchlist as _load_watchlist,
+    recently_closed_universe_symbols as _recently_closed_universe_symbols,
+    reset_macro_engine_cache as _reset_macro_engine_cache,
+)
 
 
 def _interval_cycle_gated(now_utc: datetime) -> bool:
@@ -261,686 +225,6 @@ class RunResult:
 
 
 # ---------------------------------------------------------------------------
-# Universe helpers
-# ---------------------------------------------------------------------------
-
-def _load_watchlist() -> List[str]:
-    """Return the union of uppercase tickers from WATCHLIST env var and watchlist.txt.
-
-    Both sources are read (when present) and merged/deduped -- neither one
-    takes precedence over the other. Returns an empty list when neither
-    source is configured.
-
-    Thin wrapper around ``data.portfolio_sync.load_env_watchlist`` — the
-    logic now lives there so ``pipeline/production_steps.py``'s
-    ``AsyncDataFetchStep`` (the daemon's per-cycle universe builder) can
-    share it instead of never reading WATCHLIST/watchlist.txt at all, which
-    was the root cause of a symbol silently never reaching the daemon's
-    tracked universe. See docs/known_issues/daemon_universe_watchlist_divergence.md.
-    ``WATCHLIST_FILE`` stays a module attribute (read here, not baked into a
-    default argument) so ``monkeypatch.setattr(main, "WATCHLIST_FILE", ...)``
-    in the test suite keeps working exactly as before.
-    """
-    from data.portfolio_sync import load_env_watchlist
-
-    return load_env_watchlist(WATCHLIST_FILE)
-
-
-def _load_tickers_from_sheet2() -> List[str]:
-    """Return tickers from Sheet2 column A of the Google Sheet.
-
-    Used as a last-resort fallback when Robinhood is unavailable and no
-    WATCHLIST / watchlist.txt is configured.  Silently returns [] when
-    credentials.json is absent, Sheet2 doesn't exist, or any error occurs.
-    """
-    gc = get_service_account_client()
-    if gc is None:
-        return []
-    try:
-        sh = gc.open(SHEET_NAME)
-        ws = sh.worksheet("Sheet2")
-        col_a = ws.col_values(1)  # 1-indexed; returns list of strings
-        tickers = [v.strip().upper() for v in col_a if v.strip() and not v.strip().startswith("#")]
-        logger.info("Loaded %d tickers from Google Sheet Sheet2 column A.", len(tickers))
-        return tickers
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not read Sheet2 ticker list: %s", exc)
-        return []
-
-
-from pilots.discovery import discovery
-
-def _recently_closed_universe_symbols(held: set) -> set:
-    """Symbols retained by settings.CLOSED_POSITION_RETENTION_DAYS (a
-    fully-sold symbol stays visible to the advisory pipeline for a bounded
-    window after its most recent real Robinhood SELL fill). Never raises;
-    degrades to an empty set on any failure so a store outage can never
-    shrink the universe (CONSTRAINT #6). `held` symbols are excluded --
-    retention only matters for a symbol that has already dropped out of
-    held positions.
-    """
-    try:
-        retention_days = int(getattr(settings, "CLOSED_POSITION_RETENTION_DAYS", 0) or 0)
-    except (TypeError, ValueError):
-        return set()
-    if retention_days <= 0:
-        return set()
-    try:
-        from data.broker_fills_store import recently_closed_symbols
-
-        recent = recently_closed_symbols(
-            retention_days=retention_days,
-            max_symbols=settings.CLOSED_POSITION_RETENTION_MAX_SYMBOLS,
-        )
-        return {s.upper() for s in recent} - held
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "_recently_closed_universe_symbols failed (%s) — universe unaffected.", exc
-        )
-        return set()
-
-
-def _build_universe(snapshot: AccountSnapshot) -> List[str]:
-    """Return the evaluation universe: held symbols ∪ watchlist, deduped, sorted.
-
-    priority order when building the universe:
-      1. Robinhood held positions (always included when available).
-      2. WATCHLIST env var or watchlist.txt (always merged in when present).
-      3. Discovered scan candidates from `scan_candidates.json` (always merged).
-      4. `settings.DEFAULT_TICKERS` (fallback if 1+2+3 are empty).
-      5. Google Sheet → Sheet2 column A (fallback only when 1+2+3+4 are empty).
-      6. Recently-closed positions (settings.CLOSED_POSITION_RETENTION_DAYS,
-         always merged in LAST — see below for why the ordering matters).
-
-    When ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED`` is on, the held ∪
-    watchlist ∪ discovered union is additionally subtracted by whatever
-    ``rating.symbol_rating_store.SymbolRatingStore.get_excluded_symbols``
-    reports (a non-held symbol on a long enough consecutive-BAD streak — see
-    ``rating/symbol_rating.py::should_exclude``). Held symbols are never
-    dropped, and the lookup fails OPEN: any exception leaves the universe
-    untouched and only logs a warning (CONSTRAINT #6). Both the exclusion
-    and the ``DEFAULT_TICKERS`` fallback live inside
-    ``data.portfolio_sync.compute_tracked_universe`` (shared with
-    ``pipeline/production_steps.py``'s ``AsyncDataFetchStep`` so the daemon
-    and this orchestrator can't silently diverge on the logic); only the
-    Sheet2 fallback (Google-Sheets-specific, main.py-only) stays local here.
-
-    Source 6 (recently-closed retention) is unioned in LAST, after both the
-    auto-drop subtraction and the empty-fallback decision, deliberately:
-      * a retained symbol has ``held=False``, so unioning it before the
-        auto-drop subtraction (inside ``compute_tracked_universe``) would let
-        it be immediately re-subtracted -- reproducing the exact "sold
-        symbol silently disappears" bug this feature exists to fix, through
-        a different door;
-      * unioning it before the ``if not universe:`` check would silently
-        suppress the DEFAULT_TICKERS/Sheet2 fallback on an otherwise-cold
-        account (the fallback must be decided on the pre-retention set).
-    """
-    from data.portfolio_sync import compute_tracked_universe
-
-    held = set(snapshot.positions.keys())
-    watchlist = set(_load_watchlist())
-
-    # 3. Discovered candidates
-    discovered = set()
-    try:
-        candidates = discovery(limit=None).get("candidates", [])
-        discovered = {c["symbol"].upper().strip() for c in candidates if c.get("symbol")}
-        if discovered:
-            logger.info("Loaded %d candidates from scan discovery.", len(discovered))
-    except Exception as exc:
-        logger.warning("Failed to load discovery candidates: %s", exc)
-
-    # Union + rating-exclusion + DEFAULT_TICKERS-fallback-if-empty all live in
-    # compute_tracked_universe() now, shared with pipeline/production_steps.py's
-    # AsyncDataFetchStep (the daemon's own per-cycle universe builder) so the
-    # two can no longer silently diverge on this logic.
-    universe = compute_tracked_universe(
-        held=held,
-        watchlist=watchlist,
-        discovered=discovered,
-        default_tickers=settings.DEFAULT_TICKERS,
-    )
-    if not universe:
-        # held ∪ watchlist ∪ discovered ∪ DEFAULT_TICKERS were all empty (or
-        # rating-exclusion emptied them) — last-resort Sheet2 fallback, kept
-        # main.py-only (the daemon path has no Google Sheets dependency).
-        sheet2 = set(_load_tickers_from_sheet2())
-        if sheet2:
-            logger.info(
-                "Using %d tickers from Sheet2 (Robinhood unavailable, no WATCHLIST configured).",
-                len(sheet2),
-            )
-        universe = sorted(sheet2)
-
-    # 6. Recently-closed retention — applied LAST, after both the rating-
-    # exclusion subtraction and the DEFAULT_TICKERS/Sheet2 fallback decision
-    # above (both now live inside compute_tracked_universe()/the Sheet2
-    # branch), for the exact reasons in this function's own docstring.
-    recently_closed = _recently_closed_universe_symbols(held)
-    if recently_closed:
-        logger.info(
-            "Universe: retaining %d recently-closed symbol(s): %s",
-            len(recently_closed), ", ".join(sorted(recently_closed)),
-        )
-    universe = sorted(set(universe) | recently_closed)
-
-    logger.info(
-        "Universe: %d symbols (%d held, %d watchlist-only, %d discovered, %d recently-closed).",
-        len(universe),
-        len(held),
-        len((watchlist - held) - discovered),
-        len(discovered - held),
-        len(recently_closed),
-    )
-    return universe
-
-
-# ---------------------------------------------------------------------------
-# Macro context (FRED + HMM second opinion)
-# ---------------------------------------------------------------------------
-
-def _build_macro_dto() -> MacroEconomicDTO:
-    """Fetch FRED macro data and build MacroEconomicDTO with HMM probability.
-
-    Degrades gracefully to neutral defaults when FRED_API_KEY is absent or
-    FRED is unreachable.  Never raises.
-
-    data_unavailable is set True on every branch that returns a fully or
-    partially fabricated DTO (no FRED_API_KEY, an exception mid-construction,
-    or a live macro_raw missing T10Y2Y/BAMLH0A0HYM2/VIXCLS, or a Sahm value
-    that came from calculate_sahm_rule's fallback) -- see
-    dto_models.py::MacroEconomicDTO.killSwitch/_rules_based_regime for what
-    this forces (CONSTRAINT #4/#6: a substituted benign default must never
-    read as a real "risk on" measurement for this safety-critical gate).
-    """
-    # Read via the `settings` singleton, not os.environ — pydantic-settings
-    # loads .env into Settings only, never into the real process environment.
-    fred_key = (settings.FRED_API_KEY or "").strip()
-    if not fred_key:
-        logger.info("FRED_API_KEY not configured; using neutral macro defaults.")
-        return MacroEconomicDTO(
-            yield_curve_10y_2y=0.50,
-            high_yield_oas=3.50,
-            inflation_rate=3.0,
-            nominal_10y=4.5,
-            vix_value=18.0,
-            sahm_rule_indicator=0.0,
-            data_unavailable=True,
-        )
-
-    try:
-        from macro_engine import macro_killswitch_data_unavailable
-
-        # Reuse ONE MacroEngine (and therefore one HMMRegimeDetector) across
-        # every run_once() cycle within this process -- see _get_macro_engine()
-        # docstring / Task A4. This makes the HMM's retrain_freq_days gate
-        # meaningful in --interval / agent-loop mode instead of forcing a full
-        # refit every single cycle.
-        me = _get_macro_engine(fred_key)
-        de = me.data_engine
-        macro_raw = de.fetch_macro_raw()
-        # Populated-but-fabricated blind spot: de.fetch_macro_raw()'s hardcoded
-        # emergency fallback populates EVERY key with a benign literal, so
-        # macro_killswitch_data_unavailable()'s plain presence check alone
-        # would report "available" even during a total FRED outage. See
-        # data_engine.py::fetch_macro_raw_detailed()'s docstring.
-        macro_raw_fabricated_keys = getattr(de, "last_macro_raw_fabricated_keys", frozenset())
-
-        # SPY history for the HMM regime detector now routes through
-        # HistoricalStore.get_bars() (mirroring _fetch_bars_for_universe's
-        # DB-first pattern a few lines below) instead of always calling
-        # DataEngine.fetch_technical_raw(["SPY"]) directly -- closing a gap
-        # where this was the one bars fetch in this file that bypassed the
-        # DB even though every other symbol's bars already went through it.
-        # de.fetch_macro_raw() two lines above (the current-snapshot FRED
-        # read feeding the kill switch) is deliberately left untouched --
-        # that path must always see the freshest reading, never a cached one.
-        spy_df: Optional[pd.DataFrame] = None
-        spy_from_store = False
-        if settings.HISTORICAL_STORE_ENABLED:
-            try:
-                from data.historical_store import HistoricalStore
-                _spy_store = HistoricalStore()
-                market = get_provider()
-                _spy_candidate = _spy_store.get_bars("SPY", lookback_days=504, provider=market)
-                if _spy_candidate is not None and not _spy_candidate.empty:
-                    spy_df = _spy_candidate
-                    spy_from_store = True
-            except Exception as store_exc:
-                logger.debug(
-                    "HistoricalStore SPY fetch for HMM unavailable (%s); "
-                    "falling back to direct DataEngine fetch.",
-                    store_exc,
-                )
-
-        if not spy_from_store:
-            try:
-                spy_raw = de.fetch_technical_raw(["SPY"])
-                spy_df = spy_raw.get("SPY")
-            except Exception as spy_exc:
-                logger.debug("SPY history for HMM unavailable: %s", spy_exc)
-
-        hmm_result = me.compute_hmm_risk_on_probability(spy_df)
-        hmm_prob = hmm_result["risk_on_probability"] if hmm_result else None
-        hmm_state = hmm_result["regime_state_label"] if hmm_result else None
-
-        # NOTE: SAHMREALTIME is never a key in macro_raw -- de.fetch_macro_raw()
-        # only ever populates T10Y2Y/BAMLH0A0HYM2/UNRATE/VIXCLS (see
-        # data_engine.py::fetch_macro_raw / _MACRO_HARDCODED_FALLBACK). Reading
-        # macro_raw.get("SAHMREALTIME", 0.0) here was therefore dead code --
-        # it silently returned 0.0 every cycle regardless of FRED health,
-        # meaning this DTO's Sahm-driven kill-switch input never reflected a
-        # real reading. Fixed by actually computing it via
-        # MacroEngine._calculate_sahm_rule_detailed(), the same primitive
-        # pipeline/production_steps.py's OptionsAnalysisStep already uses.
-        sahm_val, sahm_used_fallback = me._calculate_sahm_rule_detailed()
-
-        data_unavailable = (
-            macro_killswitch_data_unavailable(macro_raw, fabricated_keys=macro_raw_fabricated_keys)
-            or sahm_used_fallback
-        )
-
-        dto = MacroEconomicDTO(
-            yield_curve_10y_2y=float(macro_raw.get("T10Y2Y", 0.5)),
-            high_yield_oas=float(macro_raw.get("BAMLH0A0HYM2", 3.5)),
-            inflation_rate=float(macro_raw.get("CPIAUCSL_YoY", 2.0)),
-            nominal_10y=float(macro_raw.get("DGS10", 4.0)),
-            vix_value=float(macro_raw.get("VIXCLS", 18.0)),
-            sahm_rule_indicator=sahm_val,
-            hmm_risk_on_probability=hmm_prob,
-            hmm_regime_state=hmm_state,
-            data_unavailable=data_unavailable,
-        )
-        logger.info(
-            "Macro DTO built — regime=%s  VIX=%.1f  HMM=%.2f  data_unavailable=%s.",
-            dto.market_regime,
-            dto.vix,
-            hmm_prob if hmm_prob is not None else float("nan"),
-            data_unavailable,
-        )
-        return dto
-
-    except Exception as exc:
-        logger.warning("Macro DTO construction failed (%s); using neutral defaults.", exc)
-        return MacroEconomicDTO(
-            yield_curve_10y_2y=0.50,
-            high_yield_oas=3.50,
-            inflation_rate=3.0,
-            nominal_10y=4.5,
-            vix_value=18.0,
-            sahm_rule_indicator=0.0,
-            data_unavailable=True,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Context pre-compute (cross-sectional ranks + multifactor composites)
-# ---------------------------------------------------------------------------
-
-def _fetch_bars_for_universe(
-    symbols: List[str],
-    market: MarketDataProvider,
-) -> Dict[str, pd.DataFrame]:
-    """Fetch ~450-day OHLCV history for all symbols via the market provider.
-
-    The 12-1m cross-sectional momentum in ``_build_context_extras`` needs
-    ``252 + 22 + 1 = 275`` *trading* days; fetching only 252 leaves every
-    symbol below that floor, so the xsec rank pass silently yields nothing.
-    Request 450 calendar days (~310 trading days) to clear the floor with
-    headroom (this also maps yfinance to its "2y" period, avoiding a short
-    "1y" pull that tops out near 252 rows).
-
-    Returns a dict symbol → DataFrame.  Failures are dead-lettered per symbol
-    so one bad ticker never aborts the pre-compute pass.
-    """
-    _store = None
-    if settings.HISTORICAL_STORE_ENABLED:
-        try:
-            from data.historical_store import HistoricalStore
-            _store = HistoricalStore()
-        except Exception as exc:
-            logger.warning("HistoricalStore unavailable; using direct provider. %s", exc)
-
-    bars: Dict[str, pd.DataFrame] = {}
-    for sym in symbols:
-        try:
-            if _store is not None:
-                df = _store.get_bars(sym, lookback_days=450, provider=market)
-            else:
-                df = market.get_intraday_bars(sym, lookback_days=450)
-            if df is not None and not df.empty:
-                bars[sym] = df
-        except Exception as exc:
-            logger.debug("Bars pre-fetch skipped for %s: %s", sym, exc)
-    logger.info("Pre-fetched bars for %d / %d symbols.", len(bars), len(symbols))
-    return bars
-
-
-def _fetch_fundamentals_for_universe(
-    symbols: List[str],
-    market: MarketDataProvider,
-) -> Dict[str, FundamentalDataDTO]:
-    """Fetch fundamentals for the full universe and build FundamentalDataDTOs.
-
-    Feeds the multifactor raw-input pre-compute in ``_build_context_extras``
-    (value/quality/low-vol/size come from each DTO's ``raw_info`` via
-    ``ProcessingEngine.calculate_fundamental_metrics()``). Same
-    HistoricalStore-first-then-direct-provider routing as
-    ``engine.advisory.evaluate()``'s own Step 3, generalized across the whole
-    universe up front instead of one symbol at a time mid-loop.
-
-    Returns a dict symbol → FundamentalDataDTO. Failures are dead-lettered per
-    symbol so one bad ticker never aborts the pre-compute pass.
-    """
-    _store = None
-    if settings.HISTORICAL_STORE_ENABLED:
-        try:
-            from data.historical_store import HistoricalStore
-            _store = HistoricalStore()
-        except Exception as exc:
-            logger.warning(
-                "HistoricalStore unavailable for fundamentals pre-fetch; using direct provider. %s", exc
-            )
-
-    fund_dtos: Dict[str, FundamentalDataDTO] = {}
-    for sym in symbols:
-        try:
-            raw: Dict[str, Any] = {}
-            if _store is not None:
-                raw = _store.get_fundamentals_raw(
-                    sym, max_age_days=settings.FUNDAMENTALS_REFRESH_DAYS, provider=market
-                ) or {}
-            if not raw:
-                raw = market.get_fundamentals(sym) or {}
-            if raw:
-                fund_dtos[sym] = FundamentalDataDTO.from_raw_dict(sym, raw)
-        except Exception as exc:
-            logger.debug("Fundamentals pre-fetch skipped for %s: %s", sym, exc)
-    logger.info("Pre-fetched fundamentals for %d / %d symbols.", len(fund_dtos), len(symbols))
-    return fund_dtos
-
-
-def _build_realized_vol_60d_map(bars_dict: Dict[str, pd.DataFrame], processing_engine: Any) -> Dict[str, float]:
-    """Per-ticker 60-day annualized realized vol, sourced from
-    ``ProcessingEngine.calculate_momentum_metrics()`` (the SAME formula
-    ``main_orchestrator.py``'s technical pipeline uses) so the multifactor
-    low-volatility factor input is computed identically in both entry points.
-
-    Feeds ``calculate_fundamental_metrics()``'s ``low_vol_score``. Missing or
-    insufficient-history (< 253 rows) tickers are simply absent from the
-    returned map — NaN downstream, never fabricated (CONSTRAINT #4).
-    """
-    realized_vol_60d_map: Dict[str, float] = {}
-    for sym, df in bars_dict.items():
-        try:
-            momentum_df = processing_engine.calculate_momentum_metrics(df.copy())
-            if momentum_df.empty:
-                continue
-            vol = momentum_df["Realized_Vol_60D"].iloc[-1]
-            if pd.notna(vol):
-                realized_vol_60d_map[sym] = float(vol)
-        except Exception as exc:
-            logger.debug("Realized_Vol_60D skipped for %s: %s", sym, exc)
-    return realized_vol_60d_map
-
-
-def _build_context_extras(
-    symbols: List[str],
-    bars_dict: Dict[str, pd.DataFrame],
-    macro_dto: MacroEconomicDTO,
-    market: MarketDataProvider,
-) -> Dict[str, Any]:
-    """Build universe-wide pre-computed signal context for injection into advisory.
-
-    Computes 12-1m cross-sectional momentum ranks and Fama-French multifactor
-    composites by running global_registry.run_pre_compute() on a minimal
-    universe DataFrame.  The result is passed as context_extras to each
-    advisory.evaluate() call so cross-sectional and multifactor signals score
-    with real data instead of their neutral-0 fallback.
-
-    Returns an empty dict (and logs a warning) if pre_compute raises.
-    """
-    # This is a THIRD hand-duplicated copy of the same Jegadeesh-Titman (1993)
-    # 12-1m momentum formula -- see main_orchestrator.py::compute_xsec_momentum_ranks
-    # (the reference implementation) and pipeline/production_steps.py::
-    # _compute_xsec_momentum (the live orchestrator-path copy, whose own
-    # docstring names all three and cross-references this one). If
-    # SKIP_DAYS/LOOKBACK_DAYS ever change here, change them in both of those
-    # too -- tests/test_xsec_momentum_advisory_parity.py numerically verifies
-    # all three stay in agreement at their shared default constants and will
-    # fail CI on drift (this copy hardcodes the constants as locals rather
-    # than parameters, so only the default-constants comparison applies to it).
-    SKIP_DAYS = 22       # 1-month skip for Jegadeesh-Titman momentum
-    LOOKBACK_DAYS = 252  # 12-month lookback
-    REQUIRED = LOOKBACK_DAYS + SKIP_DAYS + 1
-
-    try:
-        # ── Step 1: compute 12-1m cross-sectional returns ────────────────────
-        xsec_return: Dict[str, float] = {}
-        for sym, df in bars_dict.items():
-            close = df["Close"].dropna()
-            if len(close) < REQUIRED:
-                continue
-            p_recent = float(close.iloc[-(SKIP_DAYS + 1)])
-            p_old = float(close.iloc[-(LOOKBACK_DAYS + 1)])
-            if p_old > 0:
-                xsec_return[sym] = p_recent / p_old - 1.0
-
-        if xsec_return:
-            ret_series = pd.Series(xsec_return)
-            xsec_rank_series = ret_series.rank(pct=True, ascending=True)
-        else:
-            xsec_rank_series = pd.Series(dtype=float)
-
-        # ── Step 1b: fundamentals-derived multifactor raw inputs ─────────────
-        # Mirrors main_orchestrator.py's calculate_fundamental_metrics() call so
-        # signals/multifactor.py's Value/Quality/Low-Vol/Size composite gets real
-        # inputs in this (main.py) advisory path too, instead of silently scoring
-        # 0 for every symbol every cycle. Any failure here degrades to an empty
-        # dict (below) rather than aborting the whole pre-compute pass.
-        fund_metrics: Dict[str, Dict[str, Any]] = {}
-        fund_dtos: Dict[str, FundamentalDataDTO] = {}
-        try:
-            from processing_engine import ProcessingEngine
-
-            _pe = ProcessingEngine()
-            realized_vol_60d_map = _build_realized_vol_60d_map(bars_dict, _pe)
-            fund_dtos = _fetch_fundamentals_for_universe(symbols, market)
-            fund_metrics = _pe.calculate_fundamental_metrics(fund_dtos, realized_vol_60d_map)
-        except Exception as exc:
-            logger.warning(
-                "Multifactor raw-input pre-compute failed (%s); "
-                "MultifactorSignal will score 0 for this cycle.", exc,
-            )
-
-        # ── Step 2: build a minimal universe DataFrame for pre_compute ────────
-        rows = []
-        for sym in symbols:
-            df = bars_dict.get(sym)
-            price = float(df["Close"].iloc[-1]) if df is not None and not df.empty else 0.0
-            fm = fund_metrics.get(sym, {})
-            rows.append({
-                "Symbol": sym,
-                "Price": price,
-                "XSec_12_1M": xsec_return.get(sym, float("nan")),
-                "XSec_Momentum_Rank": (
-                    float(xsec_rank_series[sym])
-                    if sym in xsec_rank_series.index
-                    else float("nan")
-                ),
-                "Market Cap": fm.get("Market Cap", float("nan")),
-                "book_to_market": fm.get("book_to_market", float("nan")),
-                "earnings_yield": fm.get("earnings_yield", float("nan")),
-                "quality_factor_score": fm.get("quality_factor_score", float("nan")),
-                "low_vol_score": fm.get("low_vol_score", float("nan")),
-                "log_market_cap": fm.get("log_market_cap", float("nan")),
-            })
-        universe_df = pd.DataFrame(rows)
-
-        # ── Step 3: run global_registry.run_pre_compute() ────────────────────
-        stub_bar = MarketBarDTO(
-            date=datetime.now(),
-            ticker="__UNIVERSE__",
-            open_price=100.0,
-            high_price=100.0,
-            low_price=100.0,
-            close_price=100.0,
-            volume=0,
-        )
-        stub_fund = FundamentalDataDTO(
-            ticker="__UNIVERSE__",
-            pe_ratio=None,
-            pb_ratio=None,
-            dividend_yield=0.0,
-            book_value=0.0,
-            eps_trailing=0.0,
-            dividend_growth_rate=0.0,
-            payout_ratio=0.0,
-            sector="Unknown",
-            company_name="Universe stub",
-        )
-        shared_ctx = SignalContext(bar=stub_bar, fundamentals=stub_fund, macro=macro_dto)
-        global_registry.run_pre_compute(universe_df, shared_ctx)
-
-        logger.info(
-            "Context pre-compute: %d xsec ranks, %d multifactor scores.",
-            len(shared_ctx.xsec_percentile_ranks),
-            len(shared_ctx.multifactor_scores),
-        )
-        extras: Dict[str, Any] = {
-            "xsec_percentile_ranks": shared_ctx.xsec_percentile_ranks,
-            "multifactor_scores": shared_ctx.multifactor_scores,
-            # Raw 12-1m cross-sectional return per symbol (already computed above
-            # as `xsec_return`); surfaced so the advisory path reaches parity with
-            # main_orchestrator's rich snapshot for factors.xsec_12_1m. {} when no
-            # symbol had enough history — a missing symbol degrades to NaN/null
-            # downstream, never a fabricated 0.0 (CONSTRAINT #4).
-            "xsec_12_1m": dict(xsec_return),
-            "bars": bars_dict,
-            "fundamentals": fund_dtos,
-        }
-
-        # news_catalyst.pre_compute() (run inside run_pre_compute above) wrote
-        # per-symbol FinBERT scores onto shared_ctx.news_sentiment_scores. Empty /
-        # absent when the module didn't run (no FINNHUB_API_KEY, unregistered) — a
-        # symbol absent then degrades to null downstream, never fabricated.
-        _news = getattr(shared_ctx, "news_sentiment_scores", None)
-        if isinstance(_news, dict) and _news:
-            extras["news_sentiment"] = dict(_news)
-
-        # CoVaR proxy (portfolio-wide max pairwise |corr|). Mirrors
-        # processing_engine.calculate_technical_metrics()'s Topic-30 computation
-        # over the universe returns matrix, so the advisory path reaches parity for
-        # risk.covar_proxy. Portfolio-wide scalar (the advisory writer broadcasts it
-        # to every symbol, same as the rich path). Emitted only when ≥2 symbols have
-        # real returns AND the engine returns a non-zero value — its 0.0 no-data /
-        # error sentinel is treated as "unavailable" (null), never a fabricated 0.0
-        # (CONSTRAINT #4).
-        try:
-            from research_engine import AdvancedResearchEngine
-
-            _returns = {
-                _s: _d["Close"].pct_change(fill_method=None)
-                for _s, _d in bars_dict.items()
-                if _d is not None and not _d.empty and len(_d) >= 2
-            }
-            if len(_returns) >= 2:
-                _covar = AdvancedResearchEngine().calculate_portfolio_covar_dependency(
-                    pd.DataFrame(_returns)
-                )
-                if _covar and _covar != 0.0:
-                    extras["covar_proxy"] = float(_covar)
-        except Exception as _cov_exc:
-            logger.debug("CoVaR proxy pre-compute skipped: %s", _cov_exc)
-
-        # Per-symbol post-trade excursion (MFE / MAE / Edge Ratio / Realized
-        # Slippage) from the latest CLOSED trade in the shared TransactionsStore +
-        # the already-fetched bars. Reuses evaluation_engine.EvaluationEngine's
-        # calculate_edge_ratio and calculate_realized_slippage — the SAME two
-        # methods evaluate_portfolio() calls to populate dashboard_df's
-        # 'MFE'/'MAE'/'Edge Ratio'/'Realized Slippage' columns on the rich
-        # orchestrator path (pipeline/production_steps.py's evaluate_portfolio()
-        # call), so this is a genuine parity fix, not a different metric under the
-        # same name. NOTE: this is distinct from
-        # research_engine.AdvancedResearchEngine.calculate_realized_slippage(
-        # transactions_df) — a portfolio-wide bps scalar over a Trans-Code/Amount/
-        # Commission transactions SHEET that neither path actually threads into the
-        # dashboard's 'Realized Slippage' column (that column is overwritten by
-        # evaluate_portfolio() later in the rich pipeline) — EvaluationEngine's
-        # two-argument, per-symbol calculate_realized_slippage(entry_price,
-        # arrival_price) is the real source, and needs only entry price (from the
-        # trade record) + current price (the latest close, mirroring the rich
-        # path's `row['Price']`), both already available here.
-        # A symbol with no closed trade is omitted → NaN/null downstream (honest
-        # by construction on a fresh install, lighting up as record_trade()/
-        # Robinhood reconstruction accrue history).
-        try:
-            from engine.advisory import _get_transactions_store
-            from evaluation_engine import EvaluationEngine
-            from data.market_data import get_provider
-
-            _store = _get_transactions_store()
-            _ee = EvaluationEngine()
-            # Opt-in intraday-hourly excursion (Phase-1 audit item B2,
-            # settings.EXCURSION_INTRADAY_ENABLED): passed through on every
-            # call below regardless of the flag -- calculate_edge_ratio itself
-            # checks the setting and only uses these when it's True, so this
-            # is a no-op (identical to the pre-existing daily-only call) when
-            # the flag is off (the default).
-            try:
-                _intraday_provider = get_provider()
-            except Exception:
-                _intraday_provider = None
-            _excursion: Dict[str, Dict[str, float]] = {}
-            for _s, _d in bars_dict.items():
-                if _d is None or _d.empty:
-                    continue
-                try:
-                    _th = _store.get_trade_history(_s)
-                except Exception:
-                    continue
-                if _th is None or _th.empty:
-                    continue
-                _th = _th.copy()
-                _th["entry_ts"] = pd.to_datetime(_th["entry_ts"])
-                _th = _th.sort_values("entry_ts", ascending=False)
-                _latest = _th.iloc[0]
-                _exit_ts = _latest.get("exit_ts")
-                if _exit_ts is None or pd.isna(_exit_ts):
-                    continue  # only a CLOSED trade has a defined hold window
-                _entry_price = float(_latest["entry_price"])
-                _res = _ee.calculate_edge_ratio(
-                    _d, _entry_price, _latest["entry_ts"], _exit_ts,
-                    symbol=_s, intraday_provider=_intraday_provider,
-                )
-                _arrival_price = float(_d["Close"].iloc[-1])
-                _slippage = (
-                    _ee.calculate_realized_slippage(_entry_price, _arrival_price)
-                    if (_entry_price > 0 and _arrival_price > 0)
-                    else float("nan")
-                )
-                _excursion[_s] = {
-                    "MFE": _res.get("MFE", float("nan")),
-                    "MAE": _res.get("MAE", float("nan")),
-                    "Edge Ratio": _res.get("Edge Ratio", float("nan")),
-                    "Realized Slippage": _slippage,
-                }
-            if _excursion:
-                extras["excursion"] = _excursion
-        except Exception as _exc_exc:
-            logger.debug("Excursion pre-compute skipped: %s", _exc_exc)
-
-        return extras
-
-    except Exception as exc:
-        logger.warning(
-            "Context pre-compute failed (%s); cross-sectional signals will score 0.", exc
-        )
-        return {}
-
-
-# ---------------------------------------------------------------------------
 # Run summary
 # ---------------------------------------------------------------------------
 
@@ -974,27 +258,6 @@ def _log_summary(result: RunResult) -> None:
             err["symbol"], err["stage"],
             err["error_type"], err["message"][:80],
         )
-
-
-def _run_automated_delta_hedge_cycle(executor: Any) -> Optional[Dict[str, Any]]:
-    """Resolves ONE real SPY quote and, only if available, sizes and
-    executes the automated dynamic SPY delta hedge off that single value.
-
-    Delegates to shared ``execution.options_lifecycle.run_automated_delta_hedge_cycle``.
-    """
-    from execution.options_lifecycle import run_automated_delta_hedge_cycle
-    return run_automated_delta_hedge_cycle(executor=executor)
-
-
-def _run_automated_options_lifecycle(macro_dto: Optional[MacroEconomicDTO] = None) -> None:
-    """Runs the automated options paper-trading lifecycle: exit management,
-    0DTE fast exits, new-position auto-execution, and dynamic SPY delta
-    hedging.
-
-    Delegates to shared ``execution.options_lifecycle.run_automated_options_lifecycle``.
-    """
-    from execution.options_lifecycle import run_automated_options_lifecycle
-    run_automated_options_lifecycle(macro_dto=macro_dto, delta_hedge_fn=_run_automated_delta_hedge_cycle)
 
 
 # ---------------------------------------------------------------------------
@@ -1383,6 +646,24 @@ def main() -> None:
         summary = summarize_run(result)
         logger.info("\n%s", summary)
 
+        # Step 5.3: with DAEMON_AGENTIC_QUEUE_MODE=primary the orchestrator
+        # daemon (AgenticQueueStep) writes the real execution queue and sends
+        # the summary push and watch alerts. Skip ours so there are never two
+        # writers of execution_queue.json / watch_state.json and no double
+        # pushes. daily_report.html is retired (step 5 decision 5), and our
+        # advisory state_snapshot.json write would fight the daemon's.
+        from pipeline.agentic_queue import daemon_owns_agentic_side_effects  # noqa: PLC0415
+
+        if daemon_owns_agentic_side_effects(getattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "off")):
+            logger.warning(
+                "DAEMON_AGENTIC_QUEUE_MODE=primary: the orchestrator daemon owns the execution "
+                "queue, watch alerts and summary push. main.py computed %d recommendation(s) "
+                "but writes no queue, watch state, push, daily_report.html or state snapshot. "
+                "Trigger a daemon cycle (POST /run) to refresh the queue.",
+                len(result.recommendations),
+            )
+            return result
+
         if result.errors:
             # High-priority push: list failing symbols and stages.
             err_preview = ", ".join(
@@ -1488,55 +769,11 @@ def main() -> None:
             )
         # ─────────────────────────────────────────────────────────────────────
 
-        # ── Robinhood OPTIONS execution queue (Tier 8) — non-fatal, advisory ──
-        # Sibling of the equity queue above, for multi-leg premium-selling
-        # directives.  Emits a GATED, DRY-RUN queue to
-        # output/options_execution_queue.json for the Robinhood execution agent.
-        # Same off-mode no-op + best-effort try/except contract as the equity
-        # path; NEVER contacts a broker or places an order.
-        try:
-            from execution.options_queue_builder import (  # noqa: PLC0415
-                emit_options_execution_queue,
-            )
-
-            _opt_queue_path = emit_options_execution_queue(result, macro_dto=result.macro_dto)
-            if _opt_queue_path is not None:
-                logger.info(
-                    "Robinhood options execution queue emitted → %s", _opt_queue_path,
-                )
-        except Exception as _opt_queue_exc:
-            logger.warning(
-                "Options execution queue emit failed (non-critical): %s",
-                _opt_queue_exc,
-            )
-
-        # ── Automated Strategy Options Paper Execution & Lifecycle ────────────
-        # See _run_automated_options_lifecycle()'s own docstring for the gate
-        # (including the fixed OPTIONS_0DTE_ENABLED outer-gate omission bug).
-        _run_automated_options_lifecycle(macro_dto=result.macro_dto)
-        # ─────────────────────────────────────────────────────────────────────
-
-
-        market = get_provider()
-        _write_to_sheet(result, market=market)
-
-        # Build macro_dto again cheaply (same result, neutral defaults are fast)
-        # to pass macro context to the HTML report template.
-        try:
-            from dto_models import MacroEconomicDTO as _MDTO
-
-            _macro = _MDTO(
-                yield_curve_10y_2y=0.5,
-                high_yield_oas=3.5,
-                inflation_rate=3.0,
-                nominal_10y=4.5,
-                vix_value=18.0,
-                sahm_rule_indicator=0.0,
-            )
-        except Exception:
-            _macro = None
-
-        _write_html_report(result, macro_dto=_macro)
+        # Pass the cycle's real macro context (built once by MacroStep). This
+        # used to be a hand-built "neutral" DTO, which wrote a fake RISK ON /
+        # VIX-from-defaults macro into daily_report.html and state_snapshot.json
+        # every run, overwriting the daemon's real macro fields.
+        _write_html_report(result, macro_dto=result.macro_dto)
         return result
 
     if args.agent:

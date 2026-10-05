@@ -15,7 +15,7 @@
 # This module NEVER contacts a broker and NEVER places an order.  It only:
 #   1. Translates actionable advisory Recommendations into `OrderIntent`s.
 #   2. Runs them through the existing `PreTradeRiskGate` + `GlobalKillSwitch`
-#      (the same decision stack the Alpaca path uses), in dry-run.
+#      (the same decision stack the pipeline's paper broker path uses), in dry-run.
 #   3. Writes the gated queue to disk — but ONLY when the execution mode is
 #      `review` or `live`.  In the default `off` mode nothing is written.
 #
@@ -51,7 +51,7 @@ import logging
 import math
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, ContextManager, Dict, List, Optional, Tuple
 
 from execution.broker_base import (
     AccountSnapshot as BrokerAccountSnapshot,
@@ -446,6 +446,7 @@ def build_execution_queue(
     config: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
     macro_dto: Optional[Any] = None,
+    side_effects: bool = True,
 ) -> Dict[str, Any]:
     """Build the gated execution-queue payload from a `RunResult`.
 
@@ -460,6 +461,10 @@ def build_execution_queue(
     `.macro_dto` attribute is picked up automatically even if a caller forgets
     the kwarg, matching this function's existing `getattr(run_result,
     "snapshot", None)` idiom above.
+
+    ``side_effects=False`` (the daemon's shadow queue, step 5.2) runs the same
+    gate checks but tells the gate not to send alerts or append to
+    ``risk_gate_blocks.jsonl``. The payload is identical either way.
     """
     cfg = {**CONFIG, **(config or {})}
     resolved_mode = _resolve_mode(mode)
@@ -478,6 +483,10 @@ def build_execution_queue(
     max_notional = _max_notional()
     limit_buffer_bps = _limit_buffer_bps()
     gate = PreTradeRiskGate()
+    if not side_effects:
+        # Set after construction (not as a constructor kwarg) so test doubles
+        # that replace PreTradeRiskGate with a no-arg class keep working.
+        gate.side_effects = False
     context = _build_risk_context(snapshot, now, macro_dto=resolved_macro)
 
     intents: List[Dict[str, Any]] = []
@@ -626,6 +635,8 @@ def emit_execution_queue(
     config: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
     macro_dto: Optional[Any] = None,
+    side_effects: bool = True,
+    commit_guard: Optional[Callable[[], ContextManager[bool]]] = None,
 ) -> Optional[Path]:
     """Build and atomically write `output/execution_queue.json`.
 
@@ -635,15 +646,45 @@ def emit_execution_queue(
     (CONSTRAINT #6) so a best-effort caller in the advisory loop is never
     destabilised by this bridge.  ``macro_dto`` is forwarded to
     ``build_execution_queue`` (see its docstring for the resolution order).
+
+    ``side_effects=False`` writes the queue file but skips the ntfy push and
+    its ``execution_queue_notified.json`` sidecar, and runs the risk gate
+    without alerts or block-log writes (the daemon's shadow queue, step 5.2).
+
+    ``commit_guard`` is the daemon's primary-mode run-ownership check (step
+    5.3, ``pipeline.agentic_queue``). It is checked before the build (so a
+    run that already lost ownership fires no risk-gate alert) and held around
+    the final rename; when it yields False nothing is replaced, no push is
+    sent, and ``None`` is returned. ``None`` (every other caller) changes
+    nothing.
     """
     resolved_mode = _resolve_mode(mode)
     if resolved_mode == "off":
         return None
 
+    if commit_guard is not None:
+        try:
+            with commit_guard() as _owns:
+                still_owner = bool(_owns)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("queue_builder: ownership check failed (%s); not emitting", exc)
+            return None
+        if not still_owner:
+            logger.warning(
+                "queue_builder: not emitting -- the writing run no longer owns the queue"
+            )
+            return None
+
     try:
-        payload = build_execution_queue(
-            run_result, mode=resolved_mode, config=config, now=now, macro_dto=macro_dto,
-        )
+        if side_effects:
+            payload = build_execution_queue(
+                run_result, mode=resolved_mode, config=config, now=now, macro_dto=macro_dto,
+            )
+        else:
+            payload = build_execution_queue(
+                run_result, mode=resolved_mode, config=config, now=now, macro_dto=macro_dto,
+                side_effects=False,
+            )
         if output_dir is None:
             from settings import settings
             output_dir = Path(settings.OUTPUT_DIR)
@@ -652,7 +693,19 @@ def emit_execution_queue(
         path = output_dir / _QUEUE_FILENAME
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        if commit_guard is None:
+            tmp.replace(path)
+        else:
+            with commit_guard() as _allowed:
+                if _allowed:
+                    tmp.replace(path)
+            if not _allowed:
+                tmp.unlink(missing_ok=True)
+                logger.warning(
+                    "queue_builder: execution queue not written -- the writing run "
+                    "lost ownership during the build"
+                )
+                return None
         logger.info(
             "Execution queue written (mode=%s, intents=%d, placeable=%d) → %s",
             resolved_mode, payload["n_intents"], payload["n_placeable"], path,
@@ -660,6 +713,9 @@ def emit_execution_queue(
     except Exception as exc:
         logger.warning("queue_builder: failed to emit execution queue (%s); skipping", exc)
         return None
+
+    if not side_effects:
+        return path
 
     try:
         _notify_new_intents(payload, output_dir)

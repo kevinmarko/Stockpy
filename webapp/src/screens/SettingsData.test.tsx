@@ -55,7 +55,7 @@ const mockStatus: AutomationStatus = {
     reason: null,
   },
   advisory_only: true,
-  alpaca_paper: true,
+  paper_trading: true,
   dry_run: true,
   errors: {
     entries: [],

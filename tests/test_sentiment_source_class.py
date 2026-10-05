@@ -56,14 +56,13 @@ class TestClassifySource:
         with patch("settings.settings.SENTIMENT_COMMENT_SOURCES", "reddit,discord"):
             assert classify_source("discord") == "comment"
 
-    def test_reddit_removed_from_comment_sources_falls_through_to_news(self):
-        """'reddit' is also a member of the default SENTIMENT_SOURCES
-        fan-out (the full ingested-source list), so once it's carved out of
-        SENTIMENT_COMMENT_SOURCES it correctly falls through to 'news' --
-        SENTIMENT_COMMENT_SOURCES only ever narrows the comment subset of
-        an already-recognized source, it doesn't gate recognition itself."""
+    def test_reddit_removed_from_comment_sources_falls_through_to_unknown(self):
+        """The Reddit source was removed 2026-09, so 'reddit' is no longer in
+        the default SENTIMENT_SOURCES fan-out; once it's carved out of
+        SENTIMENT_COMMENT_SOURCES a historical 'reddit' audit row is
+        genuinely unclassified -- 'unknown', never silently 'news'."""
         with patch("settings.settings.SENTIMENT_COMMENT_SOURCES", "discord"):
-            assert classify_source("reddit") == "news"
+            assert classify_source("reddit") == "unknown"
 
     def test_comment_source_with_no_other_classification_falls_through_to_unknown(self):
         """A name that's ONLY ever recognized via SENTIMENT_COMMENT_SOURCES
@@ -73,7 +72,7 @@ class TestClassifySource:
         with patch("settings.settings.SENTIMENT_COMMENT_SOURCES", "reddit"):
             assert classify_source("stocktwits") == "unknown"
 
-    def test_empty_comment_sources_setting_reddit_still_news(self):
+    def test_empty_comment_sources_setting_reddit_is_unknown(self):
         with patch("settings.settings.SENTIMENT_COMMENT_SOURCES", ""):
-            assert classify_source("reddit") == "news"
+            assert classify_source("reddit") == "unknown"
             assert classify_source("stocktwits") == "unknown"

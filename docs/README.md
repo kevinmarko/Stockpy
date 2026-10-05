@@ -16,7 +16,7 @@ The load-bearing docs also listed in CLAUDE.md's "Key documentation files" table
 |------|---------|
 | [`architecture.md`](architecture.md) | Mermaid data-flow diagram (Engines → DTOs → Signals → Strategy → Advisory → Broker [quarantined]) |
 | [`architecture/`](architecture/) | Per-module architecture reference, split by subsystem — see its own files below |
-| [`signals/README.md`](signals/README.md) | Index of all 17 registered `SignalModule` implementations, plus related non-module docs |
+| [`signals/README.md`](signals/README.md) | Index of all 18 registered `SignalModule` implementations, plus related non-module docs |
 | [`known_issues/README.md`](known_issues/README.md) | Index of 28 dated production-issue write-ups (fixed / resolved / mitigated) |
 | [`incident_log.md`](incident_log.md) | Template + log for production incidents (referenced by RUNBOOK.md §6) |
 | [`HOW_TO_GUIDE.md`](HOW_TO_GUIDE.md) | End-user guide for every platform feature |
@@ -35,9 +35,9 @@ The load-bearing docs also listed in CLAUDE.md's "Key documentation files" table
 | [`data-layer.md`](architecture/data-layer.md) | `config.py`, `dto_models.py`, `data_engine.py`, market data, Robinhood client/portfolio/orders, historical store, brokerage credentials |
 | [`signal-engines.md`](architecture/signal-engines.md) | `processing_engine.py`, `macro_engine.py`, HMM regime, `technical_options_engine.py`, `forecasting_engine.py`, `strategy_engine.py`, `sizing/` |
 | [`simulation-eval-reporting.md`](architecture/simulation-eval-reporting.md) | `simulation_engine.py`, `universe_engine.py`, `research_engine.py`, `evaluation_engine.py`, `transactions_store.py`, reporting |
-| [`execution.md`](architecture/execution.md) | `execution/cost_model.py`, `broker_base.py`, `alpaca_broker.py`, `kill_switch.py`, `risk_gate.py`, `order_manager.py`, `queue_builder.py`, `compose.py` — plus the full options-desk `pilots/*.py` block (13+ modules: risk/Greeks, delta hedging, vol surface, scenario matrix, earnings crush, unusual options flow, alerts, HAR-RV, vol mispricing, gamma scalping, dispersion, 0DTE, VPIN, SOR, LOB, GEX, copula stat-arb) and `ml/drl_market_maker.py` |
+| [`execution.md`](architecture/execution.md) | `execution/cost_model.py`, `broker_base.py`, `fmp_paper_broker.py`, `broker_selection.py`, `kill_switch.py`, `risk_gate.py`, `order_manager.py`, `queue_builder.py`, `compose.py` — plus the full options-desk `pilots/*.py` block (13+ modules: risk/Greeks, delta hedging, vol surface, scenario matrix, earnings crush, unusual options flow, alerts, HAR-RV, vol mispricing, gamma scalping, dispersion, 0DTE, VPIN, SOR, LOB, GEX, copula stat-arb) and `ml/drl_market_maker.py` |
 | [`observability-and-apis.md`](architecture/observability-and-apis.md) | `observability/*`, `api/state_api.py`, `api/control_api.py`, `api/pilots_api.py`, `llm/status_store.py`, `investyo_mcp_server.py` |
-| [`webapp-and-gui.md`](architecture/webapp-and-gui.md) | `webapp/` (Pilots PWA), `api/data_api.py`, `api/metrics_api.py`, the daemon runtime, `shared/` (live GUI-support modules), `legacy/streamlit_command_center/` (decommissioned Command Center) |
+| [`webapp-and-gui.md`](architecture/webapp-and-gui.md) | `webapp/` (Pilots PWA), `api/data_api.py`, `api/metrics_api.py`, the daemon runtime, `shared/` (live backend modules); notes the Streamlit desktop app's deletion (2026-09) |
 | [`validation-and-signals.md`](architecture/validation-and-signals.md) | `validation/purged_cv.py`, `metrics.py`, `harness.py`, `stress_scenarios.py`, the `signals/` package |
 | [`ml-and-reports.md`](architecture/ml-and-reports.md) | `ml/` pipeline, `reports/*.html.j2` templates, `ai_verification_prompts.py` |
 | [`testing.md`](architecture/testing.md) | Index of every file under `tests/` and what each covers |

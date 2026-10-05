@@ -21,7 +21,7 @@ Covers:
 - The PUT endpoint's dangerous-key confirmation gate (shared with every other
   /settings/* editor via _validate_and_write_payload) is genuinely enforced,
   not bypassable through this new write scope.
-- Domains: all 14 domains present and valid; pilots/settings_domains.py's
+- Domains: all 13 domains present and valid; pilots/settings_domains.py's
   _OVERRIDE_DOMAINS carries no stale/fabricated key.
 """
 
@@ -140,10 +140,12 @@ class TestSettingsReferenceEndpoint:
         # DIAGNOSTIC_FLAG_REASONS / DANGEROUS_KEYS / WRITE_GATE_REASONS
         # respectively), but its own dedicated editor precedes feature-flags
         # in _build_editable_at_index()'s editor list, so it wins.
-        assert fields["ETF_TRANSMISSION_ENABLED"]["editable_at"] == "/settings/etf-transmission"
-        assert fields["CACHE_LONG_SHORT_WRITES_ENABLED"]["editable_at"] == "/settings/cache-long-short"
+        assert fields["SECTOR_HEAT_ENABLED"]["editable_at"] == "/settings/sentiment"
         assert fields["PAPER_BROKER_WRITES_ENABLED"]["editable_at"] == "/settings/paper-broker"
         assert fields["FMP_API_KEY"]["editable_at"] is None  # Secret, not in any editor
+        # ETF transmission was archived (step 4d) and its settings fields
+        # were retired in step 4f, so they no longer appear at all.
+        assert "ETF_TRANSMISSION_ENABLED" not in fields
 
     def test_no_no_op_promoted_to_tunables(self):
         """Guardrail: prevent accidental promotion of no_op settings to editable tunables."""
@@ -154,7 +156,8 @@ class TestSettingsReferenceEndpoint:
             data = json.load(f)
 
         no_ops = set(data.get("no_op", []))
-        assert "OPTIONS_EARNINGS_CRUSH_ENABLED" in no_ops
+        # A real no_op field, so this proves the artifact actually loaded.
+        assert "PROMPT_MAX_CHARS" in no_ops
 
         tunable_keys = set(pilots_api._TUNABLE_INDEX.keys())
         overlap = tunable_keys & no_ops
@@ -197,7 +200,8 @@ class TestSettingsReferenceEndpoint:
             resp = client.get("/settings/reference")
         assert resp.status_code == 200
         fields = {f["key"]: f for f in resp.json()["fields"]}
-        assert fields["OPTIONS_EARNINGS_CRUSH_ENABLED"]["liveness"]["applies"] == "no_effect"
+        assert fields["PROMPT_MAX_CHARS"]["liveness"]["applies"] == "no_effect"
+        assert fields["PROMPT_MAX_CHARS"]["writable"] is False
 
     def test_writable_matches_reference_write_index_for_every_field(self):
         """`writable` on every field in the GET response must agree exactly
@@ -248,19 +252,29 @@ class TestReferenceWriteIndexDerivation:
         no_op_keys = settings_meta.load_liveness().get("no_op", frozenset())
         write_keys = set(pilots_api._REFERENCE_WRITE_INDEX.keys())
         assert not (write_keys & no_op_keys)
-        assert "OPTIONS_EARNINGS_CRUSH_ENABLED" not in write_keys
 
-    def test_contains_the_newly_promoted_options_desk_and_circuit_breaker_flags(self):
-        """A representative sample of real, actively-read boolean flags this
-        fix was specifically built to expose -- confirms the write index isn't
-        accidentally empty or scoped too narrowly."""
+    def test_a_boolean_no_op_is_excluded_by_the_derivation(self, monkeypatch):
+        """No real boolean no_op field is left after the 2026-09 settings trim
+        (step 4f), so feed the derivation a liveness artifact that marks a
+        real boolean as no_op and confirm it drops out."""
+        real = settings_meta.load_liveness()
+        fake = dict(real)
+        fake["no_op"] = frozenset(real.get("no_op", frozenset())) | {"NEWS_HISTORY_CAPTURE_ENABLED"}
+        monkeypatch.setattr(settings_meta, "load_liveness", lambda *a, **k: fake)
+        index = pilots_api._build_reference_write_index()
+        assert "NEWS_HISTORY_CAPTURE_ENABLED" not in index
+        assert "SECTOR_HEAT_ENABLED" in index
+
+    def test_contains_representative_live_boolean_flags(self):
+        """A representative sample of real, actively-read boolean flags --
+        confirms the write index isn't accidentally empty or scoped too
+        narrowly. (The options-desk/circuit-breaker flags this used to list
+        were retired in step 4f.)"""
         for key in (
-            "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
-            "OPTIONS_AUTO_EXIT_ENABLED",
-            "OPTIONS_DELTA_HEDGE_ENABLED",
-            "OPTIONS_0DTE_ENABLED",
-            "CIRCUIT_BREAKER_ENABLED",
-            "MULTI_BROKER_GATEWAY_ENABLED",
+            "SECTOR_HEAT_ENABLED",
+            "NEWS_HISTORY_CAPTURE_ENABLED",
+            "PAPER_BROKER_WRITES_ENABLED",
+            "LIVE_TRADE_EXECUTION_ENABLED",
         ):
             assert key in pilots_api._REFERENCE_WRITE_INDEX, f"{key} missing from _REFERENCE_WRITE_INDEX"
 
@@ -300,11 +314,18 @@ class TestSettingsReferenceWrite:
         assert body["rejected"]["FMP_API_KEY"] == "unknown_key"
         assert not body["written"]
 
-    def test_no_op_field_rejected_as_unknown_key(self):
-        resp = _put_reference({"OPTIONS_EARNINGS_CRUSH_ENABLED": True})
+    def test_no_op_field_rejected_as_unknown_key(self, monkeypatch):
+        """Simulate a boolean no_op (none is left after step 4f) by building
+        the write index under a liveness artifact that marks one as no_op."""
+        real = settings_meta.load_liveness()
+        fake = dict(real)
+        fake["no_op"] = frozenset(real.get("no_op", frozenset())) | {"NEWS_HISTORY_CAPTURE_ENABLED"}
+        monkeypatch.setattr(settings_meta, "load_liveness", lambda *a, **k: fake)
+        monkeypatch.setattr(pilots_api, "_REFERENCE_WRITE_INDEX", pilots_api._build_reference_write_index())
+        resp = _put_reference({"NEWS_HISTORY_CAPTURE_ENABLED": True})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["rejected"]["OPTIONS_EARNINGS_CRUSH_ENABLED"] == "unknown_key"
+        assert body["rejected"]["NEWS_HISTORY_CAPTURE_ENABLED"] == "unknown_key"
         assert not body["written"]
 
     def test_dangerous_field_requires_confirmation(self):

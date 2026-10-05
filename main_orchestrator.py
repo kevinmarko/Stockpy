@@ -1,4 +1,4 @@
-"""Async master orchestrator. Runs the full cycle: concurrent data fetch, run_pipeline (macro -> options -> processing -> forecasting -> strategy), schema validation, HTML report + Plotly chart, JSON payload, and gated broker execution (only when Alpaca credentials are configured). Supports engine reuse via EngineContext, a heartbeat watchdog, and hot-path parallelization; raises PipelineFatalError (not sys.exit) on a fatal cycle so a long-lived daemon caller survives a crashed cycle."""
+"""Async master orchestrator. Runs the full cycle: concurrent data fetch, run_pipeline (macro -> options -> processing -> forecasting -> strategy), schema validation, HTML report + Plotly chart, JSON payload, and gated paper-broker execution on the local FMP paper ledger. Supports engine reuse via EngineContext, a heartbeat watchdog, and hot-path parallelization; raises PipelineFatalError (not sys.exit) on a fatal cycle so a long-lived daemon caller survives a crashed cycle."""
 
 # =============================================================================
 # MODULE: MASTER ORCHESTRATOR
@@ -47,13 +47,14 @@ import os
 import sys
 import json
 import logging
+import math
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
-from typing import Optional, Any
+from typing import Any, Dict, Optional
 
 # ---------------------------------------------------------------------------
 # python-dotenv import (loader is INVOKED inside main(), NOT at module top)
@@ -72,7 +73,7 @@ from settings import ENV_PATH, settings
 from data_engine import DataEngine, MockDataEngine
 from processing_engine import ProcessingEngine
 from macro_engine import MacroEngine
-from technical_options_engine import TechnicalOptionsEngine
+from volatility.garch import GarchVolatilityEstimator
 from forecasting_engine import ForecastingEngine
 from forecasting.forecast_tracker import ForecastTracker
 from strategy_engine import StrategyEngine
@@ -82,7 +83,6 @@ from data.robinhood_portfolio import fetch_account_snapshot, account_snapshot_to
 from allocators.dual_momentum import DualMomentumAllocator
 from signals import global_registry
 from signals.base import SignalContext
-from volatility.iv_engine import IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp
 from execution.kill_switch import GlobalKillSwitch
 from diagnostics_and_visuals import (
     telemetry,
@@ -183,18 +183,18 @@ class PipelineFatalError(RuntimeError):
 # their literal text, and this instrumentation is deliberately additive, not
 # a replacement for it.
 #
-# "macro_options" combines the "Routing data through Macro Engine..." and
-# "Routing data through Technical Options Engine..." banners into one slice:
-# the Macro Engine step itself has no per-ticker loop, so the whole slice's
-# advance_symbol() ticks come from the options/IV ThreadPoolExecutor loop
-# that immediately follows.
+# "macro_volatility" combines the "Routing data through Macro Engine..." and
+# "Routing data through Trend & Volatility Engine..." banners into one slice
+# (MacroStep + TrendVolatilityStep): the Macro Engine step itself has no
+# per-ticker loop, so the whole slice's advance_symbol() ticks come from the
+# GARCH/trend-indicator ThreadPoolExecutor loop that immediately follows.
 #
 # "execution" combines the advisory-overlay evaluation loop (the last
 # per-symbol ThreadPoolExecutor loop in the cycle) with report generation,
 # JSON payload export, and broker order submission -- none of which iterate
 # per-ticker, so this slice's ticks likewise come entirely from one loop
 # (_eval_one).
-_PROGRESS_STAGES = ["data", "macro_options", "processing", "forecasting", "strategy", "execution"]
+_PROGRESS_STAGES = ["data", "macro_volatility", "processing", "forecasting", "strategy", "execution"]
 
 
 # =============================================================================
@@ -337,8 +337,7 @@ class EngineContext:
     construction-site substitution.
     """
     macro_engine: Optional[MacroEngine] = None
-    technical_options_engine: Optional[TechnicalOptionsEngine] = None
-    iv_history_store: Optional[IVHistoryStore] = None
+    garch_estimator: Optional[GarchVolatilityEstimator] = None
     processing_engine: Optional[ProcessingEngine] = None
     forecasting_engine: Optional[ForecastingEngine] = None
     strategy_engine: Optional[StrategyEngine] = None
@@ -366,8 +365,7 @@ class EngineContext:
         _tracker = ForecastTracker()
         return cls(
             macro_engine=MacroEngine(data_engine=data_engine),
-            technical_options_engine=TechnicalOptionsEngine(),
-            iv_history_store=IVHistoryStore(),
+            garch_estimator=GarchVolatilityEstimator(),
             processing_engine=ProcessingEngine(),
             forecasting_engine=ForecastingEngine(tracker=_tracker),
             strategy_engine=StrategyEngine(),
@@ -383,11 +381,11 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
 ) -> tuple:
     """
     Synchronous execution of the quantitative engines:
-    Macro -> Technical Options -> Processing -> Forecasting -> Strategy & Evaluation.
+    Macro -> Trend & Volatility -> Processing -> Forecasting -> Strategy & Evaluation.
     """
     from pipeline.context import RunContext
     from pipeline.runner import PipelineRunner
-    from pipeline.production_steps import OptionsAnalysisStep, ProcessingStep, ForecastingStep, StrategyEvalStep
+    from pipeline.production_steps import MacroStep, TrendVolatilityStep, ProcessingStep, ForecastingStep, StrategyEvalStep
 
     ctx = RunContext(
         force_account=False,
@@ -411,7 +409,8 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     ctx.context_extras["robinhood_positions"] = robinhood_positions
 
     runner = PipelineRunner([
-        OptionsAnalysisStep(),
+        MacroStep(),
+        TrendVolatilityStep(),
         ProcessingStep(),
         ForecastingStep(),
         StrategyEvalStep()
@@ -461,6 +460,66 @@ def _kelly_target_qty(kelly_weight: float, equity: float, price: float) -> float
     return round((kelly_weight * equity) / price, 6)
 
 
+# strategy_id stamped on every order the pipeline itself submits.
+PIPELINE_STRATEGY_ID = "main_pipeline"
+# Action Signals that close an open pipeline position. strategy_engine emits
+# STRONG BUY / BUY / HOLD / RISK REDUCE (RISK REDUCE is its fail-closed
+# immediate-exit instruction); it never emits SELL or TRIM, so before
+# RISK REDUCE was added here the SELL branch could not fire on this pipeline.
+EXIT_SIGNALS = frozenset({"SELL", "TRIM", "RISK REDUCE", "AVOID"})
+
+
+def _probe_weight_for_row(row: Any, base_weight: float) -> tuple:
+    """Paper cold-start probe weight for one zero-Kelly BUY row, or 0.0 + a reason.
+
+    The probe only stands in for a Kelly Target that is zero because Kelly has
+    not scaled in yet (no closed trades). It must never override a zero the
+    risk logic set on purpose, so it is withheld when:
+      * Dual Momentum picked the safe asset and this is one of its risky assets
+        (pipeline/production_steps.py zeroes their Kelly Target);
+      * the HMM regime multiplier or the meta-label composite is <= 0, or is
+        missing/NaN (fail closed: an unknown risk opinion is not a yes).
+    It is scaled by the regime multiplier, like a real Kelly weight would be.
+    Returns ``(weight, reason)``; reason is None when the probe applies.
+    """
+    def _num(key: str) -> float:
+        try:
+            v = float(row.get(key))
+        except (TypeError, ValueError):
+            return float("nan")
+        return v
+
+    dm_signal = str(row.get("DualMomentum_Signal", "") or "")
+    safe_asset = str(getattr(settings, "DUAL_MOMENTUM_SAFE_ASSET", "") or "")
+    risky = {str(s).upper() for s in (getattr(settings, "DUAL_MOMENTUM_RISKY_ASSETS", None) or [])}
+    if safe_asset and dm_signal == safe_asset and str(row.get("Symbol", "")).upper() in risky:
+        return 0.0, "dual_momentum_safe_asset"
+    regime = _num("Regime_Multiplier")
+    if not (regime > 0):  # False for NaN too
+        return 0.0, "regime_multiplier_not_positive"
+    meta = _num("Meta_Label_Composite")
+    if not (meta > 0):
+        return 0.0, "meta_label_not_positive"
+    return base_weight * min(regime, 1.0), None
+
+
+def _safe_decision_context(builder_name: str, symbol: str, *args: Any, **kwargs: Any) -> Optional[dict]:
+    """Run ``execution.trade_context.<builder_name>``; any error -> None.
+
+    Decision context is telemetry. It is built after the order's trading
+    fields are final and must never block, delay or resize an order, so it
+    fails open for the order -- including an import failure, which is why
+    the module is imported here rather than with the broker imports.
+    """
+    try:
+        from execution import trade_context
+        ctx = getattr(trade_context, builder_name)(*args, **kwargs)
+        return ctx if isinstance(ctx, dict) else None
+    except Exception as exc:  # noqa: BLE001
+        telemetry.warning("Trade decision context unavailable for %s: %s", symbol, exc)
+        return None
+
+
 async def _execute_broker_orders(
     final_df: "pd.DataFrame",
     dry_run: bool,
@@ -472,12 +531,16 @@ async def _execute_broker_orders(
 
     Design constraints
     ------------------
-    * Never called when Alpaca credentials are absent (checked by caller).
+    * The only automated broker is the local FMP paper ledger
+      (``FMPPaperBroker``). When the run is going live (``PAPER_TRADING=False``
+      and ``ADVISORY_ONLY=False``) ``resolve_broker_backend()`` returns None and
+      this places NO orders: real money moves only through the Robinhood queue.
     * Errors are logged as ERROR and never propagate — broker execution is
       best-effort; the analysis pipeline's value must never be held hostage
       to broker connectivity.
-    * Only BUY signals with Kelly Target > 0 generate new orders; SELL/TRIM
-      signals close existing positions.
+    * Only BUY signals with Kelly Target > 0 generate new orders (on the paper
+      ledger, PAPER_PIPELINE_PROBE_WEIGHT stands in for a zero Kelly Target);
+      EXIT_SIGNALS (SELL/TRIM/RISK REDUCE/AVOID) close existing positions.
     * Kill-switch active → ``KillSwitchActiveError`` is raised inside
       ``submit_order_with_idempotency``; caught here and logged as CRITICAL.
     * ``dry_run=True`` logs intent but never reaches the broker network.
@@ -493,45 +556,57 @@ async def _execute_broker_orders(
         )
         return
     try:
-        from execution.alpaca_broker import AlpacaBroker
         from execution.broker_base import OrderIntent, OrderPriority, OrderSide, OrderType
         from execution.kill_switch import KillSwitchActiveError
         from execution.order_manager import OrderManager
         from execution.priority_queue import LeakyBucketPriorityQueue
         from execution.risk_gate import PreTradeRiskGate, RiskContext
-        from transactions_store import TransactionsStore
 
         from execution.broker_selection import resolve_broker_backend
 
         # resolve_broker_backend() is the single source of truth for "which
         # broker should actually be used" -- shared with
-        # robinhood_execution_mcp.py::_get_broker() so the two call sites
-        # can never drift on the fmp_paper/live-trading safety guard. It
-        # logs CRITICAL + fires an alert and forces 'alpaca' internally
-        # when BROKER_BACKEND='fmp_paper' while this run is genuinely going
-        # live (ADVISORY_ONLY=False and ALPACA_PAPER=False).
+        # broker_live_execution_mcp.py::_get_broker() so the two call sites
+        # can never drift on the live-trading safety guard. None means the run
+        # is going live, and the automated pipeline has no live broker.
         broker_backend = resolve_broker_backend()
+        if broker_backend is None:
+            return
+        # The local FMP paper ledger is not an external broker: it has no
+        # market hours of its own, it IS the position ledger, and it also holds
+        # the operator's manual Quick Trade positions. Three rules follow.
 
-        if broker_backend == "fmp_paper":
-            from execution.fmp_paper_broker import FMPPaperBroker
-            broker = FMPPaperBroker()
-        else:
-            broker = AlpacaBroker()
-        ts_store = TransactionsStore()
+        # Rule 1: only trade during regular US market hours. The paper broker
+        # fills market orders at whatever quote is current, so an hourly
+        # daemon cycle at 06:00 or 19:00 ET would otherwise fill at thin
+        # pre/after-market quotes no real market order would get.
+        # Holiday/early-close aware (FMP market hours, NYSE-calendar fallback).
+        from engine.advisory_agent import is_us_market_open_now
+        if not is_us_market_open_now(datetime.now(timezone.utc)):
+            telemetry.info(
+                "fmp_paper: US market closed (outside hours or holiday); skipping "
+                "pipeline paper-order submission this cycle."
+            )
+            return
+        from execution.fmp_paper_broker import FMPPaperBroker
+        broker = FMPPaperBroker()
         risk_gate = PreTradeRiskGate()
         om = OrderManager(broker, dry_run=dry_run, risk_gate=risk_gate)
 
-        # --- Reconcile before submitting new orders ---
-        recon_report = await om.reconcile_state(ts_store)
-        if recon_report.has_drift:
-            telemetry.critical(
-                "Broker state drift detected before order submission — "
-                "review reconciliation report before trusting signals."
-            )
+        # Rule 2: no broker reconciliation. It compares an EXTERNAL broker
+        # against the internal trades ledger; the paper store IS the ledger,
+        # and the trades ledger only receives paper rows at close (via the
+        # bridge), so every open paper position would read as "drift".
 
         # --- Fetch live positions + account for risk-gate context ---
         open_pos = await broker.get_open_positions()
-        open_symbols = {p.symbol: p.qty for p in open_pos}
+        # Rule 3: on the paper ledger, the pipeline only buys/sells against
+        # its OWN positions (strategy_id == PIPELINE_STRATEGY_ID). Manual
+        # Quick Trade positions share the ledger; a SELL signal must never
+        # close them, and holding one manually must not block the pipeline
+        # from opening its own. The risk gate still sees every position.
+        own_pos = [p for p in open_pos if p.strategy_id == PIPELINE_STRATEGY_ID]
+        open_symbols = {p.symbol: p.qty for p in own_pos}
         try:
             account = await broker.get_account()
         except Exception:
@@ -587,6 +662,38 @@ async def _execute_broker_orders(
             )
             log_fn(result)
 
+        # Paper cold-start probe (settings.PAPER_PIPELINE_PROBE_WEIGHT). Active
+        # only while the pipeline has fewer closed paper trades than Kelly
+        # needs to scale in; after that, measured Kelly decides (a measured
+        # zero stays zero). Probe exposure is capped together with the
+        # pipeline's existing exposure at MAX_PORTFOLIO_GROSS.
+        probe_weight = float(getattr(settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.0) or 0.0)
+        probe_skips: Dict[str, int] = {}
+        probe_gross_left = 0.0
+        if probe_weight > 0:
+            from sizing.kelly import MIN_TRADES_REQUIRED
+            try:
+                from data.paper_account_store import PaperAccountStore
+                n_closed = PaperAccountStore(readonly=True).count_closed_trades(PIPELINE_STRATEGY_ID)
+            except Exception as exc:  # noqa: BLE001 -- unknown count: fail closed (no probe)
+                telemetry.warning("Probe disabled this cycle: closed-trade count unavailable (%s)", exc)
+                n_closed = None
+            equity_now = float(account.equity) if account is not None else 0.0
+            if n_closed is None or n_closed >= MIN_TRADES_REQUIRED or equity_now <= 0:
+                if n_closed is not None and n_closed >= MIN_TRADES_REQUIRED:
+                    telemetry.info(
+                        "Probe off: %d closed pipeline trades >= %d; measured Kelly sizes buys.",
+                        n_closed, MIN_TRADES_REQUIRED,
+                    )
+                probe_weight = 0.0
+            else:
+                existing = sum(
+                    abs(float(p.market_value)) for p in own_pos
+                    if p.market_value is not None and math.isfinite(float(p.market_value))
+                )
+                gross_cap = float(getattr(settings, "MAX_PORTFOLIO_GROSS", 2.0) or 0.0)
+                probe_gross_left = max(0.0, gross_cap - existing / equity_now)
+
         now = datetime.now(timezone.utc)
         for row in final_df.to_dict("records"):
             symbol = str(row.get("Symbol", "")).upper()
@@ -595,6 +702,24 @@ async def _execute_broker_orders(
 
             if not symbol:
                 continue
+
+            # Records whether the probe sized this BUY (decision context only).
+            used_probe = False
+
+            # Paper-only cold-start probe (settings.PAPER_PIPELINE_PROBE_WEIGHT):
+            # with no closed pipeline trades Kelly scales every target to 0,
+            # which would stop the pipeline ever collecting the closed trades
+            # Kelly needs. A positive Kelly Target always wins.
+            if "BUY" in signal and kelly <= 0 and probe_weight > 0 and symbol not in open_symbols:
+                w, why = _probe_weight_for_row(row, probe_weight)
+                if why is None and w > probe_gross_left:
+                    w, why = 0.0, "gross_cap"
+                if why is None and w > 0:
+                    kelly = w
+                    probe_gross_left -= w
+                    used_probe = True
+                else:
+                    probe_skips[why] = probe_skips.get(why, 0) + 1
 
             try:
                 if "BUY" in signal and kelly > 0 and symbol not in open_symbols:
@@ -618,8 +743,8 @@ async def _execute_broker_orders(
                     # target_qty is the pre-portfolio-cap, pre-Dual-Momentum sizing
                     # target implied by Kelly_Target_Post_Regime -- the per-name-
                     # capped weight strategy_engine.py computes (Kelly cap,
-                    # MAX_POSITION_WEIGHT, regime multiplier, meta-label composite,
-                    # ETF-transmission multiplier all already applied) BEFORE the
+                    # MAX_POSITION_WEIGHT, regime multiplier, meta-label composite
+                    # all already applied) BEFORE the
                     # Dual Momentum safe-asset override and the cycle-wide portfolio
                     # gross cap overwrite "Kelly Target" — both of which only ever
                     # reduce weight further. Falls back to `kelly` (today's exact
@@ -635,13 +760,23 @@ async def _execute_broker_orders(
                     target_weight = float(row.get("Kelly_Target_Post_Regime", kelly) or kelly)
                     target_qty_value = _kelly_target_qty(target_weight, equity, price)
                     intent = OrderIntent(
-                        strategy_id="main_pipeline",
+                        strategy_id=PIPELINE_STRATEGY_ID,
                         symbol=symbol,
                         side=OrderSide.BUY,
                         qty=buy_qty,
                         order_type=OrderType.MARKET,
                         priority=OrderPriority.NORMAL,
                         target_qty=target_qty_value,
+                    )
+                    # Attached after the trading fields are final; inert for
+                    # sizing, the risk gate and the client_order_id.
+                    intent.decision_context = _safe_decision_context(
+                        "build_entry_context", symbol, row,
+                        sizing_source="probe" if used_probe else "kelly",
+                        effective_weight=kelly,
+                        equity=equity,
+                        price=price,
+                        macro_dto=macro_dto,
                     )
 
                     def _log_buy(result, symbol=symbol, buy_qty=buy_qty, kelly=kelly,
@@ -658,7 +793,7 @@ async def _execute_broker_orders(
                     else:
                         await _submit_and_log(intent, _log_buy)
 
-                elif signal in ("SELL", "TRIM") and symbol in open_symbols:
+                elif signal in EXIT_SIGNALS and symbol in open_symbols:
                     sell_qty = abs(open_symbols[symbol])
                     # target_qty intentionally equals qty here, not a remaining gap:
                     # a full position close has no distinct "target" size to diverge
@@ -666,13 +801,18 @@ async def _execute_broker_orders(
                     # unlike the BUY case above which now has a genuine pre-cap
                     # (Kelly_Target_Post_Regime) vs. post-cap (Kelly Target) distinction.
                     intent = OrderIntent(
-                        strategy_id="main_pipeline",
+                        strategy_id=PIPELINE_STRATEGY_ID,
                         symbol=symbol,
                         side=OrderSide.SELL,
                         qty=sell_qty,
                         order_type=OrderType.MARKET,
                         priority=OrderPriority.URGENT,
                         target_qty=sell_qty,
+                    )
+                    # Real exit trigger (close_reason) + exit row context.
+                    intent.decision_context = _safe_decision_context(
+                        "build_exit_context", symbol, row,
+                        signal=signal, held_qty=sell_qty,
                     )
 
                     def _log_sell(result, symbol=symbol, sell_qty=sell_qty):
@@ -700,6 +840,12 @@ async def _execute_broker_orders(
         # Drain the priority queue (URGENT before NORMAL, paced by the leaky
         # bucket) — a no-op loop when the queue is disabled (pending_queue is
         # None) since nothing was ever pushed to it above.
+        if probe_skips:
+            telemetry.info(
+                "Paper probe withheld this cycle: %s",
+                ", ".join(f"{k}={v}" for k, v in sorted(probe_skips.items())),
+            )
+
         if pending_queue is not None:
             while len(pending_queue) > 0:
                 intent, log_fn = await pending_queue.drain_one()
@@ -748,6 +894,7 @@ def _write_state_snapshot(
     macro_kill_switch: Optional[bool] = None,
     hmm_regime_state: Optional[str] = None,
     universe_funnel: Optional[dict] = None,
+    recommendations: Optional[list] = None,
 ) -> None:
     """Persist a JSON state snapshot to OUTPUT_DIR/state_snapshot.json.
 
@@ -779,8 +926,26 @@ def _write_state_snapshot(
     ``main.py``'s advisory path, which doesn't build this dict — orchestrator-
     only, matching ``tests/test_state_snapshot_parity.py``'s existing
     convention for orchestrator-only fields.
+
+    ``recommendations`` (step 5.3) is the cycle's ``engine.advisory``
+    ``Recommendation`` list, passed by ``StateSnapshotStep`` only when
+    ``DAEMON_AGENTIC_QUEUE_MODE=primary`` (main.py then no longer writes its
+    advisory snapshot). When given, every signal also carries the two fields
+    only the advisory writer (``reporting/state_snapshot.py``) had, sourced
+    the same way: ``garch_vol`` from ``key_indicators["garch_vol"]`` and
+    ``suggested_exit_pct`` from ``Recommendation.suggested_exit_pct``. Both are
+    null (never fabricated) for a symbol with no recommendation this cycle.
+    When ``None`` (off/shadow, every other caller) neither key is written, so
+    the file is unchanged.
     """
     import json
+    recs_by_symbol: Optional[dict] = None
+    if recommendations is not None:
+        recs_by_symbol = {}
+        for _rec in recommendations:
+            _rec_sym = str(getattr(_rec, "symbol", "") or "").upper().strip()
+            if _rec_sym:
+                recs_by_symbol[_rec_sym] = _rec
     try:
         signals = []
         held_symbols = set()
@@ -799,7 +964,9 @@ def _write_state_snapshot(
                     "symbol": str(row.get("Symbol", "")),
                     "action": str(row.get("Action Signal", "")),
                     "kelly_target": float(row.get("Kelly Target", 0.0) or 0.0),
-                    "score": float(row.get("Score", 0.0) or 0.0),
+                    # StrategyEngine score; null (never a fabricated 0.0) when
+                    # the symbol was not evaluated this cycle.
+                    "score": _safe_float_or_none(row.get("Score")),
                     "price": float(row.get("Price", 0.0) or 0.0),
                     "shares": shares,
                     "macro_status": str(row.get("Macro Status", "")),
@@ -874,23 +1041,6 @@ def _write_state_snapshot(
                     # per-cycle time budget was exhausted before this symbol
                     # was reached.
                     "google_trends_asvi": _safe_float_or_none(row.get("Google_Trends_ASVI")),
-                    # ETF volatility transmission (Ben-David, Franzoni &
-                    # Moussawi 2018) -- see risk/etf_transmission.py and
-                    # pipeline/production_steps.py::_apply_etf_transmission.
-                    # DIAGNOSTIC ONLY: nothing in scoring/sizing/execution
-                    # reads these. Same NaN-never-fabricated convention as the
-                    # multifactor z-scores above -- NaN -> JSON null when
-                    # settings.ETF_TRANSMISSION_ENABLED is False, the ticker is
-                    # in no covered basket, the holdings fetch failed, the
-                    # ticker is itself an ETF, or the aligned return overlap is
-                    # shorter than the full R2 window.
-                    "etf_ownership_pct": _safe_float_or_none(row.get("ETF_Ownership_Pct")),
-                    "etf_comovement_r2": _safe_float_or_none(row.get("ETF_Comovement_R2")),
-                    # String column: NaN -> None (never the literal text "nan").
-                    "etf_primary_wrapper": (
-                        None if pd.isna(row.get("ETF_Primary_Wrapper"))
-                        else str(row.get("ETF_Primary_Wrapper"))
-                    ),
                     # Task C3 — post-trade evaluation metrics (evaluation_engine.py
                     # EvaluationEngine.evaluate_portfolio()/calculate_edge_ratio()
                     # already compute these into dashboard_df every cycle; they
@@ -938,18 +1088,6 @@ def _write_state_snapshot(
                     # never coerced into a fabricated no-op.
                     "meta_label_composite": _safe_float_or_none(row.get("Meta_Label_Composite")),
                     "regime_multiplier": _safe_float_or_none(row.get("Regime_Multiplier")),
-                    # ETF-arbitrage volatility-transmission derate applied to
-                    # this name's sizing weight (risk/etf_transmission.py,
-                    # composed in sizing/position_sizer.py::size_position step
-                    # 3 alongside regime_multiplier above). null -- never a
-                    # fabricated 1.0 -- when settings.ETF_TRANSMISSION_SIZING_ENABLED
-                    # is False, i.e. the multiplier was never computed at all
-                    # (CONSTRAINT #4). Orchestrator-only: the advisory path
-                    # keeps its own decoupled 5% cap and is not routed through
-                    # size_position(), so it has no source for this field --
-                    # pinned in tests/test_state_snapshot_parity.py's
-                    # ORCHESTRATOR_ONLY_FIELDS.
-                    "etf_transmission_multiplier": _safe_float_or_none(row.get("ETF_Transmission_Multiplier")),
                     "kelly_target_pre_regime": _safe_float_or_none(row.get("Kelly_Target_Pre_Regime")),
                     "kelly_target_post_regime": _safe_float_or_none(row.get("Kelly_Target_Post_Regime")),
                     # Guardrail telemetry (sizing/position_sizer.py) -- did any
@@ -975,6 +1113,17 @@ def _write_state_snapshot(
                     "symbol_rating_consecutive_bad_cycles": _rating_consecutive_cycles(sym),
                     "symbol_rating_excluded": _rating_is_excluded(sym, is_held=shares > 0),
                 })
+                if recs_by_symbol is not None:
+                    _rec = recs_by_symbol.get(sym)
+                    if _rec is None:
+                        signals[-1]["garch_vol"] = None
+                        signals[-1]["suggested_exit_pct"] = None
+                    else:
+                        _ki = getattr(_rec, "key_indicators", None) or {}
+                        signals[-1]["garch_vol"] = _safe_float_or_none(_ki.get("garch_vol"))
+                        signals[-1]["suggested_exit_pct"] = _safe_float_or_none(
+                            getattr(_rec, "suggested_exit_pct", None)
+                        )
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "tickers": tickers,
@@ -1211,8 +1360,10 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
     * ``"data"``    — data-fetch stage only (``AsyncDataFetchStep``);
     * ``"metrics"`` — data-fetch + indicator/forecast/signal precompute
                       (``AsyncDataFetchStep`` + ``RunPipelineStep``);
-    * ``"full"``    — the whole cycle (default, unchanged): data fetch, run
-                      pipeline, broker execution, state snapshot.
+    * ``"full"``    — the whole cycle (default): data fetch, run pipeline,
+                      advisory overlay, agentic queue (off by default, see
+                      ``settings.DAEMON_AGENTIC_QUEUE_MODE``), broker
+                      execution, state snapshot.
 
     ``force`` (default ``True``) bypasses the cross-cycle data-freshness gate.
     Only the daemon's automatic interval timer passes ``force=False``; when it
@@ -1238,6 +1389,8 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
     from pipeline.production_steps import (
         AsyncDataFetchStep,
         RunPipelineStep,
+        AdvisoryOverlayStep,
+        AgenticQueueStep,
         BrokerExecutionStep,
         StateSnapshotStep
     )
@@ -1262,16 +1415,32 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
         steps = [AsyncDataFetchStep()]
     elif mode == "metrics":
         steps = [AsyncDataFetchStep(), RunPipelineStep()]
-    else:  # "full" (default) — unchanged whole cycle
+    else:  # "full" (default) — the whole cycle
+        # AdvisoryOverlayStep and AgenticQueueStep are sync, so the runner
+        # bounds them with PIPELINE_STEP_TIMEOUT_SECONDS; AgenticQueueStep is
+        # a no-op unless DAEMON_AGENTIC_QUEUE_MODE is shadow/primary (step 5.2).
         steps = [
             AsyncDataFetchStep(),
             RunPipelineStep(),
+            AdvisoryOverlayStep(),
+            AgenticQueueStep(),
             BrokerExecutionStep(),
             StateSnapshotStep(),
         ]
 
     runner = AsyncPipelineRunner(steps)
-    await runner.run(ctx, progress)
+    try:
+        await runner.run(ctx, progress)
+    finally:
+        # Step 5.3 run ownership: a sync step that times out keeps running on
+        # its worker thread. Releasing this cycle's agentic-queue token here
+        # (on success AND on failure/timeout) means a still-running
+        # AgenticQueueStep thread can no longer commit the real queue, the
+        # advisory source or watch_state.json. No-op unless the step claimed
+        # a token (DAEMON_AGENTIC_QUEUE_MODE=primary).
+        from pipeline.agentic_queue import close_cycle_queue_writer
+
+        close_cycle_queue_writer(ctx.context_extras)
 
 
     if ctx.dashboard_df is not None:
@@ -1290,58 +1459,6 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
     return getattr(ctx, "macro_dto", None)
 
 
-
-
-async def _cache_long_short_worker() -> None:
-    """Background worker for Cache Long/Short strategy operations.
-
-    Runs every ``settings.CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS`` seconds
-    while ``settings.CACHE_LONG_SHORT_ENABLED`` is True (see ``main()``'s
-    conditional ``asyncio.create_task`` below). Scans open tax lots for TLH
-    opportunities (persisted by the engine itself so
-    ``GET /pilots/cache-long-short/pending-approvals`` can read them without
-    ever importing a heavy engine) and monitors correlation drift for every
-    tracked long position's proxy hedge.
-    """
-    from engine.cache_long_short_engine import CacheLongShortEngine
-    from data.cache_long_short_store import CacheLongShortStore
-
-    interval = settings.CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS
-    try:
-        while True:
-            try:
-                store = CacheLongShortStore()
-                opportunities = CacheLongShortEngine.scan_tlh_opportunities()
-                if opportunities:
-                    logger.info(
-                        "Cache Long/Short: flagged %d TLH opportunit%s",
-                        len(opportunities),
-                        "y" if len(opportunities) == 1 else "ies",
-                    )
-
-                for pos in store.get_open_positions():
-                    if pos.position_type != "long":
-                        continue
-                    proxy = store.get_security_proxy(pos.ticker)
-                    if not proxy:
-                        continue
-                    corr = CacheLongShortEngine.check_correlation_drift(
-                        pos.ticker, proxy["proxy_ticker"]
-                    )
-                    if corr is not None and corr < settings.CACHE_LONG_SHORT_MIN_CORRELATION:
-                        logger.warning(
-                            "Cache Long/Short: %s/%s correlation drifted to %.2f "
-                            "(below %.2f) -- proxy hedge is out of balance",
-                            pos.ticker,
-                            proxy["proxy_ticker"],
-                            corr,
-                            settings.CACHE_LONG_SHORT_MIN_CORRELATION,
-                        )
-            except Exception as e:
-                logger.error(f"Cache Long/Short worker error: {e}")
-            await asyncio.sleep(interval)
-    except asyncio.CancelledError:
-        pass
 
 
 async def main(dry_run: bool = False, strict: bool = False) -> None:
@@ -1365,46 +1482,15 @@ async def main(dry_run: bool = False, strict: bool = False) -> None:
     effective_dry_run = dry_run or settings.DRY_RUN
     if effective_dry_run:
         telemetry.info("DRY-RUN mode active: orders will be logged but NOT submitted.")
-    else:
-        # Preflight Check: Exit gracefully if live execution is requested but broker keys are missing.
-        if not getattr(settings, "ADVISORY_ONLY", True):
-            if not getattr(settings, "ALPACA_API_KEY", None) or not getattr(settings, "ALPACA_SECRET_KEY", None):
-                telemetry.critical("Fatal preflight check: Live broker execution requested but Alpaca API keys are missing.")
-                raise PipelineFatalError("Alpaca API keys are missing for live execution")
 
     _hb_task = asyncio.create_task(_heartbeat(settings.OUTPUT_DIR, interval=60))
-    _cls_task = None
-    if getattr(settings, "CACHE_LONG_SHORT_ENABLED", False):
-        _cls_task = asyncio.create_task(_cache_long_short_worker())
-    
+
     try:
         await _main_body(effective_dry_run, strict=strict)
-
-        # 1b. Manage 0DTE Fast Exits (Profit Target +75%, Stop Loss -30%, 15:45 ET Hard Stop)
-        # Evaluated here so a standalone `python main_orchestrator.py` CLI run
-        # evaluates 0DTE hard stops, since the daemon's own _timer_loop
-        # handles it separately.
-        if getattr(settings, "OPTIONS_0DTE_ENABLED", False) or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False):
-            try:
-                from pilots.zero_dte_engine import manage_0dte_exits
-                _0dte_res = manage_0dte_exits()
-                if _0dte_res.get("executed_count", 0) > 0:
-                    telemetry.info(
-                        "Automated 0DTE options exit lifecycle: %d evaluated, %d executed, %d failed",
-                        _0dte_res.get("evaluated_count", 0),
-                        _0dte_res.get("executed_count", 0),
-                        _0dte_res.get("failed_count", 0),
-                    )
-            except Exception as _0dte_exc:
-                telemetry.debug("0DTE exit lifecycle evaluation skipped: %s", _0dte_exc)
     finally:
         _hb_task.cancel()
-        if _cls_task:
-            _cls_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await _hb_task
-            if _cls_task:
-                await _cls_task
 
 
 if __name__ == "__main__":

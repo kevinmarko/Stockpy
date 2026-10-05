@@ -22,7 +22,9 @@ from data import brokerage_credentials
 from data.historical_store import HistoricalStore
 from data.robinhood_login import (
     LoginJobState,
+    RobinhoodLoginInProgress,
     cancel_login,
+    describe_owner,
     get_login_state,
     start_login,
 )
@@ -34,6 +36,10 @@ def start_connect_job(username: str, password: str) -> LoginJobState:
     """Starts a 'connect' login job for CANDIDATE credentials and arranges
     for RH_USERNAME/RH_PASSWORD to be persisted to ``.env`` the moment (and
     ONLY if) the login actually succeeds.
+
+    Raises :class:`data.robinhood_login.RobinhoodLoginInProgress` (before
+    any watcher is started) when another login job is already running --
+    single-flight, one approval prompt at a time.
     """
     job = start_login("connect", username=username, password=password)
 
@@ -62,8 +68,31 @@ def start_refresh_job() -> LoginJobState:
     """Starts a 'refresh' login job. No credential persistence needed here —
     RH_USERNAME/RH_PASSWORD are already in ``.env``; the worker reads them
     itself and, on success, writes the account snapshot to cache + DB.
+
+    Single-flight: joins an already-running refresh job (same job returned),
+    and raises :class:`data.robinhood_login.RobinhoodLoginInProgress` if a
+    connect job is running.
     """
     return start_login("refresh")
+
+
+def login_in_progress_detail(exc: RobinhoodLoginInProgress) -> str:
+    """Plain-string HTTP 409 detail for a refused start (a string, not a
+    dict, so the webapp's generic error surfacing shows it verbatim). Never
+    includes credential values -- only the running job's id and mode (or,
+    for a login running in ANOTHER process, the lock owner's pid/job/mode/
+    start time from its diagnostic sidecar)."""
+    if exc.job is None:
+        return (
+            f"A Robinhood login is already in progress in another process "
+            f"({describe_owner(exc.owner)}). Approve it in the Robinhood app or "
+            f"wait for it to finish before starting a new {exc.requested_mode} login."
+        )
+    return (
+        f"A Robinhood login is already in progress (job {exc.job.job_id}, "
+        f"mode {exc.job.mode}). Approve it in the Robinhood app or cancel it "
+        f"before starting a new {exc.requested_mode} login."
+    )
 
 
 def serialize_job(job: LoginJobState) -> Dict[str, Any]:
@@ -99,4 +128,6 @@ __all__ = [
     "serialize_job",
     "get_login_state",
     "cancel_login",
+    "RobinhoodLoginInProgress",
+    "login_in_progress_detail",
 ]

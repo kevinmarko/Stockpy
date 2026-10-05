@@ -40,8 +40,6 @@ def _empty(reason: str) -> Dict[str, Any]:
         "command_count": 0,
         "commands": [],
         "strategy_registry": [],
-        "options_strategy_registry": [],
-        "paper_broker_options_strategy_registry": [],
         "reason": reason,
     }
 
@@ -72,8 +70,9 @@ def command_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
         "dead_letters": data.get("dead_letters", []),
         "commands": commands,
         "strategy_registry": data.get("strategy_registry", []),
-        "options_strategy_registry": data.get("options_strategy_registry", []),
-        "paper_broker_options_strategy_registry": data.get("paper_broker_options_strategy_registry", []),
+        # options_strategy_registry / paper_broker_options_strategy_registry
+        # were dropped with the options desk (2026-09, step 4a); the webapp
+        # treats their absence as empty.
         "reason": None,
     }
 

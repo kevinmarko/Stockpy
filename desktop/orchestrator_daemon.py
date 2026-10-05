@@ -228,9 +228,6 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
     # reproduced exactly that silent-kill failure mode.
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT})
 
-    from observability.sentry_integration import init_sentry
-    init_sentry(service_name="orchestrator_daemon")
-
     # Deferred import: mirrors app_shell.py's deferred `from desktop.xxx
     # import yyy` imports -- keeps `import desktop.orchestrator_daemon`
     # side-effect-free/importable even before desktop.daemon_runtime exists
@@ -305,21 +302,6 @@ def run_forever(interval_seconds: int, *, dry_run: bool = False, strict: bool = 
             logger.warning("Failed to start Pilots API (PILOTS_API_ENABLED=True): %s", exc)
             pilots_api_server = None
             pilots_api_thread = None
-
-    # Optional third service: opt-in real-time WS quote ingestion
-    # (data/market_data_ws.py, settings.MARKET_DATA_WS_ENABLED, default
-    # False). The daemon is the natural, long-lived owner of this
-    # persistent connection -- CompositeProvider itself stays purely
-    # reactive (only reads the WS quote store) so short-lived CLI/test/GUI
-    # processes never leak a background thread. start_market_data_ws_thread
-    # is itself a no-op (logged, never raised) when the flag is off, the
-    # active provider isn't Alpaca, or no symbols resolve, so this call is
-    # unconditional and safe even when the feature is disabled.
-    try:
-        from data.market_data_ws import start_market_data_ws_thread
-        start_market_data_ws_thread()
-    except Exception as exc:  # noqa: BLE001 - optional service, never abort daemon startup
-        logger.warning("Failed to start market-data WS ingestion: %s", exc)
 
     # Bounded poll for the API server(s) to report ready (uvicorn.Server
     # exposes a `started` flag) before writing the discovery file -- a

@@ -122,22 +122,26 @@ describe("client.ts — live client (mocked fetch)", () => {
     expect(mod.apiMeta.hasToken).toBe(false);
   });
 
-  it("POST follow() sends a JSON body with Content-Type set", async () => {
+  it("POST simulatePilotAllocation() sends a JSON body with Content-Type set", async () => {
     const mod = await importLiveClient();
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse({ mode: "off", queue_written: false, planned_intents: [] })
-    );
+    fetchMock.mockResolvedValueOnce(jsonResponse({}));
 
-    await mod.api.follow("trend-following", 500);
+    await mod.api.simulatePilotAllocation("trend-following", { allocation_amount: 500 });
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://localhost:8602/pilots/trend-following/follow");
+    expect(url).toBe("http://localhost:8602/pilots/trend-following/simulate");
     expect(init.method).toBe("POST");
     expect((init.headers as Record<string, string>)["Content-Type"]).toBe(
       "application/json"
     );
-    expect(JSON.parse(init.body as string)).toEqual({ amount: 500 });
+    expect(JSON.parse(init.body as string)).toEqual({ allocation_amount: 500 });
+  });
+
+  it("the removed Follow-a-Pilot endpoints have no client methods", async () => {
+    const mod = await importLiveClient();
+    expect("follow" in mod.api).toBe(false);
+    expect("getFollows" in mod.api).toBe(false);
   });
 
   it("a non-OK response with a JSON {detail} body raises ApiError with that message + status", async () => {
@@ -165,7 +169,7 @@ describe("client.ts — live client (mocked fetch)", () => {
       },
     } as unknown as Response);
 
-    await expect(mod.api.getFollows()).rejects.toMatchObject({
+    await expect(mod.api.getRealized()).rejects.toMatchObject({
       status: 500,
       message: "500 Internal Server Error",
     });
@@ -204,9 +208,6 @@ describe("client.ts — live client (mocked fetch)", () => {
       [() => mod.api.getAlerts(25), "http://example.test:9000/alerts?limit=25"],
       [() => mod.api.getForecast("aapl", 30), "http://example.test:9000/symbols/aapl/forecast?horizon=30"],
       [() => mod.api.getModels(), "http://example.test:9000/models"],
-      [() => mod.api.getOptions(), "http://example.test:9000/options"],
-      [() => mod.api.getSymbolOptions("nvda"), "http://example.test:9000/symbols/nvda/options"],
-      [() => mod.api.getPairs(), "http://example.test:9000/pairs"],
       [() => mod.api.getStrategyMatrix(), "http://example.test:9000/strategy/matrix"],
     ];
     for (const [call, expectedUrl] of cases) {
@@ -490,17 +491,15 @@ describe("client.ts — live client (mocked fetch)", () => {
       });
     });
 
-    it("a POST (follow) is never written to the offline cache", async () => {
+    it("a POST (simulate) is never written to the offline cache", async () => {
       const mod = await importLiveClient();
       const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
-      fetchMock.mockResolvedValueOnce(
-        jsonResponse({ mode: "off", queue_written: false, planned_intents: [] })
-      );
+      fetchMock.mockResolvedValueOnce(jsonResponse({ current: {}, projected: {} }));
 
-      await mod.api.follow("trend-following", 500);
+      await mod.api.simulatePilotAllocation("trend-following", { allocation_amount: 500 });
 
       expect(
-        localStorage.getItem("stockpy.cache.v1:/pilots/trend-following/follow")
+        localStorage.getItem("stockpy.cache.v1:/pilots/trend-following/simulate")
       ).toBeNull();
     });
   });

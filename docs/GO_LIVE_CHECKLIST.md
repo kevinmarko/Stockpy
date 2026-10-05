@@ -1,13 +1,13 @@
-> **This checklist applies when re-enabling the automated Alpaca/FMP-paper broker
-> execution path (`ADVISORY_ONLY=false`) — OR when going live on the separate
+> **This checklist applies when lifting the `ADVISORY_ONLY` quarantine on the automated FMP-paper
+> broker path (`ADVISORY_ONLY=false`; the pipeline places no orders when also going live, see below) — OR when going live on the separate
 > Robinhood execution bridge (`ROBINHOOD_EXECUTION_MODE=live`), which is
 > **independent of `ADVISORY_ONLY`** and stays gated even while `ADVISORY_ONLY=true`.
 > If you are only going live on Robinhood, `ADVISORY_ONLY` should correctly stay
-> `true` (it only quarantines the Alpaca surface) — do not skip this file on that
+> `true` (it only quarantines the automated paper-broker surface) — do not skip this file on that
 > basis; jump straight to **🤖 Robinhood Live Sign-Off** below. If neither applies
 > (advisory mode, no Robinhood execution), the operational checklist is
 > `docs/RUNBOOK.md §2 — Pre-Market Checklist (Daily Advisory Run)`.
-> See `docs/HOW_TO_GUIDE.md → Advisory-Only Mode` for the Alpaca re-enable procedure.**
+> See `docs/HOW_TO_GUIDE.md → Advisory-Only Mode` for the advisory-only mode procedure. Alpaca was removed 2026-09-30: with `PAPER_TRADING=false` and `ADVISORY_ONLY=false` the automated pipeline places NO orders (CRITICAL log + alert); real orders go only through the Robinhood queue.**
 
 # InvestYo Go-Live Checklist
 
@@ -23,12 +23,9 @@
 - [ ] `FRED_API_KEY` rotated within the last **90 days**.  
   Set `FRED_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` to enable `check_key_rotation_recent`
   (preflight check #2 — warning-only, never blocking; check wired in Stage 3 of the 2026-06-26 cleanup plan).
-- [ ] `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` rotated within the last **90 days**.  
-  Set `ALPACA_KEY_ROTATED_DATE=YYYY-MM-DD` in `.env` to enable `check_alpaca_key_rotation_recent`
-  (preflight check #3 — warning-only; auto-skipped when `ADVISORY_ONLY=true`; check wired in Stage 3 of the 2026-06-26 cleanup plan).
 - [ ] *(manual)* No sensitive data (account numbers, SSN, trade history) stored unencrypted on disk.
 - [ ] *(manual)* Broker account uses 2-factor authentication.
-- [ ] If `ROBINHOOD_EXECUTION_MODE=live` (Tier 8 execution bridge, independent of `ADVISORY_ONLY`), `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` is set to a positive per-order dollar ceiling — `check_robinhood_execution_mode` FAILS otherwise. This check is never auto-skipped under `ADVISORY_ONLY=true` since the Robinhood path is orthogonal to the Alpaca quarantine. See **🤖 Robinhood Live Sign-Off** below for the full checklist on this path.
+- [ ] If `ROBINHOOD_EXECUTION_MODE=live` (Tier 8 execution bridge, independent of `ADVISORY_ONLY`), `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` is set to a positive per-order dollar ceiling — `check_robinhood_execution_mode` FAILS otherwise. This check is never auto-skipped under `ADVISORY_ONLY=true` since the Robinhood path is orthogonal to the paper-broker quarantine. See **🤖 Robinhood Live Sign-Off** below for the full checklist on this path.
 
 ---
 
@@ -37,7 +34,7 @@
 > Applies whenever `ROBINHOOD_EXECUTION_MODE=live` — regardless of `ADVISORY_ONLY`.
 > This is the platform's only mechanism for placing a real Robinhood order (see
 > `docs/architecture/execution.md`'s `execution/queue_builder.py` entry); it is
-> entirely separate from the Alpaca/FMP-paper broker sections elsewhere in this
+> entirely separate from the FMP-paper broker sections elsewhere in this
 > checklist, which do not apply to a Robinhood-only go-live.
 
 - [ ] Staged rollout followed in order — `off → review → live` — not jumped straight to `live`. See `docs/RUNBOOK.md`'s **Robinhood Execution Bridge (Tier 8) — paper-first rollout** section for the full staged-rollout walkthrough.
@@ -104,10 +101,8 @@
   from observability.alerts import send_alert
   send_alert("CRITICAL", "PREFLIGHT TEST — ignore", channels=["discord"])
   ```
-- [ ] Command Center launches without errors and the Observability tab renders:
-  ```
-  streamlit run legacy/streamlit_command_center/app.py
-  ```
+- [ ] The web app (`./launch_webapp.command`, live mode) loads without errors and its
+  Mission Control screen (`/observability`) renders.
 - [ ] Heartbeat file refreshes every 60 s: `ls -la ~/.stockpy_local/output/heartbeat.txt`
   (or `$LOCAL_DATA_ROOT/output/heartbeat.txt` if you've overridden the default — not a
   repo-relative `output/`, as of `settings.LOCAL_DATA_ROOT` — 2026-08).

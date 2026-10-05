@@ -165,7 +165,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
@@ -184,7 +184,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
             MockPE.return_value.calculate_technical_metrics.side_effect = Exception("tech_calc_error")
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
@@ -202,7 +202,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
@@ -220,7 +220,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.side_effect = Exception("forecast_model_error")
@@ -242,7 +242,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 102.0}
@@ -264,7 +264,7 @@ class TestAdvisoryEvaluatePerStageDeadLetter:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
             MockPE.return_value.calculate_technical_metrics.side_effect = Exception("tech_calc_error")
             MockFE.return_value.generate_forecast.side_effect = Exception("forecast_model_error")

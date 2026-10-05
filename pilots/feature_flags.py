@@ -87,20 +87,6 @@ WRITE_GATE_REASONS: dict[str, str] = {
         "settings_keysets.DANGEROUS_KEYS) which decides whether an order is "
         "real."
     ),
-    "FIX_GATEWAY_ENABLED": (
-        "Gates POST /pilots/execution/fix/route and the FIX session-"
-        "management endpoints (test-request, reset-seq, reconnect, "
-        "session/status) on the Pilots API "
-        "(api/pilots_api.py::require_fix_gateway_enabled), on top of their "
-        "existing command/read-token checks. Defaults True: the FIX 4.4 "
-        "gateway (execution/fix_gateway.py) is fully simulated -- it never "
-        "opens a real venue connection or touches real capital."
-    ),
-    "MULTI_BROKER_GATEWAY_ENABLED": (
-        "Enables multi-broker smart routing via MultiBrokerGateway in broker "
-        "execution tools (broker_live_execution_mcp.py). When false, falls "
-        "back directly to the primary broker backend without routing failover."
-    ),
 }
 
 # -- Read-only diagnostic/data features (2026-08-07, opt-in by operator -----
@@ -109,8 +95,6 @@ WRITE_GATE_REASONS: dict[str, str] = {
 DIAGNOSTIC_FLAG_REASONS: dict[str, str] = {
     "SECTOR_HEAT_ENABLED": "Enables Sector Heat Factor computation from GDELT article volume.",
     "WIKIPEDIA_ATTENTION_ENABLED": "Enables Attention Score computation from Wikipedia pageviews.",
-    "ETF_HOLDINGS_ENABLED": "Enables fetching ETF constituent baskets for exposure analysis.",
-    "ETF_TRANSMISSION_ENABLED": "Enables ETF volatility-transmission measurement columns (diagnostic only -- not read by scoring or sizing).",
     "MARKET_DATA_LATENCY_TRACKING_ENABLED": "Tracks and surfaces real-time market data feed latency.",
     "SENTIMENT_INDEX_ENABLED": "Computes composite sentiment index from news and reviews.",
     "EDGAR_FULLTEXT_ENABLED": "Enables full-text ingestion of 10-K/10-Q SEC filings.",

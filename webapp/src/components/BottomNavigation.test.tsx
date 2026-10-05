@@ -24,7 +24,6 @@ function widgets(overrides: Partial<CustomViewWidgets> = {}): CustomViewWidgets 
     pilotsTable: false,
     sentimentMini: false,
     portfolioHeat: false,
-    optionsDirective: false,
     signalBreakdown: false,
     macroRegime: false,
     ...overrides,

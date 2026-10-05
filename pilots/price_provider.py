@@ -5,7 +5,7 @@ Pricing provider for stock and options paper trading.
 Routes through `data.market_data.get_provider()` (the `CompositeProvider`
 `MarketDataProvider` ABC), per CLAUDE.md's data-layer convention that all
 quote fetches outside `DataEngine.fetch_technical_raw()` MUST go through it
--- this gets the FMP/Alpaca/yfinance fallback chain, the in-process TTL
+-- this gets the FMP/yfinance fallback chain, the in-process TTL
 quote cache, and `is_stale` staleness flagging for free, rather than a
 second, uncached, ungated direct FMP client.
 
@@ -67,56 +67,46 @@ def get_latest_price(symbol: str) -> float:
 
 
 def get_latest_prices(symbols: List[str]) -> Dict[str, float]:
-    """Fetch latest spot prices for MANY symbols in a single request.
+    """Fetch latest spot prices for MANY symbols in as few requests as possible.
 
-    Calls ``data.fmp_client.batch_quote`` directly (the same real
-    ``/batch-quote`` endpoint ``PaperAccountStore._resolve_position_prices``
-    already uses -- the established "fetch many quotes in one request"
-    pattern in this codebase) rather than looping ``get_stock_quote``/
-    ``get_latest_price`` once per symbol, which is what this function exists
-    to replace at call sites that need more than one symbol's price per tick.
+    Routes through ``data.market_data.get_provider().get_quotes_batch`` --
+    the same ``CompositeProvider`` every other quote in this module uses --
+    so callers get (a) one ``/batch-quote`` request for every cache miss,
+    (b) the in-process quote TTL cache (``MARKET_DATA_QUOTE_TTL_SECONDS``),
+    and (c) the FMP -> yfinance fallback chain for symbols FMP
+    can't resolve. The cache matters for high-frequency callers such as the
+    1 Hz ``/ws/risk/portfolio`` stream: previously this called
+    ``data.fmp_client.batch_quote`` directly, uncached, costing one live FMP
+    request per tick per connected client.
 
-    Never raises -- mirrors ``get_latest_price``'s degrade philosophy of
-    "0.0 / absent rather than blow up the caller", just applied per-entry
-    instead of per-call: any symbol whose batch response entry is missing,
-    malformed (not a dict, no parseable ``price``), zero, or negative is
-    SKIPPED from the returned dict rather than included as a fabricated
-    0.0 -- a caller can distinguish "no price available" (key absent) from
-    "price is genuinely zero" (impossible for a real equity quote, so this
-    never happens for real symbols). A failure of the batch call itself
-    (network error, malformed top-level response) degrades to an empty
-    dict, with a WARNING logged, exactly like ``get_stock_quote``'s network
-    failure path.
+    Never raises: any symbol whose quote is missing, non-finite, zero, or
+    negative is SKIPPED from the returned dict rather than included as a
+    fabricated 0.0, so a caller can distinguish "no price available" (key
+    absent) from a real price. A failure of the batch call itself degrades
+    to an empty dict with a WARNING logged.
     """
-    from data.fmp_client import batch_quote
+    import math
+
+    from data.market_data import get_provider
 
     clean_symbols = [str(s).strip().upper() for s in symbols if str(s).strip()]
     if not clean_symbols:
         return {}
 
-    prices: Dict[str, float] = {}
     try:
-        quotes_resp = batch_quote(clean_symbols)
+        quotes = get_provider().get_quotes_batch(clean_symbols)
     except Exception as e:
         logger.warning(f"Failed to fetch batch quotes for {clean_symbols}: {e}")
         return {}
 
-    if not isinstance(quotes_resp, list):
-        logger.warning(f"Unexpected batch quote response shape for {clean_symbols}: {type(quotes_resp)!r}")
-        return {}
-
-    for entry in quotes_resp:
-        if not isinstance(entry, dict):
-            continue
-        sym = str(entry.get("symbol", "")).strip().upper()
-        if not sym:
-            continue
+    prices: Dict[str, float] = {}
+    for sym, quote in (quotes or {}).items():
         try:
-            price = float(entry.get("price") or 0.0)
+            price = float(getattr(quote, "price", None))
         except (TypeError, ValueError):
             continue
-        if price > 0.0:
-            prices[sym] = price
+        if math.isfinite(price) and price > 0.0:
+            prices[str(sym).strip().upper()] = price
 
     return prices
 

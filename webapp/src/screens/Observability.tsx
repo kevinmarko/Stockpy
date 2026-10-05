@@ -77,7 +77,7 @@ function regimeColor(regime: string | null): string {
  * (not a replacement for it): TabGuide expands only on a screen's first-ever
  * visit and then stays collapsed forever (help/helpState.ts), so a section
  * whose meaning isn't obvious from its title alone — "Sizing cap-event audit
- * trail", "ETF volatility transmission" — needs an explanation that's always
+ * trail" — needs an explanation that's always
  * reachable, not just on the first visit. `thresholds` is the same
  * `GET /thresholds` result TabGuide already loads (loadThresholds()'s
  * module-level cache dedups the extra fetch to nothing); omit it for a
@@ -873,63 +873,6 @@ function SizingCapAuditSection({
 }
 
 /**
- * EtfTransmissionSection — per-symbol ETF volatility-transmission diagnostic
- * (Ben-David, Franzoni & Moussawi 2018), the webapp port of
- * gui/panels/observability.py::_render_observability_etf_transmission. Three
- * independent master switches are shown even when rows is empty, so the
- * operator can distinguish "off" from "on but no coverage yet".
- */
-function EtfTransmissionSection({
-  etf,
-}: {
-  etf: ObservabilitySummary["etf_transmission"];
-}) {
-  return (
-    <div>
-      <div className="tiles" style={{ marginBottom: "var(--s-3)" }}>
-        <Tile label="Measurement" value={etf.measurement_enabled ? "ON" : "OFF"} />
-        <Tile label="Sizing derate" value={etf.sizing_enabled ? "ON" : "OFF"} />
-        <Tile label="Portfolio covariance" value={etf.portfolio_enabled ? "ON" : "OFF"} />
-      </div>
-      {etf.rows.length === 0 ? (
-        <div className="empty" style={{ padding: "var(--s-4)" }}>{etf.reason ?? "No ETF-transmission coverage yet."}</div>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <Table style={{ fontSize: "var(--t-caption)" }}>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th className="num">Ownership</th>
-                <th className="num">Comovement R²</th>
-                <th>Wrapper</th>
-                <th className="num">Multiplier</th>
-              </tr>
-            </thead>
-            <tbody>
-              {etf.rows.map((r) => (
-                <tr key={r.symbol} data-testid="etf-transmission-row">
-                  <td>{r.symbol}</td>
-                  <td className="num">{r.etf_ownership_pct == null ? "—" : fmtPct(r.etf_ownership_pct, 1, { fromFraction: true })}</td>
-                  <td className="num">{fmtNum(r.etf_comovement_r2, 2)}</td>
-                  <td>{r.etf_primary_wrapper ?? "—"}</td>
-                  <td className="num">
-                    {r.etf_transmission_multiplier == null
-                      ? etf.sizing_enabled
-                        ? "—"
-                        : "N/A"
-                      : `${fmtNum(r.etf_transmission_multiplier, 2)}x`}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
  * HeartbeatSection — current orchestrator heartbeat age + freshness label
  * ONLY. The legacy Streamlit panel's "Heartbeat Age Trend" sparkline has no
  * durable backing store (a session-only ring buffer) -- see
@@ -1211,8 +1154,7 @@ export function Observability() {
           {/* Rendered above the fold, before the portfolio-risk/equity
               section below -- the screen's one "does anything need a
               look right now" answer plus its one real control (the macro-
-              gate toggle; the ETF-transmission config link below is the
-              other) must never be hidden behind the collapsed disclosure
+              gate toggle) must never be hidden behind the collapsed disclosure
               below. See AttentionStripSection's and MacroGateControl's doc
               comments for the full rationale. */}
           <AttentionStripSection items={attentionItems} />
@@ -1326,7 +1268,7 @@ export function Observability() {
                 color: theme.textSecondary,
               }}
             >
-              Background telemetry — forecast detail, circuit breakers, sizing &amp; ETF risk, system health, and logs
+              Background telemetry — forecast detail, circuit breakers, sizing, system health, and logs
             </summary>
             <div style={{ padding: "0 var(--s-4) var(--s-4)" }}>
               <SectionHeading title="Forecast skill" sub="Portfolio-wide reliability and weights" />
@@ -1362,18 +1304,6 @@ export function Observability() {
 
               <SectionHeading id="sizing-cap-audit" title="Sizing cap-event audit trail" helpKey="sizing cap" thresholds={thresholds} />
               <SizingCapAuditSection audit={data.sizing_cap_audit} />
-
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: "var(--s-2)" }}>
-                <SectionHeading title="ETF volatility transmission" helpKey="etf transmission" thresholds={thresholds} />
-                <Button
-                  variant="primary"
-                  onClick={() => nav("/settings/etf-transmission")}
-                  style={{ marginBottom: "var(--s-2-5)", fontSize: "var(--t-caption)" }}
-                >
-                  ⚙ Configure
-                </Button>
-              </div>
-              <EtfTransmissionSection etf={data.etf_transmission} />
 
               <SectionHeading id="heartbeat" title="Heartbeat" sub="Orchestrator liveness" />
               <HeartbeatSection heartbeat={data.heartbeat} />

@@ -91,6 +91,12 @@ class OrderIntent:
     # it (today's exact prior behavior). See main_orchestrator.py's
     # ``_execute_broker_orders`` BUY/SELL branches for the one real producer.
     target_qty: Optional[float] = None
+    # Optional decision context (execution/trade_context.py), telemetry only.
+    # Never read by sizing, the risk gate, the kill switch, OrderManager or
+    # make_client_order_id, so it cannot change an order or its id. Brokers
+    # may ignore it; today only FMPPaperBroker forwards it to the paper
+    # ledger (entry snapshot / close reason). ``None`` for every other caller.
+    decision_context: Optional[dict] = None
 
 
 @dataclass
@@ -125,6 +131,10 @@ class PositionSnapshot:
     strategy_id: Optional[str] = None
     pilot_id: Optional[str] = None
     experiment_arm: Optional[str] = None
+    # True when market_value/unrealized_pl are a cost-basis placeholder
+    # because no real live mark was available (see
+    # PaperAccountStore._resolve_position_prices) -- never act on P&L then.
+    mark_is_estimated: bool = False
 
 
 @dataclass
@@ -145,7 +155,9 @@ class BrokerBase(ABC):
     Async interface every broker adapter must implement.
 
     Concrete subclasses:
-      * AlpacaBroker  — paper / live via alpaca-py AsyncTradingClient
+      * FMPPaperBroker — local SQLite paper ledger filling at live FMP quotes
+        (execution/fmp_paper_broker.py; the only broker since Alpaca was
+        removed 2026-09-30)
       * MockBroker    — shared in-memory, network-free stub for unit tests,
         defined in ``tests/conftest.py`` and exposed both as the importable
         ``MockBroker`` class and the ``mock_broker`` pytest fixture.

@@ -41,13 +41,41 @@ combination). When models disagree, the signal is near-neutral.
 ## Signal Logic
 
 ```python
-IF forecast_price > current_price:
+IF forecast is missing (NaN / <= 0) OR forecast_is_fallback:
+    0 pts (neutral)                      # forecasting rebuild F2, 2026-09
+ELIF forecast_price > current_price:
     expected_gain = (forecast_price - current_price) / current_price * 100
     IF expected_gain >= 1.5%: +10 pts (strong projection)
     ELIF expected_gain > 0%:  +5 pts  (moderate projection)
 ELSE:
     -10 pts (forecast suggests structural price erosion)
 ```
+
+**Missing or fallback forecast = neutral (forecasting rebuild F2, 2026-09).** This is
+an intentional score change, decided by the operator on 2026-09-27. Before F2 a missing
+forecast scored **-10 (bearish)** in two ways:
+
+* `forecast_price = 0`: the vectorized path fills a missing `Forecast_30` with `0.0`,
+  which landed in the `forecast_price <= current_price` branch.
+* The engine's fallback: when every model fails (or, since F2, every model is dropped by
+  the safety guards), `Forecast_30` is today's price with `Forecast_30_Is_Fallback=True`.
+  `forecast_price == current_price` also landed in the bearish branch.
+* Forecasting rebuild F3: with `FORECAST_NAIVE_GATE_ENABLED=True`, a horizon where the
+  naive gate admits no model publishes naive (today's price) and sets
+  `Forecast_30_Is_Fallback=True` (plus `Forecast_30_Gated_Naive=True`), so it takes this
+  same neutral branch. With the flag off (the default) nothing here changes.
+
+Neither is evidence of price erosion, so both now score 0. The fallback flag reaches the
+signal as the optional `forecast_is_fallback` feature (`StrategyEngine.evaluate_security
+(forecast_is_fallback=...)` on the per-row path, `vec_df['forecast_is_fallback']` from the
+`Forecast_30_Is_Fallback` column on the vectorized path, and `engine/advisory.py`'s own
+flag). A NaN / None / absent flag means "unknown" and is not treated as a fallback. A
+REAL blend at or below the current price still scores -10, as before. Both paths emit the
+same `"0pts: No usable forecast (missing or fallback); neutral"` explanation.
+
+The `forecast_direction_arima_hw` backtest adapter never feeds this branch (it skips dates
+with no forecast and only scores `|expected gain| >= 1.5%`), so its recorded PBO/DSR/Sharpe/
+MaxDD are unaffected.
 
 `forecast_price` is the **blended** 30-day forecast from `ForecastingEngine.generate_forecast()`.
 By default, this is a static blend. Inverse-MSE skill weighting from `ForecastTracker` is an opt-in
@@ -80,7 +108,9 @@ this module are more likely to be correct.
 | Failure | Behaviour |
 |---------|-----------|
 | CNN-LSTM diverges (NaN loss) | ARIMA, Monte Carlo, Holt-Winters blended instead. `ForecastingEngine` catches per-model exceptions. |
-| `forecast_price = 0` (all models failed) | `forecast_price` stays at 0 → the `forecast_price > current_price` branch is False → −10 pts. This is a conservative failure: a failed forecast is treated as bearish. |
+| `forecast_price = 0` / NaN (no forecast) | 0 pts (neutral) since F2 (2026-09). Before F2 this was −10: a failed forecast was treated as bearish. |
+| Engine fallback (`Forecast_30_Is_Fallback=True`: every model failed or was dropped by the F2 guards, so the "forecast" is today's price) | 0 pts (neutral) since F2. Before F2, `forecast_price == current_price` scored −10. |
+| One model blows up (e.g. ARIMA on a sub-$1 symbol) | Since F2 the engine drops any model whose implied log-return exceeds 4·σ_GARCH·√h, or whose starting price is > 5% off the last close, before the blend; the others renormalize. See `docs/architecture/signal-engines.md` (forecasting_engine entry). |
 | `forecast_price` slightly above current price (0–1.5% upside) | +5 pts, not +10. The 1.5% threshold filters out noise in the ensemble blend. |
 | Very long-dated mean reversion in CNN-LSTM | CNN-LSTM sees 30-day horizon but its training data may include strong trend periods. If the LSTM learns "prices always go up" from a bull market training window, it will consistently predict positive drift. The `ForecastTracker` RMSE will penalise this systematic bias over time. |
 

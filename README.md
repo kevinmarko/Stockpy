@@ -18,11 +18,9 @@ an HTML report.
 > security. Nothing here is investment, financial, or legal advice. You are
 > solely responsible for any decision made using this platform's output.
 >
-> **Web app is the primary interface; the desktop app is decommissioned.** All
-> new UI development targets the [Pilots PWA](webapp/README.md) (`webapp/`). The
-> Streamlit "InvestYo Command Center" (`legacy/streamlit_command_center/`) and its native
-> desktop wrapper (`launch_app.command`, `launch_gui.command`) are frozen/legacy —
-> they still run for existing setups, but get no new tabs, panels, or features.
+> **The web app is the only interface.** The [Pilots PWA](webapp/README.md)
+> (`webapp/`) is the platform's UI. The old Streamlit "InvestYo Command Center"
+> desktop app and its launchers were deleted in 2026-09 (git history has them).
 > See "Launching" below.
 
 ## Quick start (fresh machine)
@@ -60,10 +58,7 @@ Copy [`.env.example`](.env.example) to `.env` and fill in the values. **Never co
 | `ADVISORY_ONLY` | Optional | `true` (default) — broker execution surface is quarantined. Flip to `false` only after a deliberate readiness review (see "Advisory-only mode") |
 | `RH_USERNAME` | Optional | Robinhood read-only snapshot (held symbols always included) |
 | `RH_PASSWORD` | Optional | Robinhood login is device-approval push — after these two are set, you approve the login by tapping "approve" in the Robinhood app on your phone; no MFA/TOTP secret is configured or needed anywhere in this codebase |
-| `ALPACA_API_KEY` | Optional | Broker execution (no-op while `ADVISORY_ONLY=true`) |
-| `ALPACA_SECRET_KEY` | Optional | — |
-| `ALPACA_PAPER` | Optional | `true` (default) = paper trading. Has no effect while `ADVISORY_ONLY=true` |
-| `FINNHUB_API_KEY` | Optional | Company news / earnings headlines for the `news_catalyst` signal only. **Not** a fundamentals source — fundamentals are Yahoo statement-derived (free, `data/yahoo_fundamentals.py`). Absent = news_catalyst signal disabled |
+| `PAPER_TRADING` | Optional | `true` (default) = paper trading on the local FMP paper ledger (an old `ALPACA_PAPER` in `.env` still works as an alias). With `PAPER_TRADING=false` and `ADVISORY_ONLY=false` the automated pipeline places **no orders** (real orders go only through the Robinhood queue). Has no effect while `ADVISORY_ONLY=true` |
 | `NTFY_TOPIC` | Optional | Phone push alerts via ntfy.sh — set a random string, subscribe in the ntfy app |
 | `WATCHLIST` | Optional | Comma-separated tickers (alternatives: `watchlist.txt` one per line, or Sheet2 column A — see "Ticker universe" below) |
 | `DISCORD_WEBHOOK_URL` | Optional | Discord channel alerts |
@@ -92,26 +87,24 @@ exits cleanly without evaluating anything.
 
 ---
 
-## Market data provider (yfinance ↔ Alpaca)
+## Market data provider (FMP ↔ yfinance)
 
 All quote/bar/fundamentals fetches go through one interface,
 `MarketDataProvider` (`data/market_data.py`), so the underlying backend is
 interchangeable without touching calculation code:
 
-- **Auto-select (default, `MARKET_DATA_PROVIDER` unset):** Alpaca when
-  `ALPACA_API_KEY` + `ALPACA_SECRET_KEY` are present, else yfinance
-  (zero-config, ~15-min delayed quotes).
-- **Force a backend:** set `MARKET_DATA_PROVIDER=alpaca` or
-  `MARKET_DATA_PROVIDER=yfinance` in `.env` to override auto-selection.
+- **Default (`MARKET_DATA_PROVIDER=fmp`):** FMP quotes/bars (gated by
+  `FMP_QUOTES_ENABLED` / `FMP_BARS_ENABLED`), falling back to yfinance.
+- **Force yfinance:** set `MARKET_DATA_PROVIDER=yfinance` in `.env`
+  (zero-config, ~15-min delayed quotes). Alpaca was removed 2026-09-30.
 - **Fundamentals** are a separate, independent choice —
   `FUNDAMENTALS_SOURCE=yahoo` (default, statement-derived,
   `data/yahoo_fundamentals.py`) or `FUNDAMENTALS_SOURCE=yfinance_info` (raw
-  `.info` fallback). Finnhub is **not** a fundamentals source; `FINNHUB_API_KEY`
-  only powers the `news_catalyst` signal.
+  `.info` fallback). Company news for the `news_catalyst` signal comes from FMP
+  (`FMP_NEWS_ENABLED` + `FMP_API_KEY`); Finnhub was removed 2026-09.
 
-This split (market data provider vs. fundamentals source vs. broker execution
-credentials) means `ALPACA_*` keys can be present purely for broker execution
-without Alpaca ever being used for market data, and vice versa.
+Market data provider and fundamentals source are independent choices; the
+pipeline's paper broker (`BROKER_BACKEND=fmp_paper`) needs no broker keys.
 
 ---
 
@@ -175,19 +168,9 @@ backend service does.
 .venv/bin/python3 main_orchestrator.py    # async orchestrator (HTML report)
 ```
 
-**Legacy — decommissioned, no new development:**
-
-```bash
-./launch_app.command    # native desktop window (pywebview) wrapping the Streamlit GUI
-./launch_gui.command    # InvestYo Command Center (Streamlit GUI) in a browser tab
-```
-
-Both still run for existing local setups (see `docs/RUNBOOK.md` §0 for `launch_app.command`'s
-exact startup behavior), but the platform's frontend strategy has moved to the web app above.
-`legacy/streamlit_command_center/` (the Streamlit Command Center's 18 tabs, `app_shell.py`,
-and its native-window support code under `desktop_shell/` — `net_util.py`, `ui_server.py`,
-`engine_supervisor.py`) gets no new tabs, panels, or capability going forward — new UI work
-goes into `webapp/`.
+The old Streamlit desktop app (`launch_app.command`, `launch_gui.command`, and
+everything under `legacy/streamlit_command_center/`) was deleted in 2026-09. Use the web
+app above.
 
 ---
 
@@ -196,11 +179,10 @@ goes into `webapp/`.
 The platform's default mode is **advisory** (`ADVISORY_ONLY=true` in `.env`):
 
 - `main_orchestrator._execute_broker_orders()` returns immediately before any broker
-  import — no orders are submitted regardless of `ALPACA_*` credentials.
-- The GUI Strategy Matrix mode toggle is replaced with a read-only "broker execution
-  disabled" banner.
+  import — no orders are submitted regardless of `PAPER_TRADING`.
+- The web app shows an "Advisory Only Mode (Live Execution Disabled)" status banner.
 - `scripts/preflight_check.py` auto-skips broker-readiness checks
-  (`alpaca_configured`, `alpaca_paper_mode`, `dry_run_disabled`, `paper_trading_duration`)
+  (`paper_trading_mode`, `dry_run_disabled`, `paper_trading_duration`)
   and instead enforces the `advisory_only_active` check.
 
 ### Pause the recommendation engine
@@ -233,8 +215,8 @@ Each override is cited in the advisory rationale so the HTML report explains the
 
 Re-enabling broker execution is a deliberate sequence: (1) set `ADVISORY_ONLY=false`
 in `.env`; (2) run `python scripts/preflight_check.py` — it should now run the broker
-gates instead of skipping them; (3) re-launch. The GUI mode toggle (Simulation / Paper /
-Live) reappears automatically. See `docs/GO_LIVE_CHECKLIST.md` for the full readiness gate.
+gates instead of skipping them; (3) re-launch. The web app's execution-mode selector
+(Settings → General: Advisory / Simulation / Paper / Live) also writes `ADVISORY_ONLY`. See `docs/GO_LIVE_CHECKLIST.md` for the full readiness gate.
 
 ---
 
@@ -255,7 +237,6 @@ pytest tests/test_pipeline_smoke.py -v     # end-to-end smoke tests only
 make smoke                                  # same
 python scripts/bug_hunter.py                # unified bug hunter scan (AST audit, webapp parity, pytest)
 python scripts/bug_hunter.py --quick        # fast bug hunter scan (AST audit + webapp typecheck)
-streamlit run legacy/streamlit_command_center/app.py                    # legacy Command Center GUI (10 tabs, incl. Observability) — decommissioned, see "Launching"
 python scripts/preflight_check.py           # pre-live readiness gate (exit 0 = pass)
 python scripts/preflight_check.py --json    # machine-readable output
 python -m execution.kill_switch --status    # check / toggle the advisory pause gate

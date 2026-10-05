@@ -196,7 +196,7 @@ _BASELINE_STEP_8_PROMPT = StepPromptTemplate(
     front-of-pipeline research agent). Verify:
     1. PROVIDER ABSTRACTION: OpenAIProvider implements the LLMProvider ABC, lazy-imports openai, and
        soft-fails to None on every error (network/parse/schema/missing-SDK).
-    2. GROUNDING (no hallucinated data): generate_research_brief synthesizes REAL retrieved Finnhub
+    2. GROUNDING (no hallucinated data): generate_research_brief synthesizes REAL retrieved FMP
        news/earnings (via signals.news_catalyst helpers), never invents catalysts/numbers; the
        ResearchBrief schema exposes NO numeric price/score fields (CONSTRAINT #4).
     3. OPT-IN: brief generation is gated on OPAL_RESEARCH_ENABLED (default False) — off means no
@@ -210,7 +210,7 @@ _BASELINE_STEP_8_PROMPT = StepPromptTemplate(
     """,
     criteria=[
         ValidationCriterion("8.1", "Provider abstraction + soft-fail", ["LLMProvider", "import openai", "None"], True),
-        ValidationCriterion("8.2", "Real grounding, no numeric fields", ["fetch_company_news", "fetch_next_earnings", "ResearchBrief"], True),
+        ValidationCriterion("8.2", "Real grounding, no numeric fields", ["fetch_company_headlines", "fetch_next_earnings_any", "ResearchBrief"], True),
         ValidationCriterion("8.3", "Opt-in default-off", ["OPAL_RESEARCH_ENABLED"], True),
         ValidationCriterion("8.4", "Threading into rationale prompt", ["research_brief", "context"], True),
         ValidationCriterion("8.5", "Secrets + advisory-only", ["OPENAI_API_KEY", "SECRET_KEYS"], True),

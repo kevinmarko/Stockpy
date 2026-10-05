@@ -2,12 +2,13 @@
 tests/test_execute_broker_orders.py
 =====================================
 Branch-coverage tests for ``main_orchestrator._execute_broker_orders`` — the
-Alpaca order-submission / reconciliation path that ``docs/test_coverage_analysis.md``
-flags as the largest remaining uncovered slice of ``main_orchestrator.py``
-("Remaining 49% is mostly the live-broker/reconciliation branches").
+pipeline's order-submission path. Since Alpaca was removed (2026-09-30) the
+only automated broker is the local FMP paper ledger (``FMPPaperBroker``);
+going live (``ADVISORY_ONLY=False`` and ``PAPER_TRADING=False``) places no
+pipeline orders at all.
 
-Everything here is FULLY OFFLINE. No real ``AlpacaBroker`` is ever constructed,
-no network I/O, no real SQLite writes. The tests patch the *source* modules that
+Everything here is FULLY OFFLINE. No real ``FMPPaperBroker`` is ever
+constructed, no network I/O, no real SQLite writes. The tests patch the *source* modules that
 ``_execute_broker_orders`` re-imports locally (it does its broker imports inside
 the function body, after the ADVISORY_ONLY guard) so the real ``OrderManager``,
 ``PreTradeRiskGate`` seam, ``RiskContext``, ``OrderIntent`` and the real
@@ -16,8 +17,8 @@ the function body, after the ADVISORY_ONLY guard) so the real ``OrderManager``,
 SAFETY: the platform ships ``ADVISORY_ONLY=True`` (broker quarantined). These
 tests flip ``settings.ADVISORY_ONLY`` to ``False`` *only* via monkeypatch (auto
 -restored) and *only* against a MockBroker — a real order can never be placed
-because ``execution.alpaca_broker.AlpacaBroker`` is replaced by a factory that
-returns the MockBroker. The ADVISORY_ONLY quarantine guard itself is covered by
+because ``execution.fmp_paper_broker.FMPPaperBroker`` is replaced by a factory
+that returns the MockBroker (and US market hours are patched open). The ADVISORY_ONLY quarantine guard itself is covered by
 ``test_advisory_only_guard_is_a_noop``.
 
 Coverage map
@@ -27,7 +28,7 @@ Coverage map
 - test_buy_qty_is_kelly_sized_not_one_share — (b) explicit regression guard for the hardcoded-1.0 bug
 - test_dry_run_never_reaches_broker          — (b) DRY_RUN semantics: manager-level guard, zero broker submits
 - test_kill_switch_aborts_order_loop         — (c) KillSwitchActiveError aborts loop, no broker submit
-- test_reconciliation_drift_is_surfaced      — (d) drift detected → telemetry.critical
+- test_going_live_constructs_no_broker_and_submits_nothing — going live → no pipeline orders
 - test_broker_error_on_one_symbol_is_non_fatal — (e) one symbol raises → logged, cycle continues
 - test_unsizable_buy_is_skipped              — BUY with no account equity is skipped, not fabricated to 1 share
 - test_buy_target_qty_reflects_post_regime_derate — (g) Kelly_Target_Post_Regime > Kelly Target -> target_qty > qty
@@ -139,12 +140,14 @@ class _FakeKillSwitch:
 # ---------------------------------------------------------------------------
 
 def _pos(symbol: str, qty: float) -> PositionSnapshot:
+    """A pipeline-owned paper position (the paper path only trades its own)."""
     return PositionSnapshot(
         symbol=symbol,
         qty=qty,
         avg_entry_price=100.0,
         market_value=qty * 100.0,
         unrealized_pl=0.0,
+        strategy_id=main_orchestrator.PIPELINE_STRATEGY_ID,
     )
 
 
@@ -173,26 +176,32 @@ def _install_enabled_broker_stack(
     broker: MockBroker,
     ts_store: MagicMock,
     kill_switch: _FakeKillSwitch,
+    market_open: bool = True,
 ) -> MagicMock:
-    """Wire up the enabled (ADVISORY_ONLY=False) broker path against mocks and
-    return the patched telemetry mock so callers can assert on log calls.
+    """Wire up the enabled (ADVISORY_ONLY=False, PAPER_TRADING=True) paper
+    broker path against mocks and return the patched telemetry mock so callers
+    can assert on log calls.
 
     Patches the SOURCE modules that ``_execute_broker_orders`` imports locally:
-      * execution.alpaca_broker.AlpacaBroker  -> factory returning ``broker``
+      * execution.fmp_paper_broker.FMPPaperBroker -> factory returning ``broker``
+      * engine.advisory_agent.is_us_market_open_now -> ``market_open``
       * transactions_store.TransactionsStore  -> factory returning ``ts_store``
       * execution.risk_gate.PreTradeRiskGate  -> pass-through gate
       * execution.order_manager.GlobalKillSwitch -> factory returning ``kill_switch``
     The REAL OrderManager / RiskContext / OrderIntent / KillSwitchActiveError are
     used unchanged.
     """
-    import execution.alpaca_broker as alpaca_mod
+    import engine.advisory_agent as agent_mod
+    import execution.fmp_paper_broker as fmp_mod
     import execution.risk_gate as risk_mod
     import execution.order_manager as om_mod
     import transactions_store as ts_mod
 
     monkeypatch.setattr(main_orchestrator.settings, "ADVISORY_ONLY", False, raising=False)
-    monkeypatch.setattr(main_orchestrator.settings, "BROKER_BACKEND", "alpaca", raising=False)
-    monkeypatch.setattr(alpaca_mod, "AlpacaBroker", lambda *a, **k: broker)
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_TRADING", True, raising=False)
+    monkeypatch.setattr(main_orchestrator.settings, "BROKER_BACKEND", "fmp_paper", raising=False)
+    monkeypatch.setattr(fmp_mod, "FMPPaperBroker", lambda *a, **k: broker)
+    monkeypatch.setattr(agent_mod, "is_us_market_open_now", lambda now: market_open)
     monkeypatch.setattr(ts_mod, "TransactionsStore", lambda *a, **k: ts_store)
     monkeypatch.setattr(risk_mod, "PreTradeRiskGate", lambda *a, **k: _PassThroughRiskGate())
     monkeypatch.setattr(om_mod, "GlobalKillSwitch", lambda *a, **k: kill_switch)
@@ -208,12 +217,12 @@ def _install_enabled_broker_stack(
 
 def test_advisory_only_guard_is_a_noop(monkeypatch):
     """ADVISORY_ONLY=True → function returns immediately, no broker constructed."""
-    import execution.alpaca_broker as alpaca_mod
+    import execution.fmp_paper_broker as fmp_mod
 
     monkeypatch.setattr(main_orchestrator.settings, "ADVISORY_ONLY", True, raising=False)
 
-    broker_ctor = MagicMock(name="AlpacaBroker")
-    monkeypatch.setattr(alpaca_mod, "AlpacaBroker", broker_ctor)
+    broker_ctor = MagicMock(name="FMPPaperBroker")
+    monkeypatch.setattr(fmp_mod, "FMPPaperBroker", broker_ctor)
 
     telemetry_mock = MagicMock()
     monkeypatch.setattr(main_orchestrator, "telemetry", telemetry_mock)
@@ -335,29 +344,6 @@ def test_kill_switch_aborts_order_loop(monkeypatch):
     # CRITICAL banner naming the kill switch is emitted.
     crit = " ".join(str(c.args[0]) for c in telemetry_mock.critical.call_args_list if c.args)
     assert "Kill switch" in crit
-
-
-# ---------------------------------------------------------------------------
-# (d) Reconciliation drift is detected and surfaced
-# ---------------------------------------------------------------------------
-
-def test_reconciliation_drift_is_surfaced(monkeypatch):
-    """Broker holds a position the internal store does not → drift is detected by
-    reconcile_state and surfaced via telemetry.critical before submission."""
-    broker = MockBroker(positions=[_pos("TSLA", 12.0)], equity=100_000.0)
-    ts_store = _make_ts_store({})  # internal store is flat → drift on TSLA
-    kill_switch = _FakeKillSwitch(active=False)
-    telemetry_mock = _install_enabled_broker_stack(
-        monkeypatch, broker=broker, ts_store=ts_store, kill_switch=kill_switch
-    )
-
-    df = _df([{"Symbol": "TSLA", "Action Signal": "HOLD", "Kelly Target": 0.0, "Price": 250.0}])
-
-    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
-
-    assert telemetry_mock.critical.called, "reconciliation drift must be surfaced"
-    crit = " ".join(str(c.args[0]) for c in telemetry_mock.critical.call_args_list if c.args)
-    assert "drift" in crit.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -601,39 +587,437 @@ def test_priority_queue_enabled_kill_switch_still_aborts_remaining_drain(monkeyp
     crit = " ".join(str(c.args[0]) for c in telemetry_mock.critical.call_args_list if c.args)
     assert "Kill switch" in crit
 
-def test_execute_broker_orders_fmp_paper_live_fallback():
-    from main_orchestrator import _execute_broker_orders
-    from settings import settings
-    import pandas as pd
-    from unittest.mock import patch
-    
-    original_broker = getattr(settings, "BROKER_BACKEND", "alpaca")
-    original_advisory = getattr(settings, "ADVISORY_ONLY", True)
-    original_paper = getattr(settings, "ALPACA_PAPER", True)
-    
-    settings.BROKER_BACKEND = "fmp_paper"
-    settings.ADVISORY_ONLY = False
-    settings.ALPACA_PAPER = False
-    
-    try:
-        with patch("main_orchestrator.telemetry.error") as mock_err, \
-             patch("observability.alerts.send_alert") as mock_alert, \
-             patch("execution.alpaca_broker.AlpacaBroker") as mock_broker, \
-             patch("execution.order_manager.OrderManager") as mock_om, \
-             patch("transactions_store.TransactionsStore") as mock_ts, \
-             patch("execution.risk_gate.PreTradeRiskGate") as mock_rg:
-             
-            from unittest.mock import AsyncMock
-            mock_broker.return_value.get_open_positions = AsyncMock(return_value=[])
-            mock_om.return_value.reconcile_state = AsyncMock()
-            mock_om.return_value.reconcile_state.return_value.has_drift = False
-            
-            import asyncio
-            asyncio.run(_execute_broker_orders(pd.DataFrame(), dry_run=False))
-            mock_err.assert_called_once()
-            mock_alert.assert_called_once()
-            mock_broker.assert_called_once()
-    finally:
-        settings.BROKER_BACKEND = original_broker
-        settings.ADVISORY_ONLY = original_advisory
-        settings.ALPACA_PAPER = original_paper
+def _install_going_live(monkeypatch):
+    """ADVISORY_ONLY=False + PAPER_TRADING=False, with every broker seam wired
+    to a recorder so any construction or submission is observable."""
+    import engine.advisory_agent as agent_mod
+    import execution.fmp_paper_broker as fmp_mod
+
+    broker = MockBroker(positions=[_pos("MSFT", 5.0)], equity=100_000.0)
+    broker_ctor = MagicMock(name="FMPPaperBroker", return_value=broker)
+    monkeypatch.setattr(main_orchestrator.settings, "ADVISORY_ONLY", False, raising=False)
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_TRADING", False, raising=False)
+    monkeypatch.setattr(fmp_mod, "FMPPaperBroker", broker_ctor)
+    monkeypatch.setattr(agent_mod, "is_us_market_open_now", lambda now: True)
+    telemetry_mock = MagicMock()
+    monkeypatch.setattr(main_orchestrator, "telemetry", telemetry_mock)
+    alert_mock = MagicMock()
+    monkeypatch.setattr("observability.alerts.send_alert", alert_mock)
+    monkeypatch.setattr("diagnostics_and_visuals.telemetry.error", MagicMock())
+    return broker, broker_ctor, alert_mock
+
+
+def test_going_live_constructs_no_broker_and_submits_nothing(monkeypatch):
+    """Going live (ADVISORY_ONLY=False, PAPER_TRADING=False): the automated
+    pipeline has no live broker since Alpaca was removed, so
+    _execute_broker_orders constructs NO broker and submits NOTHING -- real
+    trades go only through the Robinhood queue. The misconfiguration is made
+    visible with a CRITICAL alert rather than silently paper-trading."""
+    broker, broker_ctor, alert_mock = _install_going_live(monkeypatch)
+    df = _df([
+        {"Symbol": "AAPL", "Action Signal": "STRONG BUY", "Kelly Target": 0.1, "Price": 100.0},
+        {"Symbol": "MSFT", "Action Signal": "SELL", "Kelly Target": 0.0, "Price": 200.0},
+    ])
+
+    result = asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert result is None
+    broker_ctor.assert_not_called()
+    assert broker.submitted == []
+    assert broker.get_positions_calls == 0
+    alert_mock.assert_called_once()
+    assert alert_mock.call_args.kwargs.get("level") == "CRITICAL"
+
+
+# ---------------------------------------------------------------------------
+# (h) fmp_paper local ledger: RTH-only, no reconciliation, own positions only
+# ---------------------------------------------------------------------------
+
+def _install_fmp_paper_stack(monkeypatch, *, broker, ts_store, market_open: bool):
+    return _install_enabled_broker_stack(
+        monkeypatch, broker=broker, ts_store=ts_store,
+        kill_switch=_FakeKillSwitch(active=False), market_open=market_open,
+    )
+
+
+def _tagged_pos(symbol: str, qty: float, strategy_id: str) -> PositionSnapshot:
+    return PositionSnapshot(
+        symbol=symbol, qty=qty, avg_entry_price=100.0,
+        market_value=qty * 100.0, unrealized_pl=0.0, strategy_id=strategy_id,
+    )
+
+
+def test_fmp_paper_outside_market_hours_submits_nothing(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    ts_store = _make_ts_store()
+    telemetry_mock = _install_fmp_paper_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, market_open=False
+    )
+    df = _df([{"Symbol": "AAPL", "Action Signal": "BUY", "Kelly Target": 0.1, "Price": 100.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert broker.submitted == []
+    assert broker.get_positions_calls == 0, "broker must not even be queried outside RTH"
+    logged = " ".join(str(c.args[0]) for c in telemetry_mock.info.call_args_list if c.args)
+    assert "US market closed" in logged
+
+
+def test_fmp_paper_skips_reconciliation(monkeypatch):
+    # A manual position the trades ledger doesn't know about would read as
+    # drift against an external broker; the paper ledger IS the ledger, so
+    # reconciliation is skipped.
+    broker = MockBroker(positions=[_tagged_pos("ABR", 95.0, "Manual Trade")])
+    ts_store = _make_ts_store()
+    telemetry_mock = _install_fmp_paper_stack(
+        monkeypatch, broker=broker, ts_store=ts_store, market_open=True
+    )
+
+    asyncio.run(main_orchestrator._execute_broker_orders(_df([]), dry_run=False))
+
+    ts_store.open_trades_df.assert_not_called()
+    assert not telemetry_mock.critical.called
+
+
+def test_fmp_paper_sell_never_closes_a_manual_position(monkeypatch):
+    broker = MockBroker(positions=[
+        _tagged_pos("ABR", 95.0, "Manual Trade"),
+        _tagged_pos("MSFT", 5.0, main_orchestrator.PIPELINE_STRATEGY_ID),
+    ])
+    ts_store = _make_ts_store()
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=ts_store, market_open=True)
+    df = _df([
+        {"Symbol": "ABR", "Action Signal": "SELL", "Kelly Target": 0.0, "Price": 10.0},
+        {"Symbol": "MSFT", "Action Signal": "SELL", "Kelly Target": 0.0, "Price": 200.0},
+    ])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert [(i.symbol, i.side, i.qty) for i in broker.submitted] == [
+        ("MSFT", OrderSide.SELL, 5.0)
+    ]
+    assert broker.submitted[0].strategy_id == main_orchestrator.PIPELINE_STRATEGY_ID
+
+
+def test_fmp_paper_manual_holding_does_not_block_pipeline_buy(monkeypatch):
+    broker = MockBroker(positions=[_tagged_pos("ABR", 95.0, "Manual Trade")], equity=100_000.0)
+    ts_store = _make_ts_store()
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=ts_store, market_open=True)
+    df = _df([{"Symbol": "ABR", "Action Signal": "BUY", "Kelly Target": 0.05, "Price": 10.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    buy = broker.submitted[0]
+    assert (buy.symbol, buy.side) == ("ABR", OrderSide.BUY)
+    assert buy.qty == pytest.approx(main_orchestrator._kelly_target_qty(0.05, 100_000.0, 10.0))
+
+
+def test_fmp_paper_does_not_rebuy_its_own_open_position(monkeypatch):
+    broker = MockBroker(positions=[_tagged_pos("AAPL", 3.0, main_orchestrator.PIPELINE_STRATEGY_ID)])
+    ts_store = _make_ts_store()
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=ts_store, market_open=True)
+    df = _df([{"Symbol": "AAPL", "Action Signal": "BUY", "Kelly Target": 0.1, "Price": 100.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert broker.submitted == []
+
+
+# ---------------------------------------------------------------------------
+# (i) paper cold-start probe sizing + RISK REDUCE exits
+# ---------------------------------------------------------------------------
+
+def test_fmp_paper_probe_sizes_a_zero_kelly_buy(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.01, raising=False)
+    df = _df([
+        {"Symbol": "AGNC", "Action Signal": "STRONG BUY", "Kelly Target": 0.0,
+         "Kelly_Target_Post_Regime": 0.0, "Price": 10.0,
+         "Regime_Multiplier": 1.0, "Meta_Label_Composite": 1.0},
+        {"Symbol": "SPY", "Action Signal": "HOLD", "Kelly Target": 0.0, "Price": 500.0},
+    ])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert len(broker.submitted) == 1
+    buy = broker.submitted[0]
+    assert (buy.symbol, buy.side) == ("AGNC", OrderSide.BUY)
+    assert buy.qty == pytest.approx(100.0)  # 1% of $100k at $10
+
+
+def test_fmp_paper_positive_kelly_beats_the_probe(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.01, raising=False)
+    df = _df([{"Symbol": "AGNC", "Action Signal": "BUY", "Kelly Target": 0.03, "Price": 10.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert broker.submitted[0].qty == pytest.approx(300.0)
+
+
+def test_probe_is_off_by_default(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.0, raising=False)
+    df = _df([{"Symbol": "AGNC", "Action Signal": "BUY", "Kelly Target": 0.0, "Price": 10.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert broker.submitted == []
+
+
+def test_probe_never_applies_when_going_live(monkeypatch):
+    """The paper cold-start probe must never turn into a real-money order:
+    going live places no pipeline orders at all, probe or not."""
+    broker, broker_ctor, _alert = _install_going_live(monkeypatch)
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.01, raising=False)
+    df = _df([{"Symbol": "AGNC", "Action Signal": "BUY", "Kelly Target": 0.0, "Price": 10.0}])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    broker_ctor.assert_not_called()
+    assert broker.submitted == []
+
+
+def test_risk_reduce_closes_the_pipeline_position(monkeypatch):
+    broker = MockBroker(positions=[
+        _tagged_pos("AGNC", 100.0, main_orchestrator.PIPELINE_STRATEGY_ID),
+        _tagged_pos("ABR", 95.0, "Manual Trade"),
+    ])
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    df = _df([
+        {"Symbol": "AGNC", "Action Signal": "RISK REDUCE", "Kelly Target": 0.0, "Price": 10.0},
+        {"Symbol": "ABR", "Action Signal": "RISK REDUCE", "Kelly Target": 0.0, "Price": 10.0},
+    ])
+
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+
+    assert [(i.symbol, i.side, i.qty) for i in broker.submitted] == [("AGNC", OrderSide.SELL, 100.0)]
+
+
+def test_exit_signals_match_strategy_engine_vocabulary():
+    # strategy_engine emits RISK REDUCE as its exit instruction; it must close.
+    assert "RISK REDUCE" in main_orchestrator.EXIT_SIGNALS
+    assert "HOLD" not in main_orchestrator.EXIT_SIGNALS
+
+
+# ---------------------------------------------------------------------------
+# (j) probe gating: cold start only, respects risk zeros, gross-capped
+# ---------------------------------------------------------------------------
+
+def _probe_df(rows: list[dict]) -> pd.DataFrame:
+    """Rows with neutral sizing-decomposition columns unless overridden."""
+    full = []
+    for r in rows:
+        base = {"Kelly Target": 0.0, "Regime_Multiplier": 1.0, "Meta_Label_Composite": 1.0,
+                "DualMomentum_Signal": "disabled"}
+        base.update(r)
+        full.append(base)
+    return _df(full)
+
+
+def _probe_on(monkeypatch, weight=0.01, closed=0):
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", weight, raising=False)
+    import data.paper_account_store as pas
+    monkeypatch.setattr(pas.PaperAccountStore, "count_closed_trades", lambda self, sid: closed)
+
+
+def test_probe_off_once_kelly_has_enough_closed_trades(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    _probe_on(monkeypatch, closed=30)
+    df = _probe_df([{"Symbol": "AGNC", "Action Signal": "BUY", "Price": 10.0}])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert broker.submitted == []
+
+
+def test_probe_withheld_for_dual_momentum_zeroed_risky_asset(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    _probe_on(monkeypatch)
+    monkeypatch.setattr(main_orchestrator.settings, "DUAL_MOMENTUM_SAFE_ASSET", "AGG", raising=False)
+    monkeypatch.setattr(main_orchestrator.settings, "DUAL_MOMENTUM_RISKY_ASSETS", ["SPY", "EFA"], raising=False)
+    df = _probe_df([
+        {"Symbol": "SPY", "Action Signal": "BUY", "Price": 500.0, "DualMomentum_Signal": "AGG"},
+        {"Symbol": "AGNC", "Action Signal": "BUY", "Price": 10.0, "DualMomentum_Signal": "AGG"},
+    ])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert [o.symbol for o in broker.submitted] == ["AGNC"]
+
+
+@pytest.mark.parametrize("col,val", [
+    ("Regime_Multiplier", 0.0), ("Regime_Multiplier", float("nan")),
+    ("Meta_Label_Composite", 0.0), ("Meta_Label_Composite", None),
+])
+def test_probe_withheld_when_risk_logic_says_no(monkeypatch, col, val):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    _probe_on(monkeypatch)
+    df = _probe_df([{"Symbol": "AGNC", "Action Signal": "BUY", "Price": 10.0, col: val}])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert broker.submitted == []
+
+
+def test_probe_scaled_by_regime_multiplier(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    _probe_on(monkeypatch)
+    df = _probe_df([{"Symbol": "AGNC", "Action Signal": "BUY", "Price": 10.0, "Regime_Multiplier": 0.5}])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert broker.submitted[0].qty == pytest.approx(50.0)  # 0.5% of $100k at $10
+
+
+def test_probe_gross_cap_stops_probes_mid_cycle(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    _probe_on(monkeypatch, weight=0.05)
+    monkeypatch.setattr(main_orchestrator.settings, "MAX_PORTFOLIO_GROSS", 0.12, raising=False)
+    df = _probe_df([{"Symbol": s, "Action Signal": "BUY", "Price": 10.0} for s in ("A", "B", "C", "D")])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert [o.symbol for o in broker.submitted] == ["A", "B"]  # 0.05 + 0.05; a third would exceed 0.12
+
+
+def test_probe_disabled_when_closed_count_unavailable(monkeypatch):
+    broker = MockBroker(equity=100_000.0)
+    _install_fmp_paper_stack(monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True)
+    monkeypatch.setattr(main_orchestrator.settings, "PAPER_PIPELINE_PROBE_WEIGHT", 0.01, raising=False)
+    import data.paper_account_store as pas
+
+    def _boom(self, sid):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(pas.PaperAccountStore, "count_closed_trades", _boom)
+    df = _probe_df([{"Symbol": "AGNC", "Action Signal": "BUY", "Price": 10.0}])
+    asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
+    assert broker.submitted == []
+
+
+# ---------------------------------------------------------------------------
+# (k) decision context (execution/trade_context.py) is inert for trading:
+#     builders working vs. forced to raise -> identical orders and ids
+# ---------------------------------------------------------------------------
+
+_FIXED_NOW = datetime(2026, 10, 5, 15, 0, 0)
+
+
+def _freeze_orchestrator_now(monkeypatch):
+    from datetime import timezone as _tz
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _FIXED_NOW.replace(tzinfo=_tz.utc)
+
+    monkeypatch.setattr(main_orchestrator, "datetime", _FrozenDatetime)
+
+
+def _context_df() -> pd.DataFrame:
+    """One Kelly-sized BUY, one probe-sized zero-Kelly BUY, one RISK REDUCE
+    exit on an open pipeline position, plus a HOLD that must not trade."""
+    return _df([
+        {"Symbol": "AAPL", "Action Signal": "STRONG BUY", "Kelly Target": 0.05,
+         "Kelly_Target_Post_Regime": 0.08, "Price": 100.0, "Score": 82,
+         "Regime_Multiplier": 1.0, "Meta_Label_Composite": 1.0,
+         "DualMomentum_Signal": "disabled", "Macro Status": "RISK_ON",
+         "Forecast_30": 110.0, "Actionable Advice Signal": "STRONG BUY: test",
+         "Advisory_Action": "BUY", "Advisory_Conviction": 0.7},
+        {"Symbol": "AGNC", "Action Signal": "BUY", "Kelly Target": 0.0,
+         "Kelly_Target_Post_Regime": 0.0, "Price": 10.0, "Score": 61,
+         "Regime_Multiplier": 1.0, "Meta_Label_Composite": 1.0,
+         "DualMomentum_Signal": "disabled", "Macro Status": "RISK_ON",
+         "Forecast_30": float("nan"), "Actionable Advice Signal": "BUY: test",
+         "Advisory_Action": "", "Advisory_Conviction": 0.0},
+        {"Symbol": "SPY", "Action Signal": "RISK REDUCE", "Kelly Target": 0.0,
+         "Price": 500.0, "Score": 20, "Regime_Multiplier": 1.0,
+         "Meta_Label_Composite": 1.0, "DualMomentum_Signal": "BIL",
+         "Macro Status": "RISK_OFF"},
+        {"Symbol": "MSFT", "Action Signal": "HOLD", "Kelly Target": 0.0, "Price": 200.0},
+    ])
+
+
+def _run_context_cycle(monkeypatch, *, builders_raise: bool, priority_queue: bool):
+    import execution.trade_context as tc
+
+    broker = MockBroker(
+        positions=[_tagged_pos("SPY", 1.3, main_orchestrator.PIPELINE_STRATEGY_ID)],
+        equity=100_000.0,
+    )
+    telemetry_mock = _install_fmp_paper_stack(
+        monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True
+    )
+    _probe_on(monkeypatch, weight=0.01, closed=0)
+    _freeze_orchestrator_now(monkeypatch)
+    monkeypatch.setattr(main_orchestrator.settings, "EXECUTION_PRIORITY_QUEUE_ENABLED", priority_queue, raising=False)
+    monkeypatch.setattr(main_orchestrator.settings, "EXECUTION_QUEUE_LEAK_RATE_PER_SEC", -1, raising=False)
+    if builders_raise:
+        def _boom(*a, **k):
+            raise RuntimeError("context builder exploded")
+        monkeypatch.setattr(tc, "build_entry_context", _boom)
+        monkeypatch.setattr(tc, "build_exit_context", _boom)
+
+    asyncio.run(main_orchestrator._execute_broker_orders(_context_df(), dry_run=False))
+    return broker.submitted, telemetry_mock
+
+
+def _trading_fields(intents):
+    return [
+        (i.strategy_id, i.symbol, i.side, i.qty, i.target_qty, i.order_type,
+         i.priority, i.limit_price, i.time_in_force, i.dry_run, i.client_order_id)
+        for i in intents
+    ]
+
+
+@pytest.mark.parametrize("priority_queue", [False, True])
+def test_decision_context_never_changes_orders_or_client_order_ids(monkeypatch, priority_queue):
+    with_ctx, _ = _run_context_cycle(monkeypatch, builders_raise=False, priority_queue=priority_queue)
+    monkeypatch.undo()
+    without_ctx, telemetry_mock = _run_context_cycle(monkeypatch, builders_raise=True, priority_queue=priority_queue)
+
+    # Same orders, same submission order, same sizes, same ids.
+    assert len(with_ctx) == 3
+    assert _trading_fields(with_ctx) == _trading_fields(without_ctx)
+    assert all(i.client_order_id for i in with_ctx)
+
+    # Context attached when the builders work; None (and the order still
+    # submitted) when they raise.
+    assert all(isinstance(i.decision_context, dict) for i in with_ctx)
+    assert all(i.decision_context is None for i in without_ctx)
+    warned = " ".join(str(c.args[0]) for c in telemetry_mock.warning.call_args_list if c.args)
+    assert "Trade decision context unavailable" in warned
+
+
+def test_decision_context_content_for_entry_probe_and_exit(monkeypatch):
+    import json
+
+    submitted, _ = _run_context_cycle(monkeypatch, builders_raise=False, priority_queue=False)
+    by_symbol = {i.symbol: i.decision_context for i in submitted}
+
+    aapl = by_symbol["AAPL"]
+    assert aapl["kind"] == "entry"
+    assert aapl["provenance"] == "signal_driven"
+    assert aapl["provenance_tag"] == "main_pipeline:kelly"
+    assert aapl["signal_score"] == 82.0
+    assert aapl["conviction"] is None  # never the advisory engine's number
+    ind = json.loads(aapl["key_indicators_json"])
+    assert ind["advisory_conviction_same_cycle"] == 0.7
+    assert ind["effective_weight"] == pytest.approx(0.05)
+
+    agnc = by_symbol["AGNC"]
+    assert agnc["provenance_tag"] == "main_pipeline:probe"
+    assert agnc["raw_forecast"] is None  # NaN forecast -> None, not 0.0
+    agnc_ind = json.loads(agnc["key_indicators_json"])
+    assert agnc_ind["effective_weight"] == pytest.approx(0.01)
+    assert agnc_ind["kelly_target_row"] == 0.0
+    # Advisory 0.0 blank-fill with no Advisory_Action is a placeholder.
+    assert agnc_ind["advisory_conviction_same_cycle"] is None
+
+    spy = by_symbol["SPY"]
+    assert spy["kind"] == "exit"
+    assert spy["close_reason"] == "signal_risk_reduce"
+    exit_ctx = json.loads(spy["exit_context_json"])
+    assert exit_ctx["exit_signal"] == "RISK REDUCE"
+    assert exit_ctx["dual_momentum_signal"] == "BIL"
+    assert exit_ctx["held_qty"] == pytest.approx(1.3)

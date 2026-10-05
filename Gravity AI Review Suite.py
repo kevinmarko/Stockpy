@@ -684,7 +684,9 @@ class GravityAIAuditor:
             # controls for wiring verification only, not real strategies —
             # isolate their reports so they never clobber reports/*_validation_summary.json
             # for actual production strategies (or get picked up by
-            # scripts/preflight_check.py's validation_reports gate).
+            # scripts/preflight_check.py's validation_reports gate). The temp
+            # dir only isolates FILES; record_to_history_db=False below keeps
+            # them out of the shared validation_runs DB table too.
             audit_reports_dir = tempfile.mkdtemp(prefix="gravity_harness_audit_")
 
             # 1. Random strategy (should fail deployability)
@@ -715,7 +717,8 @@ class GravityAIAuditor:
                 cost_model=cost_model,
                 n_cpcv_splits=5,
                 n_test_splits=1,
-                reports_dir=audit_reports_dir
+                reports_dir=audit_reports_dir,
+                record_to_history_db=False,
             )
 
             report_random = harness.run(
@@ -753,7 +756,8 @@ class GravityAIAuditor:
                 cost_model=cost_model,
                 n_cpcv_splits=5,
                 n_test_splits=1,
-                reports_dir=audit_reports_dir
+                reports_dir=audit_reports_dir,
+                record_to_history_db=False,
             )
 
             report_trend = harness_trend.run(
@@ -1661,70 +1665,6 @@ class GravityAIAuditor:
 
         self.report["step_18_hmm_regime_audit"] = hmm_report
 
-    def run_ivr_vrp_audit(self) -> None:
-        """
-        STEP 19: OPTIONS TRUE IVR AND VRP REGIME GATE AUDIT
-        """
-        ivr_report = {}
-        try:
-            from technical_options_engine import OptionsPricingRecommender
-            from dto_models import MacroEconomicDTO
-            import config as platform_config
-            
-            # Check schema columns
-            schema_keys = {c["key"] for c in platform_config.COLUMN_SCHEMA}
-            has_realized_vol_rank = "Realized_Vol_Rank" in schema_keys
-            has_true_ivr = "True_IVR" in schema_keys
-            has_vrp = "VRP" in schema_keys
-            
-            ivr_report["has_schema_columns"] = bool(has_realized_vol_rank and has_true_ivr and has_vrp)
-            
-            recommender = OptionsPricingRecommender(100.0)
-            
-            # 1. High true_ivr (>50) but gated (VRP <= 0.02) -> should return Cash/Wait
-            gated_res_vrp = recommender.generate_strategy_pricing_matrix(
-                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.01,
-                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0, vix_value=20.0)
-            )
-            gated_vrp_ok = gated_res_vrp["Strategy"] == "Cash" and gated_res_vrp["Action"] == "Wait"
-            ivr_report["gated_by_low_vrp_works"] = bool(gated_vrp_ok)
-            
-            # 2. High true_ivr (>50) but gated (VIX >= 30) -> should return Cash/Wait
-            gated_res_vix = recommender.generate_strategy_pricing_matrix(
-                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.05,
-                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0, vix_value=32.0)
-            )
-            gated_vix_ok = gated_res_vix["Strategy"] == "Cash" and gated_res_vix["Action"] == "Wait"
-            ivr_report["gated_by_high_vix_works"] = bool(gated_vix_ok)
-
-            # 3. High true_ivr (>50) but gated (CREDIT EVENT) -> should return Cash/Wait
-            # Setting high_yield_oas=7.0 naturally triggers a CREDIT EVENT regime in DTO
-            gated_res_credit = recommender.generate_strategy_pricing_matrix(
-                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.05,
-                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=7.0, inflation_rate=2.0, vix_value=20.0)
-            )
-            gated_credit_ok = gated_res_credit["Strategy"] == "Cash" and gated_res_credit["Action"] == "Wait"
-            ivr_report["gated_by_credit_event_works"] = bool(gated_credit_ok)
-            
-            # 4. High true_ivr (>50) and ungated -> should recommend Put Credit Spread for Bullish bias
-            ungated_res = recommender.generate_strategy_pricing_matrix(
-                true_ivr=60.0, current_iv=0.25, trend_bias="Bullish", vrp=0.05,
-                macro_dto=MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=2.0, inflation_rate=2.0, vix_value=20.0)
-            )
-            ungated_ok = ungated_res["Strategy"] == "Put Credit Spread" and ungated_res["Action"] == "Sell to Open"
-            ivr_report["ungated_put_credit_spread_works"] = bool(ungated_ok)
-            
-            all_pass = all([
-                has_realized_vol_rank, has_true_ivr, has_vrp,
-                gated_vrp_ok, gated_vix_ok, gated_credit_ok, ungated_ok
-            ])
-            ivr_report["status"] = "PASSED" if all_pass else "FAILED"
-        except Exception as e:
-            ivr_report["status"] = f"Execution Error: {str(e)}"
-            ivr_report["error"] = str(e)
-            
-        self.report["step_19_ivr_vrp_audit"] = ivr_report
-
     def run_pairs_trading_audit(self) -> None:
         """
         STEP 20: ENGLE-GRANGER AND KALMAN PAIRS TRADING VALIDATION AUDIT
@@ -1907,10 +1847,11 @@ class GravityAIAuditor:
 
     def run_broker_order_manager_audit(self):
         """
-        STEP 22 — Alpaca Broker & OrderManager Audit
+        STEP 22 — Broker selection & OrderManager Audit
         Checks:
         1. BrokerBase ABC cannot be instantiated directly.
-        2. AlpacaBroker raises RuntimeError when credentials are absent.
+        2. resolve_broker_backend() returns None (no automated orders) when
+           going live, and 'fmp_paper' otherwise (Alpaca was removed 2026-09-30).
         3. make_client_order_id is deterministic for the same inputs.
         4. make_client_order_id differs for different symbols.
         5. make_client_order_id differs for different strategy_ids.
@@ -1936,20 +1877,29 @@ class GravityAIAuditor:
             broker_report["checks"]["broker_base_abstract"] = f"ERROR: {e}"
             broker_report["status"] = "FAILED"
 
-        # Check 2: AlpacaBroker raises on missing credentials
+        # Check 2: no automated live broker -- going live resolves to None
         try:
-            from execution.alpaca_broker import AlpacaBroker
-            try:
-                AlpacaBroker(api_key=None, secret_key=None)
-                broker_report["checks"]["alpaca_missing_creds"] = "FAIL: should raise RuntimeError"
-                broker_report["status"] = "FAILED"
-            except RuntimeError:
-                broker_report["checks"]["alpaca_missing_creds"] = "PASS: raises RuntimeError when credentials absent"
-            except Exception as e:
-                broker_report["checks"]["alpaca_missing_creds"] = f"FAIL: wrong exception {type(e).__name__}: {e}"
+            from unittest.mock import patch as _patch
+            from execution import broker_selection as _bs
+            with _patch("settings.settings.ADVISORY_ONLY", False), \
+                 _patch("settings.settings.PAPER_TRADING", False), \
+                 _patch("diagnostics_and_visuals.telemetry.error"), \
+                 _patch("observability.alerts.send_alert"):
+                live_backend = _bs.resolve_broker_backend()
+            with _patch("settings.settings.ADVISORY_ONLY", False), \
+                 _patch("settings.settings.PAPER_TRADING", True):
+                paper_backend = _bs.resolve_broker_backend()
+            if live_backend is None and paper_backend == "fmp_paper":
+                broker_report["checks"]["live_resolves_to_no_broker"] = (
+                    "PASS: going live -> None (no pipeline orders); paper -> 'fmp_paper'"
+                )
+            else:
+                broker_report["checks"]["live_resolves_to_no_broker"] = (
+                    f"FAIL: live={live_backend!r} paper={paper_backend!r}"
+                )
                 broker_report["status"] = "FAILED"
         except Exception as e:
-            broker_report["checks"]["alpaca_missing_creds"] = f"ERROR importing AlpacaBroker: {e}"
+            broker_report["checks"]["live_resolves_to_no_broker"] = f"ERROR: {e}"
             broker_report["status"] = "FAILED"
 
         # Checks 3-5: make_client_order_id
@@ -2758,7 +2708,7 @@ class GravityAIAuditor:
         """Step 26 — Validates data/market_data.py (swappable market-data layer).
 
         All checks are fully offline — no network calls are made.  Providers that
-        require live connectivity (AlpacaProvider, FinnhubProvider with a real key)
+        require live connectivity (FMPProvider with a real key)
         are exercised via constructor injection or by bypassing __init__ with
         __new__, mirroring the pattern used in tests/test_market_data.py.
 
@@ -2771,13 +2721,13 @@ class GravityAIAuditor:
               (yfinance data is ~15-min delayed by design).
           (f) _QuoteCache respects TTL: fresh hit returns the quote; after the
               TTL elapses the same lookup returns None (eviction).
-          (g) CompositeProvider selects yfinance when Alpaca keys are absent.
-          (h) CompositeProvider selects Alpaca when both Alpaca keys are present.
-          (i) FinnhubProvider degrades gracefully to empty dict when key is None.
+          (g) CompositeProvider selects yfinance when MARKET_DATA_PROVIDER is unset.
+          (h) MARKET_DATA_PROVIDER='alpaca' is rejected as an unknown value
+              (Alpaca was removed 2026-09-30) rather than silently degrading.
           (j) Bar DataFrame contract: columns == [Open, High, Low, Close, Volume]
               and index is timezone-naive.
           (k) New settings fields exist on the Settings class
-              (MARKET_DATA_PROVIDER, FINNHUB_API_KEY, MARKET_DATA_QUOTE_TTL_SECONDS).
+              (MARKET_DATA_PROVIDER, MARKET_DATA_QUOTE_TTL_SECONDS).
         """
         audit: dict = {"status": "PENDING", "checks": {}}
         try:
@@ -2786,9 +2736,7 @@ class GravityAIAuditor:
                 MarketDataError,
                 MarketDataProvider,
                 Quote,
-                AlpacaProvider,
                 YFinanceProvider,
-                FinnhubProvider,
                 CompositeProvider,
                 get_provider,
                 reset_provider,
@@ -2870,7 +2818,7 @@ class GravityAIAuditor:
                 "evicted_after_ttl": evicted,
             }
 
-            # ── (g) CompositeProvider selects yfinance when no Alpaca keys ────
+            # ── (g) CompositeProvider selects yfinance when provider unset ────
             # NOTE: provider selection reads settings.settings (the pydantic
             # singleton, populated once from .env at import time), never
             # os.environ directly -- see data/market_data.py's
@@ -2883,7 +2831,7 @@ class GravityAIAuditor:
             import os as _os
             with patch.multiple(
                 "settings.settings",
-                MARKET_DATA_PROVIDER=None, ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
+                MARKET_DATA_PROVIDER=None,
             ):
                 cp_no_keys = CompositeProvider.__new__(CompositeProvider)
                 cp_no_keys._quote_provider = cp_no_keys._select_quote_provider()  # type: ignore[attr-defined]
@@ -2894,33 +2842,16 @@ class GravityAIAuditor:
                 "selected_provider": selected_no_keys,
             }
 
-            # ── (h) CompositeProvider selects Alpaca when both keys present ───
-            with patch.multiple(
-                "settings.settings",
-                MARKET_DATA_PROVIDER=None, ALPACA_API_KEY="test_key", ALPACA_SECRET_KEY="test_secret",
-            ):
-                # Patch StockHistoricalDataClient so alpaca-py doesn't try to connect.
-                # Must patch the name as looked up by AlpacaProvider._build_client()'s
-                # `from alpaca.data.historical import StockHistoricalDataClient` --
-                # i.e. the attribute on alpaca.data.historical itself, not on the
-                # (possibly different) submodule it was originally defined in.
-                with patch("alpaca.data.historical.StockHistoricalDataClient"):
-                    cp_with_keys = CompositeProvider.__new__(CompositeProvider)
-                    cp_with_keys._quote_provider = cp_with_keys._select_quote_provider()  # type: ignore[attr-defined]
-                    selected_with_keys = type(cp_with_keys._quote_provider).__name__
-            alpaca_selected = selected_with_keys == "AlpacaProvider"
-            audit["checks"]["composite_selects_alpaca_with_keys"] = {
-                "status": "PASSED" if alpaca_selected else "FAILED",
-                "selected_provider": selected_with_keys,
-            }
-
-            # ── (i) FinnhubProvider degrades gracefully with no key ───────────
-            fh_no_key = FinnhubProvider(api_key=None)
-            result_no_key = fh_no_key.get_fundamentals("AAPL")
-            degrade_ok = isinstance(result_no_key, dict) and len(result_no_key) == 0
-            audit["checks"]["finnhub_degrades_no_key"] = {
-                "status": "PASSED" if degrade_ok else "FAILED",
-                "returned_empty_dict": degrade_ok,
+            # ── (h) 'alpaca' is an unknown provider value now (fails loudly) ──
+            alpaca_rejected = False
+            with patch.multiple("settings.settings", MARKET_DATA_PROVIDER="alpaca"):
+                cp_alpaca = CompositeProvider.__new__(CompositeProvider)
+                try:
+                    cp_alpaca._select_quote_provider()  # type: ignore[attr-defined]
+                except RuntimeError as _exc:
+                    alpaca_rejected = "Unknown MARKET_DATA_PROVIDER" in str(_exc)
+            audit["checks"]["composite_rejects_removed_alpaca_provider"] = {
+                "status": "PASSED" if alpaca_rejected else "FAILED",
             }
 
             # ── (j) Bar DataFrame contract: OHLCV columns + tz-naive index ────
@@ -2951,83 +2882,16 @@ class GravityAIAuditor:
             from settings import Settings
             s = Settings()
             has_provider_field = hasattr(s, "MARKET_DATA_PROVIDER")
-            has_finnhub_field = hasattr(s, "FINNHUB_API_KEY")
             has_ttl_field = hasattr(s, "MARKET_DATA_QUOTE_TTL_SECONDS")
-            # 2026-06 Finnhub 429 mitigation — cache TTL + rate-limit settings.
             has_fund_cache_ttl = hasattr(s, "FUNDAMENTALS_CACHE_TTL_SECONDS")
-            has_finnhub_rate_limit = hasattr(s, "FINNHUB_RATE_LIMIT_PER_MIN")
             all_fields_present = (
-                has_provider_field and has_finnhub_field and has_ttl_field
-                and has_fund_cache_ttl and has_finnhub_rate_limit
+                has_provider_field and has_ttl_field and has_fund_cache_ttl
             )
             audit["checks"]["settings_fields_present"] = {
                 "status": "PASSED" if all_fields_present else "FAILED",
                 "MARKET_DATA_PROVIDER": has_provider_field,
-                "FINNHUB_API_KEY": has_finnhub_field,
                 "MARKET_DATA_QUOTE_TTL_SECONDS": has_ttl_field,
                 "FUNDAMENTALS_CACHE_TTL_SECONDS": has_fund_cache_ttl,
-                "FINNHUB_RATE_LIMIT_PER_MIN": has_finnhub_rate_limit,
-            }
-
-            # ── (l) Finnhub fundamentals cache: positive AND negative entries ─
-            # Asserts the 2026-06 fix: repeat get_fundamentals() calls within the
-            # TTL window hit the cache and never re-invoke the network client.
-            from data.market_data import FinnhubProvider, _FundamentalsCache
-            fh = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
-            fh._client = MagicMock()
-            fh._client.company_basic_financials.return_value = {
-                "metric": {"peBasicExclExtraTTM": 25.0}
-            }
-            fh._client.quote.return_value = {"c": 150.0}
-            fh._client.company_profile2.return_value = {}
-            fh.get_fundamentals("AAPL")
-            fh.get_fundamentals("AAPL")
-            fh.get_fundamentals("AAPL")
-            cache_dedupes = fh._client.company_basic_financials.call_count == 1
-            audit["checks"]["finnhub_fundamentals_cache_dedupes"] = {
-                "status": "PASSED" if cache_dedupes else "FAILED",
-                "call_count": fh._client.company_basic_financials.call_count,
-            }
-
-            # ── (m) 429 is swallowed AND negative-cached ──────────────────────
-            # A FinnhubAPIException-shaped exception (status_code=429) must NOT
-            # raise; it must return {} and prevent re-hammer on the next call.
-            fh2 = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
-            fh2._client = MagicMock()
-            mock_exc = Exception("Too many requests.")
-            mock_exc.status_code = 429
-            fh2._client.company_basic_financials.side_effect = mock_exc
-            with patch("data.market_data.time.sleep", lambda s: None):
-                first = fh2.get_fundamentals("BAC")
-                second = fh2.get_fundamentals("BAC")
-            call_count_after_two = fh2._client.company_basic_financials.call_count
-            # The FIRST get_fundamentals() call makes 2 client calls on its own
-            # (initial attempt + the documented one-shot backoff retry on 429);
-            # the SECOND call must be served entirely from the negative cache,
-            # contributing zero further client calls -- so the total after both
-            # calls is 2, not 1.
-            rate_limit_handled = (
-                first == {} and second == {} and call_count_after_two == 2
-            )
-            audit["checks"]["finnhub_429_swallowed_and_cached"] = {
-                "status": "PASSED" if rate_limit_handled else "FAILED",
-                "first": first,
-                "second": second,
-                "client_call_count": call_count_after_two,
-            }
-
-            # ── (n) Sliding-window rate limiter sleeps when budget exhausted ─
-            from data.market_data import _SlidingWindowRateLimiter
-            slept: list[float] = []
-            with patch("data.market_data.time.sleep", lambda s: slept.append(s)):
-                rl = _SlidingWindowRateLimiter(max_calls=2, window_seconds=60.0)
-                rl.acquire()
-                rl.acquire()
-                rl.acquire()  # third call MUST sleep
-            limiter_blocks = len(slept) == 1 and slept[0] > 0
-            audit["checks"]["rate_limiter_blocks_on_budget"] = {
-                "status": "PASSED" if limiter_blocks else "FAILED",
-                "sleeps": slept,
             }
 
             # ── (o) CompositeProvider-level fundamentals cache dedup ──────────
@@ -3047,7 +2911,6 @@ class GravityAIAuditor:
             with patch.multiple(
                 "settings.settings",
                 FUNDAMENTALS_SOURCE=None, MARKET_DATA_PROVIDER=None,
-                FINNHUB_API_KEY="", ALPACA_API_KEY="", ALPACA_SECRET_KEY="",
             ):
                 cp = CompositeProvider()
                 yf_calls = {"n": 0}
@@ -3080,7 +2943,6 @@ class GravityAIAuditor:
             with patch.multiple(
                 "settings.settings",
                 MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE=None,
-                ALPACA_API_KEY="", ALPACA_SECRET_KEY="",
             ):
                 cp_default = CompositeProvider()
                 default_source = cp_default.source_name
@@ -3343,7 +3205,7 @@ class GravityAIAuditor:
             mock_targets = [
                 "engine.advisory.ProcessingEngine",
                 "engine.advisory.ForecastingEngine",
-                "engine.advisory.TechnicalOptionsEngine",
+                "engine.advisory.GarchVolatilityEstimator",
                 "engine.advisory.StrategyEngine",
             ]
 
@@ -4282,7 +4144,7 @@ class GravityAIAuditor:
                     )
                     secret_write_refused = False
                     try:
-                        _env_io.write_setting("ALPACA_SECRET_KEY", "nope")
+                        _env_io.write_setting("FRED_API_KEY", "nope")
                     except _env_io.SecretWriteError:
                         secret_write_refused = True
                     _chk("secret_write_refused", secret_write_refused,
@@ -4565,7 +4427,6 @@ class GravityAIAuditor:
         self.run_kelly_vol_target_sizing_audit()
         self.run_multifactor_audit()
         self.run_hmm_regime_audit()
-        self.run_ivr_vrp_audit()
         self.run_pairs_trading_audit()
         self.run_stress_scenario_audit()
         self.run_broker_order_manager_audit()
@@ -4586,7 +4447,6 @@ class GravityAIAuditor:
         self.run_portfolio_sync_audit()
         self.run_risk_gates_portfolio_heat_audit()
         self.run_six_bug_regression_audit()
-        self.run_options_matrix_integrity_audit()
         self.run_brinson_fachler_attribution_audit()
         self.run_launcher_telemetry_audit()
         self.run_market_data_diagnostics_audit()
@@ -4632,7 +4492,7 @@ class GravityAIAuditor:
         self.step_65_refresh_validations_audit()
         # Stage 2 — Advisory false-positive preflight fixes (state_snapshot_fresh + expanded _ADVISORY_AUTO_SKIP)
         self.step_66_advisory_false_positive_audit()
-        # Stage 3 — Alpaca key-rotation reminder check
+        # Stage 3 — key-rotation reminder check (FRED; the Alpaca check was removed with Alpaca)
         self.step_67_key_rotation_audit()
         # Stage 8 — Prompt Registry security + wiring audit
         self.step_69_prompt_registry_audit()
@@ -4680,8 +4540,8 @@ class GravityAIAuditor:
         self.step_90_forecast_reliability_curve_audit()
         # Robinhood account-snapshot cache adapter + orchestrator call-site wiring audit
         self.step_91_robinhood_account_cache_audit()
-        # Autopilot "Pilots" gated follow-mirror — broker-quarantine + gating audit
-        self.step_92_pilots_mirror_quarantine_audit()
+        # (step 92, the Follow-a-Pilot mirror quarantine audit, was removed with
+        # Follow-a-Pilot in 2026-09, step 4c; pilots/mirror.py is in legacy/.)
         # MCP DB query surface — DATABASE-LEVEL read-only enforcement audit
         self.step_93_mcp_db_readonly_audit()
         # HistoricalStore/ForecastTracker/TransactionsStore readonly=True hardening
@@ -4720,7 +4580,7 @@ class GravityAIAuditor:
         5.  ``shared.env_io.SECRET_KEYS`` does NOT contain ``MACRO_REGIME_GATE_ENABLED``
             (it is a toggle, not a credential).
         6.  ``scripts.preflight_check.check_macro_regime_gate_enabled`` fails when
-            gate is off and ALPACA_PAPER is False (live-trading safety guard).
+            gate is off and PAPER_TRADING is False (live-trading safety guard).
         7.  ``main_orchestrator._write_state_snapshot`` surfaces ``sahm_rule``,
             ``high_yield_oas``, and ``macro_regime_gate_enabled`` keys so the GUI
             Observability tab can display recession telemetry without a live FRED call.
@@ -4867,12 +4727,12 @@ class GravityAIAuditor:
             from scripts.preflight_check import check_macro_regime_gate_enabled
             with (
                 patch.object(_settings, "MACRO_REGIME_GATE_ENABLED", False),
-                patch.object(_settings, "ALPACA_PAPER", False),
+                patch.object(_settings, "PAPER_TRADING", False),
             ):
                 result_preflight = check_macro_regime_gate_enabled()
             passed = result_preflight.passed is False
             audit["checks"].append({
-                "check": "preflight fails when gate OFF + ALPACA_PAPER=False",
+                "check": "preflight fails when gate OFF + PAPER_TRADING=False",
                 "passed": passed,
                 "detail": f"passed={result_preflight.passed}, reason={result_preflight.reason!r}",
             })
@@ -5507,189 +5367,6 @@ class GravityAIAuditor:
         self.report["step_37_six_bug_regression_audit"] = audit
 
 
-    def run_options_matrix_integrity_audit(self) -> None:
-        """Step 38 — Technical Options Matrix integrity audit.
-
-        Verifies the premium-selling matrix surfaced by the Command Center's
-        Technical Options Matrix tab (and used by every advisory render path)
-        upholds the four invariants demanded by the operational spec:
-
-        1. **Schema hydration** — ``build_premium_directive`` returns a row
-           containing every diagnostic + actionable column the GUI needs
-           (sigma, IVR proxy, trend bias, ATM Greeks, legs, theta, integrity).
-        2. **Strike grid** — every leg strike falls on the ``$0.50`` grid.
-        3. **Delta targets** — the resolved Black-Scholes delta of each leg is
-           within ``±0.05`` of its conventional target (short/long Put Credit
-           Spread, Iron Condor, etc.).
-        4. **Regime gate (fail-closed)** — high IVR + bullish trend during
-           ``VIX > 30`` or ``CREDIT EVENT`` regime degrades to ``Cash / Wait``
-           rather than producing a premium-selling recommendation.
-        """
-        audit = {
-            "step": "step_38_options_matrix_integrity_audit",
-            "description": "Technical Options Matrix integrity ($0.50 strike grid + delta targets + regime gate)",
-            "checks": [],
-            "overall_pass": False,
-        }
-        all_pass = True
-
-        try:
-            import numpy as np
-            import pandas as pd
-            from technical_options_engine import (
-                EXPECTED_DELTA_TARGETS,
-                OptionsPricingRecommender,
-                STRIKE_GRID_USD,
-                build_premium_directive,
-                validate_directive_integrity,
-            )
-
-            class _MacroProxy:
-                def __init__(self, vix=15.0, regime="RISK ON") -> None:
-                    self.vix = vix
-                    self.market_regime = regime
-
-            # ── Check 1: full row hydration on synthetic bars ─────────────
-            rng = np.random.default_rng(42)
-            n = 252
-            returns = rng.normal(0.0005, 0.012, size=n)
-            close = 100 * np.exp(np.cumsum(returns))
-            idx = pd.date_range("2024-01-01", periods=n, freq="B")
-            bars = pd.DataFrame(
-                {
-                    "Open": close * 0.999,
-                    "High": close * 1.005,
-                    "Low": close * 0.995,
-                    "Close": close,
-                    "Volume": rng.integers(1_000_000, 5_000_000, size=n),
-                },
-                index=idx,
-            )
-            row = build_premium_directive(
-                "GRAVITY_TEST",
-                bars,
-                spot_price=float(bars["Close"].iloc[-1]),
-                is_stale=False,
-                target_dte=30,
-                macro_dto=_MacroProxy(),
-            )
-            required = {
-                "Symbol", "Price", "Sigma_GARCH", "IVR_Proxy",
-                "Aroon_Oscillator", "Coppock_Curve", "Trend_Bias",
-                "Strategy", "Action", "Net_Premium", "Realizable_Daily_Theta",
-                "ATM_Delta", "ATM_Gamma", "ATM_Vega", "ATM_Theta_Daily",
-                "Legs", "Integrity_OK", "Integrity_Issues",
-            }
-            schema_ok = required.issubset(row.keys())
-            audit["checks"].append({
-                "check": "build_premium_directive hydrates the full column schema",
-                "passed": schema_ok,
-                "detail": f"missing={sorted(required - set(row.keys()))}",
-            })
-            all_pass = all_pass and schema_ok
-
-            # ── Check 2: high IVR + bullish → Put Credit Spread, $0.50 grid ──
-            rec = OptionsPricingRecommender(stock_price=100.0)
-            d_pcs = rec.generate_strategy_pricing_matrix(
-                true_ivr=75.0, current_iv=0.30, trend_bias="Bullish",
-                target_dte=30, vrp=None, macro_dto=_MacroProxy(),
-            )
-            grid_ok = all(
-                abs(float(l["Strike"]) / STRIKE_GRID_USD - round(float(l["Strike"]) / STRIKE_GRID_USD)) < 1e-6
-                for l in d_pcs["Legs"]
-            )
-            strategy_ok = d_pcs["Strategy"] == "Put Credit Spread"
-            audit["checks"].append({
-                "check": "high IVR + bullish → Put Credit Spread with every strike on $0.50 grid",
-                "passed": strategy_ok and grid_ok,
-                "detail": f"strategy={d_pcs['Strategy']!r}, strikes={[l['Strike'] for l in d_pcs['Legs']]}",
-            })
-            all_pass = all_pass and strategy_ok and grid_ok
-
-            # ── Check 3: short/long deltas land within ±0.05 of target ─────
-            short_leg = next(l for l in d_pcs["Legs"] if l["Side"] == "Short")
-            long_leg = next(l for l in d_pcs["Legs"] if l["Side"] == "Long")
-            tgt_s = EXPECTED_DELTA_TARGETS[("Put Credit Spread", "Short", "Put")]
-            tgt_l = EXPECTED_DELTA_TARGETS[("Put Credit Spread", "Long", "Put")]
-            delta_ok = (
-                abs(float(short_leg["Delta"]) - tgt_s) <= 0.05
-                and abs(float(long_leg["Delta"]) - tgt_l) <= 0.05
-            )
-            audit["checks"].append({
-                "check": "Put Credit Spread leg deltas within ±0.05 of (-0.30, -0.15) targets",
-                "passed": delta_ok,
-                "detail": f"short_delta={short_leg['Delta']:+.3f} target={tgt_s:+.2f}; "
-                          f"long_delta={long_leg['Delta']:+.3f} target={tgt_l:+.2f}",
-            })
-            all_pass = all_pass and delta_ok
-
-            # ── Check 4: validate_directive_integrity catches off-grid strike ──
-            bad = {
-                "Strategy": "Put Credit Spread", "Action": "Sell to Open",
-                "Legs": [
-                    {"Side": "Short", "Type": "Put", "Strike": 95.37, "Price": 1.5, "Delta": -0.30},
-                    {"Side": "Long", "Type": "Put", "Strike": 90.00, "Price": 0.5, "Delta": -0.15},
-                ],
-                "Net_Premium": 1.0, "Realizable_Daily_Theta": 0.02,
-            }
-            v_bad = validate_directive_integrity(bad)
-            v_good = validate_directive_integrity(d_pcs)
-            integrity_ok = (not v_bad["ok"]) and v_good["ok"]
-            audit["checks"].append({
-                "check": "validate_directive_integrity flags off-grid strike but accepts engine output",
-                "passed": integrity_ok,
-                "detail": f"bad.ok={v_bad['ok']}, bad.issues={v_bad['issues'][:2]}; good.ok={v_good['ok']}",
-            })
-            all_pass = all_pass and integrity_ok
-
-            # ── Check 5: regime gate fires Cash/Wait under VIX > 30 ──────────
-            d_vix = rec.generate_strategy_pricing_matrix(
-                true_ivr=80.0, current_iv=0.45, trend_bias="Bullish",
-                target_dte=30, vrp=None, macro_dto=_MacroProxy(vix=35.0),
-            )
-            gate_vix_ok = d_vix["Strategy"] == "Cash" and d_vix["Action"] == "Wait"
-            audit["checks"].append({
-                "check": "regime gate degrades high-IVR opportunity to Cash/Wait when VIX > 30",
-                "passed": gate_vix_ok,
-                "detail": f"strategy={d_vix['Strategy']!r}, action={d_vix['Action']!r}",
-            })
-            all_pass = all_pass and gate_vix_ok
-
-            # ── Check 6: regime gate fires Cash/Wait under CREDIT EVENT ─────
-            d_ce = rec.generate_strategy_pricing_matrix(
-                true_ivr=80.0, current_iv=0.45, trend_bias="Neutral",
-                target_dte=30, vrp=None, macro_dto=_MacroProxy(regime="CREDIT EVENT"),
-            )
-            gate_ce_ok = d_ce["Strategy"] == "Cash"
-            audit["checks"].append({
-                "check": "regime gate degrades high-IVR opportunity to Cash/Wait in CREDIT EVENT",
-                "passed": gate_ce_ok,
-                "detail": f"strategy={d_ce['Strategy']!r}, action={d_ce['Action']!r}",
-            })
-            all_pass = all_pass and gate_ce_ok
-
-            # ── Check 7: low IVR + bullish → Call Debit Spread (buying vol) ──
-            d_low = rec.generate_strategy_pricing_matrix(
-                true_ivr=20.0, current_iv=0.18, trend_bias="Bullish",
-                target_dte=30, vrp=None, macro_dto=_MacroProxy(),
-            )
-            low_ok = d_low["Strategy"] == "Call Debit Spread"
-            audit["checks"].append({
-                "check": "low IVR + bullish → Call Debit Spread (premium-buying, not selling)",
-                "passed": low_ok,
-                "detail": f"strategy={d_low['Strategy']!r}",
-            })
-            all_pass = all_pass and low_ok
-
-            audit["overall_pass"] = all_pass
-            audit["status"] = "PASSED" if all_pass else "FAILED"
-        except Exception as exc:
-            audit["status"] = f"Execution Error: {exc}"
-            audit["error"] = str(exc)
-            audit["overall_pass"] = False
-
-        self.report["step_38_options_matrix_integrity_audit"] = audit
-
     def run_brinson_fachler_attribution_audit(self) -> None:
         """Step 40 — Brinson-Fachler Attribution UI ↔ Engine wiring audit.
 
@@ -5996,7 +5673,7 @@ class GravityAIAuditor:
         Checks
         ------
         1.  ``classify_market_error`` returns the right category for canonical
-            yfinance / Alpaca / Finnhub error strings and ``status_code=429``.
+            yfinance / FMP error strings and ``status_code=429``.
         2.  ``validate_quote`` returns ok=True for a clean Quote and ok=False
             for one with a NaN price.
         3.  ``FetchHealthTracker``: empty state HEALTHY-neutral; mixed window
@@ -6231,7 +5908,7 @@ class GravityAIAuditor:
             store = ot.LatencySampleStore(max_samples=3)
             base = datetime(2026, 6, 26, tzinfo=timezone.utc)
             for i in range(5):
-                store.record(f"S{i}", "alpaca",
+                store.record(f"S{i}", "fmp",
                              base + timedelta(seconds=i),
                              ingested_at=base + timedelta(seconds=i + 1))
             roll_off_ok = (
@@ -6241,10 +5918,10 @@ class GravityAIAuditor:
             # Worst-symbol summary
             store2 = ot.LatencySampleStore()
             for _ in range(3):
-                store2.record("AAPL", "alpaca", base,
+                store2.record("AAPL", "fmp", base,
                               ingested_at=base + timedelta(seconds=1))
             for _ in range(3):
-                store2.record("MSFT", "alpaca", base,
+                store2.record("MSFT", "fmp", base,
                               ingested_at=base + timedelta(seconds=60))
             summary = ot.summarise_latency(store2.samples())
             worst_ok = summary["worst_symbol"] == "MSFT" and summary["count"] == 6
@@ -6319,8 +5996,8 @@ class GravityAIAuditor:
         4.  ``strategy_registry.list_strategy_versions`` returns a stable
             sha256 prefix that CHANGES when the file content changes.
         5.  ``strategy_registry.read_active_mode`` resolves the mode truth
-            table correctly (DRY_RUN > ALPACA_PAPER).
-        6.  ``shared.env_io.ALLOWED_KEYS`` includes ``ALPACA_PAPER`` so the
+            table correctly (DRY_RUN > PAPER_TRADING).
+        6.  ``shared.env_io.ALLOWED_KEYS`` includes ``PAPER_TRADING`` so the
             Strategy Matrix mode toggle can persist the flag.
         """
         audit: dict = {"step": "step_44_safety_analytics_control_audit",
@@ -6438,14 +6115,14 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and version_ok
 
-            # 5. Mode truth table (DRY_RUN wins over ALPACA_PAPER)
+            # 5. Mode truth table (DRY_RUN wins over PAPER_TRADING)
             #    Patch settings on the fly, sample, restore.
             import settings as _settings
             real_settings = _settings.settings
 
             class _Fake:
                 def __init__(self, ap, dr) -> None:
-                    self.ALPACA_PAPER = ap
+                    self.PAPER_TRADING = ap
                     self.DRY_RUN = dr
 
             cases = [
@@ -6465,7 +6142,7 @@ class GravityAIAuditor:
 
             mode_ok = all(e is g for e, g in mode_results)
             audit["checks"].append({
-                "check": "strategy_registry.read_active_mode truth table (DRY_RUN wins over ALPACA_PAPER)",
+                "check": "strategy_registry.read_active_mode truth table (DRY_RUN wins over PAPER_TRADING)",
                 "passed": mode_ok,
                 "detail": [
                     f"expected={e.value}, got={g.value}"
@@ -6476,17 +6153,17 @@ class GravityAIAuditor:
 
             # 6. env_io allowlist contract
             allowlist_ok = (
-                "ALPACA_PAPER" in env_io.ALLOWED_KEYS
+                "PAPER_TRADING" in env_io.ALLOWED_KEYS
                 and "DRY_RUN" in env_io.ALLOWED_KEYS
-                and not env_io.is_secret("ALPACA_PAPER")
+                and not env_io.is_secret("PAPER_TRADING")
             )
             audit["checks"].append({
-                "check": "env_io.ALLOWED_KEYS includes ALPACA_PAPER + DRY_RUN; ALPACA_PAPER is NOT secret",
+                "check": "env_io.ALLOWED_KEYS includes PAPER_TRADING + DRY_RUN; PAPER_TRADING is NOT secret",
                 "passed": allowlist_ok,
                 "detail": (
-                    f"ALPACA_PAPER_in_allowlist={'ALPACA_PAPER' in env_io.ALLOWED_KEYS}, "
+                    f"PAPER_TRADING_in_allowlist={'PAPER_TRADING' in env_io.ALLOWED_KEYS}, "
                     f"DRY_RUN_in_allowlist={'DRY_RUN' in env_io.ALLOWED_KEYS}, "
-                    f"ALPACA_PAPER_is_secret={env_io.is_secret('ALPACA_PAPER')}"
+                    f"PAPER_TRADING_is_secret={env_io.is_secret('PAPER_TRADING')}"
                 ),
             })
             all_pass = all_pass and allowlist_ok
@@ -8061,7 +7738,7 @@ class GravityAIAuditor:
 
                 with (
                     _mock.patch("engine.advisory.ProcessingEngine") as _pe,
-                    _mock.patch("engine.advisory.TechnicalOptionsEngine") as _toe,
+                    _mock.patch("engine.advisory.GarchVolatilityEstimator") as _toe,
                     _mock.patch("engine.advisory.ForecastingEngine") as _fe,
                     _mock.patch("engine.advisory.StrategyEngine") as _se,
                     _mock.patch("engine.advisory.TransactionsStore"),
@@ -8130,10 +7807,10 @@ class GravityAIAuditor:
            (no broker imports) when the flag is True.
         2. ``gui/panels._render_strategy_mode_toggle`` does NOT render the
            Simulation/Paper/Live radio + confirm button when the flag is True.
-        3. ``scripts.preflight_check.run_checks`` auto-skips eight checks when
-           ADVISORY_ONLY=True — four broker-stack checks (alpaca_configured,
-           alpaca_paper_mode, dry_run_disabled, paper_trading_duration), one
-           key-rotation check (alpaca_key_rotation_recent — Stage 3 addition),
+        3. ``scripts.preflight_check.run_checks`` auto-skips six checks when
+           ADVISORY_ONLY=True — three broker-stack checks (paper_trading_mode,
+           dry_run_disabled, paper_trading_duration; the Alpaca credential and
+           key-rotation checks were removed with Alpaca on 2026-09-30),
            and three runtime-state false-positive checks (heartbeat_fresh,
            validation_reports, no_unexpected_risk_blocks).  Each skipped check
            gets a distinct per-check reason string (Stages 2+3, 2026-06-26
@@ -8150,10 +7827,9 @@ class GravityAIAuditor:
             "ADVISORY MODE" banner string.
         5.  ``scripts.preflight_check`` exports ``check_advisory_only_active``.
         6.  ``scripts.preflight_check._ADVISORY_AUTO_SKIP`` is a dict that
-            contains all 8 expected advisory-mode auto-skip entries (5 broker-
-            dependent including alpaca_key_rotation_recent, plus 3 advisory
-            false-positives: heartbeat_fresh, validation_reports,
-            no_unexpected_risk_blocks).
+            contains all 6 expected advisory-mode auto-skip entries (3 broker-
+            dependent, plus 3 advisory false-positives: heartbeat_fresh,
+            validation_reports, no_unexpected_risk_blocks).
         7.  Functional: when ADVISORY_ONLY=True, ``run_checks`` PASSes each
             check in ``_ADVISORY_AUTO_SKIP`` with reason naming ADVISORY_ONLY.
         8.  Functional: when ADVISORY_ONLY=False, the ``advisory_only_active``
@@ -8233,13 +7909,12 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c5
 
-            # Check 6: auto-skip dict — 8 entries (5 broker-dependent including
-            # alpaca_key_rotation_recent from Stage 3, plus 3 advisory false-positives
-            # added in Stage 2).
+            # Check 6: auto-skip dict — 6 entries (3 broker-dependent, plus 3
+            # advisory false-positives added in Stage 2). The Alpaca credential
+            # and key-rotation checks were removed with Alpaca (2026-09-30).
             broker_checks = {
-                "alpaca_configured", "alpaca_paper_mode",
+                "paper_trading_mode",
                 "dry_run_disabled", "paper_trading_duration",
-                "alpaca_key_rotation_recent",
             }
             advisory_fp_checks = {
                 "heartbeat_fresh", "validation_reports", "no_unexpected_risk_blocks",
@@ -8250,7 +7925,7 @@ class GravityAIAuditor:
             # so that future additions to _ADVISORY_AUTO_SKIP don't break this check).
             c6 = broker_checks.issubset(actual_skip) and advisory_fp_checks.issubset(actual_skip)
             audit["checks"].append({
-                "check": "_ADVISORY_AUTO_SKIP contains all 8 advisory-mode auto-skip checks (5 broker-dependent + 3 false-positives)",
+                "check": "_ADVISORY_AUTO_SKIP contains all 6 advisory-mode auto-skip checks (3 broker-dependent + 3 false-positives)",
                 "passed": c6,
                 "detail": f"actual={sorted(actual_skip)}, expected_subset={sorted(expected_skip)}",
             })
@@ -9411,7 +9086,7 @@ class GravityAIAuditor:
             )
             fe = ForecastingEngine()
             with patch.object(_s2, "FORECAST_USE_GARCH_SIGMA", True), patch(
-                "technical_options_engine.TechnicalOptionsEngine.estimate_gjr_garch_volatility",
+                "volatility.garch.GarchVolatilityEstimator.estimate_gjr_garch_volatility",
                 return_value=KNOWN_ANNUAL,
             ):
                 got_daily = fe._estimate_daily_sigma(hist_df, fallback_daily_sigma=0.99)
@@ -10491,10 +10166,10 @@ class GravityAIAuditor:
 
         Verifies that:
         1. ``check_state_snapshot_fresh`` exists and is in ``ALL_CHECKS``.
-        2. ``_ADVISORY_AUTO_SKIP`` contains all 8 expected entries (5 broker-
-           dependent including alpaca_key_rotation_recent, plus 3 advisory
-           false-positives: heartbeat_fresh, validation_reports,
-           no_unexpected_risk_blocks).
+        2. ``_ADVISORY_AUTO_SKIP`` contains all 6 expected entries (3 broker-
+           dependent, plus 3 advisory false-positives: heartbeat_fresh,
+           validation_reports, no_unexpected_risk_blocks). The Alpaca
+           credential/key-rotation checks were removed with Alpaca (2026-09-30).
         3. ``state_snapshot_fresh`` is NOT in ``_ADVISORY_AUTO_SKIP`` — it is
            the advisory liveness indicator and must always run.
         4. ``check_state_snapshot_fresh`` passes when snapshot is fresh and
@@ -10510,9 +10185,9 @@ class GravityAIAuditor:
            check_calibration_drift + check_robinhood_kill_switch_clear +
            check_robinhood_queue_fresh + check_robinhood_session_present +
            check_macro_regime_gate_enabled + check_alert_channels_reachable +
-           check_broker_backend_matches_live_intent + check_daemon_pid_alive +
+           check_live_order_routing + check_daemon_pid_alive +
            check_no_stray_database_files + check_output_dir_matches_local_data_root
-           added since).
+           added since, minus the two Alpaca checks removed 2026-09-30).
         10. ``tests/test_preflight.py`` contains ``TestStateSnapshotFresh``
             and ``TestAdvisoryAutoSkip`` class definitions.
         """
@@ -10551,19 +10226,18 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c2
 
-            # Check 3: _ADVISORY_AUTO_SKIP contains all 8 expected entries
-            # (4 broker + alpaca_key_rotation_recent + 3 advisory false-positives)
+            # Check 3: _ADVISORY_AUTO_SKIP contains all 6 expected entries
+            # (3 broker + 3 advisory false-positives)
             actual_skip = set(getattr(preflight_check, "_ADVISORY_AUTO_SKIP", ()))
             broker_checks = {
-                "alpaca_configured", "alpaca_paper_mode",
+                "paper_trading_mode",
                 "dry_run_disabled", "paper_trading_duration",
-                "alpaca_key_rotation_recent",
             }
             fp_checks = {"heartbeat_fresh", "validation_reports", "no_unexpected_risk_blocks"}
             all_expected = broker_checks | fp_checks
             c3 = all_expected.issubset(actual_skip)
             audit["checks"].append({
-                "check": "_ADVISORY_AUTO_SKIP contains all 8 advisory-mode auto-skip entries",
+                "check": "_ADVISORY_AUTO_SKIP contains all 6 advisory-mode auto-skip entries",
                 "passed": c3,
                 "detail": f"actual={sorted(actual_skip)}, missing={sorted(all_expected - actual_skip)}",
             })
@@ -10674,9 +10348,11 @@ class GravityAIAuditor:
             all_pass = all_pass and c8
 
             # Check 9: ALL_CHECKS has at least 27 entries (23 from prior tiers +
-            # check_broker_backend_matches_live_intent + check_daemon_pid_alive +
+            # check_live_order_routing + check_daemon_pid_alive +
             # check_no_stray_database_files + check_output_dir_matches_local_data_root
-            # added since -- this count is a simple registry-size tripwire, not a
+            # added since, minus the two Alpaca checks removed 2026-09-30, plus
+            # check_feature_drift + check_prompt_registry_signing_key_configured
+            # -- this count is a simple registry-size tripwire, not a
             # semantic assertion. A floor (>=), not exact equality, so a future
             # legitimately-added preflight check no longer re-breaks this tripwire
             # (this exact literal has already been manually bumped ~6 times); only
@@ -10711,25 +10387,27 @@ class GravityAIAuditor:
         self.report["step_66_advisory_false_positive_audit"] = audit
 
     def step_67_key_rotation_audit(self) -> None:
-        """Step 67 — Alpaca key-rotation reminder check (Stage 3, 2026-06-26 cleanup).
+        """Step 67 — key-rotation reminder check (Stage 3, 2026-06-26; Alpaca
+        half removed 2026-09-30).
 
-        ``check_alpaca_key_rotation_recent`` mirrors ``check_key_rotation_recent``
-        for the Alpaca key pair, with one critical difference: it is auto-skipped
-        under ADVISORY_ONLY=True because Alpaca paper keys have no blast-radius
-        risk while the broker surface is quarantined.
+        ``check_key_rotation_recent`` reminds the operator to rotate
+        FRED_API_KEY. The Alpaca twin (``check_alpaca_key_rotation_recent`` +
+        ``ALPACA_KEY_ROTATED_DATE``) was removed along with Alpaca itself.
 
         Checks
         ------
-        1. ``check_alpaca_key_rotation_recent`` is importable and callable.
-        2. ``settings.ALPACA_KEY_ROTATED_DATE`` field exists (Optional[str]).
+        1. ``check_key_rotation_recent`` is importable and callable.
+        2. ``settings.FRED_KEY_ROTATED_DATE`` exists and
+           ``ALPACA_KEY_ROTATED_DATE`` is no longer a Settings field.
         3. Unset date → warning-level PASS (not blocking).
         4. Fresh date (30 days ago) → clean PASS, no warning.
         5. Stale date (100 days ago) → warning-level PASS (never ``passed=False``).
         6. Invalid ISO format → warning-level PASS.
-        7. ``alpaca_key_rotation_recent`` appears in ``_ADVISORY_AUTO_SKIP``.
-        8. Auto-skip fires when ADVISORY_ONLY=True (verified via run_checks).
-        9. Both key_rotation_recent and alpaca_key_rotation_recent in ALL_CHECKS in order.
-        10. ``tests/test_preflight.py`` includes ``TestKeyRotationChecks``.
+        7. ``key_rotation_recent`` is NOT auto-skipped under ADVISORY_ONLY (FRED
+           feeds the advisory pipeline too).
+        8. The Alpaca check is gone from the module, ``ALL_CHECKS`` and
+           ``_ADVISORY_AUTO_SKIP``; ``key_rotation_recent`` is in ``ALL_CHECKS``.
+        9. ``tests/test_preflight.py`` includes ``TestKeyRotationChecks``.
         """
         audit: dict = {
             "step": "step_67_key_rotation_audit",
@@ -10744,41 +10422,42 @@ class GravityAIAuditor:
             from unittest.mock import MagicMock, patch as _patch
 
             # Check 1: importable
-            c1 = hasattr(preflight_check, "check_alpaca_key_rotation_recent")
+            c1 = callable(getattr(preflight_check, "check_key_rotation_recent", None))
             audit["checks"].append({
-                "check": "check_alpaca_key_rotation_recent exists and is callable",
+                "check": "check_key_rotation_recent exists and is callable",
                 "passed": c1,
             })
             all_pass = all_pass and c1
 
-            # Check 2: settings field exists
-            from settings import settings as _s
-            c2 = hasattr(_s, "ALPACA_KEY_ROTATED_DATE")
+            # Check 2: settings fields
+            from settings import Settings as _Settings
+            c2 = ("FRED_KEY_ROTATED_DATE" in _Settings.model_fields
+                  and "ALPACA_KEY_ROTATED_DATE" not in _Settings.model_fields)
             audit["checks"].append({
-                "check": "settings.ALPACA_KEY_ROTATED_DATE field exists",
+                "check": "FRED_KEY_ROTATED_DATE exists; ALPACA_KEY_ROTATED_DATE removed",
                 "passed": c2,
             })
             all_pass = all_pass and c2
 
             def _mock_s(**kwargs):
                 m = MagicMock()
-                m.ALPACA_KEY_ROTATED_DATE = kwargs.get("ALPACA_KEY_ROTATED_DATE", None)
+                m.FRED_KEY_ROTATED_DATE = kwargs.get("FRED_KEY_ROTATED_DATE", None)
                 return m
 
             # Check 3: unset → warning PASS
-            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE=None)):
-                r3 = preflight_check.check_alpaca_key_rotation_recent()
+            with _patch("scripts.preflight_check.settings", _mock_s(FRED_KEY_ROTATED_DATE=None)):
+                r3 = preflight_check.check_key_rotation_recent()
             c3 = r3.passed and r3.warning
             audit["checks"].append({
-                "check": "Unset ALPACA_KEY_ROTATED_DATE → warning-level PASS",
+                "check": "Unset FRED_KEY_ROTATED_DATE → warning-level PASS",
                 "passed": c3,
             })
             all_pass = all_pass and c3
 
             # Check 4: fresh date → clean PASS
             fresh = (_date.today() - _td(days=30)).isoformat()
-            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE=fresh)):
-                r4 = preflight_check.check_alpaca_key_rotation_recent(max_age_days=90)
+            with _patch("scripts.preflight_check.settings", _mock_s(FRED_KEY_ROTATED_DATE=fresh)):
+                r4 = preflight_check.check_key_rotation_recent(max_age_days=90)
             c4 = r4.passed and not r4.warning
             audit["checks"].append({
                 "check": "Fresh rotation date → clean PASS without warning",
@@ -10788,8 +10467,8 @@ class GravityAIAuditor:
 
             # Check 5: stale date → warning PASS (never False)
             stale = (_date.today() - _td(days=100)).isoformat()
-            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE=stale)):
-                r5 = preflight_check.check_alpaca_key_rotation_recent(max_age_days=90)
+            with _patch("scripts.preflight_check.settings", _mock_s(FRED_KEY_ROTATED_DATE=stale)):
+                r5 = preflight_check.check_key_rotation_recent(max_age_days=90)
             c5 = r5.passed and r5.warning
             audit["checks"].append({
                 "check": "Stale rotation date → warning-level PASS (never passed=False)",
@@ -10798,8 +10477,8 @@ class GravityAIAuditor:
             all_pass = all_pass and c5
 
             # Check 6: invalid ISO format → warning PASS
-            with _patch("scripts.preflight_check.settings", _mock_s(ALPACA_KEY_ROTATED_DATE="not-a-date")):
-                r6 = preflight_check.check_alpaca_key_rotation_recent()
+            with _patch("scripts.preflight_check.settings", _mock_s(FRED_KEY_ROTATED_DATE="not-a-date")):
+                r6 = preflight_check.check_key_rotation_recent()
             c6 = r6.passed and r6.warning
             audit["checks"].append({
                 "check": "Invalid ISO format → warning-level PASS",
@@ -10807,61 +10486,39 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c6
 
-            # Check 7: appears in _ADVISORY_AUTO_SKIP
+            # Check 7: FRED rotation reminder is never auto-skipped
             auto_skip = getattr(preflight_check, "_ADVISORY_AUTO_SKIP", {})
-            c7 = "alpaca_key_rotation_recent" in auto_skip
+            c7 = "key_rotation_recent" not in auto_skip
             audit["checks"].append({
-                "check": "alpaca_key_rotation_recent in _ADVISORY_AUTO_SKIP",
+                "check": "key_rotation_recent is NOT in _ADVISORY_AUTO_SKIP",
                 "passed": c7,
             })
             all_pass = all_pass and c7
 
-            # Check 8: functional auto-skip under ADVISORY_ONLY=True
-            prior = getattr(preflight_check.settings, "ADVISORY_ONLY", True)
-            try:
-                preflight_check.settings.ADVISORY_ONLY = True
-                results = preflight_check.run_checks(skip=[])
-                by_name = {r.name: r for r in results}
-                skip_r = by_name.get("alpaca_key_rotation_recent")
-                c8 = (
-                    skip_r is not None
-                    and skip_r.passed
-                    and "ADVISORY_ONLY" in skip_r.reason
-                )
-            finally:
-                try:
-                    preflight_check.settings.ADVISORY_ONLY = prior
-                except Exception:
-                    pass
+            # Check 8: Alpaca check gone everywhere; FRED check registered
+            all_check_names = [fn.__name__.replace("check_", "", 1) for fn in preflight_check.ALL_CHECKS]
+            c8 = (
+                "key_rotation_recent" in all_check_names
+                and "alpaca_key_rotation_recent" not in all_check_names
+                and "alpaca_key_rotation_recent" not in auto_skip
+                and not hasattr(preflight_check, "check_alpaca_key_rotation_recent")
+            )
             audit["checks"].append({
-                "check": "auto-skip fires for alpaca_key_rotation_recent under ADVISORY_ONLY=True",
+                "check": "Alpaca key-rotation check removed; key_rotation_recent registered",
                 "passed": c8,
+                "detail": f"order={all_check_names[:5]}",
             })
             all_pass = all_pass and c8
 
-            # Check 9: both key_rotation_recent and alpaca_key_rotation_recent in ALL_CHECKS in order
-            all_check_names = [fn.__name__.replace("check_", "") for fn in preflight_check.ALL_CHECKS]
-            has_both = ("key_rotation_recent" in all_check_names
-                        and "alpaca_key_rotation_recent" in all_check_names)
-            idx_fred = all_check_names.index("key_rotation_recent") if "key_rotation_recent" in all_check_names else -1
-            idx_alpaca = all_check_names.index("alpaca_key_rotation_recent") if "alpaca_key_rotation_recent" in all_check_names else -1
-            c9 = has_both and idx_fred < idx_alpaca
-            audit["checks"].append({
-                "check": "key_rotation_recent and alpaca_key_rotation_recent both in ALL_CHECKS (in order)",
-                "passed": c9,
-                "detail": f"order={all_check_names[:5]}",
-            })
-            all_pass = all_pass and c9
-
-            # Check 10: test file contains TestKeyRotationChecks
+            # Check 9: test file contains TestKeyRotationChecks
             from pathlib import Path as _Path
             test_src = _Path("tests/test_preflight.py").read_text(encoding="utf-8")
-            c10 = "TestKeyRotationChecks" in test_src and "check_alpaca_key_rotation_recent" in test_src
+            c9 = "TestKeyRotationChecks" in test_src and "check_key_rotation_recent" in test_src
             audit["checks"].append({
                 "check": "tests/test_preflight.py contains TestKeyRotationChecks class",
-                "passed": c10,
+                "passed": c9,
             })
-            all_pass = all_pass and c10
+            all_pass = all_pass and c9
 
             audit["overall_pass"] = all_pass
             audit["status"] = "PASSED" if all_pass else "FAILED"
@@ -15403,302 +15060,6 @@ class GravityAIAuditor:
             audit["overall_pass"] = False
 
         self.report["step_91_robinhood_account_cache_audit"] = audit
-
-    def step_92_pilots_mirror_quarantine_audit(self) -> None:
-        """Step 92 — Autopilot "Pilots" gated follow-mirror (pilots/mirror.py) audit.
-
-        Background
-        ----------
-        Phase 3 of the Autopilot "Pilots" makeover. ``pilots/mirror.py`` is the
-        *write* side of the Pilot layer: it turns "Follow Pilot P with $A" into a
-        proportional, target-notional **rebalance** queue that flows through the
-        EXISTING gated, dry-run execution bridge (``execution/queue_builder.py``).
-        It is the newest and most safety-sensitive Pilot module because it emits
-        order *intents* — yet before this step it had ZERO Gravity coverage while
-        every other order-adjacent subsystem (steps 79/80/81) is audited.
-
-        Load-bearing invariants (see docs/plans/AUTOPILOT_PLAN.md):
-        * **Broker quarantine.** No new order code, no ``place_*``/``submit_order``/
-          ``*_order`` function names, and no direct broker/order-manager import —
-          all placement stays the sole job of the downstream ``robinhood-execution``
-          skill. mirror.py reaches execution ONLY through the sanctioned
-          ``execution/`` zone — either ``execution.queue_builder`` (mode
-          resolution, and the underlying gating every composed intent still
-          flows through) or ``execution.compose`` (2026-07, D8 — the single
-          writer of ``output/execution_queue.json``; ``plan_follow`` now
-          writes its own source file and calls ``compose_and_emit`` instead
-          of calling ``emit_execution_queue`` directly, since that queue is
-          no longer this module's alone to write) — reusing
-          ``PreTradeRiskGate`` / ``GlobalKillSwitch`` / ``allow_place`` gating
-          verbatim either way.
-        * **Decision D3.** A deliberate Follow keeps every chosen name:
-          ``FOLLOW_MIN_CONVICTION == 0.0`` and ``plan_follow`` passes it as
-          ``config["min_conviction"]`` so the queue builder's default 0.85
-          conviction gate does not silently drop the Pilot's holdings.
-        * **Honesty / dead-letter (CONSTRAINT #4/#6).** A non-positive amount or
-          non-positive account equity yields ``[]`` — never a fabricated intent,
-          never a raise.
-
-        Checks
-        ------
-        1.  ``pilots.mirror`` importable with full surface (``build_follow_intents``,
-            ``plan_follow``, ``FollowIntent``, ``FollowRunResult``,
-            ``FOLLOW_MIN_CONVICTION``).
-        2.  Broker quarantine: no order-submission ``def`` names in mirror.py source
-            (``submit_order`` / ``buy_order`` / ``sell_order`` / ``place_order`` /
-            ``place_equity_order`` / ``place_option_order`` / ``def place_*``).
-        3.  No direct broker/order path: mirror.py reaches execution only via
-            ``from execution.queue_builder import ...`` and/or
-            ``from execution.compose import ...`` (both are inside the sanctioned
-            ``execution/`` zone; D8 moved the actual emit call to the latter) and
-            never imports a concrete broker / order-manager (``alpaca_broker`` /
-            ``order_manager`` / ``AlpacaBroker`` / ``submit_order_with_idempotency``).
-        4.  Decision D3: ``FOLLOW_MIN_CONVICTION == 0.0`` AND ``plan_follow`` source
-            passes ``"min_conviction": FOLLOW_MIN_CONVICTION`` to the builder.
-        5.  Honesty: ``build_follow_intents`` returns ``[]`` on a non-positive amount
-            AND on non-positive account equity — never raises (CONSTRAINT #6).
-        6.  ``off`` mode emits nothing: ``emit_execution_queue`` with the follow's
-            own intents returns ``None`` and writes no ``execution_queue.json``.
-        7.  ``review`` mode: queue written, EVERY intent ``allow_place=False`` (gated
-            dry-run — the live gate is not satisfied), and with the D3 ``min_conviction=0``
-            floor the follow's names are KEPT (``n_intents == 2``, not dropped by the
-            default 0.85 gate).
-        8.  ``plan_follow`` end-to-end in ``off`` mode returns the
-            ``{planned_intents, mode, queue_written}`` shape with ``mode=="off"`` /
-            ``queue_written is False`` and writes no queue file — never raises.
-        """
-        import importlib
-        import json as _json
-        import tempfile
-        from dataclasses import dataclass as _dc
-        from datetime import datetime, timezone
-        from pathlib import Path
-
-        audit: dict = {
-            "step": "step_92_pilots_mirror_quarantine_audit",
-            "description": "Pilots gated follow-mirror — broker quarantine, D3, gating, honesty",
-            "checks": [],
-            "overall_pass": False,
-        }
-        all_pass = True
-
-        def _chk(name, passed, detail=""):
-            audit["checks"].append({"check": name, "passed": bool(passed), "detail": str(detail)})
-            return bool(passed)
-
-        try:
-            # ── 1: import surface ────────────────────────────────────────
-            try:
-                mirror = importlib.import_module("pilots.mirror")
-                surface = ("build_follow_intents", "plan_follow", "FollowIntent",
-                           "FollowRunResult", "FOLLOW_MIN_CONVICTION")
-                ok1 = all(hasattr(mirror, n) for n in surface)
-                detail1 = "" if ok1 else f"missing={[n for n in surface if not hasattr(mirror, n)]}"
-            except Exception as exc:
-                mirror, ok1, detail1 = None, False, str(exc)
-            all_pass = _chk("pilots.mirror importable with full surface", ok1, detail1) and all_pass
-
-            # ── 2: broker quarantine — no order-submission def names ─────
-            src = Path("pilots/mirror.py").read_text(encoding="utf-8")
-            src_l = src.lower()
-            forbidden = ["submit_order", "buy_order", "sell_order", "place_order",
-                         "place_equity_order", "place_option_order"]
-            present = [kw for kw in forbidden if f"def {kw}" in src_l]
-            # also catch any `def place_*` variant
-            import re as _re92
-            present += _re92.findall(r"def\s+place_\w+", src_l)
-            ok2 = present == []
-            all_pass = _chk(
-                "no order-submission def names in pilots/mirror.py (broker quarantine)",
-                ok2, f"forbidden_defs={present}",
-            ) and all_pass
-
-            # ── 3: no direct broker/order path (reach execution only via the
-            #      sanctioned execution/ zone -- queue_builder and/or compose)
-            reaches_execution_layer = (
-                "from execution.queue_builder import" in src
-                or "from execution.compose import" in src
-            )
-            broker_tokens = ["alpaca_broker", "order_manager", "AlpacaBroker",
-                             "submit_order_with_idempotency", "BrokerBase"]
-            # ignore comment lines so an explanatory note can't trip the guard
-            code_only = "\n".join( l for l in src.splitlines() if not l.strip().startswith("#"))
-            direct_broker = [t for t in broker_tokens if t in code_only]
-            ok3 = reaches_execution_layer and direct_broker == []
-            all_pass = _chk(
-                "reaches execution only via queue_builder/compose; no direct broker/order import",
-                ok3, f"reaches_execution_layer={reaches_execution_layer} direct_broker={direct_broker}",
-            ) and all_pass
-
-            # ── 4: Decision D3 — min_conviction floor is 0.0 and plumbed ──
-            # The actual queue-emission call (and thus where
-            # FOLLOW_MIN_CONVICTION must be referenced BY CODE, not just
-            # mentioned in a docstring) now lives in execution/compose.py's
-            # compose_and_emit (pilots/mirror.py delegates to it -- see its
-            # own module docstring on the compose_and_emit/write_follow_source
-            # refactor). Checking pilots/mirror.py's source here would be a
-            # false-positive trap: its docstring literally describes this
-            # wiring in prose (`` config["min_conviction"] = FOLLOW_MIN_
-            # CONVICTION ``), which would satisfy a naive substring check even
-            # if the REAL code never referenced the constant at all.
-            compose_src = Path("execution/compose.py").read_text(encoding="utf-8")
-            const_ok = ok1 and float(getattr(mirror, "FOLLOW_MIN_CONVICTION", 1.0)) == 0.0
-            plumbed = "FOLLOW_MIN_CONVICTION" in compose_src and "min_conviction" in compose_src
-            ok4 = const_ok and plumbed
-            all_pass = _chk(
-                "D3: FOLLOW_MIN_CONVICTION == 0.0 and passed as config['min_conviction']",
-                ok4, f"const_is_zero={const_ok} plumbed={plumbed}",
-            ) and all_pass
-
-            # ── duck-typed account snapshot (queue builder reads via getattr)
-            @_dc
-            class _P:
-                symbol: str; quantity: float; average_cost: float
-                current_price: float; market_value: float; unrealized_pl: float = 0.0
-
-            @_dc
-            class _S:
-                positions: dict; total_equity: float; buying_power: float
-
-            snap = _S({"NVDA": _P("NVDA", 10, 100.0, 120.0, 1200.0, 200.0)}, 10000.0, 3000.0)
-            rth = datetime(2026, 6, 30, 17, 0, tzinfo=timezone.utc)  # Tue ~1pm ET
-
-            # ── 5: honesty — non-positive amount / equity → [] ───────────
-            if ok1:
-                try:
-                    from pilots.catalog import get_pilot
-                    pilot = get_pilot("trend-following")
-                    # non-positive amount short-circuits before any scoring math
-                    neg_amt = mirror.build_follow_intents(pilot, -100.0, snap, snapshot={})
-                    # non-positive equity short-circuits too
-                    zero_eq = mirror.build_follow_intents(
-                        pilot, 1000.0, _S({}, 0.0, 0.0), snapshot={})
-                    ok5 = neg_amt == [] and zero_eq == []
-                    detail5 = f"neg_amount->{neg_amt!r} zero_equity->{zero_eq!r}"
-                except Exception as exc:
-                    ok5, detail5 = False, str(exc)
-            else:
-                ok5, detail5 = False, "skipped — import failed"
-            all_pass = _chk(
-                "build_follow_intents returns [] on non-positive amount/equity (CONSTRAINT #6)",
-                ok5, detail5,
-            ) and all_pass
-
-            # ── build the follow's own intents directly (no scoring math) ─
-            follow_cfg = {"strategy_id": "follow-audit",
-                          "min_conviction": 0.0}  # D3 floor plan_follow passes
-            if ok1:
-                fi = mirror.FollowIntent
-                intents = [
-                    fi(symbol="AAPL", action="BUY", strategy="Follow:audit",
-                       conviction=0.60, suggested_position_pct=0.05, target_notional=500.0,
-                       weight=0.60, price=180.0, score=1.0),
-                    fi(symbol="MSFT", action="BUY", strategy="Follow:audit",
-                       conviction=0.40, suggested_position_pct=0.03, target_notional=300.0,
-                       weight=0.40, price=320.0, score=0.8),
-                ]
-                rr = mirror.FollowRunResult(recommendations=intents, snapshot=snap)
-            else:
-                rr = None
-
-            qb = importlib.import_module("execution.queue_builder")
-
-            # ── 6: off mode → emit returns None, writes nothing ──────────
-            if rr is not None:
-                try:
-                    with tempfile.TemporaryDirectory() as td:
-                        out = Path(td)
-                        ret = qb.emit_execution_queue(
-                            rr, mode="off", output_dir=out, config=follow_cfg, now=rth)
-                        ok6 = ret is None and not (out / "execution_queue.json").exists()
-                        detail6 = f"ret={ret!r}"
-                except Exception as exc:
-                    ok6, detail6 = False, str(exc)
-            else:
-                ok6, detail6 = False, "skipped — import failed"
-            all_pass = _chk(
-                "off mode: emit returns None and writes no execution_queue.json",
-                ok6, detail6,
-            ) and all_pass
-
-            # ── 7: review mode → written, all allow_place False, names kept
-            if rr is not None:
-                try:
-                    with tempfile.TemporaryDirectory() as td:
-                        out = Path(td)
-                        path = qb.emit_execution_queue(
-                            rr, mode="review", output_dir=out, config=follow_cfg, now=rth)
-                        qfile = out / "execution_queue.json"
-                        payload = _json.loads(qfile.read_text(encoding="utf-8")) if qfile.exists() else {}
-                        q_intents = payload.get("intents", [])
-                        ok7 = (
-                            path is not None
-                            and qfile.exists()
-                            and payload.get("n_intents") == 2          # D3: both names kept
-                            and len(q_intents) == 2
-                            and all(i.get("allow_place") is False for i in q_intents)
-                        )
-                        detail7 = (f"n_intents={payload.get('n_intents')} "
-                                   f"allow_place={[i.get('allow_place') for i in q_intents]}")
-                except Exception as exc:
-                    ok7, detail7 = False, str(exc)
-            else:
-                ok7, detail7 = False, "skipped — import failed"
-            all_pass = _chk(
-                "review mode: queue written, every intent allow_place=False, D3 keeps both names",
-                ok7, detail7,
-            ) and all_pass
-
-            # ── 8: plan_follow end-to-end (off mode) shape + no write ─────
-            # plan_follow() takes no `mode` argument -- it relies on
-            # execution.queue_builder._resolve_mode()'s default, which reads
-            # the live `settings.ROBINHOOD_EXECUTION_MODE` singleton
-            # (pydantic-settings resolves a real local `.env` override ahead
-            # of the field default). Temporarily pin the singleton attribute
-            # to "off" for this call so the check validates the CODE's
-            # off-by-default behavior instead of whatever execution mode a
-            # real operator has actually configured in their own `.env`
-            # (e.g. ROBINHOOD_EXECUTION_MODE=live for genuine paper/live
-            # operation) -- restored in `finally` regardless of outcome.
-            if ok1:
-                from settings import settings as _live_settings
-                _orig_exec_mode = _live_settings.ROBINHOOD_EXECUTION_MODE
-                _live_settings.ROBINHOOD_EXECUTION_MODE = "off"
-                try:
-                    from pilots.catalog import get_pilot as _get_pilot
-                    pilot = _get_pilot("trend-following")
-                    with tempfile.TemporaryDirectory() as td:
-                        out = Path(td)
-                        res = mirror.plan_follow(
-                            pilot, 1000.0, snap, snapshot={}, output_dir=out)
-                        ok8 = (
-                            isinstance(res, dict)
-                            and set(("planned_intents", "mode", "queue_written")).issubset(res)
-                            and res.get("mode") == "off"
-                            and res.get("queue_written") is False
-                            and not (out / "execution_queue.json").exists()
-                        )
-                        detail8 = f"keys={sorted(res)[:6] if isinstance(res, dict) else res} mode={res.get('mode') if isinstance(res, dict) else '?'}"
-                except Exception as exc:
-                    ok8, detail8 = False, str(exc)
-                finally:
-                    _live_settings.ROBINHOOD_EXECUTION_MODE = _orig_exec_mode
-            else:
-                ok8, detail8 = False, "skipped — import failed"
-            all_pass = _chk(
-                "plan_follow off-mode returns {planned_intents,mode,queue_written}, writes nothing",
-                ok8, detail8,
-            ) and all_pass
-
-            audit["overall_pass"] = all_pass
-            audit["status"] = "PASSED" if all_pass else "FAILED"
-
-        except Exception as exc:
-            audit["status"] = f"Execution Error: {exc}"
-            audit["error"] = str(exc)
-            audit["overall_pass"] = False
-
-        self.report["step_92_pilots_mirror_quarantine_audit"] = audit
 
     def step_93_mcp_db_readonly_audit(self) -> None:
         """Step 93 — MCP DB query surface DATABASE-LEVEL read-only enforcement.

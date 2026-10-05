@@ -25,9 +25,10 @@ Several PUT tests below exercise a live-safe field (e.g. ``KELLY_FRACTION``)
 through the real endpoint with ``write_many_atomic`` mocked but
 ``runtime_flags_writer.write_override`` left genuinely live — proving the
 field really does apply immediately, not just that the code claims it does.
-``_isolated_runtime_flags_store`` (autouse) redirects that real writer's
-target file to a throwaway path so those writes never touch this checkout's
-own ``output/runtime_flags.json``.
+The root ``conftest.py`` fixture ``_isolate_runtime_flags_store_in_tests``
+(autouse, suite-wide) redirects that real writer's target file to a throwaway
+path so those writes never touch the operator's live
+``~/.stockpy_local/output/runtime_flags.json``.
 """
 
 from __future__ import annotations
@@ -39,14 +40,12 @@ import json
 import pathlib
 from unittest import mock
 
-import pytest
 from fastapi.testclient import TestClient
 
-from settings import settings
+from settings import Settings, settings
 from settings_keysets import DANGEROUS_KEYS
 import api.pilots_api as pilots_api
 import pilots.settings_meta as settings_meta
-import runtime_flags
 
 # Starlette's TestClient defaults request.client.host to the literal
 # string "testclient" -- NOT loopback -- which would trip
@@ -55,21 +54,6 @@ import runtime_flags
 # An explicit loopback host here is what these tests have always meant.
 client = TestClient(pilots_api.app, client=("127.0.0.1", 54123))
 
-
-@pytest.fixture(autouse=True)
-def _isolated_runtime_flags_store(tmp_path, monkeypatch):
-    """Redirect the real runtime-flags store for every test in this file.
-
-    PUT handlers call ``runtime_flags_writer.write_override`` with no
-    ``path=`` override, exactly like production — so without this, a test
-    that PUTs a live-safe field through the real endpoint writes to this
-    checkout's actual ``output/runtime_flags.json`` instead of an isolated
-    file. ``INVESTYO_RUNTIME_FLAGS_PATH`` is the one override both the
-    writer and the reader (``runtime_flags.load_store``) already respect.
-    """
-    monkeypatch.setenv(
-        runtime_flags.PATH_OVERRIDE_ENV_VAR, str(tmp_path / "runtime_flags.json")
-    )
 
 _CMD_TOKEN = "cmd-tok"
 _READ_TOKEN = "read-tok"
@@ -84,16 +68,16 @@ _EXPECTED_GROUPS = [
     "Market Data",
     "Runtime & Ops",
     "Advanced / Config",
-    "Options & Pairs Snapshots",
     "ML, Data Capture & Audit",
     "Validation Gates",
     "RLHF Calibration",
-    "Options Desk Automation",
-    "Circuit Breaker",
 ]
 _VALID_TYPES = {"number", "boolean", "enum", "string"}
 
-_NEW_OPTIONS_DESK_KEYS = {
+# The "Options Desk Automation" group and these 13 fields were retired in the
+# 2026-09 settings/schema trim (step 4f) -- every one was read by archived
+# options-desk code only.
+_RETIRED_OPTIONS_DESK_KEYS = {
     "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
     "OPTIONS_AUTO_EXIT_ENABLED",
     "OPTIONS_PROFIT_TARGET_PCT",
@@ -109,7 +93,10 @@ _NEW_OPTIONS_DESK_KEYS = {
     "MAX_CONCURRENT_OPTION_POSITIONS",
 }
 
-_NEW_CIRCUIT_BREAKER_KEYS = {
+# The dynamic circuit breaker was unwired from the risk gate and daemon in
+# 2026-09; its settings no longer do anything, so they must not be offered as
+# editable tunables.
+_RETIRED_CIRCUIT_BREAKER_KEYS = {
     "CIRCUIT_BREAKER_ENABLED",
     "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
     "CIRCUIT_BREAKER_VPIN_THRESHOLD",
@@ -141,7 +128,8 @@ _JSON_KIND_KEYS = {"SECTOR_FORECAST_CONFIGS", "CORS_ALLOWED_ORIGINS"}
 
 # 32 additional flags/tunables surfaced from settings.py across the existing
 # "Position Sizing"/"Risk Gate"/"Forecasting"/"Market Data"/"Runtime & Ops"
-# groups plus the three brand-new groups above ("Options & Pairs Snapshots",
+# groups plus the three brand-new groups above ("Pairs Snapshot" -- was
+# "Options & Pairs Snapshots" until step 4f --
 # "ML, Data Capture & Audit", "Validation Gates") -- GRAVITY_REQUIRE_NATIVE
 # itself is already covered by _NEW_ADVANCED_KEYS above, so it is not
 # repeated here.
@@ -153,10 +141,9 @@ _NEW_MISC_TUNABLE_KEYS = {
     "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", "CNN_LSTM_PROCESS_POOL_WORKERS",
     "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS", "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
     "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",
-    "MARKET_DATA_WS_ENABLED", "HISTORICAL_STORE_ENABLED",
+    "HISTORICAL_STORE_ENABLED",
     "ROBINHOOD_AUTO_REFRESH_ENABLED", "RUNTIME_FLAGS_REFRESH_ENABLED",
     "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS",
-    "OPTIONS_MATRIX_ENABLED", "OPTIONS_TRUE_IVR_ENABLED", "PAIRS_SNAPSHOT_ENABLED",
     "META_LABELING_ENABLED", "NEWS_HISTORY_CAPTURE_ENABLED", "PIT_CAPTURE_ENABLED",
     "SENTIMENT_AUDIT_ENABLED", "SENTIMENT_DESENTENCIZE_ENABLED", "EXCURSION_INTRADAY_ENABLED",
     "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED", "VALIDATION_HARNESS_OOS_GATE_ENABLED",
@@ -171,14 +158,13 @@ _NEW_RLHF_KEYS = {
     "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
 }
 
-# New "Regime Model" group (settings.py's HMM_N_STATES/HMM_RETRAIN_FREQ_DAYS/
-# OPTIONS_VRP_THRESHOLD) -- HMM_RISK_OFF_BLOCK_THRESHOLD moved into this group
+# New "Regime Model" group (settings.py's HMM_N_STATES/HMM_RETRAIN_FREQ_DAYS;
+# OPTIONS_VRP_THRESHOLD was retired in step 4f) -- HMM_RISK_OFF_BLOCK_THRESHOLD moved into this group
 # from "Risk Gate" but isn't new to the editor, so it stays in the inline
 # baseline set below rather than here.
 _NEW_REGIME_KEYS = {
     "HMM_N_STATES",
     "HMM_RETRAIN_FREQ_DAYS",
-    "OPTIONS_VRP_THRESHOLD",
 }
 
 
@@ -430,8 +416,6 @@ class TestTunablesScopeInvariants:
             | _NEW_RLHF_KEYS
             | _NEW_REGIME_KEYS
             | _NEW_MISC_TUNABLE_KEYS
-            | _NEW_OPTIONS_DESK_KEYS
-            | _NEW_CIRCUIT_BREAKER_KEYS
             | _NEW_PROMOTED_KEYS
         )
         assert set(pilots_api._TUNABLE_INDEX) == expected
@@ -440,7 +424,7 @@ class TestTunablesScopeInvariants:
         for key in (
             "SIGNAL_WEIGHTS", "DISABLED_SIGNAL_MODULES", "DEFAULT_TICKERS",
             "LLM_COMMENTARY_ENABLED", "OPAL_RESEARCH_PROVIDER",
-            "MACRO_REGIME_GATE_ENABLED", "ALPACA_PAPER",
+            "MACRO_REGIME_GATE_ENABLED", "PAPER_TRADING",
         ):
             assert key not in pilots_api._TUNABLE_INDEX, f"{key} leaked into tunables scope"
 
@@ -452,19 +436,30 @@ class TestTunablesScopeInvariants:
         advanced_group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Advanced / Config")
         assert {k for k, _kind, _extras in advanced_group[1]} == _NEW_ADVANCED_KEYS
 
-    def test_options_desk_automation_group_has_exactly_the_intended_fields(self):
-        """Per-group membership, not just flat-index presence -- the flat
-        _TUNABLE_INDEX/group-name-list checks elsewhere would NOT catch a
-        field placed in the wrong group (e.g. a Circuit Breaker field
-        accidentally landing in Options Desk Automation)."""
-        group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Options Desk Automation")
-        assert {k for k, _kind, _extras in group[1]} == _NEW_OPTIONS_DESK_KEYS
-        # The one field this promotion deliberately excludes, and why.
-        assert "OPTIONS_EARNINGS_CRUSH_ENABLED" not in _NEW_OPTIONS_DESK_KEYS
+    def test_retired_options_desk_keys_are_gone(self):
+        """Step 4f retired the "Options Desk Automation" group and its fields
+        (plus the options-matrix/True-IVR/VRP tunables): none may be offered
+        as a tunable, and none is a Settings field any more."""
+        assert not any(g[0] == "Options Desk Automation" for g in pilots_api._TUNABLE_GROUPS)
+        retired = _RETIRED_OPTIONS_DESK_KEYS | {
+            "OPTIONS_MATRIX_ENABLED", "OPTIONS_TRUE_IVR_ENABLED", "OPTIONS_VRP_THRESHOLD",
+        }
+        assert not (retired & set(pilots_api._TUNABLE_INDEX))
+        assert not (retired & set(Settings.model_fields))
 
-    def test_circuit_breaker_group_has_exactly_the_intended_fields(self):
-        group = next(g for g in pilots_api._TUNABLE_GROUPS if g[0] == "Circuit Breaker")
-        assert {k for k, _kind, _extras in group[1]} == _NEW_CIRCUIT_BREAKER_KEYS
+    def test_retired_circuit_breaker_keys_are_not_tunables(self):
+        assert not any(g[0] == "Circuit Breaker" for g in pilots_api._TUNABLE_GROUPS)
+        assert not (_RETIRED_CIRCUIT_BREAKER_KEYS & set(pilots_api._TUNABLE_INDEX))
+
+    def test_alpaca_removal_keys_and_options(self):
+        """Alpaca was removed 2026-09-30: its WS toggle is no longer a tunable
+        or a Settings field, and the provider enum no longer offers it."""
+        assert "MARKET_DATA_WS_ENABLED" not in pilots_api._TUNABLE_INDEX
+        assert "MARKET_DATA_WS_ENABLED" not in Settings.model_fields
+        _kind, extras = pilots_api._TUNABLE_INDEX["MARKET_DATA_PROVIDER"]
+        assert extras["options"] == ["fmp", "yfinance"]
+        kind, extras = pilots_api._PAPER_BROKER_INDEX["BROKER_BACKEND"]
+        assert (kind, extras["options"]) == ("enum", ["fmp_paper"])
 
 
 # ---------------------------------------------------------------------------
@@ -568,27 +563,27 @@ class TestPutTunables:
     def test_happy_path_writes_via_env_io_and_echoes(self):
         with mock.patch.object(
             pilots_api.env_io, "write_many_atomic",
-            return_value=["KELLY_FRACTION", "LOG_LEVEL", "DRY_RUN"],
+            return_value=["KELLY_FRACTION", "HMM_N_STATES", "DRY_RUN"],
         ) as w:
             # DRY_RUN is a DANGEROUS_KEYS member and needs its confirmation
-            # echo; KELLY_FRACTION/LOG_LEVEL are ordinary and need none.
+            # echo; KELLY_FRACTION/HMM_N_STATES are ordinary and need none.
             resp = _put(
-                {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True},
+                {"KELLY_FRACTION": 0.6, "HMM_N_STATES": 4, "DRY_RUN": True},
                 confirm={"DRY_RUN": "DRY_RUN"},
             )
         assert resp.status_code == 200
         body = resp.json()
-        # KELLY_FRACTION is live_safe (applies immediately via the real
-        # writer, genuinely invoked here); LOG_LEVEL/DRY_RUN are
-        # restart_required — an honest rollup of a mixed batch is "mixed",
-        # not a blanket "next_daemon_restart" (see _settings_editor_payload).
+        # KELLY_FRACTION and DRY_RUN are live_safe (apply immediately via the
+        # real writer, genuinely invoked here); HMM_N_STATES is
+        # restart_required, so an honest rollup of the batch is "mixed", not a
+        # blanket "next_daemon_restart" (see _settings_editor_payload).
         assert body["applies"] == "mixed"
         assert body["rejected"] == {}
         # Echoes the REQUEST/coerced values, not the (stale) settings singleton.
-        assert body["written"] == {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True}
+        assert body["written"] == {"KELLY_FRACTION": 0.6, "HMM_N_STATES": 4, "DRY_RUN": True}
         # write_many_atomic called ONCE with the accepted dict.
         assert w.call_count == 1
-        assert w.call_args[0][0] == {"KELLY_FRACTION": 0.6, "LOG_LEVEL": "DEBUG", "DRY_RUN": True}
+        assert w.call_args[0][0] == {"KELLY_FRACTION": 0.6, "HMM_N_STATES": 4, "DRY_RUN": True}
 
     def test_int_field_coerced_to_int(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
@@ -724,7 +719,6 @@ _SETTINGS_SUBROUTES = [
     ("/settings/sentiment", "_SENTIMENT_INDEX"),
     ("/settings/sector-selection", "_SECTOR_SELECTION_INDEX"),
     ("/settings/fmp", "_FMP_INDEX"),
-    ("/settings/etf-transmission", "_ETF_TRANSMISSION_INDEX"),
     ("/settings/feature-flags", "_FEATURE_FLAGS_INDEX"),
 ]
 
@@ -776,7 +770,6 @@ class TestSettingsSubroutesRealFieldInvariant:
             "sentiment": set(pilots_api._SENTIMENT_INDEX),
             "sector": set(pilots_api._SECTOR_SELECTION_INDEX),
             "fmp": set(pilots_api._FMP_INDEX),
-            "etf_transmission": set(pilots_api._ETF_TRANSMISSION_INDEX),
         }
         for (name_a, keys_a), (name_b, keys_b) in itertools.combinations(scopes.items(), 2):
             assert not (keys_a & keys_b), f"{name_a} and {name_b} share keys: {keys_a & keys_b}"
@@ -852,7 +845,6 @@ class TestSettingsSubroutesEnvDrift:
             ("/settings/sentiment", "SENTIMENT_INGESTION_LOOKBACK_DAYS", int, 1),
             ("/settings/sector-selection", "SECTOR_SELECTION_TOP_N", int, 1),
             ("/settings/fmp", "FMP_COOLDOWN_THRESHOLD", int, 1),
-            ("/settings/etf-transmission", "ETF_TRANSMISSION_WINDOW_DAYS", int, 1),
         ]
         for url, key, _cast, delta in cases:
             env_file = tmp_path / f"{key}.env"
@@ -877,7 +869,7 @@ class TestSettingsSubroutesEnvDrift:
 
 
 class TestSettingsSubroutesPut:
-    """PUT /settings/sentiment, PUT /settings/sector-selection, PUT /settings/fmp, PUT /settings/etf-transmission."""
+    """PUT /settings/sentiment, PUT /settings/sector-selection, PUT /settings/fmp."""
 
     def test_happy_path_writes_via_env_io_and_echoes(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
@@ -906,10 +898,10 @@ class TestSettingsSubroutesPut:
 
     def test_rejects_secret_key_never_written(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put_scoped("/settings/sentiment", {"FINNHUB_API_KEY": "leak"})
+            resp = _put_scoped("/settings/sentiment", {"FMP_API_KEY": "leak"})
         assert resp.status_code == 200
         body = resp.json()
-        assert body["rejected"]["FINNHUB_API_KEY"] == "unknown_key"
+        assert body["rejected"]["FMP_API_KEY"] == "unknown_key"
         assert body["written"] == {}
         assert w.call_count == 0
 
@@ -928,25 +920,18 @@ class TestSettingsSubroutesPut:
         assert w.call_count == 1
         assert w.call_args[0][0] == {"FMP_QUOTES_ENABLED": True}
 
-        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put_scoped("/settings/etf-transmission", {"ETF_TRANSMISSION_ENABLED": True})
-        assert resp.status_code == 200
-        assert resp.json()["written"] == {"ETF_TRANSMISSION_ENABLED": True}
-        assert w.call_count == 1
-        assert w.call_args[0][0] == {"ETF_TRANSMISSION_ENABLED": True}
-
     def test_rejects_out_of_scope_key(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put_scoped("/settings/fmp", {"ETF_TRANSMISSION_ENABLED": True})
+            resp = _put_scoped("/settings/fmp", {"SECTOR_SELECTION_TOP_N": 5})
         assert resp.status_code == 200
-        assert resp.json()["rejected"]["ETF_TRANSMISSION_ENABLED"] == "unknown_key"
+        assert resp.json()["rejected"]["SECTOR_SELECTION_TOP_N"] == "unknown_key"
         assert w.call_count == 0
 
     def test_rejects_out_of_range(self):
         with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put_scoped("/settings/etf-transmission", {"ETF_TRANSMISSION_MAX_DERATE": 5.0})
+            resp = _put_scoped("/settings/fmp", {"FMP_TIMEOUT_SECONDS": 500.0})
         assert resp.status_code == 200
-        assert resp.json()["rejected"]["ETF_TRANSMISSION_MAX_DERATE"] == "out_of_range"
+        assert resp.json()["rejected"]["FMP_TIMEOUT_SECONDS"] == "out_of_range"
         assert w.call_count == 0
 
     def test_fail_closed_when_command_token_unset(self):
@@ -976,7 +961,6 @@ _EDITORS = [
     ("/settings/sentiment", "_SENTIMENT_INDEX"),
     ("/settings/sector-selection", "_SECTOR_SELECTION_INDEX"),
     ("/settings/fmp", "_FMP_INDEX"),
-    ("/settings/etf-transmission", "_ETF_TRANSMISSION_INDEX"),
     ("/settings/feature-flags", "_FEATURE_FLAGS_INDEX"),
 ]
 

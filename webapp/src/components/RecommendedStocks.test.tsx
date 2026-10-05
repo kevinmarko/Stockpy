@@ -98,7 +98,7 @@ describe("RecommendedStocks (real mock API)", () => {
   it("the Detail link always navigates to the symbol page, even when onSelect diverts the row click", async () => {
     // Data Explorer passes onSelect to load a pick inline instead of navigating
     // -- the Detail link must still provide a guaranteed path to the actionable
-    // SymbolDetail page (Held-by-Pilots -> Follow, Decision journal) regardless.
+    // SymbolDetail page (Held-by-Pilots, Decision journal) regardless.
     const onSelect = vi.fn();
     render(
       <MemoryRouter initialEntries={["/data-explorer"]}>

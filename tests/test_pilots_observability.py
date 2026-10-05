@@ -1244,8 +1244,8 @@ class TestLatencyHeatmapSummary:
 
         market_data_latency.get_ring().clear()
         now = datetime.now(timezone.utc)
-        market_data_latency.record_quote_latency("AAPL", "alpaca", now - timedelta(seconds=5), False)
-        market_data_latency.record_quote_latency("MSFT", "alpaca", now - timedelta(seconds=1), True)
+        market_data_latency.record_quote_latency("AAPL", "fmp", now - timedelta(seconds=5), False)
+        market_data_latency.record_quote_latency("MSFT", "fmp", now - timedelta(seconds=1), True)
 
         with mock.patch.object(settings, "MARKET_DATA_LATENCY_TRACKING_ENABLED", True):
             out = obs.latency_heatmap_summary()
@@ -1267,7 +1267,7 @@ class TestLatencyHeatmapSummary:
         market_data_latency.get_ring().clear()
         now = datetime.now(timezone.utc)
         for i in range(5):
-            market_data_latency.record_quote_latency(f"SYM{i}", "alpaca", now - timedelta(seconds=i), False)
+            market_data_latency.record_quote_latency(f"SYM{i}", "fmp", now - timedelta(seconds=i), False)
 
         with mock.patch.object(settings, "MARKET_DATA_LATENCY_TRACKING_ENABLED", True):
             out = obs.latency_heatmap_summary(limit=2)
@@ -1405,7 +1405,7 @@ class TestObservabilitySummary:
             "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
             "forecast_skill", "forecast_skill_by_symbol", "risk_gate_blocks",
             "circuit_breakers", "system_telemetry", "latency_heatmap",
-            "sizing_cap_audit", "etf_transmission", "heartbeat", "strategy_pnl",
+            "sizing_cap_audit", "heartbeat", "strategy_pnl",
         }
 
     def test_one_section_failure_never_blocks_the_others(self, tmp_path):
@@ -1508,55 +1508,6 @@ class TestSizingCapAuditSummary:
         assert out["count"] == 2
         assert out["capped_count"] == 1
         assert out["escalation_enabled"] is True
-        assert out["reason"] is None
-
-
-# ---------------------------------------------------------------------------
-# etf_transmission_summary — reuses shared.observability_panel_helpers
-# .etf_transmission_rows directly.
-# ---------------------------------------------------------------------------
-
-
-class TestEtfTransmissionSummary:
-    def test_measurement_disabled_is_honest_empty(self):
-        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", False):
-            out = obs.etf_transmission_summary({"signals": [{"symbol": "AAPL", "etf_ownership_pct": 0.5}]})
-        assert out["rows"] == []
-        assert out["measurement_enabled"] is False
-        assert "ETF_TRANSMISSION_ENABLED" in out["reason"]
-
-    def test_no_coverage_in_snapshot_is_honest_empty(self):
-        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", True):
-            out = obs.etf_transmission_summary({"signals": [{"symbol": "AAPL"}]})
-        assert out["rows"] == []
-        assert out["measurement_enabled"] is True
-        assert out["reason"] and "coverage" in out["reason"]
-
-    def test_none_snapshot_is_honest_empty(self):
-        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", True):
-            out = obs.etf_transmission_summary(None)
-        assert out["rows"] == []
-        assert out["reason"]
-
-    def test_warm_path_surfaces_rows_and_switches(self):
-        snapshot = {
-            "signals": [
-                {
-                    "symbol": "SPY", "etf_ownership_pct": 0.42, "etf_comovement_r2": 0.81,
-                    "etf_primary_wrapper": "SPY", "etf_transmission_multiplier": 0.75,
-                },
-                {"symbol": "ZZZZ"},  # no ETF fields -> filtered out by etf_transmission_rows
-            ]
-        }
-        with mock.patch.object(settings, "ETF_TRANSMISSION_ENABLED", True):
-            with mock.patch.object(settings, "ETF_TRANSMISSION_SIZING_ENABLED", True):
-                with mock.patch.object(settings, "ETF_TRANSMISSION_PORTFOLIO_ENABLED", False):
-                    out = obs.etf_transmission_summary(snapshot)
-        assert len(out["rows"]) == 1
-        assert out["rows"][0]["symbol"] == "SPY"
-        assert out["measurement_enabled"] is True
-        assert out["sizing_enabled"] is True
-        assert out["portfolio_enabled"] is False
         assert out["reason"] is None
 
 
@@ -1684,3 +1635,50 @@ class TestStrategyPnlSummary:
             out = obs.strategy_pnl_summary()
         assert out["rows"] == []
         assert out["reason"]
+
+
+class TestForecastSectionCache:
+    """observability_summary reuses the two forecast-skill sections (each runs
+    several full scans of forecast_errors) for a short TTL."""
+
+    def _patch(self, monkeypatch, reason=None):
+        calls = {"portfolio": 0, "by_symbol": 0}
+
+        def _portfolio(h):
+            calls["portfolio"] += 1
+            return {"horizon_days": h, "reason": reason}
+
+        def _by_symbol(snap, h):
+            calls["by_symbol"] += 1
+            return {"horizon_days": h, "rows": [], "reason": reason}
+
+        monkeypatch.setattr(obs, "portfolio_forecast_skill", _portfolio)
+        monkeypatch.setattr(obs, "forecast_skill_by_symbol_summary", _by_symbol)
+        return calls
+
+    def test_second_call_is_served_from_cache(self, monkeypatch):
+        calls = self._patch(monkeypatch)
+        snap = {"timestamp": "t1", "signals": [{"symbol": "AAPL"}]}
+        obs.observability_summary(snapshot=snap)
+        obs.observability_summary(snapshot=snap)
+        assert calls == {"portfolio": 1, "by_symbol": 1}
+
+    def test_new_snapshot_or_horizon_misses(self, monkeypatch):
+        calls = self._patch(monkeypatch)
+        obs.observability_summary(snapshot={"timestamp": "t1", "signals": []})
+        obs.observability_summary(snapshot={"timestamp": "t2", "signals": []})
+        obs.observability_summary(snapshot={"timestamp": "t2", "signals": []}, horizon_days=10)
+        assert calls == {"portfolio": 2, "by_symbol": 3}
+
+    def test_degraded_result_is_not_cached(self, monkeypatch):
+        calls = self._patch(monkeypatch, reason="No forecast history yet")
+        obs.observability_summary(snapshot=None)
+        obs.observability_summary(snapshot=None)
+        assert calls == {"portfolio": 2, "by_symbol": 2}
+
+    def test_expired_entry_is_rebuilt(self, monkeypatch):
+        calls = self._patch(monkeypatch)
+        monkeypatch.setattr(obs, "_FORECAST_SECTION_TTL_SECONDS", 0.0)
+        obs.observability_summary(snapshot=None)
+        obs.observability_summary(snapshot=None)
+        assert calls == {"portfolio": 2, "by_symbol": 2}

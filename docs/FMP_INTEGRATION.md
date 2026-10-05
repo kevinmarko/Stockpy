@@ -11,7 +11,7 @@ Every setting in this document defaults to today's exact pre-FMP behavior. Nothi
 
 ## 1. What FMP is used for
 
-The platform's entire fundamentals and price stack ran, until this integration, on unauthenticated Yahoo/yfinance scraping — fragile by construction, and several downstream metrics were already silently broken or fabricated as a result (see `CLAUDE.md`'s FMP bullet for the specific list: `Institutional Velocity` hardcoded to `0.0`, `dividend_growth_rate` falling back to a fabricated 2% constant, `fetch_macro_raw` falling back to hardcoded macro constants, and others). Financial Modeling Prep becomes the **primary, opt-in source** for quotes, bars, and fundamentals, with the existing Alpaca/yfinance/Yahoo providers kept as automatic fallbacks — never removed, never bypassed silently. Alongside that replacement role, four genuinely new feeds land as **diagnostic-only dashboard columns**: analyst consensus/grades, an earnings calendar with surprise history, treasury-rate and economic-indicator macro supplements, and insider-trading + sector-snapshot statistics. None of the four is a scored signal (see §1a below) — they exist to give an operator more to look at, not more for the strategy engine to trade on.
+The platform's entire fundamentals and price stack ran, until this integration, on unauthenticated Yahoo/yfinance scraping — fragile by construction, and several downstream metrics were already silently broken or fabricated as a result (see `CLAUDE.md`'s FMP bullet for the specific list: `Institutional Velocity` hardcoded to `0.0`, `dividend_growth_rate` falling back to a fabricated 2% constant, `fetch_macro_raw` falling back to hardcoded macro constants, and others). Financial Modeling Prep becomes the **primary, opt-in source** for quotes, bars, and fundamentals, with the existing yfinance/Yahoo providers kept as automatic fallbacks — never removed, never bypassed silently. Alongside that replacement role, four genuinely new feeds land as **diagnostic-only dashboard columns**: analyst consensus/grades, an earnings calendar with surprise history, treasury-rate and economic-indicator macro supplements, and insider-trading + sector-snapshot statistics. None of the four is a scored signal (see §1a below) — they exist to give an operator more to look at, not more for the strategy engine to trade on.
 
 **1a. Why none of the four new feeds is a `SignalModule`.** `signals/` modules are backtested through the purged-CV validation harness before they can earn a `SIGNAL_WEIGHTS` entry — that is the platform's whole quality bar for anything influencing `final_score`. None of the four new feeds has point-in-time history on day one (FMP serves only the *current* analyst consensus, for example — targets get revised, and there is no archived "what did the consensus say on date X" to backtest against). A signal the repo cannot backtest cannot earn a weight. This is also the no-lookahead *guarantee mechanism*, not just a policy: because nothing new ever enters `signals/` or `dto_models.py`, nothing new ever needs to pass through the perturbation/lookahead test harness in the first place.
 
@@ -34,7 +34,7 @@ Two honest, permanent consequences follow, stated plainly so nobody re-discovers
 
 ## 3. Settings reference
 
-All 32 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (data/fmp_client.py) ---` (the three news settings — §7 — were added 2026-08, next to `FMP_EARNINGS_ENABLED`/`FMP_ECON_INDICATORS`; `FMP_OPTIONS_HEALTH_ENABLED`, `FMP_OPTIONS_CONTEXT_ENABLED`, and `FMP_PEERS_ENABLED` — §3a/§3b below — were added alongside them; `FMP_SCREENER_ENABLED` — §9 below — was added next to `FMP_UNIVERSE_ENABLED`), are mirrored in `.env.example`, and (except the credential) are GUI-writable via `shared/env_io.py`'s `ALLOWED_KEYS` (the desktop GUI itself is decommissioned as of 2026-07-20 — see `CLAUDE.md`'s "Frontend strategy" — so these settings are allowlisted for write access but have no new `legacy/streamlit_command_center/panels/settings_manager.py` widget). **`FMP_API_KEY` alone never elects FMP as the active provider for anything.** All feed master gates enforce a genuine two-gate convention (the `STOCKTWITS_ENABLED` precedent) where a source is actually being REPLACED: quotes need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_QUOTES_ENABLED`; bars need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_BARS_ENABLED`, independently of the quotes gate; fundamentals need `FUNDAMENTALS_SOURCE=fmp` **and** `FMP_FUNDAMENTALS_ENABLED`; news needs `FMP_NEWS_ENABLED` **and** `FMP_API_KEY` (see §7); the eight diagnostic feeds (`FMP_ANALYST_ENABLED`, `FMP_EARNINGS_ENABLED`, `FMP_MACRO_ENABLED`, `FMP_INSIDER_ENABLED`, `FMP_SECTOR_SNAPSHOT_ENABLED`, `FMP_OPTIONS_HEALTH_ENABLED`, `FMP_OPTIONS_CONTEXT_ENABLED`, `FMP_PEERS_ENABLED`) are each a single, standalone gate — they add new columns/surfaces rather than replacing an existing source, so there is no second selector to require. When `MARKET_DATA_PROVIDER=fmp`/`FUNDAMENTALS_SOURCE=fmp` is set but the matching capability flag is `False`, that capability falls through **unconditionally** to the pre-existing default (Alpaca-if-keyed-else-yfinance for quotes/bars, Yahoo-derived for fundamentals) — this is deliberately independent of `FMP_FALLBACK_ENABLED`, since FMP is never attempted in the first place and there is nothing to fall back *from*. `CompositeProvider.quote_source`/`.is_realtime`/`.source_name` always report the provider that is genuinely serving, never `"fmp"` while its capability gate is off. `FMP_QUOTES_ENABLED` and `FMP_BARS_ENABLED` are fully independent: an operator can run quotes on FMP while bars stay on yfinance, or vice versa, from the same `MARKET_DATA_PROVIDER=fmp` selection.
+All 32 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (data/fmp_client.py) ---` (the three news settings — §7 — were added 2026-08, next to `FMP_EARNINGS_ENABLED`/`FMP_ECON_INDICATORS`; `FMP_OPTIONS_HEALTH_ENABLED`, `FMP_OPTIONS_CONTEXT_ENABLED`, and `FMP_PEERS_ENABLED` — §3a/§3b below — were added alongside them; `FMP_SCREENER_ENABLED` — §9 below — was added next to `FMP_UNIVERSE_ENABLED`), are mirrored in `.env.example`, and (except the credential) are writable via `shared/env_io.py`'s `ALLOWED_KEYS` (edited from the web app's Settings → FMP screen, `/settings/fmp`; the Streamlit desktop app was deleted in 2026-09). **`FMP_API_KEY` alone never elects FMP as the active provider for anything.** All feed master gates enforce a genuine two-gate convention (the `STOCKTWITS_ENABLED` precedent) where a source is actually being REPLACED: quotes need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_QUOTES_ENABLED`; bars need `MARKET_DATA_PROVIDER=fmp` **and** `FMP_BARS_ENABLED`, independently of the quotes gate; fundamentals need `FUNDAMENTALS_SOURCE=fmp` **and** `FMP_FUNDAMENTALS_ENABLED`; news needs `FMP_NEWS_ENABLED` **and** `FMP_API_KEY` (see §7); the eight diagnostic feeds (`FMP_ANALYST_ENABLED`, `FMP_EARNINGS_ENABLED`, `FMP_MACRO_ENABLED`, `FMP_INSIDER_ENABLED`, `FMP_SECTOR_SNAPSHOT_ENABLED`, `FMP_OPTIONS_HEALTH_ENABLED`, `FMP_OPTIONS_CONTEXT_ENABLED`, `FMP_PEERS_ENABLED`) are each a single, standalone gate — they add new columns/surfaces rather than replacing an existing source, so there is no second selector to require. When `MARKET_DATA_PROVIDER=fmp`/`FUNDAMENTALS_SOURCE=fmp` is set but the matching capability flag is `False`, that capability falls through **unconditionally** to the pre-existing default (yfinance for quotes/bars, Yahoo-derived for fundamentals) — this is deliberately independent of `FMP_FALLBACK_ENABLED`, since FMP is never attempted in the first place and there is nothing to fall back *from*. `CompositeProvider.quote_source`/`.is_realtime`/`.source_name` always report the provider that is genuinely serving, never `"fmp"` while its capability gate is off. `FMP_QUOTES_ENABLED` and `FMP_BARS_ENABLED` are fully independent: an operator can run quotes on FMP while bars stay on yfinance, or vice versa, from the same `MARKET_DATA_PROVIDER=fmp` selection.
 
 ### Credential (1) — `SECRET_KEYS` only, never GUI-writable
 
@@ -80,7 +80,7 @@ All 32 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 
 | Setting | Type | Default | Purpose |
 |---|---|---|---|
-| `FMP_FALLBACK_ENABLED` | `bool` | `True` | When `True`, an FMP failure falls through to the existing provider chain (quotes/bars: FMP → Alpaca if keyed → yfinance; fundamentals: FMP → Yahoo statement-derived → yfinance `.info`), logging a `WARNING`. `False` makes the chain `[primary]` only. |
+| `FMP_FALLBACK_ENABLED` | `bool` | `True` | When `True`, an FMP failure falls through to the existing provider chain (quotes/bars: FMP → yfinance; fundamentals: FMP → Yahoo statement-derived → yfinance `.info`), logging a `WARNING`. `False` makes the chain `[primary]` only. |
 | `FMP_QUOTES_REALTIME` | `bool` | `True` | Whether FMP quotes may be labelled real-time (`is_stale=False`). Defaults `True` by explicit operator decision. |
 | `FMP_BARS_ADJUSTMENT` | `str` | `"dividend-adjusted"` | Which `/historical-price-eod` variant bars are pulled from: `"dividend-adjusted"`, `"light"`, `"full"`, or `"non-split-adjusted"`. **Not cosmetic — see §4, the single highest-risk setting in this integration.** |
 | `FMP_ANALYST_REFRESH_HOURS` | `int` | `24` | Hours before a symbol's cached analyst consensus is re-fetched. |
@@ -204,15 +204,15 @@ Added in response to an operator report of two related failures — a `RH_USERNA
 resolution bug (fixed separately, see `CLAUDE.md`'s `.env`-resolution notes) and a
 `FINNHUB_API_KEY is not set ... (or finnhub-python is not installed)` error from
 `scripts/backfill_news_history.py` — that prompted the decision to make FMP the
-PRIMARY company-news source, with Finnhub kept as an opt-in fallback rather than
-removed outright.
+PRIMARY company-news source. Finnhub was kept as a fallback at first and was
+then removed outright in 2026-09 (vendor-removal PR: it was unreached on the live
+config), so FMP is now the ONLY company-news / earnings-date provider.
 
 **Endpoint used:** `data/fmp_client.py::stock_news` wraps `GET /news/stock`
 (`symbols`, `from`, `to`, `page`, `limit` params). Verified live 2026-08 against a
 real FMP key: a single 10-day window returned 99 and 93 articles across two pages,
 and a query 6 months in the past still returned genuinely real, dated articles —
-well past Finnhub's free-tier ~3 month cap (`settings.NEWS_LOOKBACK_DAYS`'s own
-description). **Deliberately does NOT wrap `/news/press-releases`** — that endpoint
+well past the ~3 month cap Finnhub's free tier used to impose. **Deliberately does NOT wrap `/news/press-releases`** — that endpoint
 returned `"Restricted Endpoint... please visit our subscription page to upgrade
 your plan"` (a plan-entitlement rejection, not a bug) against the Starter-tier
 account this integration was verified with.
@@ -232,29 +232,26 @@ silently — exactly the class of "fails plausibly, not loudly" risk §6 above w
 about for the bars-adjustment setting; the same discipline (verify against a real,
 independently-dated record) was applied here.
 
-**Consumers, all provider-agnostic (FMP-first, Finnhub-fallback):**
+**Consumers (FMP-only):**
 - `data/sentiment_sources.py::FMPNewsSource` (`name = "fmp_news"`) — a new,
-  separately-selectable entry in `_SOURCE_REGISTRY`/`_SOURCE_PRIORITY` (ahead of
-  `"finnhub"`). Opt-in: an operator must add `"fmp_news"` to `SENTIMENT_SOURCES`
+  separately-selectable entry in `_SOURCE_REGISTRY`/`_SOURCE_PRIORITY` (first in
+  the priority order). Opt-in: an operator must add `"fmp_news"` to `SENTIMENT_SOURCES`
   *and* set `FMP_NEWS_ENABLED=True` for it to run. Paginates, scores via the
   batched `score_headlines()` path, and is bounded by `deadline_exceeded()` like
   every other multi-request source in this module (the `GDELTSource` pattern).
 - `signals/news_catalyst.py::fetch_company_headlines(symbol, lookback_days)` and
-  `fetch_next_earnings_any(symbol)` — new top-level dispatcher functions. Each
-  tries FMP first (when `FMP_NEWS_ENABLED` + `FMP_API_KEY`), falling back to the
-  existing Finnhub-specific `build_finnhub_client()`/`fetch_company_news()`/
-  `fetch_next_earnings()` otherwise (those three functions are UNCHANGED and stay
-  exported, since `FMPNewsSource`'s Finnhub sibling `FinnhubSentimentSource` and
-  other explicit-Finnhub callers still use them directly). `NewsCatalystSignal`'s
-  `pre_compute()` (renamed internal method `_score_via_provider`, aliased from the
-  old `_score_via_finnhub` name), `llm/research.py`'s Opal grounding packet, and
-  `engine/agent_sentiment.py`'s Antigravity agent tool were all re-pointed at
-  these two dispatchers — the earnings-date gate that used to require a Finnhub
-  client now also accepts FMP-only configuration.
+  `fetch_next_earnings_any(symbol)` — the top-level dispatcher functions. Each reads
+  FMP only (`FMP_NEWS_ENABLED` + `FMP_API_KEY`) and returns the honest empty result
+  (`[]` / `None`) when FMP is off, unconfigured, failing or has nothing — never
+  raises, never fabricates. `NewsCatalystSignal`'s `pre_compute()` (internal method
+  `_score_via_provider`), `llm/research.py`'s Opal grounding packet, and
+  `engine/agent_sentiment.py`'s Antigravity agent tool all call these two
+  dispatchers. (`build_finnhub_client()`/`fetch_company_news()`/
+  `fetch_next_earnings()` and `FinnhubSentimentSource` were deleted.)
 - `scripts/backfill_news_history.py` — `_fetch_headlines`/`_fetch_earnings_dates`
-  each gained an FMP-first half (`_fetch_headlines_fmp`/`_fetch_earnings_dates_fmp`)
-  using the same wide-date-range-in-one-call-then-reconstruct-locally approach the
-  Finnhub path already used, so a 6-month backfill still costs a small, bounded
+  are FMP-only (`_fetch_headlines_fmp`/`_fetch_earnings_dates_fmp`) and use a
+  wide-date-range-in-one-call-then-reconstruct-locally approach, so a 6-month
+  backfill still costs a small, bounded
   number of provider calls, not thousands. The pagination ceiling
   (`FMP_NEWS_MAX_PAGES`) is logged, not silently absorbed, when it's hit.
 
@@ -268,10 +265,9 @@ with FMP as the sole configured provider; the full `backfill_news_history.py`
 triggered with a low `FMP_NEWS_MAX_PAGES` to confirm the log fires and coverage
 degrades honestly rather than silently).
 
-**Not changed:** `FinnhubSentimentSource` (`data/sentiment_sources.py`) stays
-Finnhub-specific and is not re-pointed at the dispatchers — it remains a
-separately-selectable `SENTIMENT_SOURCES` entry for an operator who wants Finnhub
-specifically, alongside (or instead of) `fmp_news`.
+**Removed 2026-09:** `FinnhubSentimentSource`, `FinnhubProvider`, the `FINNHUB_*`
+settings and the `finnhub-python` dependency. A leftover `FINNHUB_API_KEY` line in
+`.env` is ignored (`Settings` uses `extra="ignore"`).
 
 ---
 

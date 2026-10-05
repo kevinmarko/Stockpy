@@ -23,6 +23,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from typing import Any, Optional
@@ -79,37 +80,46 @@ class AsyncDataFetchStep(PipelineStep):
     async def run(self, ctx: RunContext) -> None:
         """Fetch macro, fundamentals, and technicals concurrently into the RunContext."""
         import main_orchestrator
+        import data_engine as data_engine_mod
         from data_engine import DataEngine, MockDataEngine
         from dto_models import RobinhoodPositionDTO
 
         settings.warn_if_fred_key_leaked(telemetry)
 
-        # Merge discovered candidates
-        from pilots.discovery import discovery
+        # Robinhood account snapshot first: its held symbols are one of the
+        # universe's inputs. Same call as before step 5.1 (20 h cache, then
+        # the existing ROBINHOOD_AUTO_REFRESH_ENABLED-gated live tier); it
+        # only moved up from below the data-engine setup. No new login path.
+        rh_positions = {}
+        snapshot = None
         try:
-            candidates = discovery(limit=None).get("candidates", [])
-            discovered_symbols = [c["symbol"].upper().strip() for c in candidates if c.get("symbol")]
-            if discovered_symbols:
-                telemetry.info(f"Loaded {len(discovered_symbols)} candidates from scan discovery.")
-        except Exception as exc:
-            telemetry.warning(f"Failed to load discovery candidates: {exc}")
-            discovered_symbols = []
+            snapshot = await asyncio.to_thread(main_orchestrator.fetch_account_snapshot)
+            rh_positions = main_orchestrator.account_snapshot_to_robinhood_positions(snapshot)
+        except Exception as rh_exc:
+            snapshot = None
+            telemetry.warning(
+                f"Robinhood account snapshot unavailable: {rh_exc}; "
+                "proceeding without holdings-aware overlay."
+            )
+        ctx.context_extras["robinhood_positions"] = rh_positions
+        # Kept for AdvisoryOverlayStep / AgenticQueueStep (step 5.2), which
+        # used to fetch the same 20 h-cached snapshot a second time. None on
+        # failure; AdvisoryOverlayStep substitutes main.py's empty snapshot.
+        ctx.snapshot = snapshot
 
-        # WATCHLIST env var / watchlist.txt ∪ discovered ∪ DEFAULT_TICKERS
-        # (fallback-only) — shared with main.py::_build_universe() via
-        # data.portfolio_sync so this step can no longer silently diverge
-        # from what watchlist.txt / POST /agentic/watch actually promise.
-        # Previously this line never read WATCHLIST/watchlist.txt at all and
-        # dropped DEFAULT_TICKERS outright whenever discovery had any
-        # candidate — see docs/known_issues/daemon_universe_watchlist_divergence.md.
-        from data.portfolio_sync import compute_tracked_universe, load_env_watchlist
+        # One universe builder for both orchestrators (step 5.1):
+        # held ∪ WATCHLIST/watchlist.txt ∪ discovered, rating auto-drop,
+        # DEFAULT_TICKERS only when that whole union is empty, then
+        # recently-closed retention unioned LAST. main.py calls the same
+        # pipeline.advisory_inputs.build_universe_detailed(), so the two can
+        # no longer diverge. Before 5.1 this step left held out of the union
+        # (so DEFAULT_TICKERS could fire while positions were held) and had
+        # no closed-position retention -- see
+        # docs/known_issues/daemon_universe_watchlist_divergence.md.
+        from pipeline.advisory_inputs import build_universe_detailed
 
-        watchlist_symbols = load_env_watchlist(ctx.watchlist_file)
-        base_symbols = compute_tracked_universe(
-            watchlist=watchlist_symbols,
-            discovered=discovered_symbols,
-            default_tickers=settings.DEFAULT_TICKERS,
-        )
+        build = build_universe_detailed(snapshot, watchlist_file=ctx.watchlist_file)
+        base_symbols = list(build.symbols)
 
         # Permanent universe-funnel diagnostic (see
         # docs/known_issues/universe_count_reporting_mismatch.md): records the
@@ -117,47 +127,38 @@ class AsyncDataFetchStep(PipelineStep):
         # "N-symbol universe but only M forecasted" report can be diagnosed
         # from state_snapshot.json directly instead of re-deriving it from
         # scratch. Never gates behavior -- purely additive telemetry.
+        # Since step 5.1 held symbols go into the builder's union rather than
+        # being appended afterwards, so tracked_universe_before_held now
+        # counts the universe symbols that are neither held nor retained
+        # (the ones only watchlist/discovery/DEFAULT_TICKERS contributed).
         universe_funnel: dict = {
             "configured_default_tickers": len(settings.DEFAULT_TICKERS or []),
-            "watchlist_count": len(watchlist_symbols),
-            "discovered_count": len(discovered_symbols),
-            "default_tickers_is_fallback": not (watchlist_symbols or discovered_symbols),
-            "tracked_universe_before_held": len(base_symbols),
+            "watchlist_count": len(build.watchlist),
+            "discovered_count": len(build.discovered),
+            "default_tickers_is_fallback": build.default_tickers_is_fallback,
+            "tracked_universe_before_held": len(
+                set(base_symbols) - build.held - build.recently_closed
+            ),
+            "held_positions_added": len(rh_positions),
+            "recently_closed_added": len(build.recently_closed),
         }
         ctx.context_extras["universe_funnel"] = universe_funnel
 
         # Initialize data engine
         de = ctx.market
         if de is None:
-            creds_exist = os.path.exists("credentials.json")
-            if creds_exist:
+            if data_engine_mod.live_data_configured():
                 settings.ensure_fred_configured()
                 de = DataEngine(settings.FRED_API_KEY)
                 ctx.symbols = base_symbols
             else:
-                telemetry.warning("credentials.json not found. Operating with deterministic MockDataEngine.")
+                telemetry.warning("FRED_API_KEY not configured. Operating with deterministic MockDataEngine.")
                 de = MockDataEngine()
-                ctx.symbols = ["AAPL"]
+                # Mock mode keeps its pre-5.1 universe: AAPL plus held.
+                ctx.symbols = ["AAPL"] + [tk for tk in rh_positions if tk != "AAPL"]
             ctx.market = de
         else:
             ctx.symbols = base_symbols
-
-        # Integrate Robinhood Holdings
-        rh_positions = {}
-        try:
-            snapshot = await asyncio.to_thread(main_orchestrator.fetch_account_snapshot)
-            rh_positions = main_orchestrator.account_snapshot_to_robinhood_positions(snapshot)
-            if rh_positions:
-                for tk in rh_positions.keys():
-                    if tk not in ctx.symbols:
-                        ctx.symbols.append(tk)
-        except Exception as rh_exc:
-            telemetry.warning(
-                f"Robinhood account snapshot unavailable: {rh_exc}; "
-                "proceeding without holdings-aware overlay."
-            )
-        ctx.context_extras["robinhood_positions"] = rh_positions
-        universe_funnel["held_positions_added"] = len(rh_positions)
         universe_funnel["tracked_universe_total"] = len(ctx.symbols)
 
         # 1. Asynchronous concurrent data fetching
@@ -184,9 +185,7 @@ class AsyncDataFetchStep(PipelineStep):
             # main_orchestrator._mark_data_refreshed()'s real-data-only
             # asymmetry below -- set ONLY on this fallback branch, never on
             # the real-data path. BrokerExecutionStep checks this marker
-            # before it will submit any order, regardless of which broker
-            # backend (Alpaca, FMPPaperBroker, ...) settings.BROKER_BACKEND
-            # selects one layer deeper.
+            # before it will submit any paper order.
             ctx.context_extras['data_is_synthetic'] = True
         else:
             # Real (non-mock) data landed — stamp the cross-cycle freshness
@@ -242,18 +241,22 @@ class RunPipelineStep(PipelineStep):
         ctx.context_extras["shared_context"] = shared_context
 
 
-class OptionsAnalysisStep(PipelineStep):
-    """Calculates options and GARCH."""
-    name = "macro_options"
-    
+class MacroStep(PipelineStep):
+    """Builds this cycle's ``MacroEconomicDTO`` (Sahm, macro kill switch, HMM).
+
+    Split out of the old ``OptionsAnalysisStep`` (2026-09, step 3d) with its
+    body unchanged, so the equity path no longer runs through the options
+    desk to get its macro regime.
+    """
+    name = "macro_volatility"
+
     def run(self, ctx: RunContext) -> None:
-        """Compute per-ticker options metrics and GJR-GARCH volatility."""
-        from main_orchestrator import MacroEngine, TechnicalOptionsEngine, IVHistoryStore, get_30d_atm_iv, calculate_true_ivr, get_vrp, MacroEconomicDTO
+        """Compute the macro regime DTO onto ``ctx.macro_dto``."""
+        from main_orchestrator import MacroEngine, MacroEconomicDTO
         from macro_engine import macro_killswitch_data_unavailable
-        from concurrent.futures import ThreadPoolExecutor
 
         if ctx.progress is not None:
-            ctx.progress.start_stage("macro_options", symbols_total=len(ctx.symbols))
+            ctx.progress.start_stage("macro_volatility", symbols_total=len(ctx.symbols))
 
         engines = ctx.engine_context
 
@@ -300,107 +303,91 @@ class OptionsAnalysisStep(PipelineStep):
             data_unavailable=data_unavailable,
         )
 
-        # Technical Options Analysis
-        telemetry.info("Routing data through Technical Options Engine...")
-        toe = (engines.technical_options_engine
-               if engines is not None and engines.technical_options_engine is not None
-               else TechnicalOptionsEngine())
-        iv_store = (engines.iv_history_store
-                    if engines is not None and engines.iv_history_store is not None
-                    else IVHistoryStore())
-        
-        tech_opt_indicators = {}
 
-        def _options_one(ticker):
+class TrendVolatilityStep(PipelineStep):
+    """Per-ticker GJR-GARCH vol and the Aroon/Coppock/Chandelier indicators.
+
+    What is left of the old ``OptionsAnalysisStep`` once the options desk was
+    cut out of core (2026-09, step 3d): the implied-vol reads, True IVR, VRP,
+    realized-vol rank and the options strategy matrix are gone; ``GARCH_Vol``
+    (cold-start sizing), the GARCH term structure ``ForecastingStep`` reuses,
+    and the trend/exit indicators ``StrategyEvalStep`` uses are computed
+    exactly as before, now from ``volatility.garch`` and ``trend_indicators``.
+    """
+    name = "macro_volatility"
+
+    def run(self, ctx: RunContext) -> None:
+        """Compute per-ticker trend/exit indicators and GJR-GARCH volatility."""
+        from main_orchestrator import GarchVolatilityEstimator
+        from trend_indicators import calculate_trend_exit_indicators
+        from concurrent.futures import ThreadPoolExecutor
+
+        engines = ctx.engine_context
+
+        telemetry.info("Routing data through Trend & Volatility Engine...")
+        garch = (engines.garch_estimator
+                 if engines is not None and engines.garch_estimator is not None
+                 else GarchVolatilityEstimator())
+
+        trend_vol_indicators = {}
+
+        def _trend_vol_one(ticker):
             df_hist = ctx.tech_raw.get(ticker)
             if df_hist is None or df_hist.empty:
                 if ctx.progress is not None:
-                    ctx.progress.advance_symbol(f"Options: {ticker} (no data)")
-                return ticker, None, None, None
+                    ctx.progress.advance_symbol(f"Volatility: {ticker} (no data)")
+                return ticker, None, None
             try:
-                indicators = toe.calculate_indicators(df_hist)
-                # ONE GJR-GARCH fit covers both this step's horizon=1 uses
-                # (GARCH_Vol column / VRP / True IVR, unchanged from before)
+                indicators = calculate_trend_exit_indicators(df_hist)
+                # ONE GJR-GARCH fit covers both the horizon=1 GARCH_Vol column
                 # AND the forecasting step's per-horizon Monte Carlo sigma
                 # (10/30/60/90) -- see estimate_gjr_garch_volatility_term_structure's
                 # docstring. Threaded through via garch_term_structure below
                 # so ForecastingStep never has to refit.
-                garch_term_structure = toe.estimate_gjr_garch_volatility_term_structure(
+                garch_term_structure = garch.estimate_gjr_garch_volatility_term_structure(
                     df_hist, horizons=(1, 10, 30, 60, 90)
                 )
                 # None means there isn't even enough history to measure a
                 # historical-stdev fallback (CONSTRAINT #4 -- see the
-                # estimator's own docstring). Degrade GARCH_Vol/VRP to NaN
-                # (VRP = current_iv - vol propagates the NaN and correctly
-                # gates the VRP leg closed) rather than letting this whole
-                # per-ticker step crash on `garch_term_structure[1]` and lose
-                # Aroon/Coppock/Chandelier/True_IVR too, none of which depend
-                # on GARCH at all.
+                # estimator's own docstring). Degrade GARCH_Vol to NaN rather
+                # than letting this whole per-ticker step crash on
+                # `garch_term_structure[1]` and lose Aroon/Coppock/Chandelier
+                # too, none of which depend on GARCH at all.
                 vol = garch_term_structure[1] if garch_term_structure is not None else float('nan')
-                realized_vol_rank = toe.calculate_realized_vol_rank(df_hist, vol)
-
-                as_of_date = df_hist.index[-1].strftime("%Y-%m-%d")
-                price_val = float(df_hist['Close'].iloc[-1])
-
-                current_iv = float('nan')
-                iv_record = None
-                if ctx.market is not None:
-                    current_iv = get_30d_atm_iv(ctx.market, ticker, as_of_date, spot_price=price_val)
-                    if not np.isnan(current_iv):
-                        iv_record = (ticker, as_of_date, current_iv)
-
-                true_ivr = calculate_true_ivr(ticker, current_iv, as_of_date, iv_store)
-                vrp = get_vrp(ticker, current_iv, vol)
-
-                opt_strategy = toe.generate_option_strategy_matrix(
-                    true_ivr=true_ivr if not np.isnan(true_ivr) else 50.0,
-                    aroon_osc=indicators["Aroon_Oscillator"],
-                    coppock_val=indicators["Coppock_Curve"],
-                    stock_price=price_val,
-                    current_iv=current_iv if not np.isnan(current_iv) else vol,
-                    vrp=vrp,
-                    macro_dto=ctx.macro_dto
-                )
                 result = {
                     "Aroon_Oscillator": indicators["Aroon_Oscillator"],
                     "Coppock_Curve": indicators["Coppock_Curve"],
                     "Chandelier_Long": indicators["Chandelier_Long"],
                     "Chandelier_Short": indicators["Chandelier_Short"],
                     "GARCH_Vol": vol,
-                    "Realized_Vol_Rank": realized_vol_rank,
-                    "True_IVR": true_ivr,
-                    "VRP": vrp,
-                    "Option_Strategy_Matrix": opt_strategy
                 }
                 if ctx.progress is not None:
-                    ctx.progress.advance_symbol(f"Options: {ticker}")
-                return ticker, result, iv_record, garch_term_structure
-            except Exception as opt_exc:
+                    ctx.progress.advance_symbol(f"Volatility: {ticker}")
+                return ticker, result, garch_term_structure
+            except Exception as tv_exc:
                 telemetry.warning(
-                    f"Technical Options Analysis failed for {ticker}: {opt_exc}. "
-                    f"Skipping options metrics for this ticker this cycle."
+                    f"Trend & volatility analysis failed for {ticker}: {tv_exc}. "
+                    f"Skipping GARCH/trend metrics for this ticker this cycle."
                 )
                 if ctx.progress is not None:
-                    ctx.progress.advance_symbol(f"Options: {ticker} (failed)")
-                return ticker, None, None, None
+                    ctx.progress.advance_symbol(f"Volatility: {ticker} (failed)")
+                return ticker, None, None
 
-        opt_workers = min(int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)), max(1, len(ctx.symbols)))
-        if opt_workers <= 1 or len(ctx.symbols) <= 1:
-            opt_results = [_options_one(t) for t in ctx.symbols]
+        tv_workers = min(int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)), max(1, len(ctx.symbols)))
+        if tv_workers <= 1 or len(ctx.symbols) <= 1:
+            tv_results = [_trend_vol_one(t) for t in ctx.symbols]
         else:
-            with ThreadPoolExecutor(max_workers=opt_workers) as opt_pool:
-                opt_results = list(opt_pool.map(_options_one, ctx.symbols))
+            with ThreadPoolExecutor(max_workers=tv_workers) as tv_pool:
+                tv_results = list(tv_pool.map(_trend_vol_one, ctx.symbols))
 
         garch_term_structures: dict[str, dict[int, float]] = {}
-        for tk, res, iv_rec, term_structure in opt_results:
-            if iv_rec is not None:
-                iv_store.record_iv(iv_rec[0], iv_rec[1], iv_rec[2])
+        for tk, res, term_structure in tv_results:
             if res is not None:
-                tech_opt_indicators[tk] = res
+                trend_vol_indicators[tk] = res
             if term_structure is not None:
                 garch_term_structures[tk] = term_structure
 
-        ctx.context_extras["tech_opt_indicators"] = tech_opt_indicators
+        ctx.context_extras["trend_vol_indicators"] = trend_vol_indicators
         # Per-ticker {horizon: annualized_vol} GARCH term structure, consumed
         # by ForecastingStep below to avoid refitting GJR-GARCH a second time
         # this cycle for the SAME per-horizon Monte Carlo sigma computation.
@@ -462,8 +449,8 @@ class ProcessingStep(PipelineStep):
                 "dashboard compilation (tech ∪ fund raw data)",
             )
 
-        tech_opt_indicators = ctx.context_extras.get("tech_opt_indicators", {})
-        _apply_options_columns(ctx.dashboard_df, tech_opt_indicators)
+        trend_vol_indicators = ctx.context_extras.get("trend_vol_indicators", {})
+        _apply_trend_vol_columns(ctx.dashboard_df, trend_vol_indicators)
 
 
 class ForecastingStep(PipelineStep):
@@ -504,11 +491,17 @@ class ForecastingStep(PipelineStep):
                          # -- Pandera's DashboardSchema is non-strict, so an
                          # extra column here is fine, and adding it to the
                          # schema would force main.py's advisory path /
-                         # Sheets publisher / report templates to also
+                         # report templates to also
                          # populate it, which is out of scope for this change
                          # (see docs/known_issues/forecast_fallback_current_price_disclosure.md).
                          'Forecast_10_Is_Fallback', 'Forecast_30_Is_Fallback',
                          'Forecast_60_Is_Fallback', 'Forecast_90_Is_Fallback']
+        # Forecasting rebuild F3: the gate's "published naive" disclosure
+        # columns exist only when the gate drives the published forecast, so
+        # the flag-off dashboard keeps exactly its pre-F3 columns.
+        if bool(getattr(settings, "FORECAST_NAIVE_GATE_ENABLED", False)):
+            forecast_cols += ['Forecast_10_Gated_Naive', 'Forecast_30_Gated_Naive',
+                              'Forecast_60_Gated_Naive', 'Forecast_90_Gated_Naive']
 
         def _forecast_one(row) -> tuple[str, dict | None]:
             ticker = row['Symbol']
@@ -522,7 +515,7 @@ class ForecastingStep(PipelineStep):
             history_series = history_df['Close'] if history_df is not None else None
 
             try:
-                # {horizon: annualized_vol}, fit ONCE by OptionsAnalysisStep above
+                # {horizon: annualized_vol}, fit ONCE by TrendVolatilityStep above
                 # (against this same history_df) -- lets generate_forecast give
                 # each of the 10/30/60/90-day horizons its OWN mean-reversion
                 # -aware sigma without a redundant second GJR-GARCH fit here.
@@ -587,6 +580,39 @@ class ForecastingStep(PipelineStep):
                 pairs = list(pool.map(_forecast_one, rows))
         forecast_results = {tk: fc for tk, fc in pairs if fc is not None}
 
+        # Forecasting rebuild F2: one aggregated line per cycle for the safety
+        # guards (per-drop detail is at DEBUG inside the engine).
+        _pop_guard_stats = getattr(fe, "pop_guard_stats", None)
+        if callable(_pop_guard_stats):
+            try:
+                _guard_stats = _pop_guard_stats()
+                if any(not k.startswith("gate_") and v for k, v in _guard_stats.items()):
+                    telemetry.info(
+                        "Forecast guards this cycle: %d clamped, %d input-price drops, "
+                        "%d symbol-horizons with every model dropped, %d symbols with no "
+                        "GARCH sigma (clamp skipped), %d symbols with no price history "
+                        "(input check skipped).",
+                        _guard_stats.get("dropped_clamp", 0),
+                        _guard_stats.get("dropped_input_price", 0),
+                        _guard_stats.get("all_dropped_horizons", 0),
+                        _guard_stats.get("sigma_unavailable", 0),
+                        _guard_stats.get("no_reference_close", 0),
+                    )
+                _gate_total = (_guard_stats.get("gate_naive_horizons", 0)
+                               + _guard_stats.get("gate_admitted_horizons", 0))
+                if _gate_total:
+                    telemetry.info(
+                        "Forecast naive gate this cycle (%s): %d symbol-horizons admitted "
+                        "at least one model, %d fell back to naive, %d with no usable "
+                        "ledger stats.",
+                        "LIVE" if getattr(settings, "FORECAST_NAIVE_GATE_ENABLED", False) else "shadow",
+                        _guard_stats.get("gate_admitted_horizons", 0),
+                        _guard_stats.get("gate_naive_horizons", 0),
+                        _guard_stats.get("gate_stats_unavailable", 0),
+                    )
+            except Exception as _guard_exc:  # noqa: BLE001 - logging only
+                telemetry.debug("Forecast guard stats unavailable: %s", _guard_exc)
+
         # Universe-funnel diagnostic, final stage (see AsyncDataFetchStep /
         # ProcessingStep above and
         # docs/known_issues/universe_count_reporting_mismatch.md).
@@ -636,27 +662,26 @@ def _apply_forecast_columns(
         )
 
 
-_OPTIONS_COLUMN_MAP = (
+# Realized_Vol_Rank / True_IVR / VRP used to be mapped here too; they were
+# options-desk columns (always NaN since step 3d) and left COLUMN_SCHEMA in
+# the 2026-09 settings/schema trim (step 4f).
+_TREND_VOL_COLUMN_MAP = (
     ('GARCH_Vol', 'GARCH_Vol'),
-    ('Realized_Vol_Rank', 'Realized_Vol_Rank'),
-    ('True_IVR', 'True_IVR'),
-    ('VRP', 'VRP'),
     ('Aroon Oscillator', 'Aroon_Oscillator'),
     ('Coppock Curve', 'Coppock_Curve'),
     ('Chandelier Exit', 'Chandelier_Long'),
 )
 
 
-def _apply_options_columns(dashboard_df: pd.DataFrame, tech_opt_indicators: dict) -> None:
-    """Map OptionsAnalysisStep's per-ticker ``tech_opt_indicators`` dict onto
-    ``dashboard_df``'s GARCH/IVR/VRP/Aroon/Coppock/Chandelier columns.
+def _apply_trend_vol_columns(dashboard_df: pd.DataFrame, trend_vol_indicators: dict) -> None:
+    """Map TrendVolatilityStep's per-ticker ``trend_vol_indicators`` dict onto
+    ``dashboard_df``'s GARCH/Aroon/Coppock/Chandelier columns.
 
     NaN-fills every column first, then overlays whatever each ticker actually
-    has in ``tech_opt_indicators``. A ticker absent from that dict (its
-    ``OptionsAnalysisStep._options_one()`` call failed or was dead-lettered
+    has in ``trend_vol_indicators``. A ticker absent from that dict (its
+    ``TrendVolatilityStep._trend_vol_one()`` call failed or was dead-lettered
     this cycle) or missing an individual key stays NaN for that cell --
-    "uncomputable" must never read as "zero VRP" / "zero True IVR"
-    (CONSTRAINT #4); a fabricated 0.0 there is indistinguishable from a
+    "uncomputable" must never read as a computed zero (CONSTRAINT #4); a fabricated 0.0 there is indistinguishable from a
     genuinely-computed, legitimately-zero value.
 
     Deliberately a module-level function (same pattern as
@@ -665,12 +690,45 @@ def _apply_options_columns(dashboard_df: pd.DataFrame, tech_opt_indicators: dict
     chain.
     """
     nan = float("nan")
-    for col_key, _ in _OPTIONS_COLUMN_MAP:
+    for col_key, _ in _TREND_VOL_COLUMN_MAP:
         dashboard_df[col_key] = nan
-    for col_key, mapped_key in _OPTIONS_COLUMN_MAP:
+    for col_key, mapped_key in _TREND_VOL_COLUMN_MAP:
         dashboard_df[col_key] = dashboard_df['Symbol'].map(
-            lambda x: tech_opt_indicators.get(x, {}).get(mapped_key, nan)
+            lambda x: trend_vol_indicators.get(x, {}).get(mapped_key, nan)
         )
+
+
+def _apply_strategy_score_column(dashboard_df: pd.DataFrame, eval_results: dict) -> None:
+    """Write each symbol's ``StrategyEngine.evaluate_security()`` "Score" onto
+    ``dashboard_df``.
+
+    A symbol that never reached the 'results' stage this cycle (dead-lettered,
+    or skipped for a zero/missing price) gets NaN, never a fabricated number
+    (CONSTRAINT #4). A genuine score of 0 stays 0.0.
+
+    Until this helper existed the daemon path NaN-filled "Score" as if it were
+    advisory-only metadata, so every snapshot carried score=NaN — see
+    docs/known_issues/daemon_strategy_score_always_nan.md.
+    """
+    nan = float("nan")
+    dashboard_df['Score'] = pd.to_numeric(
+        dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get('Score', nan)),
+        errors="coerce",
+    ).astype(float)
+
+
+# The daemon does NOT write symbol ratings (rating/symbol_rating_store.py).
+# It never did in practice: "Score" was always NaN on this path, so
+# _record_symbol_ratings skipped every row. Now that Score is real, writing
+# ratings here would change trading behavior: SYMBOL_RATING_AUTO_DROP_ENABLED
+# counts consecutive BAD *cycles*, and the daemon runs hourly, so an unheld
+# symbol could be dropped from the universe within hours instead of the ~5
+# trading days main.py's once-a-day run gives today. Kept off on purpose
+# (operator decision, 2026-10-05, during the step-7 feature freeze). When
+# main.py is retired (step 5.5) nobody writes ratings any more, so this needs
+# a once-per-trading-day cadence before it is turned on — see
+# docs/known_issues/daemon_strategy_score_always_nan.md.
+_DAEMON_RECORDS_SYMBOL_RATINGS = False
 
 
 def _record_symbol_ratings(dashboard_df: Optional[pd.DataFrame], cycle_id: str) -> None:
@@ -678,8 +736,8 @@ def _record_symbol_ratings(dashboard_df: Optional[pd.DataFrame], cycle_id: str) 
     (``rating.symbol_rating.classify_tier``) to the durable
     ``rating.symbol_rating_store.SymbolRatingStore``.
 
-    A module-level function (same pattern as ``_apply_sector_heat_factor``/
-    ``_apply_etf_transmission`` above) so it's testable directly, without
+    A module-level function (same pattern as ``_apply_sector_heat_factor``
+    above) so it's testable directly, without
     going through ``StrategyEvalStep.run()``'s heavy import chain. No-ops
     when ``settings.SYMBOL_RATING_ENABLED`` is off or ``dashboard_df`` is
     empty/``None`` -- mirrors the CAP-EVENT AUDIT LOG block's own guard.
@@ -735,7 +793,7 @@ def _apply_symbol_rating_columns(dashboard_df: pd.DataFrame) -> None:
     excluded).
 
     Deliberately INDEPENDENT of ``settings.SYMBOL_RATING_AUTO_DROP_ENABLED``
-    -- these are diagnostic-only columns (Sheet/HTML report/state snapshot),
+    -- these are diagnostic-only columns (HTML report/state snapshot),
     so the operator can see which symbols WOULD be excluded before ever
     opting into the auto-drop behavior. Only ``settings.SYMBOL_RATING_ENABLED``
     (default True) gates whether there's any rating history to read at all.
@@ -961,289 +1019,6 @@ def _apply_sector_selection(dashboard_df: pd.DataFrame) -> None:
         run_sector_selection(stale_targets, correlation_store=correlation_store)
     except Exception as exc:
         logger.warning("Sector Selection computation failed (non-fatal): %s", exc)
-
-
-_ETF_TRANSMISSION_COLUMNS = (
-    'ETF_Ownership_Pct',
-    'ETF_Comovement_R2',
-    'ETF_Primary_Wrapper',
-)
-
-
-def _apply_etf_transmission(
-    dashboard_df: pd.DataFrame, tech_raw: dict[str, pd.DataFrame],
-) -> None:
-    """Populate the three ETF volatility-transmission MEASUREMENT columns.
-
-    Ben-David, Franzoni & Moussawi (2018), "Do ETFs Increase Volatility?",
-    *Journal of Finance* 73(6). ETF arbitrage transmits a shock in one
-    constituent to its healthy basket peers, so a heavily ETF-wrapped name
-    carries extra non-fundamental, non-diversifiable variance. The math lives
-    in ``risk/etf_transmission.py`` (pure, zero-I/O); this function owns every
-    network call and every settings gate.
-
-    **Diagnostic only.** Nothing in scoring, sizing, or execution reads these
-    columns as of this commit -- a sibling PR wires them into position sizing.
-
-    Deliberately a module-level function (not inlined in ``StrategyEvalStep.run``)
-    following the ``_apply_sector_heat_factor`` template directly above, for the
-    same two reasons: it stays importable/testable without ``main_orchestrator``'s
-    heavy top-level import chain, and it logs via this module's own plain
-    ``logger`` rather than the ``telemetry`` proxy (whose ``__getattr__`` lazily
-    imports ``main_orchestrator`` and therefore its whole engine chain on first
-    attribute access, defeating the light import footprint).
-
-    NaN-fills all three columns FIRST, before any branch, so every early-return
-    path -- disabled gate, missing market proxy, holdings-provider absent,
-    total failure -- leaves genuinely-missing cells NaN rather than a fabricated
-    default (CONSTRAINT #4). Never raises (CONSTRAINT #6).
-
-    Honesty contract -- every one of these is NaN, never 0.0: ticker in no
-    covered ETF; holdings fetch failed; gate off; ``Market Cap`` is the
-    fabricated ``0.0`` that ``FundamentalDataDTO`` defaults to; fewer than
-    ``ETF_TRANSMISSION_MIN_OBS`` overlapping bars; the composite is market-proxy-
-    only (residual identically zero); the ticker is ITSELF an ETF. The
-    fallback count is logged ONCE per cycle at INFO -- never once per name,
-    because 40 warnings a cycle is how a real signal gets ignored.
-    """
-    for col in _ETF_TRANSMISSION_COLUMNS:
-        dashboard_df[col] = float('nan')
-
-    if not getattr(settings, "ETF_TRANSMISSION_ENABLED", False):
-        return
-    if dashboard_df.empty or 'Symbol' not in dashboard_df.columns:
-        return
-
-    try:
-        from data.etf_holdings import get_etf_holdings
-        from risk.etf_transmission import (
-            build_etf_return_composite,
-            compute_etf_ownership,
-            compute_market_residual_r2,
-            filter_holdings_as_of,
-            primary_wrapper,
-        )
-
-        market_proxy = str(getattr(settings, "ETF_HOLDINGS_MARKET_PROXY", "SPY")).upper().strip()
-        wrappers = [
-            str(s).upper().strip()
-            for s in (getattr(settings, "ETF_TRANSMISSION_WRAPPERS", None) or [])
-            if str(s).strip()
-        ]
-        if market_proxy and market_proxy not in wrappers:
-            wrappers.append(market_proxy)
-        if not wrappers:
-            return
-
-        universe = [
-            str(s).upper().strip() for s in dashboard_df['Symbol'].dropna().tolist()
-            if str(s).strip()
-        ]
-        # A ticker that is ITSELF an ETF scores 1.0/1.0 against its own basket
-        # -- maximum derate for a trivially wrong reason. Explicit exclusion.
-        excluded = set(wrappers) | {
-            str(s).upper().strip()
-            for s in (getattr(settings, "ETF_TRANSMISSION_EXCLUDED_SYMBOLS", None) or [])
-            if str(s).strip()
-        }
-        measurable = [s for s in universe if s not in excluded]
-        if not measurable:
-            return
-
-        market_df = (tech_raw or {}).get(market_proxy)
-        if market_df is None or getattr(market_df, "empty", True):
-            logger.info(
-                "ETF transmission: market proxy %s absent from tech_raw; "
-                "all %d measurable symbols degrade to NaN this cycle.",
-                market_proxy, len(measurable),
-            )
-            return
-
-        as_of = pd.Timestamp(datetime.now(timezone.utc)).date()
-        raw_holdings = get_etf_holdings(wrappers, as_of=as_of) or {}
-        # Belt-and-suspenders causality: a basket row stamped after this
-        # cycle's as-of date must never enter the measurement regardless of
-        # what the provider returned. Also collapses duplicate/multi-snapshot
-        # rows so ownership can't be double-counted.
-        holdings = filter_holdings_as_of(raw_holdings, as_of=as_of)
-        # Only the operator universe matters -- SPY alone carries ~500 rows.
-        measurable_set = set(measurable)
-        holdings = {
-            etf: [
-                row for row in rows
-                if str(getattr(row, "holding_symbol", "") or "").upper().strip() in measurable_set
-            ]
-            for etf, rows in holdings.items()
-        }
-        covered_etfs = sorted({etf for etf, rows in holdings.items() if rows})
-        if not covered_etfs:
-            logger.info(
-                "ETF transmission: no covered basket rows for any of %d measurable "
-                "symbols; all three columns stay NaN this cycle.", len(measurable),
-            )
-            return
-
-        # ── ETF_Ownership_Pct ────────────────────────────────────────────────
-        # shares_out ~= Market Cap / Price. GUARDED on both being > 0:
-        # FundamentalDataDTO.market_cap defaults to a fabricated 0.0, so a
-        # naive divide yields inf on exactly the names whose fundamentals
-        # failed. Follow-up (deliberately NOT built here):
-        # dei:EntityCommonStockSharesOutstanding is already parsed by
-        # data/edgar_fundamentals.py::extract_shares and is PIT-dated.
-        shares_out: dict = {}
-        _mcap_col = 'Market Cap' if 'Market Cap' in dashboard_df.columns else None
-        _price_col = 'Price' if 'Price' in dashboard_df.columns else None
-        if _mcap_col and _price_col:
-            for row in dashboard_df.to_dict('records'):
-                sym = str(row.get('Symbol', '') or '').upper().strip()
-                if not sym:
-                    continue
-                try:
-                    mcap = float(row.get(_mcap_col))
-                    price = float(row.get(_price_col))
-                except (TypeError, ValueError):
-                    continue
-                if mcap > 0.0 and price > 0.0:
-                    shares_out[sym] = mcap / price
-
-        ownership = compute_etf_ownership(
-            holdings, shares_out, exclude_symbols=frozenset(excluded),
-        )
-
-        # ── ETF_Comovement_R2 ────────────────────────────────────────────────
-        # ETF price bars go through the existing fetch_technical_raw_cached
-        # path (HistoricalStore-backed, incremental) -- deliberately NOT a
-        # second batched yf.download; research_engine.fetch_returns_for_clustering
-        # is the only one of those in the repo, on purpose.
-        etf_bars = {e: (tech_raw or {}).get(e) for e in covered_etfs if (tech_raw or {}).get(e) is not None}
-        missing_bars = [e for e in covered_etfs if e not in etf_bars and e != market_proxy]
-        if missing_bars:
-            from data_engine import DataEngine
-
-            fetched = DataEngine(getattr(settings, "FRED_API_KEY", "")).fetch_technical_raw_cached(
-                missing_bars
-            ) or {}
-            etf_bars.update({str(k).upper().strip(): v for k, v in fetched.items() if v is not None})
-
-        composites = build_etf_return_composite(
-            holdings, etf_bars, market_proxy=market_proxy,
-        )
-
-        window = int(getattr(settings, "ETF_TRANSMISSION_WINDOW_DAYS", 60))
-        min_obs = int(getattr(settings, "ETF_TRANSMISSION_MIN_OBS", 60))
-        r2_map: dict = {}
-        no_composite = 0
-        insufficient = 0
-        for sym in measurable:
-            composite = composites.get(sym)
-            if composite is None or len(composite) == 0:
-                no_composite += 1
-                continue
-            stock_df = (tech_raw or {}).get(sym)
-            if stock_df is None or getattr(stock_df, "empty", True):
-                insufficient += 1
-                continue
-            value = compute_market_residual_r2(
-                stock_df, composite, market_df, window=window, min_obs=min_obs,
-            )
-            if value != value:  # NaN
-                insufficient += 1
-                continue
-            r2_map[sym] = value
-
-        wrappers_map = primary_wrapper(holdings)
-
-        _upper = dashboard_df['Symbol'].astype(str).str.upper().str.strip()
-        dashboard_df['ETF_Ownership_Pct'] = _upper.map(ownership)
-        dashboard_df['ETF_Comovement_R2'] = _upper.map(r2_map)
-        dashboard_df['ETF_Primary_Wrapper'] = _upper.map(wrappers_map)
-
-        # ONE INFO line per cycle with counts -- never one warning per name.
-        logger.info(
-            "ETF transmission: %d/%d symbols measured (R2); %d with no covered "
-            "non-market wrapper, %d with insufficient/degenerate overlap; "
-            "%d ownership values, %d primary-wrapper labels; %d symbols excluded "
-            "as funds.",
-            len(r2_map), len(measurable), no_composite, insufficient,
-            sum(1 for v in ownership.values() if v == v), len(wrappers_map),
-            len(universe) - len(measurable),
-        )
-
-    except Exception as exc:
-        logger.warning("ETF transmission computation failed (non-fatal): %s", exc)
-        for col in _ETF_TRANSMISSION_COLUMNS:
-            dashboard_df[col] = float('nan')
-
-def _apply_etf_transmission_multiplier(dashboard_df: pd.DataFrame) -> None:
-    """Populate the ``ETF_Transmission_Multiplier`` column from the measured
-    ``ETF_Ownership_Pct`` / ``ETF_Comovement_R2`` columns.
-
-    NaN-fills the column FIRST (identical pattern to
-    ``_apply_sector_heat_factor`` above), so the DISABLED state is an honest
-    "never computed" rather than a fabricated 1.0 that a reader would
-    mistake for a measured "no transmission risk here" (CONSTRAINT #4).
-
-    Where the feature IS enabled, every row gets a real float and NEVER a
-    NaN -- a name with no ETF coverage this cycle gets exactly ``1.0``, the
-    no-op. That asymmetry is deliberate and load-bearing: a NaN multiplier
-    would make ``final_weight`` non-finite, and
-    ``sizing.position_sizer.apply_portfolio_gross_cap`` EXCLUDES non-finite
-    weights from its gross-exposure sum -- so a broad coverage gap would
-    shrink the gross denominator and silently LOOSEN the portfolio-wide cap
-    for every name that DID have coverage. A data outage must never relax a
-    risk limit. See ``risk/etf_transmission.py``.
-
-    Coverage-gap logging is once per cycle with a COUNT, never per name --
-    a 500-name universe with the feature newly enabled and no holdings data
-    yet would otherwise emit 500 identical log lines every refresh.
-
-    Never raises (CONSTRAINT #6): any failure degrades the whole column back
-    to NaN, which every consumer then reads as the 1.0 no-op.
-    """
-    dashboard_df['ETF_Transmission_Multiplier'] = float('nan')
-    if not settings.ETF_TRANSMISSION_SIZING_ENABLED:
-        return
-    try:
-        from risk.etf_transmission import transmission_multiplier
-
-        # Missing measurement columns (e.g. ETF holdings ingestion not
-        # configured) are treated exactly like present-but-NaN cells: every
-        # row resolves to the 1.0 no-op, never NaN.
-        ownership = (
-            dashboard_df['ETF_Ownership_Pct'] if 'ETF_Ownership_Pct' in dashboard_df.columns
-            else pd.Series(float('nan'), index=dashboard_df.index)
-        )
-        comovement = (
-            dashboard_df['ETF_Comovement_R2'] if 'ETF_Comovement_R2' in dashboard_df.columns
-            else pd.Series(float('nan'), index=dashboard_df.index)
-        )
-        multipliers = [
-            transmission_multiplier(
-                own, r2,
-                max_derate=settings.ETF_TRANSMISSION_MAX_DERATE,
-                ownership_reference=settings.ETF_TRANSMISSION_OWNERSHIP_REFERENCE,
-                floor=settings.ETF_TRANSMISSION_MIN_MULTIPLIER,
-            )
-            for own, r2 in zip(ownership, comovement)
-        ]
-        dashboard_df['ETF_Transmission_Multiplier'] = multipliers
-
-        uncovered = sum(
-            1 for own, r2 in zip(ownership, comovement)
-            if pd.isna(own) or pd.isna(r2)
-        )
-        if uncovered:
-            logger.info(
-                "ETF transmission derate: %d of %d symbol(s) had no ETF "
-                "ownership/co-movement coverage this cycle and fall back to "
-                "the 1.0 no-op multiplier (never NaN -- a NaN would exclude "
-                "them from the portfolio gross-exposure sum and loosen the "
-                "cap for every covered name).",
-                uncovered, len(dashboard_df),
-            )
-    except Exception as exc:
-        logger.warning("ETF transmission multiplier computation failed (non-fatal): %s", exc)
-        dashboard_df['ETF_Transmission_Multiplier'] = float('nan')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1499,8 +1274,9 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame, deadline: Optional[float] = 
 
     ``Days_To_Earnings`` (number) and ``Last_EPS_Surprise_Pct`` (percent) are
     new; the EXISTING ``Earnings_Date`` column is ALSO written when this gate
-    is on, making FMP a SECOND source for it alongside Finnhub's news-catalyst
-    path (and unlike Finnhub, FMP is not limited to a 30-day forward window).
+    is on, making this gate a SECOND writer of it alongside the news-catalyst
+    write-back (which reads FMP's earnings calendar via
+    ``fetch_next_earnings_any``).
     That column is deliberately shared rather than duplicated -- see
     config.COLUMN_SCHEMA's FMP section.
 
@@ -1635,7 +1411,7 @@ def _apply_fmp_earnings(dashboard_df: pd.DataFrame, deadline: Optional[float] = 
 
         # Rule 4 / the shared-column discipline: only overwrite 'Earnings_Date'
         # for symbols FMP actually covered (a real next-event date) this
-        # cycle -- a NaN/absent FMP row must never blank a date the Finnhub
+        # cycle -- a NaN/absent FMP row must never blank a date the
         # news-catalyst write-back already resolved earlier in this same
         # cycle. If the column doesn't exist yet (unit tests calling this
         # function standalone), there is nothing to preserve or overwrite.
@@ -1674,7 +1450,7 @@ def _apply_fmp_insider(dashboard_df: pd.DataFrame, deadline: Optional[float] = N
 
     Wall-clock budget: ``settings.FMP_MAX_SECONDS_PER_CYCLE`` bounds the
     whole per-symbol loop (measured via ``time.monotonic()``, matching the
-    ``data/etf_holdings.py`` precedent). Once the budget is spent the loop
+    ``legacy/data/etf_holdings.py`` precedent). Once the budget is spent the loop
     stops outright and every symbol not yet reached that cycle stays NaN --
     an honest gap, never a fabricated value.
     """
@@ -1953,141 +1729,44 @@ def _apply_fmp_econ_calendar(dashboard_df: pd.DataFrame) -> None:
             dashboard_df[col] = float('nan')
 
 
-def _build_etf_transmission_cov_matrix(
-    symbols: list, tech_raw: dict,
-) -> Optional[pd.DataFrame]:
-    """ETF-co-ownership-inflated covariance matrix for the portfolio gross cap.
+def _apply_portfolio_gross_cap(dashboard_df: pd.DataFrame) -> None:
+    """Portfolio-level gross exposure cap (``settings.MAX_PORTFOLIO_GROSS``).
 
-    Feeds ``sizing.position_sizer.apply_portfolio_gross_cap``'s EXISTING
-    ``cov_matrix``/``target_vol`` risk-aware path (built for exactly this
-    purpose, previously unreachable from production -- see
-    ``sizing/position_sizer.py``'s "Reduction-only guarantee" section)
-    rather than building a second portfolio-cap mechanism.
+    Scales every name's ``Kelly Target`` uniformly via
+    ``sizing.position_sizer.apply_portfolio_gross_cap`` (the sum-of-|weight|
+    path, ``cov_matrix=None``) and, for each name whose weight actually
+    moved, overrides its guardrail telemetry to ``"portfolio_gross"``.
 
-    Gated on ``settings.ETF_TRANSMISSION_PORTFOLIO_ENABLED`` (default
-    ``False``): returns ``None`` immediately when off, which the caller reads
-    as "use the existing sum-of-|weight| fallback", byte-identical to
-    pre-feature behavior. Never raises (CONSTRAINT #6) -- any failure
-    degrades to ``None``, the same fallback signal as the gate being off.
+    Split out of ``StrategyEvalStep.run()`` in step 4d. It used to share a
+    ``try`` with the ETF-transmission covariance build, so any failure in
+    that ETF code (including an ImportError once the module moved to
+    legacy/) would have skipped this live risk limit. It now depends on
+    nothing but ``sizing.position_sizer`` and settings.
 
-    Deliberately does NOT return a partially-covered matrix. A symbol
-    missing from ``cov_matrix`` is not merely excluded from
-    ``portfolio_vol_target``'s risk estimate -- it is explicitly zeroed out
-    of the returned weights (that function's own documented, correct
-    behavior for an unknowable-risk name). Silently zeroing a coverage-gapped
-    name's ENTIRE position because it lacked 60 days of overlapping bars
-    would be a far harsher, more surprising outcome than the existing
-    sum-of-|weight| fallback this feature is opt-in to replace, so this
-    function insists on FULL coverage across ``symbols`` before returning
-    anything other than ``None``.
+    Failures propagate; the caller logs them. Tested directly in
+    ``tests/test_production_steps_portfolio_gross_cap.py``.
     """
-    if not getattr(settings, "ETF_TRANSMISSION_PORTFOLIO_ENABLED", False):
-        return None
-    try:
-        from data.etf_holdings import get_etf_holdings
-        from risk.etf_transmission import build_transmission_adjusted_cov, filter_holdings_as_of
+    from sizing.position_sizer import apply_portfolio_gross_cap
 
-        market_proxy = str(getattr(settings, "ETF_HOLDINGS_MARKET_PROXY", "SPY")).upper().strip()
-        wrappers = [
-            str(s).upper().strip()
-            for s in (getattr(settings, "ETF_TRANSMISSION_WRAPPERS", None) or [])
-            if str(s).strip()
-        ]
-        if market_proxy and market_proxy not in wrappers:
-            wrappers.append(market_proxy)
-        if not wrappers:
-            return None
-
-        universe = [str(s).upper().strip() for s in symbols if str(s).strip()]
-        if len(universe) < 2:
-            return None
-
-        as_of = pd.Timestamp(datetime.now(timezone.utc)).date()
-        raw_holdings = get_etf_holdings(wrappers, as_of=as_of) or {}
-        holdings = filter_holdings_as_of(raw_holdings, as_of=as_of)
-        if not any(rows for rows in holdings.values()):
-            logger.info(
-                "ETF transmission portfolio cov: no covered basket rows for "
-                "any of %d symbols; falling back to the sum-of-|weight| "
-                "gross cap this cycle.", len(universe),
-            )
-            return None
-
-        # Every symbol in `universe` needs an aligned Close series -- a
-        # partial matrix would let portfolio_vol_target zero out whichever
-        # names lack one, which is worse than just not using the cov path
-        # this cycle. Inner-join across the whole requested universe, not
-        # per-pair, so coverage is all-or-nothing and easy to reason about.
-        closes = {}
-        for sym in universe:
-            df = (tech_raw or {}).get(sym)
-            if df is None or getattr(df, "empty", True) or "Close" not in df.columns:
-                continue
-            closes[sym] = df["Close"]
-        missing = sorted(set(universe) - set(closes))
-        if missing:
-            logger.info(
-                "ETF transmission portfolio cov: %d of %d symbols lack price "
-                "bars in tech_raw (%s); falling back to the sum-of-|weight| "
-                "gross cap this cycle rather than zeroing their exposure via "
-                "a partially-covered covariance matrix.",
-                len(missing), len(universe), missing,
-            )
-            return None
-
-        window = int(getattr(settings, "ETF_TRANSMISSION_COV_WINDOW_DAYS", 60))
-        price_df = pd.concat(closes, axis=1, join="inner").sort_index()
-        returns_df = price_df.pct_change().dropna(how="any")
-        if len(returns_df) < window:
-            logger.info(
-                "ETF transmission portfolio cov: only %d overlapping return "
-                "observations across %d symbols (need >= %d); falling back "
-                "to the sum-of-|weight| gross cap this cycle rather than "
-                "estimating a covariance matrix off a short, noisy sample.",
-                len(returns_df), len(closes), window,
-            )
-            return None
-
-        inflation = float(getattr(settings, "ETF_TRANSMISSION_COV_INFLATION", 0.25))
-        cov_matrix = build_transmission_adjusted_cov(
-            returns_df, holdings, inflation=inflation, window=window,
+    per_name = dict(zip(dashboard_df["Symbol"], dashboard_df["Kelly Target"]))
+    cap_result = apply_portfolio_gross_cap(
+        per_name, max_gross=settings.MAX_PORTFOLIO_GROSS, cov_matrix=None,
+    )
+    if cap_result.was_capped:
+        telemetry.info(
+            "Portfolio gross cap bound this cycle: scale_factor=%.4f "
+            "(max_gross=%.2f, method=%s).",
+            cap_result.scale_factor, settings.MAX_PORTFOLIO_GROSS, cap_result.method,
         )
-        if cov_matrix is None:
-            logger.info(
-                "ETF transmission portfolio cov: covariance build declined "
-                "(see risk.etf_transmission.build_transmission_adjusted_cov); "
-                "falling back to the sum-of-|weight| gross cap this cycle."
-            )
-            return None
-
-        # build_transmission_adjusted_cov operates on WHATEVER frequency it's
-        # handed (its own docstring: "daily simple-return DataFrame") and
-        # returns a covariance matrix on that same daily scale. But
-        # apply_portfolio_gross_cap's cov_matrix path compares
-        # sqrt(w' Sigma w) against `target_vol`, and every other caller of
-        # target_vol/VOL_TARGET in this codebase (e.g.
-        # sizing.vol_target.volatility_target_weight, whose own docstring
-        # says "Annualized ... volatility") treats it as an ANNUALIZED
-        # figure. A daily-scale covariance handed to an annualized target is
-        # a silent units mismatch: daily portfolio vol (typically well under
-        # 5%) will almost always sit far below a ~10% annualized target, so
-        # portfolio_vol_target's scalar saturates at its ceiling regardless
-        # of the ACTUAL covariance structure -- the whole point of this
-        # feature (a risk-aware cap) would silently never bind. Annualize
-        # here, matching processing_engine.py's own convention for
-        # Realized_Vol_60D (`daily_std * sqrt(252)`): variance/covariance
-        # scales with TIME (not sqrt(time)) under the i.i.d. return
-        # assumption, so the covariance matrix annualizes by *252, not
-        # *sqrt(252). Caught and fixed via
-        # tests/test_etf_transmission_sensitivity_sweep.py -- the sweep
-        # showed IDENTICAL final_gross across every ETF_TRANSMISSION_COV_
-        # INFLATION value before this fix, because the un-annualized
-        # covariance never came close to influencing the vol-target scalar.
-        TRADING_DAYS_PER_YEAR = 252
-        return cov_matrix * TRADING_DAYS_PER_YEAR
-    except Exception as exc:
-        logger.warning("ETF transmission portfolio covariance build failed (non-fatal): %s", exc)
-        return None
+        dashboard_df["Kelly Target"] = dashboard_df["Symbol"].map(
+            lambda x: cap_result.scaled_weights.get(x, per_name.get(x, 0.0))
+        )
+        # Only mark names whose weight actually moved (a 0.0 name is
+        # trivially unaffected by a uniform scalar) -- avoids fabricating
+        # a "capped" flag on a name that never had exposure to cap.
+        _affected = dashboard_df["Symbol"].map(lambda x: abs(per_name.get(x, 0.0)) > 1e-9)
+        dashboard_df.loc[_affected, "Sizing_Was_Capped"] = "Yes"
+        dashboard_df.loc[_affected, "Sizing_Binding_Constraint"] = "portfolio_gross"
 
 
 def _compute_xsec_momentum(
@@ -2114,10 +1793,10 @@ def _compute_xsec_momentum(
     restricted to pipeline/production_steps.py.
 
     NOTE: this formula is actually hand-duplicated a THIRD time, in
-    main.py::_build_context_extras (its own inline copy, for the advisory
-    path -- search that file for ``SKIP_DAYS = 22``). Keep all three
+    pipeline/advisory_inputs.py::build_context_extras (its own inline copy,
+    for the advisory path -- search for ``SKIP_DAYS = 22``). Keep all three
     (main_orchestrator.py::compute_xsec_momentum_ranks, this function, and
-    main.py::_build_context_extras) in lockstep if skip_days/lookback_days
+    advisory_inputs.build_context_extras) in lockstep if skip_days/lookback_days
     ever change in any one of them. This is no longer just a hand-maintained
     comment: tests/test_xsec_momentum_advisory_parity.py numerically
     cross-checks all three at their shared default constants and will fail
@@ -2286,7 +1965,7 @@ class StrategyEvalStep(PipelineStep):
         # (-> Bot_Activity_Ratio), "aggregated_source_credibility"
         # (-> Aggregated_Source_Credibility). NaN when no multi-source social
         # documents exist for a symbol this trading day (distinct from
-        # News_Sentiment, which is Finnhub-headline-only) -- same write-back
+        # News_Sentiment, which is news-headline-only) -- same write-back
         # pattern as the Value_Z/etc multifactor columns above.
         _SENTIMENT_CREDIBILITY_COLS = {
             'Credibility_Weighted_Sentiment': 'credibility_weighted_sentiment',
@@ -2326,28 +2005,6 @@ class StrategyEvalStep(PipelineStep):
         # _apply_sector_selection's own docstring for the daily-refresh gate
         # that keeps this from inserting duplicate rows under --interval.
         _apply_sector_selection(ctx.dashboard_df)
-
-        # ETF volatility transmission (Ben-David, Franzoni & Moussawi 2018) --
-        # three measurement columns (ETF_Ownership_Pct / ETF_Comovement_R2 /
-        # ETF_Primary_Wrapper). Placed here rather than before
-        # run_pre_compute() above deliberately: nothing in pre_compute
-        # consumes these columns, so moving a networked call earlier in the
-        # critical path buys nothing. A complete no-op (zero network calls,
-        # all three columns NaN) while settings.ETF_TRANSMISSION_ENABLED is
-        # False. See risk/etf_transmission.py and
-        # docs/signals/etf_transmission.md.
-        _apply_etf_transmission(ctx.dashboard_df, ctx.tech_raw)
-
-        # ETF-arbitrage volatility-transmission SIZING DERATE, built on the
-        # measurement columns just populated above -- must run AFTER
-        # _apply_etf_transmission() so ETF_Ownership_Pct/ETF_Comovement_R2 are
-        # already resolved for this cycle, and BEFORE the per-ticker
-        # evaluate_security loop below so each row can simply read its own
-        # already-resolved multiplier. NaN-filled (never fabricated --
-        # CONSTRAINT #4) when settings.ETF_TRANSMISSION_SIZING_ENABLED is
-        # False, which every consumer reads as the exact 1.0 no-op, making
-        # the disabled path byte-identical to the pre-feature behavior.
-        _apply_etf_transmission_multiplier(ctx.dashboard_df)
 
         # Financial Modeling Prep diagnostic feeds -- eight columns across
         # four independently-gated feeds (analyst / earnings / insider /
@@ -2422,16 +2079,18 @@ class StrategyEvalStep(PipelineStep):
                 lambda x: attention_scores.get(x, float('nan'))
             )
 
-        # docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns
-        # (config.COLUMN_SCHEMA's "# --- ADVISORY METADATA ---" section) are
-        # populated only by the advisory path (engine/advisory.py via
-        # reporting/sheet_publisher.py::rec_to_sheet_row); this orchestrator
+        # docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1 — four of the five ADVISORY
+        # METADATA columns (config.COLUMN_SCHEMA's "# --- ADVISORY METADATA ---"
+        # section) are populated only by the advisory path (engine/advisory.py's
+        # Recommendation; the Sheet sink that mapped it was archived in step
+        # 4e); this orchestrator
         # path has no equivalent per-symbol conviction/data-quality concept,
         # so blank/NaN-fill them here — same pattern already used above for
         # "Correlation_Cluster" / "News_Sentiment" — so DashboardSchema.validate()
         # keeps passing (every declared column must be present) without
-        # fabricating advisory-only values (CONSTRAINT #4).
-        ctx.dashboard_df['Score'] = float('nan')
+        # fabricating advisory-only values (CONSTRAINT #4). The fifth, "Score",
+        # is StrategyEngine's own score and is written from eval_results after
+        # the loop below (_apply_strategy_score_column).
         ctx.dashboard_df['Forecast_30_Pct'] = float('nan')
         ctx.dashboard_df['Advisory_Conviction'] = float('nan')
         ctx.dashboard_df['Advisory_Position_Pct'] = float('nan')
@@ -2440,7 +2099,7 @@ class StrategyEvalStep(PipelineStep):
         # Strategy evaluation loop
         strategy_cols = ['Action Signal', 'Advice', 'Actionable Advice Signal', 'Kelly Target',
                          'Sizing_Was_Capped', 'Sizing_Binding_Constraint',
-                         'Option Strategy', 'buyRange', 'sellRange', 'Strategy Explainer Notes',
+                         'buyRange', 'sellRange', 'Strategy Explainer Notes',
                          'Robinhood Shares', 'Robinhood Avg Cost', 'Robinhood Dividends', 'Robinhood Advice']
         for col in strategy_cols:
             ctx.dashboard_df[col] = ""
@@ -2453,12 +2112,18 @@ class StrategyEvalStep(PipelineStep):
         eval_results = {}
         dead_letter_entries = []
         fund_dtos = ctx.context_extras.get("fund_dtos", {})
-        tech_opt_indicators = ctx.context_extras.get("tech_opt_indicators", {})
+        trend_vol_indicators = ctx.context_extras.get("trend_vol_indicators", {})
         robinhood_positions = ctx.context_extras.get("robinhood_positions", {})
 
         # -- Vectorized Signal Aggregation --
         vec_df = pd.DataFrame(index=ctx.dashboard_df['Symbol'].values)
         vec_df['forecast_price'] = ctx.dashboard_df.get('Forecast_30', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
+        # Forecasting rebuild F2: forecast_alignment scores a fallback forecast
+        # as neutral, so it needs the engine's disclosure flag. Only a real
+        # bool counts; NaN (row skipped forecasting) stays "unknown" (False).
+        vec_df['forecast_is_fallback'] = ctx.dashboard_df.get(
+            'Forecast_30_Is_Fallback', pd.Series(False, index=ctx.dashboard_df.index)
+        ).map(lambda v: v is True or (isinstance(v, (bool, np.bool_)) and bool(v))).values
         vec_df['trend_strength'] = ctx.dashboard_df.get('Aroon Up', pd.Series(50.0, index=ctx.dashboard_df.index)).fillna(50.0).values
         vec_df['atr'] = ctx.dashboard_df.get('ATR', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
         vec_df['macd_line'] = ctx.dashboard_df.get('MACD_Line', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
@@ -2481,8 +2146,8 @@ class StrategyEvalStep(PipelineStep):
         edge = ctx.dashboard_df.get('Edge Ratio', ctx.dashboard_df.get('Edge_Ratio', pd.Series(0.0, index=ctx.dashboard_df.index)))
         vec_df['edge_ratio'] = edge.fillna(0.0).values
         
-        vec_df['chandelier_long'] = ctx.dashboard_df['Symbol'].map(lambda x: tech_opt_indicators.get(x, {}).get('Chandelier_Long', 0.0)).values
-        vec_df['chandelier_short'] = ctx.dashboard_df['Symbol'].map(lambda x: tech_opt_indicators.get(x, {}).get('Chandelier_Short', 0.0)).values
+        vec_df['chandelier_long'] = ctx.dashboard_df['Symbol'].map(lambda x: trend_vol_indicators.get(x, {}).get('Chandelier_Long', 0.0)).values
+        vec_df['chandelier_short'] = ctx.dashboard_df['Symbol'].map(lambda x: trend_vol_indicators.get(x, {}).get('Chandelier_Short', 0.0)).values
         
         vec_df['current_price'] = ctx.dashboard_df.get('Price', pd.Series(0.0, index=ctx.dashboard_df.index)).fillna(0.0).values
         vec_df['Close'] = vec_df['current_price']
@@ -2595,15 +2260,19 @@ class StrategyEvalStep(PipelineStep):
 
                 chan_long = 0.0
                 chan_short = 0.0
-                if ticker in tech_opt_indicators:
-                    chan_long = tech_opt_indicators[ticker].get('Chandelier_Long', 0.0)
-                    chan_short = tech_opt_indicators[ticker].get('Chandelier_Short', 0.0)
+                if ticker in trend_vol_indicators:
+                    chan_long = trend_vol_indicators[ticker].get('Chandelier_Long', 0.0)
+                    chan_short = trend_vol_indicators[ticker].get('Chandelier_Short', 0.0)
 
                 strategy_output = se.evaluate_security(
                     bar=bar_dto,
                     fundamentals=fund_dto,
                     macro=ctx.macro_dto,
                     forecast_price=row.get('Forecast_30', 0.0),
+                    forecast_is_fallback=(
+                        bool(row.get('Forecast_30_Is_Fallback'))
+                        if isinstance(row.get('Forecast_30_Is_Fallback'), (bool, np.bool_)) else None
+                    ),
                     trend_strength=aroon_val,
                     atr=atr_val,
                     macd_line=macd_line_val,
@@ -2627,13 +2296,6 @@ class StrategyEvalStep(PipelineStep):
                     vol_ratio=vol_ratio_val,
                     roc_5=roc_5_val,
                     roc_20=roc_20_val,
-                    # Per-name ETF volatility-transmission derate resolved by
-                    # _apply_etf_transmission_multiplier() before this loop.
-                    # Bare .get() -- a missing column / NaN cell is passed
-                    # through verbatim and sanitized to the exact 1.0 no-op
-                    # inside size_position(), the single place that decides
-                    # what "missing" means here (CONSTRAINT #7).
-                    etf_transmission_multiplier=row.get('ETF_Transmission_Multiplier'),
                     robinhood_position=rh_position,
                     precomputed_signal_tuple=vectorized_results.get(ticker)
                 )
@@ -2661,14 +2323,16 @@ class StrategyEvalStep(PipelineStep):
                     'book_value': fund_dto.book_value,
                     'graham_number': fund_dto.graham_number,
                     'Kelly Target': float(strategy_output['Kelly Target']),
+                    # StrategyEngine's 0-100 score (the one that set Action
+                    # Signal). Bare .get(): absent stays absent -> NaN.
+                    'Score': strategy_output.get('Score'),
                     # Guardrail telemetry (sizing/position_sizer.py) -- schema-driven
                     # ("format": "string" in config.COLUMN_SCHEMA), so serialize the
-                    # bool/Optional[str] into the Sheet-friendly text convention
+                    # bool/Optional[str] into the plain-text convention
                     # ("Yes"/"No" + the constraint name or "") that every other
                     # string strategy_col in this loop already defaults to.
                     'Sizing_Was_Capped': "Yes" if strategy_output.get('Sizing_Was_Capped') else "No",
                     'Sizing_Binding_Constraint': strategy_output.get('Sizing_Binding_Constraint') or "",
-                    'Option Strategy': tech_opt_indicators[ticker].get('Option_Strategy_Matrix', '') if ticker in tech_opt_indicators else strategy_output['Option Strategy'],
                     'buyRange': strategy_output['buyRange'],
                     'sellRange': strategy_output['sellRange'],
                     'Strategy Explainer Notes': strategy_output['Strategy Explainer Notes'],
@@ -2733,6 +2397,12 @@ class StrategyEvalStep(PipelineStep):
         except Exception as dl_exc:
             telemetry.warning("Failed to write dead-letter report: %s", dl_exc)
 
+        try:
+            _apply_strategy_score_column(ctx.dashboard_df, eval_results)
+        except Exception as score_exc:  # noqa: BLE001 -- display column only; never abort the cycle
+            telemetry.warning("Strategy Score column write failed (non-critical): %s", score_exc)
+            ctx.dashboard_df['Score'] = float('nan')
+
         _SIZING_DECOMPOSITION_COLS = (
             'Meta_Label_Composite', 'Regime_Multiplier',
             'Kelly_Target_Pre_Regime', 'Kelly_Target_Post_Regime',
@@ -2752,7 +2422,7 @@ class StrategyEvalStep(PipelineStep):
             'Edge Ratio', 'Action Signal', 'Advice', 'Actionable Advice Signal',
             'is_dividend_sustainable', 'eps_trailing', 'book_value', 'graham_number',
             'Kelly Target', 'Sizing_Was_Capped', 'Sizing_Binding_Constraint',
-            'Option Strategy', 'buyRange', 'sellRange',
+            'buyRange', 'sellRange',
             'Strategy Explainer Notes', 'Robinhood Shares', 'Robinhood Avg Cost',
             'Robinhood Dividends', 'Robinhood Advice', 'Score_Components',
             *_SIZING_DECOMPOSITION_COLS,
@@ -2773,11 +2443,10 @@ class StrategyEvalStep(PipelineStep):
                 # Regime_Multiplier/Kelly_Target_{Pre,Post}_Regime) — deliberately
                 # NOT in config.COLUMN_SCHEMA (like Score_Components above): these
                 # are read-only diagnostic fields for the webapp's Strategy Matrix/
-                # Symbol Detail screens, not a Sheets/HTML-report column or a
+                # Symbol Detail screens, not an HTML-report column or a
                 # quant_platform.db field. Adding them to COLUMN_SCHEMA would
-                # trigger a Sheets column + a DailySignals DDL migration for no
-                # reason (config.get_headers() drives both; pandera is
-                # strict=False so a non-schema column here is already safe).
+                # trigger a DailySignals DDL migration for no reason (pandera
+                # is strict=False so a non-schema column here is already safe).
                 # Default None (-> NaN), NEVER 0.0/1.0 — a fabricated sizing
                 # value is actively misleading (CONSTRAINT #4), and 0.0 is a
                 # real, operationally significant value (a MetaLabeler hard
@@ -2884,47 +2553,10 @@ class StrategyEvalStep(PipelineStep):
         # authoritative reason a position ended up smaller than its raw
         # Kelly/vol-target recommendation for this cycle.
         #
-        # ETF-transmission-adjusted covariance (settings.ETF_TRANSMISSION_
-        # PORTFOLIO_ENABLED, default False): when enabled and full-coverage
-        # data is available, routes through apply_portfolio_gross_cap's
-        # EXISTING risk-aware cov_matrix/target_vol path instead of the
-        # sum-of-|weight| fallback -- reuses settings.VOL_TARGET as
-        # target_vol (the same setting the per-name vol-target sizing
-        # fallback already uses) rather than introducing a second,
-        # redundant target-vol setting. _build_etf_transmission_cov_matrix
-        # returns None (byte-identical fallback) whenever the gate is off,
-        # holdings/bars are unavailable, or coverage across this cycle's
-        # universe is incomplete -- see that function's docstring for why a
-        # partially-covered matrix is never substituted in its place.
+        # Runs unconditionally, in its own try: it no longer shares one with
+        # any optional feature (see _apply_portfolio_gross_cap's docstring).
         try:
-            from sizing.position_sizer import apply_portfolio_gross_cap
-
-            per_name = dict(zip(ctx.dashboard_df["Symbol"], ctx.dashboard_df["Kelly Target"]))
-            cov_matrix = _build_etf_transmission_cov_matrix(
-                list(per_name.keys()), ctx.tech_raw,
-            )
-            if cov_matrix is not None:
-                cap_result = apply_portfolio_gross_cap(
-                    per_name, max_gross=settings.MAX_PORTFOLIO_GROSS,
-                    cov_matrix=cov_matrix, target_vol=settings.VOL_TARGET,
-                )
-            else:
-                cap_result = apply_portfolio_gross_cap(per_name, max_gross=settings.MAX_PORTFOLIO_GROSS)
-            if cap_result.was_capped:
-                telemetry.info(
-                    "Portfolio gross cap bound this cycle: scale_factor=%.4f "
-                    "(max_gross=%.2f, method=%s).",
-                    cap_result.scale_factor, settings.MAX_PORTFOLIO_GROSS, cap_result.method,
-                )
-                ctx.dashboard_df["Kelly Target"] = ctx.dashboard_df["Symbol"].map(
-                    lambda x: cap_result.scaled_weights.get(x, per_name.get(x, 0.0))
-                )
-                # Only mark names whose weight actually moved (a 0.0 name is
-                # trivially unaffected by a uniform scalar) -- avoids fabricating
-                # a "capped" flag on a name that never had exposure to cap.
-                _affected = ctx.dashboard_df["Symbol"].map(lambda x: abs(per_name.get(x, 0.0)) > 1e-9)
-                ctx.dashboard_df.loc[_affected, "Sizing_Was_Capped"] = "Yes"
-                ctx.dashboard_df.loc[_affected, "Sizing_Binding_Constraint"] = "portfolio_gross"
+            _apply_portfolio_gross_cap(ctx.dashboard_df)
         except Exception as portfolio_cap_exc:
             telemetry.warning(f"Portfolio gross cap application failed (non-critical): {portfolio_cap_exc}")
 
@@ -2985,16 +2617,18 @@ class StrategyEvalStep(PipelineStep):
         # run's own scoring/sizing decisions or its SUCCEEDED/FAILED state
         # (CONSTRAINT #6). The write itself lives in the module-level
         # _record_symbol_ratings() helper below (same pattern as
-        # _apply_etf_transmission/_apply_sector_heat_factor) so it can be
+        # _apply_sector_heat_factor) so it can be
         # exercised directly in tests without going through the whole of
         # StrategyEvalStep.run().
-        try:
-            _record_symbol_ratings(ctx.dashboard_df, cycle_id)
-        except Exception as rating_exc:
-            telemetry.warning(f"Symbol-rating audit write failed (non-critical): {rating_exc}")
+        # Off on purpose — see _DAEMON_RECORDS_SYMBOL_RATINGS.
+        if _DAEMON_RECORDS_SYMBOL_RATINGS:
+            try:
+                _record_symbol_ratings(ctx.dashboard_df, cycle_id)
+            except Exception as rating_exc:
+                telemetry.warning(f"Symbol-rating audit write failed (non-critical): {rating_exc}")
 
         # Populate the two config.COLUMN_SCHEMA-registered rating columns on
-        # the dashboard itself (Sheet/HTML report/state snapshot) -- a
+        # the dashboard itself (HTML report/state snapshot) -- a
         # SEPARATE try/except from the write above so a read-back failure
         # can never suppress the write, and vice versa. Always runs
         # (independent of SYMBOL_RATING_AUTO_DROP_ENABLED -- see
@@ -3035,133 +2669,602 @@ class StrategyEvalStep(PipelineStep):
             telemetry.warning(f"Sizing cap-threshold alert failed (non-critical): {alert_exc}")
 
 
-class BrokerExecutionStep(PipelineStep):
-    """Executes trades with the broker."""
+# ---------------------------------------------------------------------------
+# Advisory overlay + agentic queue (step 5.2 of
+# .claude/shrink_step5_retire_main_py_implementation_plan.md)
+# ---------------------------------------------------------------------------
+
+_ADVISORY_COLUMNS = (
+    'Advisory_Action', 'Advisory_Conviction', 'Advisory_Rationale',
+    'Advisory_Position_Pct', 'Advisory_Data_Quality',
+)
+_ADVISORY_NUMERIC_COLUMNS = ('Advisory_Conviction', 'Advisory_Position_Pct')
+
+
+def _select_precomputed_for_row(row: Optional[dict], reuse_pipeline_compute: bool) -> tuple:
+    """Return ``(precomputed_garch, precomputed_forecast, precomputed_forecast_is_fallback)``
+    for one ticker's ``engine.advisory.evaluate()`` call.
+
+    ``settings.ADVISORY_REUSE_PIPELINE_COMPUTE`` off (or no dashboard row for
+    the ticker): all three are None, so evaluate() refits GARCH and the
+    forecast itself, exactly as main.py does. On: the row's own
+    ``GARCH_Vol``/``Forecast_30`` are passed through, and
+    ``Forecast_30_Is_Fallback`` only when it is an actual bool -- the cell can
+    also be NaN (the row skipped forecasting) or absent, neither of which says
+    anything about fallback status.
+    """
+    if not reuse_pipeline_compute or row is None:
+        return None, None, None
+    raw_fallback = row.get('Forecast_30_Is_Fallback')
+    return (
+        row.get('GARCH_Vol'),
+        row.get('Forecast_30'),
+        raw_fallback if isinstance(raw_fallback, bool) else None,
+    )
+
+
+def _empty_account_snapshot():
+    """The empty account main.py's AccountStep evaluates with when the
+    Robinhood snapshot is unavailable (pipeline/steps.py)."""
+    from data.robinhood_portfolio import AccountSnapshot
+
+    return AccountSnapshot(
+        positions={},
+        buying_power=0.0,
+        total_equity=0.0,
+        total_dividends=0.0,
+        fetched_at=datetime.now(timezone.utc),
+    )
+
+
+class AdvisoryOverlayStep(PipelineStep):
+    """Runs ``engine.advisory.evaluate()`` for every universe symbol, the same
+    way main.py's run_once() does, and keeps the full ``Recommendation``
+    objects in ``ctx.recommendations``.
+
+    Split out of ``BrokerExecutionStep`` in step 5.2. It is a SYNC step so
+    ``AsyncPipelineRunner`` runs it under ``PIPELINE_STEP_TIMEOUT_SECONDS``
+    (the async broker step has no timeout). Its inputs match main.py's:
+
+    * the universe is ``ctx.symbols`` (the same ``build_universe_detailed``
+      main.py uses, since step 5.1), in the same order;
+    * the account snapshot is the one ``AsyncDataFetchStep`` already fetched
+      (``ctx.snapshot``; before 5.2 this step fetched it a second time), or
+      main.py's empty snapshot when that fetch failed;
+    * the context extras come from ``pipeline.advisory_inputs``'s
+      ``fetch_bars_for_universe`` + ``build_context_extras`` -- the same
+      functions main.py calls. Before 5.2 this step passed only the pipeline's
+      xsec ranks and multifactor scores.
+
+    ``ctx.macro_dto`` is the daemon's own (built by ``RunPipelineStep``), so a
+    difference from main.py's macro inputs still shows up here; see the plan's
+    section 1 "Macro".
+
+    It writes the same five ``Advisory_*`` dashboard columns as before.
+    ``settings.ADVISORY_REUSE_PIPELINE_COMPUTE`` is honoured exactly as the old
+    block did. Never raises: a failure is logged, the columns stay at their
+    blank defaults, and ``advisory_overlay_ok`` is not set, which makes
+    ``AgenticQueueStep`` skip the cycle.
+    """
+
+    # Same progress-stage label the advisory loop always reported under.
     name = "execution"
-    
-    async def run(self, ctx: RunContext) -> None:
-        """Execute gated BUY/SELL orders through the broker (skipped without credentials)."""
-        import main_orchestrator
-        from data.market_data import get_provider as _get_market_provider
-        from data.robinhood_portfolio import fetch_account_snapshot as _fetch_rh_snapshot
-        from engine.advisory import evaluate as _advisory_evaluate
+
+    def run(self, ctx: RunContext) -> None:
+        """Evaluate every symbol and fill ctx.recommendations + the Advisory_* columns."""
+        if ctx.dashboard_df is None or ctx.dashboard_df.empty:
+            return
+        # Captured once per step: the daemon can apply runtime_flags.json to
+        # the shared settings object between (and during) cycles.
+        reuse_pipeline_compute = bool(getattr(settings, 'ADVISORY_REUSE_PIPELINE_COMPUTE', False))
+        max_workers = int(getattr(settings, 'ADVISORY_MAX_CONCURRENCY', 8))
+        try:
+            self._evaluate(ctx, reuse_pipeline_compute, max_workers)
+        except Exception as adv_loop_err:
+            telemetry.warning(
+                "Advisory evaluation loop failed (non-critical): %s", adv_loop_err
+            )
+            return
+        ctx.context_extras["advisory_overlay_ok"] = True
+
+    def _evaluate(self, ctx: RunContext, reuse_pipeline_compute: bool, max_workers: int) -> None:
         from concurrent.futures import ThreadPoolExecutor
 
-        if ctx.dashboard_df.empty:
-            return
+        from data.market_data import get_provider as _get_market_provider
+        from engine.advisory import evaluate as _advisory_evaluate
+        from pipeline.advisory_inputs import build_context_extras, fetch_bars_for_universe
 
-        # 3b. Advisory Evaluation
-        try:
-            _market_provider = _get_market_provider()
-            shared_context = ctx.context_extras.get("shared_context")
-            _context_extras = {
-                'xsec_percentile_ranks': shared_context.xsec_percentile_ranks if shared_context else {},
-                'multifactor_scores':    shared_context.multifactor_scores if shared_context else {},
-            }
+        dashboard_df = ctx.dashboard_df
+        for col in _ADVISORY_COLUMNS:
+            dashboard_df[col] = ""
+        for col in _ADVISORY_NUMERIC_COLUMNS:
+            dashboard_df[col] = 0.0
 
-            _rh_snapshot = None
-            try:
-                _rh_snapshot = _fetch_rh_snapshot(max_age_hours=20.0)
-            except Exception as _rh_exc:
-                telemetry.warning(
-                    "Advisory: Robinhood account snapshot unavailable (%s) — "
-                    "position=None for all tickers; Kelly sizing still runs.", _rh_exc
-                )
-
-            for _col in ('Advisory_Action', 'Advisory_Conviction',
-                         'Advisory_Rationale', 'Advisory_Position_Pct',
-                         'Advisory_Data_Quality'):
-                ctx.dashboard_df[_col] = ""
-            ctx.dashboard_df['Advisory_Conviction'] = 0.0
-            ctx.dashboard_df['Advisory_Position_Pct'] = 0.0
-
-            _reuse_pipeline_compute = bool(
-                getattr(settings, 'ADVISORY_REUSE_PIPELINE_COMPUTE', False)
-            )
-
-            def _eval_one(_ticker, _row):
-                try:
-                    _position = (
-                        _rh_snapshot.positions.get(_ticker)
-                        if _rh_snapshot is not None else None
-                    )
-                    _precomputed_garch = None
-                    _precomputed_forecast = None
-                    _precomputed_forecast_is_fallback = None
-                    if _reuse_pipeline_compute:
-                        _precomputed_garch = _row.get('GARCH_Vol')
-                        _precomputed_forecast = _row.get('Forecast_30')
-                        # Only trust an actual bool -- the dashboard_df cell
-                        # can also be float('nan') (row skipped forecasting
-                        # entirely this cycle) or absent, neither of which
-                        # tells us anything about fallback status.
-                        _raw_pf_fallback = _row.get('Forecast_30_Is_Fallback')
-                        _precomputed_forecast_is_fallback = (
-                            _raw_pf_fallback if isinstance(_raw_pf_fallback, bool) else None
-                        )
-                    _rec = _advisory_evaluate(
-                        symbol=_ticker,
-                        position=_position,
-                        market=_market_provider,
-                        snapshot=_rh_snapshot,
-                        macro_dto=ctx.macro_dto,
-                        context_extras=_context_extras,
-                        precomputed_garch=_precomputed_garch,
-                        precomputed_forecast=_precomputed_forecast,
-                        precomputed_forecast_is_fallback=_precomputed_forecast_is_fallback,
-                    )
-                    if ctx.progress is not None:
-                        ctx.progress.advance_symbol(f"Advisory: {_ticker}")
-                    return _ticker, {
-                        'Advisory_Action': _rec.action,
-                        'Advisory_Conviction': round(_rec.conviction, 4),
-                        'Advisory_Rationale': _rec.rationale,
-                        'Advisory_Position_Pct': round(_rec.suggested_position_pct, 6),
-                        'Advisory_Data_Quality': _rec.data_quality
-                    }
-                except Exception as _adv_exc:
-                    telemetry.warning("Advisory failed for %s: %s", _ticker, _adv_exc)
-                    if ctx.progress is not None:
-                        ctx.progress.advance_symbol(f"Advisory: {_ticker} (failed)")
-                    return _ticker, None
-
-            _adv_rows = []
-            for _row in ctx.dashboard_df.to_dict('records'):
-                _ticker = str(_row.get('Symbol', '')).upper()
-                if not _ticker:
-                    continue
-                _adv_rows.append((_ticker, _row))
-
-            if ctx.progress is not None:
-                ctx.progress.start_stage("execution", symbols_total=len(_adv_rows))
-
-            _adv_workers = min(
-                int(getattr(settings, 'ADVISORY_MAX_CONCURRENCY', 8)),
-                max(1, len(ctx.dashboard_df)),
-            )
-            if _adv_workers <= 1 or len(_adv_rows) <= 1:
-                _adv_pairs = [_eval_one(_t, _r) for _t, _r in _adv_rows]
-            else:
-                with ThreadPoolExecutor(max_workers=_adv_workers) as _adv_pool:
-                    _adv_pairs = list(_adv_pool.map(lambda _tr: _eval_one(*_tr), _adv_rows))
-
-            advisory_results = {_t: _res for _t, _res in _adv_pairs if _res is not None}
-
-            for _col in ('Advisory_Action', 'Advisory_Conviction',
-                         'Advisory_Rationale', 'Advisory_Position_Pct',
-                         'Advisory_Data_Quality'):
-                if _col in ('Advisory_Conviction', 'Advisory_Position_Pct'):
-                    ctx.dashboard_df[_col] = ctx.dashboard_df['Symbol'].map(lambda x: advisory_results.get(str(x).upper(), {}).get(_col, 0.0))
-                else:
-                    ctx.dashboard_df[_col] = ctx.dashboard_df['Symbol'].map(lambda x: advisory_results.get(str(x).upper(), {}).get(_col, ""))
-
-            telemetry.info(
-                "Advisory evaluation complete for %d tickers.", len(ctx.dashboard_df)
-            )
-        except Exception as _adv_loop_err:
+        if ctx.snapshot is None:
             telemetry.warning(
-                "Advisory evaluation loop failed (non-critical): %s", _adv_loop_err
+                "Advisory: Robinhood account snapshot unavailable — evaluating "
+                "with an empty account (main.py's fallback); Kelly sizing still runs."
             )
+            ctx.snapshot = _empty_account_snapshot()
+        snapshot = ctx.snapshot
+
+        symbols = [str(s) for s in ctx.symbols if s]
+        # Defensive: the dashboard is built from ctx.symbols, so this is
+        # normally empty. A row that isn't in ctx.symbols still gets its
+        # Advisory_* columns, as it did before step 5.2.
+        known = set(symbols)
+        dashboard_only = [
+            s for s in (str(v).upper() for v in dashboard_df['Symbol'].tolist())
+            if s and s not in known
+        ]
+        if dashboard_only:
+            telemetry.warning(
+                "Advisory: %d dashboard symbol(s) not in the cycle universe "
+                "(evaluated anyway): %s", len(dashboard_only), ", ".join(dashboard_only[:10]),
+            )
+            symbols.extend(dict.fromkeys(dashboard_only))
+
+        market = _get_market_provider()
+        bars_dict = fetch_bars_for_universe(symbols, market)
+        context_extras = build_context_extras(symbols, bars_dict, ctx.macro_dto, market)
+        ctx.bars_dict = bars_dict
+        ctx.context_extras["advisory_context_extras"] = context_extras
+
+        rows_by_symbol = {}
+        if reuse_pipeline_compute:
+            for row in dashboard_df.to_dict('records'):
+                ticker = str(row.get('Symbol', '')).upper()
+                if ticker:
+                    rows_by_symbol[ticker] = row
+
+        if ctx.progress is not None:
+            ctx.progress.start_stage("execution", symbols_total=len(symbols))
+
+        def _eval_one(symbol: str) -> tuple:
+            """('ok', Recommendation) or ('err', error_dict). Never raises."""
+            try:
+                garch, forecast, forecast_is_fallback = _select_precomputed_for_row(
+                    rows_by_symbol.get(symbol.upper()), reuse_pipeline_compute,
+                )
+                rec = _advisory_evaluate(
+                    symbol=symbol,
+                    position=snapshot.positions.get(symbol),
+                    market=market,
+                    snapshot=snapshot,
+                    macro_dto=ctx.macro_dto,
+                    context_extras=context_extras,
+                    precomputed_garch=garch,
+                    precomputed_forecast=forecast,
+                    precomputed_forecast_is_fallback=forecast_is_fallback,
+                )
+                if ctx.progress is not None:
+                    ctx.progress.advance_symbol(f"Advisory: {symbol}")
+                return "ok", rec
+            except Exception as exc:
+                if ctx.progress is not None:
+                    ctx.progress.advance_symbol(f"Advisory: {symbol} (failed)")
+                return "err", {
+                    "symbol": symbol,
+                    "stage": "advisory_evaluate",
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+
+        workers = max(1, max_workers)
+        if workers == 1 or len(symbols) <= 1:
+            results_by_symbol = {sym: _eval_one(sym) for sym in symbols}
+        else:
+            with ThreadPoolExecutor(max_workers=min(workers, len(symbols))) as pool:
+                results_by_symbol = dict(zip(symbols, pool.map(_eval_one, symbols)))
+
+        # Assemble in universe order so the recommendations (and so the queue
+        # source) are deterministic regardless of worker completion order.
+        recommendations = []
+        column_values: dict = {}
+        for symbol in symbols:
+            kind, payload = results_by_symbol[symbol]
+            if kind != "ok":
+                telemetry.warning("Advisory failed for %s: %s", symbol, payload["message"])
+                ctx.errors.append(payload)
+                continue
+            rec = payload
+            recommendations.append(rec)
+            telemetry.info(
+                "  %-6s  %-10s  conviction=%.2f  quality=%-7s  pos=%.1f%%",
+                symbol, rec.action, rec.conviction, rec.data_quality,
+                rec.suggested_position_pct * 100.0,
+            )
+            column_values[symbol.upper()] = {
+                'Advisory_Action': rec.action,
+                'Advisory_Conviction': round(rec.conviction, 4),
+                'Advisory_Rationale': rec.rationale,
+                'Advisory_Position_Pct': round(rec.suggested_position_pct, 6),
+                'Advisory_Data_Quality': rec.data_quality,
+            }
+        ctx.recommendations = recommendations
+
+        for col in _ADVISORY_COLUMNS:
+            blank = 0.0 if col in _ADVISORY_NUMERIC_COLUMNS else ""
+            dashboard_df[col] = dashboard_df['Symbol'].map(
+                lambda x, _c=col, _b=blank: column_values.get(str(x).upper(), {}).get(_c, _b)
+            )
+
+        telemetry.info(
+            "Advisory evaluation complete for %d tickers (%d recommendations).",
+            len(symbols), len(recommendations),
+        )
+
+
+# The mode resolver lives in the light pipeline.agentic_queue module (main.py
+# reads it too); re-exported here under the names 5.2 introduced.
+from pipeline.agentic_queue import (  # noqa: E402
+    DAEMON_AGENTIC_QUEUE_MODES,
+    MODE_USED_KEY,
+    OWNER_TOKEN_KEY,
+    claim_queue_writer,
+    guard_for,
+    is_current_queue_writer,
+    release_queue_writer,
+    resolve_daemon_agentic_queue_mode,
+    run_watch_engine,
+    send_run_summary_push,
+)
+
+SHADOW_OUTPUT_SUBDIR = "shadow"
+
+
+def shadow_output_dir(output_dir: Any) -> Path:
+    """Where the shadow queue lives: ``<OUTPUT_DIR>/shadow``."""
+    return Path(output_dir) / SHADOW_OUTPUT_SUBDIR
+
+
+def shadow_collision_reason(real_dir: Any, shadow_dir: Any) -> Optional[str]:
+    """Return why a shadow write could land on a real queue file, or None.
+
+    ``shadow_dir`` is a subdirectory of ``real_dir``, so the plain paths never
+    collide. A symlink or hard link could still make them the same file (for
+    example ``OUTPUT_DIR/shadow`` pointing back at ``OUTPUT_DIR``), so every
+    path the shadow writer touches is compared with its real counterpart after
+    resolving links.
+    """
+    real_dir = Path(real_dir)
+    shadow_dir = Path(shadow_dir)
+    pairs = (
+        ("output dir", real_dir, shadow_dir),
+        ("queue_sources dir", real_dir / "queue_sources", shadow_dir / "queue_sources"),
+        ("advisory source", real_dir / "queue_sources" / "advisory.json",
+         shadow_dir / "queue_sources" / "advisory.json"),
+        ("execution queue", real_dir / "execution_queue.json",
+         shadow_dir / "execution_queue.json"),
+    )
+    for label, real_path, shadow_path in pairs:
+        try:
+            if real_path.resolve() == shadow_path.resolve():
+                return f"shadow {label} resolves to the real one ({real_path.resolve()})"
+            if real_path.exists() and shadow_path.exists() and os.path.samefile(real_path, shadow_path):
+                return f"shadow {label} is the same file as the real one ({real_path})"
+        except OSError as exc:
+            return f"could not verify the shadow {label} path ({exc})"
+    return None
+
+
+SHADOW_HISTORY_SUBDIR = "history"
+# Two files per cycle; 480 files is ~10 days of hourly cycles, enough for
+# the 5-trading-day comparison (scripts/compare_shadow_queue.py).
+SHADOW_HISTORY_MAX_FILES = 480
+
+
+def archive_shadow_run(
+    shadow_dir: Path, now: datetime, source_path: Optional[Path], queue_path: Optional[Path],
+) -> None:
+    """Keep a timestamped copy of this cycle's shadow files under
+    ``shadow/history/`` so ``scripts/compare_shadow_queue.py`` can find the
+    shadow run nearest after main.py's morning queue (the live shadow files
+    are overwritten every cycle). Only files written THIS cycle are copied: a
+    ``None`` queue path means compose wrote nothing, so the previous shadow
+    queue is not re-archived under a new timestamp. Best effort; never raises.
+    """
+    try:
+        history = Path(shadow_dir) / SHADOW_HISTORY_SUBDIR
+        history.mkdir(parents=True, exist_ok=True)
+        stamp = now.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        for kind, path in (("advisory", source_path), ("execution_queue", queue_path)):
+            if path is not None and Path(path).exists():
+                (history / f"{stamp}_{kind}.json").write_bytes(Path(path).read_bytes())
+        files = sorted(p for p in history.glob("*.json") if p.is_file())
+        for old in files[:-SHADOW_HISTORY_MAX_FILES]:
+            old.unlink()
+    except Exception as exc:  # noqa: BLE001 - archive is diagnostics only
+        telemetry.warning("Shadow agentic queue: history archive failed (%s).", exc)
+
+
+class AgenticQueueStep(PipelineStep):
+    """Writes the daemon's copy of the Robinhood execution queue from
+    ``ctx.recommendations``, behind ``settings.DAEMON_AGENTIC_QUEUE_MODE``.
+
+    * ``off`` (default): does nothing. main.py stays the only queue writer.
+    * ``shadow`` (step 5.2): writes ``queue_sources/advisory.json`` and
+      ``execution_queue.json`` under ``OUTPUT_DIR/shadow/`` ONLY, with the same
+      ``write_advisory_source`` + ``compose_and_emit`` calls main.py's
+      ``_run_cycle`` makes. ``side_effects=False`` means no push notification,
+      no risk-gate alert and no ``risk_gate_blocks.jsonl`` entry. Refuses to
+      write if a link makes a shadow path resolve to a real queue path. A
+      timestamped copy of each cycle's shadow files goes to
+      ``shadow/history/`` for ``scripts/compare_shadow_queue.py``.
+    * ``primary`` (step 5.3): the daemon is the writer. In main.py's
+      ``_run_cycle`` order it (1) logs the run summary and sends main.py's
+      summary push, (2) runs the symbol watch engine (``watch_state.json`` +
+      watch alerts), and (3) writes the REAL ``queue_sources/advisory.json``
+      and ``execution_queue.json`` under ``OUTPUT_DIR`` with the same
+      ``write_advisory_source`` + ``compose_and_emit`` calls, WITH their side
+      effects (the new-intent push, risk-gate alerts and block log), exactly
+      as main.py does. main.py skips all of these in primary
+      (``pipeline.agentic_queue.daemon_owns_agentic_side_effects``).
+
+    Skips (and logs why): in every mode, the whole step when the cycle
+    stopped, the data is synthetic (MockDataEngine fallback) or the advisory
+    overlay did not finish; the queue write alone when there are no
+    recommendations (primary still sends the summary push, which then reports
+    the per-symbol errors, and runs the watch engine, as main.py does).
+
+    ``compose_and_emit`` leaves the previous ``execution_queue.json`` in place
+    when nothing is composable, the source is stale/corrupt, or the account
+    has no positive equity (``execution/compose.py``). Primary keeps that
+    exactly: a cycle with no BUY/SELL clearing the 0.85 floor rewrites
+    ``advisory.json`` but leaves the old queue file. The skill's
+    ``generated_at`` freshness rule is what stops an old queue being placed.
+
+    The mode, ``ROBINHOOD_EXECUTION_MODE`` and ``OUTPUT_DIR`` are captured
+    once at step start and passed explicitly, because the daemon can
+    hot-reload runtime flags while a cycle runs. The mode actually used is
+    recorded in ``ctx.context_extras[MODE_USED_KEY]`` for ``StateSnapshotStep``.
+
+    Run ownership (primary): the step claims a token at start
+    (``pipeline.agentic_queue.claim_queue_writer``); the cycle releases it
+    when the runner returns or raises (``main_orchestrator._main_body_impl``).
+    Every real file commit goes through ``commit_guard``, so if this step
+    times out and its thread keeps running after the cycle was marked failed,
+    it cannot write the queue, the advisory source or ``watch_state.json``.
+
+    A separate, short, sync step on purpose: if ``AdvisoryOverlayStep`` times
+    out, the runner raises and this step never runs for that cycle. Never
+    raises (a native crash would take the daemon's APIs down with it; Python
+    errors are logged and swallowed).
+    """
+
+    name = "agentic_queue"
+
+    def __init__(self, *, clock: Optional[Any] = None) -> None:
+        # ``clock`` (a zero-arg callable returning an aware datetime) exists
+        # for the frozen-input equivalence test; production uses UTC now.
+        self._clock = clock
+
+    def run(self, ctx: RunContext) -> None:
+        """Write (or skip) this cycle's daemon queue."""
+        token: Optional[int] = None
+        try:
+            mode = resolve_daemon_agentic_queue_mode(
+                getattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "off")
+            )
+            execution_mode = str(getattr(settings, "ROBINHOOD_EXECUTION_MODE", "off") or "off")
+            output_dir = settings.OUTPUT_DIR
+            ctx.context_extras[MODE_USED_KEY] = mode
+            if mode == "primary":
+                token = claim_queue_writer(ctx.context_extras)
+                if token is None:
+                    telemetry.warning(
+                        "Agentic queue (primary): this cycle already ended (the step "
+                        "timed out before it started); nothing written."
+                    )
+                    return
+            self.write_queue(
+                ctx, mode=mode, execution_mode=execution_mode, output_dir=output_dir,
+                owner_token=token,
+            )
+        except Exception as exc:  # noqa: BLE001 - must never fail the cycle
+            telemetry.warning("Agentic queue step failed (non-critical): %s", exc)
+        finally:
+            # Normal return: nothing more to write this cycle. (A timed-out
+            # thread never gets here in time; the cycle's own finally in
+            # main_orchestrator._main_body_impl releases the token instead.)
+            release_queue_writer(token)
+
+    @staticmethod
+    def cycle_skip_reason(ctx: RunContext) -> Optional[str]:
+        """Why this cycle must produce nothing at all (queue, pushes, watch), or None."""
+        if ctx.stopped:
+            return f"the cycle stopped ({ctx.stop_reason or 'no reason recorded'})"
+        if ctx.context_extras.get("data_is_synthetic"):
+            return "this cycle fell back to synthetic MockDataEngine data"
+        if not ctx.context_extras.get("advisory_overlay_ok"):
+            return "the advisory overlay did not complete this cycle"
+        return None
+
+    @classmethod
+    def skip_reason(cls, ctx: RunContext) -> Optional[str]:
+        """Why this cycle must not produce a queue, or None."""
+        reason = cls.cycle_skip_reason(ctx)
+        if reason is not None:
+            return reason
+        if not ctx.recommendations:
+            return "there are no recommendations"
+        return None
+
+    def _now(self) -> datetime:
+        return self._clock() if self._clock is not None else datetime.now(timezone.utc)
+
+    def write_queue(
+        self,
+        ctx: RunContext,
+        *,
+        mode: str,
+        execution_mode: str,
+        output_dir: Any,
+        owner_token: Optional[int] = None,
+    ) -> Optional[Path]:
+        """Write this cycle's queue for ``mode``.
+
+        Returns the written ``execution_queue.json`` path (the shadow one in
+        shadow mode, the real one in primary), or None when nothing was
+        written (mode off, a skip reason, a refused path, lost ownership, or
+        ``compose_and_emit`` writing nothing, e.g. ``execution_mode=off``).
+        ``owner_token`` is the primary-mode ownership token; when None in
+        primary (a direct call, e.g. from a test) one is claimed and released
+        here.
+        """
+        mode = resolve_daemon_agentic_queue_mode(mode)
+        if mode == "off":
+            telemetry.debug("DAEMON_AGENTIC_QUEUE_MODE=off — daemon writes no execution queue.")
+            return None
+        if mode == "primary":
+            own_token = owner_token is None
+            token = claim_queue_writer() if own_token else owner_token
+            try:
+                return self._write_primary(
+                    ctx, execution_mode=execution_mode, output_dir=output_dir, token=token,
+                )
+            finally:
+                if own_token:
+                    release_queue_writer(token)
+        return self._write_shadow(ctx, execution_mode=execution_mode, output_dir=output_dir)
+
+    def _write_shadow(self, ctx: RunContext, *, execution_mode: str, output_dir: Any) -> Optional[Path]:
+        reason = self.skip_reason(ctx)
+        if reason is not None:
+            telemetry.info("Shadow agentic queue skipped: %s.", reason)
+            return None
+
+        real_dir = Path(output_dir)
+        shadow_dir = shadow_output_dir(real_dir)
+        shadow_dir.mkdir(parents=True, exist_ok=True)
+        collision = shadow_collision_reason(real_dir, shadow_dir)
+        if collision is not None:
+            telemetry.error("Shadow agentic queue refused: %s.", collision)
+            return None
+
+        from execution.compose import compose_and_emit, write_advisory_source
+
+        now = self._now()
+        source_path = write_advisory_source(ctx.recommendations, output_dir=shadow_dir, now=now)
+        if source_path is None:
+            telemetry.warning("Shadow agentic queue: advisory source write failed; no queue composed.")
+            return None
+        queue_path = compose_and_emit(
+            ctx.snapshot,
+            output_dir=shadow_dir,
+            mode=execution_mode,
+            now=now,
+            macro_dto=ctx.macro_dto,
+            side_effects=False,
+        )
+        if queue_path is None:
+            telemetry.info(
+                "Shadow agentic queue: advisory source written to %s; no queue composed "
+                "(ROBINHOOD_EXECUTION_MODE=%s, or nothing composable -- any previous shadow "
+                "queue is left in place, as main.py leaves the real one).",
+                source_path, execution_mode,
+            )
+        else:
+            telemetry.info("Shadow agentic queue written → %s", queue_path)
+        archive_shadow_run(shadow_dir, now, source_path, queue_path)
+        return queue_path
+
+    def _write_primary(
+        self, ctx: RunContext, *, execution_mode: str, output_dir: Any, token: int,
+    ) -> Optional[Path]:
+        reason = self.cycle_skip_reason(ctx)
+        if reason is not None:
+            telemetry.info(
+                "Agentic queue (primary) skipped: %s. No queue write, watch alerts or "
+                "summary push this cycle; the previous queue is left in place.", reason,
+            )
+            return None
+        real_dir = Path(output_dir)
+
+        # (1) main.py's summary push.
+        try:
+            started_at = ctx.started_at
+            if started_at.tzinfo is None:
+                started_at = started_at.astimezone()  # naive local -> aware
+            send_run_summary_push(
+                ctx.recommendations, ctx.errors,
+                started_at=started_at, owner_token=token,
+            )
+        except Exception as exc:  # noqa: BLE001
+            telemetry.warning("Run-summary push failed (non-critical): %s", exc)
+
+        # (2) main.py's symbol watch engine, same inputs.
+        run_watch_engine(
+            ctx.recommendations,
+            rules_file=settings.WATCH_RULES_FILE,
+            state_path=real_dir / "watch_state.json",
+            dashboard_url=settings.NTFY_DASHBOARD_URL,
+            owner_token=token,
+        )
+
+        # (3) the real queue.
+        if not ctx.recommendations:
+            telemetry.info(
+                "Agentic queue (primary): no recommendations this cycle; queue not written "
+                "(the previous advisory.json and execution_queue.json are left in place)."
+            )
+            return None
+        if not is_current_queue_writer(token):
+            telemetry.warning(
+                "Agentic queue (primary): this cycle no longer owns the queue "
+                "(it timed out or a newer cycle started); nothing written."
+            )
+            return None
+
+        from execution.compose import compose_and_emit, write_advisory_source
+
+        guard = guard_for(token)
+        now = self._now()
+        source_path = write_advisory_source(
+            ctx.recommendations, output_dir=real_dir, now=now, commit_guard=guard,
+        )
+        if source_path is None:
+            telemetry.warning(
+                "Agentic queue (primary): advisory source not written; no queue composed."
+            )
+            return None
+        queue_path = compose_and_emit(
+            ctx.snapshot,
+            output_dir=real_dir,
+            mode=execution_mode,
+            now=now,
+            macro_dto=ctx.macro_dto,
+            commit_guard=guard,
+        )
+        if queue_path is None:
+            telemetry.info(
+                "Agentic queue (primary): advisory source written to %s; no queue composed "
+                "(ROBINHOOD_EXECUTION_MODE=%s, nothing composable, or ownership lost) -- "
+                "the previous execution_queue.json is left in place, as main.py leaves it.",
+                source_path, execution_mode,
+            )
+        else:
+            telemetry.info("Robinhood execution queue emitted → %s", queue_path)
+        return queue_path
+
+
+class BrokerExecutionStep(PipelineStep):
+    """Executes gated paper orders on the local FMP paper ledger
+    (``main_orchestrator._execute_broker_orders``) from the strategy Kelly
+    targets. Separate from the Robinhood queue (``AgenticQueueStep``).
+
+    Before step 5.2 this step also ran the advisory overlay; that now lives in
+    ``AdvisoryOverlayStep``, which runs first.
+    """
+    name = "execution"
+
+    async def run(self, ctx: RunContext) -> None:
+        """Execute gated BUY/SELL orders on the paper ledger (never when going live)."""
+        import main_orchestrator
+
+        if ctx.dashboard_df is None or ctx.dashboard_df.empty:
+            return
 
         # 6. Broker Execution
         effective_dry_run = ctx.force_account # Or pass it in context
@@ -3174,8 +3277,7 @@ class BrokerExecutionStep(PipelineStep):
         # unconditionally without calling main_orchestrator._execute_broker_
         # orders. This never touches broker-selection code -- that selection
         # happens one layer deeper inside _execute_broker_orders, keyed off
-        # settings.BROKER_BACKEND -- so it protects AlpacaBroker and
-        # FMPPaperBroker identically.
+        # execution.broker_selection.resolve_broker_backend().
         if ctx.context_extras.get("data_is_synthetic"):
             telemetry.critical(
                 "Synthetic (MockDataEngine) data detected for this cycle -- "
@@ -3191,13 +3293,10 @@ class BrokerExecutionStep(PipelineStep):
                 "execution is disabled for this run.",
                 0 if ctx.dashboard_df is None else len(ctx.dashboard_df),
             )
-        elif not ctx.dashboard_df.empty and settings.ALPACA_API_KEY and settings.ALPACA_SECRET_KEY:
-            await main_orchestrator._execute_broker_orders(ctx.dashboard_df, effective_dry_run, macro_dto=ctx.macro_dto)
         elif not ctx.dashboard_df.empty:
-            telemetry.info(
-                "ALPACA_API_KEY/SECRET_KEY not configured; skipping broker execution. "
-                "Set them in .env to enable live/paper order submission."
-            )
+            # Going live (PAPER_TRADING=False) is handled inside:
+            # resolve_broker_backend() returns None and no order is placed.
+            await main_orchestrator._execute_broker_orders(ctx.dashboard_df, effective_dry_run, macro_dto=ctx.macro_dto)
 
 
 class StateSnapshotStep(PipelineStep):
@@ -3220,34 +3319,19 @@ class StateSnapshotStep(PipelineStep):
                 except Exception as plot_err:
                     telemetry.warning(f"Failed to generate interactive Plotly chart: {plot_err}")
 
-        _write_state_snapshot(
-            ctx.macro_raw, ctx.dashboard_df, ctx.symbols,
+        snapshot_kwargs = dict(
             macro_kill_switch=getattr(ctx.macro_dto, "killSwitch", None),
             hmm_regime_state=getattr(ctx.macro_dto, "hmm_regime_state", None),
             universe_funnel=ctx.context_extras.get("universe_funnel"),
         )
-
-        # Persist the optional Pilots-PWA analytics artifacts (options premium
-        # matrix + pairs radar). Both are opt-in (settings.*_ENABLED, default
-        # False) and dead-letter-guarded: a failure here NEVER affects the
-        # pipeline (CONSTRAINT #6). Heavy engine imports live in reporting/*,
-        # never in the AST-guarded api/pilots_api.py.
-        try:
-            from reporting.options_snapshot import write_options_matrix
-
-            write_options_matrix(
-                ctx.symbols,
-                vix=float(ctx.macro_raw.get("VIXCLS", 0.0) or 0.0),
-                market_regime=str(ctx.macro_raw.get("market_regime", "RISK ON")),
-            )
-        except Exception as opt_err:  # noqa: BLE001
-            telemetry.warning(f"Options matrix snapshot skipped: {opt_err}")
-        try:
-            from reporting.pairs_snapshot import write_pairs_snapshot
-
-            write_pairs_snapshot(ctx.symbols)
-        except Exception as pairs_err:  # noqa: BLE001
-            telemetry.warning(f"Pairs radar snapshot skipped: {pairs_err}")
+        # Step 5.3: once the daemon is the primary agentic writer, main.py
+        # stops writing its advisory snapshot, so this writer adds the two
+        # per-signal fields only that writer had (garch_vol,
+        # suggested_exit_pct). Keyed on the mode AgenticQueueStep actually
+        # used this cycle, so off/shadow snapshots stay byte-identical.
+        if ctx.context_extras.get(MODE_USED_KEY) == "primary":
+            snapshot_kwargs["recommendations"] = list(ctx.recommendations or [])
+        _write_state_snapshot(ctx.macro_raw, ctx.dashboard_df, ctx.symbols, **snapshot_kwargs)
 
         # Jinja HTML report
         try:
@@ -3288,8 +3372,10 @@ class StateSnapshotStep(PipelineStep):
 
         # Export Final JSON Payload Representation
         if not ctx.dashboard_df.empty:
+            # "Option Strategy" / "True_IVR" left this payload with the 2026-09
+            # schema trim (step 4f); both were always blank/NaN by then.
             payload_cols = ["Symbol", "Price", "Action Signal", "buyRange", "sellRange",
-                            "Kelly Target", "Option Strategy", "GARCH_Vol", "True_IVR"]
+                            "Kelly Target", "GARCH_Vol"]
             for ac in ("Advisory_Action", "Advisory_Conviction",
                         "Advisory_Rationale", "Advisory_Position_Pct", "Advisory_Data_Quality"):
                 if ac in ctx.dashboard_df.columns:

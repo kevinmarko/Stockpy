@@ -8,9 +8,9 @@ docstring) reads this store, runs the configured scans, and writes discovered
 candidates to ``output/scan_candidates.json`` (read by :mod:`pilots.discovery`).
 
 Deliberately a DEDICATED JSON file, not an ``.env`` key: scan configs are
-structured, operator-editable, multi-row data (like Pilot follows), not a
-global tunable — mirrors :class:`pilots.follows_store.FollowsStore` exactly,
-including the atomic write-then-rename idiom so a concurrent reader (the
+structured, operator-editable, multi-row data, not a global tunable. Uses
+the atomic write-then-rename idiom (originally modelled on the since-archived
+``legacy/pilots/follows_store.py``) so a concurrent reader (the
 discovery skill, mid-scan) never sees a partially-written file.
 
 Schema (``output/scan_configs.json``)::
@@ -29,7 +29,7 @@ Schema (``output/scan_configs.json``)::
       ]
     }
 
-Design constraints (identical to ``FollowsStore``):
+Design constraints:
 
 * **Dependency-light** — stdlib + ``settings`` only. Safe to import on the API
   path.

@@ -184,11 +184,31 @@ class TestRegistryStructure:
             "relative_strength_xsec", "rsi14_extremes", "sortino_drawdown",
             "macro_regime_pit", "forecast_direction_arima_hw",
             "signal_replay_balanced_blend",
-            "put_credit_spread", "call_credit_spread", "call_debit_spread",
-            "put_debit_spread", "covered_call", "vrp_premium_selling",
-            "vol_mispricing",
         ):
             assert name in STRATEGY_REGISTRY, f"{name} missing from STRATEGY_REGISTRY"
+
+    def test_options_strategies_removed(self) -> None:
+        """The options, copula, earnings-crush, dispersion, 0DTE and gamma
+        entries were removed with the options desk (2026-09, step 4a)."""
+        import scripts.refresh_validations as rv
+
+        for name in (
+            "options_flow_sentiment", "vrp_premium_selling", "vol_mispricing",
+            "put_credit_spread", "call_credit_spread", "call_debit_spread",
+            "put_debit_spread", "covered_call", "copula_stat_arb",
+            "earnings_crush", "dispersion_trading", "zero_dte_engine",
+            "gamma_scalper",
+        ):
+            assert name not in rv.STRATEGY_REGISTRY, name
+        for attr in (
+            "PAPER_BROKER_OPTIONS_STRATEGIES",
+            "_resolve_options_selling_stress_fn",
+            "_build_ungateable_adapter",
+            "_build_options_spread_adapter",
+        ):
+            assert not hasattr(rv, attr), attr
+        assert "vrp_premium_selling" not in rv._REPLAY_EXCLUDED_MODULES
+        assert "options_flow_sentiment" not in rv._REPLAY_EXCLUDED_MODULES
 
 
     def test_multifactor_universe_is_multi_ticker(self) -> None:
@@ -1405,83 +1425,6 @@ class TestBuildSignalReplayAdapterRawJsonHandling:
         for (_, _, raw), exp in zip(test_calls, expected):
             assert raw == exp
 
-
-class TestBuildOptionsStrategiesAdapters:
-    def test_options_adapters_return_expected_shapes(self) -> None:
-        import scripts.refresh_validations as rv
-
-        spy = _synthetic_spy(n=350)
-        # _build_vol_mispricing_adapter is deliberately NOT in this list: unlike
-        # every other adapter here (pure price-derived GARCH/IVR proxies, no
-        # external dependency), it needs a real macro_history VIXCLS series --
-        # HistoricalStore.get_macro() degrades to an empty Series (CONSTRAINT #6)
-        # when there's no fresh cached row AND no FRED_API_KEY/network access to
-        # top up, which is exactly the offline-CI environment this synthetic-only
-        # test runs in. Covered instead by test_vol_mispricing_adapter_offline_with_mocked_vix
-        # below (mocked VIX, still fully offline) and by the real, network-marked
-        # tests/test_validation_vol_mispricing_registry.py.
-        adapters = [
-            (rv._build_put_credit_spread_adapter, "PutCreditSpread"),
-            (rv._build_call_credit_spread_adapter, "CallCreditSpread"),
-            (rv._build_call_debit_spread_adapter, "CallDebitSpread"),
-            (rv._build_put_debit_spread_adapter, "PutDebitSpread"),
-            (rv._build_covered_call_adapter, "CoveredCall"),
-            (rv._build_vrp_premium_selling_adapter, "VRP_IronCondor"),
-        ]
-        for adapter_fn, pre_key in adapters:
-            X, y, pre = adapter_fn(spy)
-            assert isinstance(X, pd.DataFrame)
-            assert isinstance(y, pd.Series)
-            assert isinstance(pre, dict)
-            assert pre_key in pre
-            assert isinstance(pre[pre_key], pd.Series)
-            assert X.index.equals(y.index)
-            assert pre[pre_key].index.equals(y.index)
-
-    def test_vol_mispricing_adapter_offline_with_mocked_vix(self) -> None:
-        """_build_vol_mispricing_adapter's shape contract, fully offline: mocks
-        HistoricalStore.get_macro to supply a synthetic-but-real-shaped VIXCLS
-        series spanning the synthetic SPY window, instead of relying on either
-        real network access or a pre-populated local macro_history cache
-        (neither of which a fresh CI checkout has -- see the comment above).
-        """
-        import scripts.refresh_validations as rv
-
-        spy = _synthetic_spy(n=350)
-        rng = np.random.default_rng(99)
-        vix_values = 18.0 + rng.normal(0, 3, size=len(spy)).cumsum() * 0.05
-        vix_values = np.clip(vix_values, 9.0, 60.0)
-        synthetic_vix = pd.Series(vix_values, index=spy.index, name="VIXCLS")
-
-        with patch("data.historical_store.HistoricalStore.get_macro", return_value=synthetic_vix):
-            X, y, pre = rv._build_vol_mispricing_adapter(spy)
-
-        assert isinstance(X, pd.DataFrame)
-        assert isinstance(y, pd.Series)
-        assert isinstance(pre, dict)
-        assert "VolMispricing" in pre
-        assert isinstance(pre["VolMispricing"], pd.Series)
-        assert X.index.equals(y.index)
-        assert pre["VolMispricing"].index.equals(y.index)
-
-    def test_resolve_options_selling_stress_fn(self) -> None:
-        import scripts.refresh_validations as rv
-
-        assert rv._resolve_options_selling_stress_fn("put_credit_spread") is not None
-        assert rv._resolve_options_selling_stress_fn("call_credit_spread") is not None
-        assert rv._resolve_options_selling_stress_fn("covered_call") is not None
-        assert rv._resolve_options_selling_stress_fn("vrp_premium_selling") is not None
-        assert rv._resolve_options_selling_stress_fn("iron_condor") is not None
-        assert rv._resolve_options_selling_stress_fn("vol_mispricing") is not None
-        # Non-selling or equity strategies resolve to None
-        assert rv._resolve_options_selling_stress_fn("call_debit_spread") is None
-        assert rv._resolve_options_selling_stress_fn("put_debit_spread") is None
-        assert rv._resolve_options_selling_stress_fn("rsi2_mean_reversion") is None
-
-
-# ---------------------------------------------------------------------------
-# TestMakeStrategyFn
-# ---------------------------------------------------------------------------
 
 class TestMakeStrategyFn:
     def _fake_precomputed(self, n: int = 200) -> Dict[str, pd.Series]:

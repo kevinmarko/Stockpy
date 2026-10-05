@@ -28,13 +28,12 @@ interface CommandPaletteModalProps {
   onInspectTicker?: (symbol: string) => void;
   onPreviewReport?: (reportName: string) => void;
   onNavigate?: (path: string) => void;
-  /** Live registries from the command manifest, mirroring the free-text
-   *  Command Bar's (Commands.tsx) own props -- optional so this modal still
-   *  degrades to commandParse.ts's hardcoded REGISTERED_STRATEGIES/
-   *  REGISTERED_OPTIONS_STRATEGIES fallbacks when a caller (or a test)
-   *  doesn't wire them. */
+  /** Live strategy registry from the command manifest, mirroring the
+   *  free-text Command Bar's (Commands.tsx) own prop -- optional so this
+   *  modal still degrades to commandParse.ts's hardcoded
+   *  REGISTERED_STRATEGIES fallback when a caller (or a test) doesn't wire
+   *  it. */
   strategyRegistry?: string[];
-  optionsStrategyRegistry?: string[];
 }
 
 /** Real, in-app routes only — never invented paths. Kept in sync with
@@ -45,7 +44,6 @@ const NAV_TARGETS: { label: string; path: string }[] = [
   { label: "Activity Feed", path: "/activity" },
   { label: "Agentic Trading", path: "/agentic" },
   { label: "Commands", path: "/commands" },
-  { label: "Options Matrix", path: "/options" },
   { label: "Forecast Viewer", path: "/forecast" },
   { label: "Signal Breakdown", path: "/signals" },
   { label: "Observability / Mission Control", path: "/observability" },
@@ -66,7 +64,6 @@ export function CommandPaletteModal({
   onPreviewReport,
   onNavigate,
   strategyRegistry = [],
-  optionsStrategyRegistry = [],
 }: CommandPaletteModalProps) {
   const [input, setInput] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -105,8 +102,8 @@ export function CommandPaletteModal({
   }, [isOpen]);
 
   const parsed = useMemo(
-    () => parseCommandLine(input, commands, strategyRegistry, optionsStrategyRegistry),
-    [input, commands, strategyRegistry, optionsStrategyRegistry]
+    () => parseCommandLine(input, commands, strategyRegistry),
+    [input, commands, strategyRegistry]
   );
   const suggestions = parsed.suggestions;
   const ghostText = useMemo(() => getGhostText(input, suggestions), [input, suggestions]);

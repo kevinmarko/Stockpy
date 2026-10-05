@@ -4,8 +4,7 @@ live-trade human-approval gate's Pilots API endpoints.
 
 Imports only ``execution.live_trade_proposals_store`` (a plain persistence
 store, no heavy engine) -- never a heavy engine, matching the same
-AST-guard discipline documented in ``pilots/cache_long_short.py`` and
-``pilots/paper_broker.py``.
+AST-guard discipline documented in ``pilots/paper_broker.py``.
 
 Honesty (CONSTRAINT #6): never raises -- degrades to ``[]`` on any failure,
 matching every other read helper in ``pilots/``.
@@ -20,7 +19,7 @@ __all__ = ["get_pending_proposals"]
 def _serialize(proposal: Any) -> Dict[str, Any]:
     """Plain-dict, JSON-safe serialization of a single ``LiveTradeProposal``
     row/object. Datetime fields are rendered via ``.isoformat()`` (matching
-    ``pilots/paper_broker.py``'s/``pilots/cache_long_short.py``'s convention
+    ``pilots/paper_broker.py``'s convention
     of never handing a raw ``datetime`` back through the Pilots API)."""
 
     def _iso(value: Optional[Any]) -> Optional[str]:

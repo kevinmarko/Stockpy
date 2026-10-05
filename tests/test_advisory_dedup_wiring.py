@@ -147,7 +147,7 @@ class TestEvaluateRejectsNonPositivePrecomputedValues:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             pe_instance = MagicMock()

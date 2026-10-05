@@ -143,7 +143,7 @@ Coverage
 * ``query_investyo_db`` accepts a read-only ``WITH ... SELECT`` CTE while
   still rejecting INSERT/UPDATE/DELETE/DROP (incl. a CTE-prefixed mutation).
 * New read-only market-intelligence tools ``get_recommendation`` /
-  ``get_options_directive`` / ``get_regime_status`` /
+  ``get_regime_status`` /
   ``get_portfolio_coverage``: one happy-path each (markdown fields + a
   fenced ```json block) mocking the underlying engine, plus a dead-letter
   degradation path each.
@@ -1475,7 +1475,7 @@ class TestGetPortfolioSummary:
         def _fake_quote(sym):
             return md_mod.Quote(
                 symbol=sym, price=110.0, bid=109.9, ask=110.1,
-                timestamp=datetime(2026, 8, 10), is_stale=False, source="alpaca",
+                timestamp=datetime(2026, 8, 10), is_stale=False, source="fmp",
             )
 
         fake_provider = MagicMock()
@@ -2565,223 +2565,65 @@ class TestGetRecommendation:
         assert "error" in low or "unavailable" in low or "fail" in low
 
 
-class TestGetOptionsDirective:
-    def _directive(self):
-        return {
-            "Symbol": "AAPL",
-            "Strategy": "Put Credit Spread",
-            "Action": "SELL",
-            "Net_Premium": 1.25,
-            "Short_Strike": 145.0,
-            "Long_Strike": 140.0,
-            "Sigma_GARCH": 0.22,
-            "Trend_Bias": "Bullish",
-            "Integrity_OK": True,
-        }
+class TestRetiredOptionsTools:
+    """The options desk was retired (2026-09, step 4a). The three options
+    MCP tools stay registered as stubs: each returns an explicit retired
+    answer, never raises, and never imports an options module (proven by
+    blocking those modules in sys.modules)."""
 
-    def _patch_bars_provider(self, monkeypatch):
-        """The generic MagicMock() provider from _patch_advisory_inputs
-        returns a MagicMock (truthy .empty) for get_intraday_bars, which
-        trips the tool's "no bar data" guard before it ever reaches
-        build_premium_directive. Provide a fake with a real, non-empty
-        bars DataFrame instead."""
-        import data.market_data as md_mod
+    _BLOCKED = (
+        "technical_options_engine",
+        "pilots.options_risk",
+        "pilots.volatility_surface",
+        "pilots.vol_mispricing",
+        "pilots.zero_dte_engine",
+    )
 
-        idx = pd.bdate_range("2024-01-01", periods=30)
-        bars = pd.DataFrame(
-            {"Open": 150.0, "High": 152.0, "Low": 148.0, "Close": 150.0, "Volume": 1_000_000},
-            index=idx,
-        )
+    def _block_options_modules(self, monkeypatch):
+        import sys
 
-        fake_provider = MagicMock()
-        fake_provider.get_intraday_bars.return_value = bars
-        fake_provider.get_latest_quote.return_value = SimpleNamespace(price=150.0, is_stale=False)
-        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
+        for name in self._BLOCKED:
+            monkeypatch.setitem(sys.modules, name, None)
 
-    def test_happy_path_renders_directive_and_json_block(self, monkeypatch):
-        import technical_options_engine as toe_mod
-
-        monkeypatch.setattr(toe_mod, "build_premium_directive", lambda *a, **k: self._directive())
-        monkeypatch.setattr(
-            toe_mod,
-            "validate_directive_integrity",
-            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
-        )
-        _patch_advisory_inputs(monkeypatch)
-        self._patch_bars_provider(monkeypatch)
+    def test_get_options_directive_is_retired_stub(self, monkeypatch):
+        self._block_options_modules(monkeypatch)
+        import investyo_mcp_server as srv
 
         result = srv.get_options_directive("aapl")
-
-        assert "AAPL" in result
-        assert "Put Credit Spread" in result or "SELL" in result
-        assert "```json" in result
-
-    def test_exception_degrades(self, monkeypatch):
-        import technical_options_engine as toe_mod
-
-        def _raise(*a, **k):
-            raise RuntimeError("garch failed")
-
-        monkeypatch.setattr(toe_mod, "build_premium_directive", _raise)
-        _patch_advisory_inputs(monkeypatch)
-        self._patch_bars_provider(monkeypatch)
-
-        result = srv.get_options_directive("AAPL")
         assert isinstance(result, str)
-        low = result.lower()
-        assert "error" in low or "unavailable" in low or "fail" in low
+        assert "retired" in result.lower()
+        assert "Net Premium" not in result
 
-    def test_nan_realizable_theta_renders_as_na_not_literal_nan(self, monkeypatch):
-        """A debit-spread/Covered-Call/Cash directive never computes
-        Realizable_Daily_Theta (engine leaves it NaN, CONSTRAINT #4). The
-        markdown renderer must show 'N/A', not the literal string 'nan'."""
-        import technical_options_engine as toe_mod
+    def test_analyze_options_chain_is_retired_stub(self, monkeypatch):
+        self._block_options_modules(monkeypatch)
+        import investyo_mcp_server as srv
 
-        directive = self._directive()
-        directive["Strategy"] = "Call Debit Spread"
-        directive["Realizable_Daily_Theta"] = float("nan")
+        result = srv.analyze_options_chain("spy", target_dte=7)
+        assert result["retired"] is True
+        assert result["ticker"] == "SPY"
+        assert "retired" in result["error"].lower()
+        assert result["directive"] is None
+        assert result["surface"] is None
+        assert result["mispricing"] is None
 
-        monkeypatch.setattr(toe_mod, "build_premium_directive", lambda *a, **k: directive)
-        monkeypatch.setattr(
-            toe_mod,
-            "validate_directive_integrity",
-            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
-        )
-        _patch_advisory_inputs(monkeypatch)
-        self._patch_bars_provider(monkeypatch)
+    def test_scan_0dte_signals_is_retired_stub(self, monkeypatch):
+        self._block_options_modules(monkeypatch)
+        import investyo_mcp_server as srv
 
-        result = srv.get_options_directive("aapl")
+        result = srv.scan_0dte_signals("qqq", contracts=2)
+        assert result["retired"] is True
+        assert result["ticker"] == "QQQ"
+        assert result["contracts"] == 2
+        assert result["signals"] is None
+        assert result["live_exit_gate_wired"] is False
 
-        assert "Realizable Daily Theta**: N/A" in result
-        assert "nan" not in result.lower().split("```json")[0]
+    def test_tools_remain_registered(self):
+        import asyncio
 
-    def _write_snapshot(self, tmp_path, data):
-        (tmp_path / "output").mkdir(exist_ok=True)
-        (tmp_path / "output" / "state_snapshot.json").write_text(
-            json.dumps(data), encoding="utf-8"
-        )
+        import investyo_mcp_server as srv
 
-    def test_passes_macro_proxy_and_vrp_none_from_snapshot(self, monkeypatch, tmp_path):
-        """Finding 7 regression: previously this tool called
-        ``build_premium_directive(sym, bars, spot_price=..., is_stale=...)``
-        with NO ``macro_dto``/``vrp`` -- the VRP regime gate (VIX>=30 / CREDIT
-        EVENT) inside the engine silently never fired. Verify the tool now
-        threads a ``_MacroProxy`` built from the persisted state snapshot's
-        vix/market_regime, plus an explicit ``vrp=None``, matching the 4 other
-        production callers of ``build_premium_directive``."""
-        import technical_options_engine as toe_mod
-        from settings import settings
-
-        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
-        self._write_snapshot(tmp_path, {"vix": 35.0, "market_regime": "CREDIT EVENT"})
-
-        captured = {}
-
-        def _fake_directive(symbol, bars, *, spot_price, is_stale=False, **kw):
-            captured.update(kw)
-            return self._directive()
-
-        monkeypatch.setattr(toe_mod, "build_premium_directive", _fake_directive)
-        monkeypatch.setattr(
-            toe_mod,
-            "validate_directive_integrity",
-            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
-        )
-        _patch_advisory_inputs(monkeypatch)
-        self._patch_bars_provider(monkeypatch)
-
-        srv.get_options_directive("AAPL")
-
-        assert "macro_dto" in captured
-        macro_dto = captured["macro_dto"]
-        assert macro_dto.vix == 35.0
-        assert macro_dto.market_regime == "CREDIT EVENT"
-        assert captured.get("vrp") is None
-
-    def test_macro_proxy_neutral_default_without_snapshot(self, monkeypatch, tmp_path):
-        """No persisted snapshot -> neutral defaults (vix=15.0/"RISK ON"),
-        matching options_ondemand.py's MACRO_DEFAULT_VIX/MACRO_DEFAULT_REGIME."""
-        import technical_options_engine as toe_mod
-        from settings import settings
-
-        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
-
-        captured = {}
-
-        def _fake_directive(symbol, bars, *, spot_price, is_stale=False, **kw):
-            captured.update(kw)
-            return self._directive()
-
-        monkeypatch.setattr(toe_mod, "build_premium_directive", _fake_directive)
-        monkeypatch.setattr(
-            toe_mod,
-            "validate_directive_integrity",
-            lambda *a, **k: {"ok": True, "issues": [], "checks": []},
-        )
-        _patch_advisory_inputs(monkeypatch)
-        self._patch_bars_provider(monkeypatch)
-
-        srv.get_options_directive("AAPL")
-
-        macro_dto = captured["macro_dto"]
-        assert macro_dto.vix == 15.0
-        assert macro_dto.market_regime == "RISK ON"
-        assert captured.get("vrp") is None
-
-    def test_real_engine_gates_high_vix_snapshot_to_cash_wait(self, monkeypatch, tmp_path):
-        """End-to-end (no mocked strategy result): the persisted snapshot's
-        VIX >= 30 must genuinely gate the real
-        ``technical_options_engine.build_premium_directive`` call to
-        Cash/Wait, proving the wiring fix has a real effect and not just a
-        passed-but-ignored kwarg."""
-        import data.market_data as md_mod
-        import technical_options_engine as toe_mod
-        from settings import settings
-
-        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path / "output")
-        self._write_snapshot(tmp_path, {"vix": 35.0, "market_regime": "RISK ON"})
-        _patch_advisory_inputs(monkeypatch)
-
-        # Realistic (non-degenerate) GBM-like bars -- the flat-price fixture
-        # from _patch_bars_provider would fail the GJR-GARCH fit outright
-        # (zero variance) and return Cash/Wait BEFORE ever reaching the VRP
-        # regime gate, making that a false-positive proof for this test.
-        rng = np.random.default_rng(0)
-        idx = pd.bdate_range("2023-01-01", periods=252)
-        returns = rng.normal(0.0005, 0.012, size=252)
-        close = 100 * np.exp(np.cumsum(returns))
-        bars = pd.DataFrame(
-            {
-                "Open": close * 0.999,
-                "High": close * 1.005,
-                "Low": close * 0.995,
-                "Close": close,
-                "Volume": rng.integers(1_000_000, 5_000_000, size=252),
-            },
-            index=idx,
-        )
-        fake_provider = MagicMock()
-        fake_provider.get_intraday_bars.return_value = bars
-        fake_provider.get_latest_quote.return_value = SimpleNamespace(
-            price=float(close[-1]), is_stale=False
-        )
-        monkeypatch.setattr(md_mod, "get_provider", lambda *a, **k: fake_provider, raising=False)
-
-        # Force the HIGH IVR REGIME branch deterministically regardless of
-        # the synthetic bars' realized-vol-derived IVR proxy, so the only
-        # thing that can be varying the outcome is the VRP regime gate.
-        real_directive = toe_mod.build_premium_directive
-
-        def _low_threshold_directive(*args, **kwargs):
-            kwargs.setdefault("ivr_sell_threshold", 0.0)
-            return real_directive(*args, **kwargs)
-
-        monkeypatch.setattr(toe_mod, "build_premium_directive", _low_threshold_directive)
-
-        result = srv.get_options_directive("AAPL")
-
-        assert "Cash" in result
-        assert "Wait" in result
+        names = {t.name for t in asyncio.run(srv.mcp.list_tools())}
+        assert {"get_options_directive", "analyze_options_chain", "scan_0dte_signals"} <= names
 
 
 class TestGetRegimeStatus:
@@ -3596,7 +3438,7 @@ class TestRunBacktest:
 
     def test_market_data_error_returns_no_historical_data(self, monkeypatch):
         # A MarketDataError from get_intraday_bars (unrecoverable provider
-        # failure across the whole FMP/Alpaca/yfinance fallback chain) is
+        # failure across the whole FMP/yfinance fallback chain) is
         # the "no data" case here, matching the pre-existing "empty result
         # from yfinance" -> "No historical data found" contract.
         import data.market_data as md_mod
@@ -3823,10 +3665,11 @@ class TestGenerateDailySignals:
 
 # ---------------------------------------------------------------------------
 # Pilots marketplace tools (list_pilots / get_pilot_detail /
-# get_pilot_performance / get_pilot_trades / get_follows / follow_pilot)
+# get_pilot_performance / get_pilot_trades), plus the four retired
+# Follow-a-Pilot stubs (archived 2026-09, step 4c).
 #
-# These wrap pilots.catalog / pilots.scoring / pilots.performance /
-# pilots.follows_store / pilots.mirror -- each of which already has its own
+# These wrap pilots.catalog / pilots.scoring / pilots.performance -- each of
+# which already has its own
 # dedicated test suite (tests/test_pilots_*.py). Tests here therefore focus
 # on the MCP tool WIRING: arg validation, markdown+json rendering, unknown-
 # pilot 404-equivalent messages, and dead-letter degradation -- not on
@@ -4187,237 +4030,54 @@ class TestGetPilotTrades:
         assert "Failed to get trades" in result
 
 
-class TestGetFollows:
-    def test_no_active_follows(self, monkeypatch):
-        import pilots.follows_store as fs_mod
+class TestRetiredFollowTools:
+    """Follow-a-Pilot was archived (2026-09, step 4c). The four tool names stay
+    registered as stubs that return a clear retired message, never raise, and
+    touch no follow state (the follow modules are not even importable here)."""
 
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_active", lambda self: [])
+    @pytest.fixture(autouse=True)
+    def _follow_modules_unimportable(self, monkeypatch):
+        import sys as _sys
 
-        result = srv.get_follows()
-        assert "No active follows" in result
+        for name in ("pilots.mirror", "pilots.follows_store", "pilots.portfolio_attribution"):
+            monkeypatch.setitem(_sys.modules, name, None)
 
-    def test_happy_path(self, monkeypatch):
-        import pilots.follows_store as fs_mod
+    @pytest.mark.parametrize(
+        "name, call",
+        [
+            ("get_follows", lambda: srv.get_follows()),
+            ("follow_pilot", lambda: srv.follow_pilot("trend-following", 1000.0)),
+            ("unfollow_pilot", lambda: srv.unfollow_pilot("trend-following")),
+            ("get_portfolio_by_pilot", lambda: srv.get_portfolio_by_pilot()),
+        ],
+    )
+    def test_stub_returns_retired_message(self, name, call, tmp_path, monkeypatch):
+        from settings import settings as _settings
 
-        rows = [
-            {
-                "pilot_id": "trend-following",
-                "amount": 500.0,
-                "created_at": "t1",
-                "updated_at": "t2",
-                "status": "active",
-            }
-        ]
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_active", lambda self: rows)
+        monkeypatch.setattr(_settings, "OUTPUT_DIR", tmp_path, raising=False)
+        result = call()
+        assert f"`{name}` is retired" in result
+        assert "list_pilots" in result  # points at what still works
+        assert not (tmp_path / "follows.json").exists()
+        assert not (tmp_path / "execution_queue.json").exists()
 
-        result = srv.get_follows()
-        assert "trend-following" in result
-        assert "$500.00" in result
+    @pytest.mark.parametrize(
+        "name", ["get_follows", "follow_pilot", "unfollow_pilot", "get_portfolio_by_pilot"]
+    )
+    def test_stub_is_read_only_and_has_no_widget(self, name):
+        tool = srv.mcp._tool_manager.get_tool(name)
+        assert tool is not None
+        assert tool.annotations is not None and tool.annotations.readOnlyHint is True
+        assert not tool.meta
 
-    def test_exception_degrades(self, monkeypatch):
-        import pilots.follows_store as fs_mod
-
-        def _raise(self):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_active", _raise)
-
-        result = srv.get_follows()
-        assert "Failed to list follows" in result
-
-
-class TestFollowPilot:
-    def test_unknown_pilot(self):
-        assert "No such pilot" in srv.follow_pilot("nope", 100)
-
-    def test_non_positive_amount_rejected(self):
-        assert "amount must be > 0" in srv.follow_pilot("trend-following", 0)
-        assert "amount must be > 0" in srv.follow_pilot("trend-following", -5)
-
-    def test_kill_switch_blocks(self, monkeypatch):
-        import execution.kill_switch as ks_mod
-
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: True)
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "reason", lambda self: "VIX spike")
-
-        result = srv.follow_pilot("trend-following", 500)
-
-        assert "Kill switch is active" in result
-        assert "VIX spike" in result
-
-    def test_happy_path_no_account_snapshot(self, monkeypatch):
-        import data.historical_store as hs_mod
-        import execution.kill_switch as ks_mod
-        import pilots.follows_store as fs_mod
-        import pilots.mirror as mirror_mod
+    def test_list_pilots_has_no_follow_proxies(self, monkeypatch):
         import pilots.scoring as scoring_mod
 
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: False)
-        follow_row = {"pilot_id": "trend-following", "amount": 500.0, "status": "active"}
-        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: follow_row)
         monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: None)
-        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: None)
-        monkeypatch.setattr(
-            mirror_mod,
-            "plan_follow",
-            lambda pilot, amount, account_snapshot, snapshot=None: {
-                "planned_intents": [],
-                "mode": "off",
-                "queue_written": False,
-            },
-        )
-
-        result = srv.follow_pilot("trend-following", 500)
-
-        assert "no account snapshot" in result
-        assert "No order is placed automatically" in result
-        assert '"queue_written": false' in result
-
-    def test_happy_path_with_planned_intents(self, monkeypatch):
-        import data.historical_store as hs_mod
-        import execution.kill_switch as ks_mod
-        import pilots.follows_store as fs_mod
-        import pilots.mirror as mirror_mod
-        import pilots.scoring as scoring_mod
-
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: False)
-        monkeypatch.setattr(
-            fs_mod.FollowsStore, "upsert", lambda self, pid, amt: {"pilot_id": pid, "amount": amt}
-        )
-        monkeypatch.setattr(scoring_mod, "load_snapshot", lambda *a, **k: {"timestamp": "t"})
-        fake_snap = SimpleNamespace(total_equity=10000.0)
-        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: fake_snap)
-        monkeypatch.setattr(
-            mirror_mod,
-            "plan_follow",
-            lambda pilot, amount, account_snapshot, snapshot=None: {
-                "planned_intents": [
-                    {"symbol": "AAPL", "action": "BUY", "target_notional": 300.0, "rationale": "underweight"}
-                ],
-                "mode": "review",
-                "queue_written": True,
-            },
-        )
-
-        result = srv.follow_pilot("trend-following", 500)
-
-        assert "account snapshot loaded (DB)" in result
-        assert "AAPL" in result
-        assert "$300.00" in result
-
-    def test_exception_degrades(self, monkeypatch):
-        import pilots.catalog as catalog_mod
-
-        def _raise(*a, **k):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(catalog_mod, "get_pilot", _raise)
-
-        result = srv.follow_pilot("trend-following", 500)
-        assert "Failed to follow pilot" in result
-
-
-# ---------------------------------------------------------------------------
-# unfollow_pilot -- Tool 1 of the "PR A" Pilot marketplace batch. Cancels a
-# follow via FollowsStore.upsert(pilot_id, 0.0), NOT .remove() (would delete
-# the mirrored attribution). No widget, never gated on the kill switch, no
-# ToolAnnotations(readOnlyHint=True) (it writes state).
-# ---------------------------------------------------------------------------
-
-
-class TestUnfollowPilot:
-    def test_unknown_pilot(self):
-        result = srv.unfollow_pilot("does-not-exist")
-        assert "No such pilot 'does-not-exist'" in result
-
-    def test_not_currently_following_short_circuits(self, monkeypatch):
-        import pilots.follows_store as fs_mod
-
-        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: None)
-
-        result = srv.unfollow_pilot("trend-following")
-        assert "Not currently following" in result
-        assert "trend-following" in result
-
-    def test_happy_path_reports_residual_mirrored(self, monkeypatch):
-        import pilots.follows_store as fs_mod
-
-        row = {"pilot_id": "trend-following", "amount": 500.0, "status": "active"}
-        mirrored = [{"symbol": "AAPL", "weight": 1.0, "target_notional": 500.0}]
-
-        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
-        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: mirrored)
-        captured = {}
-        monkeypatch.setattr(
-            fs_mod.FollowsStore,
-            "upsert",
-            lambda self, pid, amt: captured.update(pid=pid, amt=amt) or row,
-        )
-
-        result = srv.unfollow_pilot("trend-following")
-
-        assert captured == {"pid": "trend-following", "amt": 0.0}
-        assert "Follow cancelled (was $500.00)" in result
-        assert "Still Held (not automatically sold)" in result
-        assert "will not be automatically sold" in result
-        assert "AAPL" in result
-        assert "$500.00" in result
-        assert '"was_following": true' in result
-
-    def test_happy_path_no_residual_mirrored(self, monkeypatch):
-        import pilots.follows_store as fs_mod
-
-        row = {"pilot_id": "trend-following", "amount": 100.0, "status": "active"}
-        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
-        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: [])
-        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: row)
-
-        result = srv.unfollow_pilot("trend-following")
-
-        assert "Follow cancelled" in result
-        assert "No attributed positions on record" in result
-
-    def test_already_cancelled_is_idempotent(self, monkeypatch):
-        import pilots.follows_store as fs_mod
-
-        row = {"pilot_id": "trend-following", "amount": 0.0, "status": "cancelled"}
-        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
-        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: [])
-        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: row)
-
-        result = srv.unfollow_pilot("trend-following")
-
-        assert "Already not actively following" in result
-        assert '"was_following": false' in result
-
-    def test_not_gated_on_kill_switch(self, monkeypatch):
-        """Unlike follow_pilot, unfollow_pilot must succeed even when the
-        global kill switch is active -- it takes on no new risk."""
-        import execution.kill_switch as ks_mod
-        import pilots.follows_store as fs_mod
-
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "is_active", lambda self: True)
-        monkeypatch.setattr(ks_mod.GlobalKillSwitch, "reason", lambda self: "VIX spike")
-        row = {"pilot_id": "trend-following", "amount": 500.0, "status": "active"}
-        monkeypatch.setattr(fs_mod.FollowsStore, "get", lambda self, pid: row)
-        monkeypatch.setattr(fs_mod.FollowsStore, "get_mirrored", lambda self, pid: [])
-        monkeypatch.setattr(fs_mod.FollowsStore, "upsert", lambda self, pid, amt: row)
-
-        result = srv.unfollow_pilot("trend-following")
-
-        assert "Kill switch" not in result
-        assert "Follow cancelled" in result
-
-    def test_exception_degrades(self, monkeypatch):
-        import pilots.catalog as catalog_mod
-
-        def _raise(*a, **k):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(catalog_mod, "get_pilot", _raise)
-
-        result = srv.unfollow_pilot("trend-following")
-        assert "Failed to unfollow pilot" in result
+        result = srv.list_pilots()
+        assert "aum_proxy" not in result
+        assert "followers_proxy" not in result
+        assert "AUM" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -4435,7 +4095,7 @@ class TestGetQuote:
         ts = datetime(2026, 8, 10, 14, 30, tzinfo=None)
         quote = md_mod.Quote(
             symbol="AAPL", price=150.25, bid=150.20, ask=150.30,
-            timestamp=ts, is_stale=False, source="alpaca",
+            timestamp=ts, is_stale=False, source="fmp",
         )
         fake_provider = MagicMock()
         fake_provider.get_latest_quote.return_value = quote
@@ -4446,7 +4106,7 @@ class TestGetQuote:
         assert "# Quote: AAPL" in result
         assert "$150.25" in result
         assert "🟢 Live" in result
-        assert "alpaca" in result
+        assert "fmp" in result
         assert '"is_stale": false' in result
         fake_provider.get_latest_quote.assert_called_once_with("AAPL")
 
@@ -4509,106 +4169,6 @@ class TestGetQuote:
 
         result = srv.get_quote("AAPL")
         assert "Failed to get quote for 'AAPL'" in result
-
-
-# ---------------------------------------------------------------------------
-# get_portfolio_by_pilot -- Tool 4 of the "PR A" Pilot marketplace batch.
-# Thin MCP-tool wrapper over the pure pilots.portfolio_attribution algorithm
-# (see tests/test_pilots_portfolio_attribution.py for the math itself). Tests
-# here focus on tool wiring: account-snapshot sourcing, follows/catalog
-# threading, markdown rendering, dead-letter degradation.
-# ---------------------------------------------------------------------------
-
-
-class TestGetPortfolioByPilot:
-    def test_no_account_snapshot(self, monkeypatch):
-        import data.historical_store as hs_mod
-        import pilots.follows_store as fs_mod
-
-        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: None)
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_all", lambda self: [])
-
-        result = srv.get_portfolio_by_pilot()
-
-        assert "# Portfolio by Pilot (proxy attribution)" in result
-        assert "no account snapshot on record" in result
-        assert "NOT per-lot cost-basis P&L tracking" in result
-
-    def test_happy_path_renders_attribution_and_unattributed(self, monkeypatch):
-        import data.historical_store as hs_mod
-        import pilots.follows_store as fs_mod
-
-        position = SimpleNamespace(market_value=1000.0, unrealized_pl=100.0)
-        other_position = SimpleNamespace(market_value=200.0, unrealized_pl=-10.0)
-        fake_snapshot = SimpleNamespace(
-            positions={"AAPL": position, "MSFT": other_position},
-            fetched_at=datetime(2026, 8, 1, tzinfo=None),
-        )
-        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", lambda self: fake_snapshot)
-        follows = [
-            {
-                "pilot_id": "trend-following",
-                "status": "active",
-                "mirrored": [{"symbol": "AAPL", "weight": 1.0, "target_notional": 600.0}],
-                "mirrored_updated_at": "2026-07-30T00:00:00+00:00",
-            }
-        ]
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_all", lambda self: follows)
-
-        result = srv.get_portfolio_by_pilot()
-
-        assert "By Pilot" in result
-        assert "`trend-following`" in result
-        assert "$600.00" in result
-        assert "Unattributed" in result
-        assert "MSFT" in result  # fully unclaimed -> in the unattributed bucket
-        assert "$200.00" in result
-        payload = json.loads(result.split("```json")[1].split("```")[0])
-        assert payload["pilots"][0]["pilot_id"] == "trend-following"
-        # AAPL: $400 of the $1000 held is unclaimed (target_notional=600 < market_value=1000);
-        # MSFT: fully unclaimed.
-        assert payload["unattributed"] == [
-            {"symbol": "AAPL", "value": 400.0},
-            {"symbol": "MSFT", "value": 200.0},
-        ]
-
-    def test_account_snapshot_fetch_exception_degrades_to_no_data(self, monkeypatch):
-        import data.historical_store as hs_mod
-        import pilots.follows_store as fs_mod
-
-        def _raise(self):
-            raise RuntimeError("db unavailable")
-
-        monkeypatch.setattr(hs_mod.HistoricalStore, "latest_account_snapshot", _raise)
-        monkeypatch.setattr(fs_mod.FollowsStore, "list_all", lambda self: [])
-
-        result = srv.get_portfolio_by_pilot()
-
-        assert "no account snapshot on record" in result
-
-    def test_exception_degrades(self, monkeypatch):
-        import pilots.catalog as catalog_mod
-
-        def _raise(*a, **k):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(catalog_mod, "list_pilots", _raise)
-
-        result = srv.get_portfolio_by_pilot()
-        assert "Failed to build portfolio-by-pilot attribution" in result
-
-    def test_tool_meta_wired_to_pilot_portfolio_widget(self):
-        """The widget for this tool was deferred at v1 and shipped later --
-        confirm the ``meta=`` kwarg now points at ``pilot-portfolio.html``
-        (mirrors compare_pilots' equivalent wiring test in
-        tests/test_investyo_mcp_widgets.py::TestPilotCompareWidgetSmoke)."""
-        tool = srv.mcp._tool_manager.get_tool("get_portfolio_by_pilot")
-        assert tool is not None
-        assert tool.meta == srv._PILOT_PORTFOLIO_UI
-        if srv._WIDGETS_AVAILABLE:
-            assert tool.meta == {"ui": {"resourceUri": "ui://widgets/pilot-portfolio.html"}}
-        else:
-            assert tool.meta is None
 
 
 # ---------------------------------------------------------------------------
@@ -5411,13 +4971,14 @@ class TestValidateOrderCompliance:
     real-schema convention) so a genuinely-passing and a genuinely-failing
     case are driven by actual data, not a mocked risk-gate verdict."""
 
-    def _insert_signal_row(self, symbol, kelly, sizing_capped, binding_constraint, vrp, true_ivr):
+    def _insert_signal_row(self, symbol, kelly, sizing_capped, binding_constraint):
+        # "VRP"/"True_IVR" left COLUMN_SCHEMA (and so DailySignals) in step 4f.
         conn = sqlite3.connect("quant_platform.db")
         conn.execute(
             'INSERT INTO DailySignals ("Symbol", timestamp, "Kelly Target", '
-            '"Sizing_Was_Capped", "Sizing_Binding_Constraint", "VRP", "True_IVR") '
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (symbol, "2026-01-01 09:30:00", kelly, sizing_capped, binding_constraint, vrp, true_ivr),
+            '"Sizing_Was_Capped", "Sizing_Binding_Constraint") '
+            "VALUES (?, ?, ?, ?, ?)",
+            (symbol, "2026-01-01 09:30:00", kelly, sizing_capped, binding_constraint),
         )
         conn.commit()
         conn.close()
@@ -5443,7 +5004,7 @@ class TestValidateOrderCompliance:
         import database_setup
         database_setup.initialize_database("quant_platform.db")
         self._insert_signal_row("GOOD", kelly=0.10, sizing_capped="No",
-                                 binding_constraint="", vrp=0.05, true_ivr=65.0)
+                                 binding_constraint="")
         (tmp_path / "output").mkdir(exist_ok=True)
         (tmp_path / "output" / "state_snapshot.json").write_text(
             json.dumps({"vix": 14.0, "market_regime": "RISK ON"}), encoding="utf-8"
@@ -5453,7 +5014,8 @@ class TestValidateOrderCompliance:
         result = validate_order_compliance("GOOD", "buy", 10.0)
         assert "Overall verdict: PASSED" in result
         assert "kelly_sizing_cap**: PASS" in result
-        assert "vrp_premium_selling_regime**: PASS" in result
+        # The options VRP regime gate was removed with the options desk.
+        assert "vrp_premium_selling_regime" not in result
 
     def test_genuinely_failing_case_is_different_from_passing(self, monkeypatch, tmp_path):
         from settings import settings
@@ -5465,7 +5027,7 @@ class TestValidateOrderCompliance:
         # Kelly Target well beyond settings.KELLY_CAP (0.20), and the
         # per-symbol VRP gate columns fail their thresholds too.
         self._insert_signal_row("BAD", kelly=0.35, sizing_capped="Yes",
-                                 binding_constraint="kelly_cap", vrp=0.001, true_ivr=20.0)
+                                 binding_constraint="kelly_cap")
         (tmp_path / "output").mkdir(exist_ok=True)
         (tmp_path / "output" / "state_snapshot.json").write_text(
             json.dumps({"vix": 14.0, "market_regime": "RISK ON"}), encoding="utf-8"
@@ -5476,7 +5038,7 @@ class TestValidateOrderCompliance:
         assert "Overall verdict: FAILED" in result
         assert "kelly_sizing_cap**: FAIL" in result
         assert "exceeds KELLY_CAP" in result
-        assert "vrp_premium_selling_regime**: FAIL" in result
+        assert "vrp_premium_selling_regime" not in result
 
     def test_sell_side_skips_kelly_cap_check(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
@@ -5484,7 +5046,7 @@ class TestValidateOrderCompliance:
         import database_setup
         database_setup.initialize_database("quant_platform.db")
         self._insert_signal_row("SELLME", kelly=0.35, sizing_capped="Yes",
-                                 binding_constraint="kelly_cap", vrp=None, true_ivr=None)
+                                 binding_constraint="kelly_cap")
         from investyo_mcp_server import validate_order_compliance
 
         result = validate_order_compliance("SELLME", "sell", 10.0)
@@ -5492,18 +5054,23 @@ class TestValidateOrderCompliance:
         assert "not applicable" not in result  # uses the real "only applies to..." wording
         assert "SELL order" in result
 
-    def test_missing_vrp_columns_are_unavailable_not_fabricated_pass(self, monkeypatch, tmp_path):
-        """A Kelly-only row (no VRP/True_IVR yet) must degrade that ONE
-        check to UNAVAILABLE, never silently pass it."""
+    def test_kelly_check_runs_with_vrp_signal_module_unimportable(self, monkeypatch, tmp_path):
+        """The Kelly-cap check must not depend on any options module: with
+        signals.vrp_premium_selling blocked, the tool still evaluates the
+        cap and returns a real verdict, never a blanket "unavailable"."""
+        import sys
+
+        monkeypatch.setitem(sys.modules, "signals.vrp_premium_selling", None)
         monkeypatch.chdir(tmp_path)
         _route_default_db_to_tmp_path(monkeypatch, tmp_path)
         import database_setup
         database_setup.initialize_database("quant_platform.db")
         self._insert_signal_row("PARTIAL", kelly=0.05, sizing_capped="No",
-                                 binding_constraint="", vrp=None, true_ivr=None)
+                                 binding_constraint="")
         from investyo_mcp_server import validate_order_compliance
 
         result = validate_order_compliance("PARTIAL", "buy", 10.0)
-        assert "vrp_premium_selling_regime**: UNAVAILABLE" in result
-        assert "no VRP" in result or "no True_IVR/VRP" in result or "no True_IVR" in result
+        assert "Overall verdict: PASSED" in result
         assert "kelly_sizing_cap**: PASS" in result
+        assert "vrp_premium_selling_regime" not in result
+        assert "compliance check unavailable" not in result

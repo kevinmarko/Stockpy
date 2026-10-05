@@ -82,13 +82,13 @@ class _FakeQuote:
     symbol: str
     price: float
     is_stale: bool
-    source: str = "alpaca"
+    source: str = "fmp"
 
 
 class _FakeProvider:
     """Mimics ``data.market_data.CompositeProvider`` for the sync probe."""
 
-    quote_source = "alpaca"
+    quote_source = "fmp"
 
     def __init__(
         self,
@@ -460,6 +460,157 @@ def test_universe_dedup_and_sort(monkeypatch):
     assert sorted(report.symbols.keys()) == ["AAPL", "MSFT", "NVDA"]
     # AAPL appears in both watchlists.
     assert set(report.symbols["AAPL"].watchlists) == {"List A", "List B"}
+
+
+def test_probe_crash_for_one_symbol_does_not_abort_the_others(monkeypatch):
+    """Probes run in a thread pool; one that raises is dead-lettered as
+    UNKNOWN for that symbol only, and the rest still classify."""
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from data import robinhood_client as rc
+    from settings import settings
+
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+    held = {"AAPL": _FakePosition("AAPL", 1, 100.0, 100.0, 100.0)}
+    client = _FakeRobinhoodClient(holdings=held, watchlists={"L": ["MSFT", "NVDA"]})
+    monkeypatch.setattr(rc, "_watchlist_tickers", lambda name: client._watchlists.get(name, []))
+    monkeypatch.setattr(md, "get_provider", lambda: _FakeProvider(
+        covered={"AAPL", "MSFT", "NVDA"}, has_funds={"AAPL", "MSFT", "NVDA"}
+    ))
+    real_probe = ps._probe_symbol_coverage
+
+    def _probe(sym, provider, **kw):
+        if sym == "MSFT":
+            raise RuntimeError("boom")
+        return real_probe(sym, provider, **kw)
+
+    monkeypatch.setattr(ps, "_probe_symbol_coverage", _probe)
+    report = ps.build_sync_report(_FakeSnapshot(positions=held), client=client)
+    assert list(report.symbols) == ["AAPL", "MSFT", "NVDA"]
+    assert report.symbols["MSFT"].coverage is ps.CoverageStatus.UNKNOWN
+    assert report.symbols["AAPL"].coverage is ps.CoverageStatus.FULL
+    assert report.symbols["NVDA"].coverage is ps.CoverageStatus.FULL
+
+
+# ---------------------------------------------------------------------------
+# fundamentals_from_store — read endpoints never fetch fundamentals live
+# ---------------------------------------------------------------------------
+
+
+class _CountingProvider(_FakeProvider):
+    """A provider that records every live fundamentals call."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.fundamentals_calls: list[str] = []
+
+    def get_fundamentals(self, symbol: str) -> dict[str, Any]:
+        self.fundamentals_calls.append(symbol)
+        return super().get_fundamentals(symbol)
+
+
+def _store_with_rows(tmp_path, rows: dict[str, tuple[dict, dict]]):
+    from data.historical_store import HistoricalStore
+
+    db = tmp_path / "hist.db"
+    store = HistoricalStore(str(db))
+    for sym, (typed, raw) in rows.items():
+        store._upsert_fundamentals(sym, typed, raw, "test")
+    return str(db)
+
+
+def _point_store_at(monkeypatch, db_path: str):
+    import data.historical_store as hs
+
+    real_cls = hs.HistoricalStore
+
+    def _factory(db_path_arg=None, *, readonly=False):
+        return real_cls(db_path, readonly=readonly)
+
+    monkeypatch.setattr(hs, "HistoricalStore", _factory)
+
+
+def _typed(**over):
+    base = {k: float("nan") for k in (
+        "pe_ratio", "pb_ratio", "roe", "dividend_yield", "market_cap",
+        "eps", "operating_margin", "debt_to_equity",
+    )}
+    base.update(over)
+    return base
+
+
+def test_store_mode_reads_db_and_never_calls_provider_fundamentals(monkeypatch, tmp_path):
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from settings import settings
+
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+    db = _store_with_rows(tmp_path, {
+        "AAPL": (_typed(pe_ratio=30.0), {"trailingPE": 30.0}),
+        "EMPT": (_typed(), {}),
+    })
+    _point_store_at(monkeypatch, db)
+    provider = _CountingProvider(
+        covered={"AAPL", "MSFT", "EMPT"}, has_funds={"AAPL", "MSFT", "EMPT"}
+    )
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+    held = {s: _FakePosition(s, 1, 100.0, 100.0, 100.0) for s in ("AAPL", "MSFT", "EMPT")}
+
+    report = ps.build_sync_report(
+        _FakeSnapshot(positions=held), fundamentals_from_store=True
+    )
+
+    assert provider.fundamentals_calls == []
+    assert report.symbols["AAPL"].coverage is ps.CoverageStatus.FULL
+    assert report.symbols["AAPL"].has_fundamentals is True
+    # No stored row: honestly not covered, never assumed.
+    assert report.symbols["MSFT"].coverage is ps.CoverageStatus.QUOTES_ONLY
+    assert "fundamentals:not_in_store" in report.symbols["MSFT"].diagnostic
+    # A stored row with no real values does not count as covered.
+    assert report.symbols["EMPT"].has_fundamentals is False
+    assert "fundamentals:empty" in report.symbols["EMPT"].diagnostic
+    assert report.fundamentals_source == "fundamentals_history (stored)"
+
+
+def test_store_mode_unreadable_store_degrades_without_live_fetch(monkeypatch):
+    import data.historical_store as hs
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from settings import settings
+
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+
+    def _boom(*a, **k):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(hs, "HistoricalStore", _boom)
+    provider = _CountingProvider(covered={"AAPL"}, has_funds={"AAPL"})
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+    held = {"AAPL": _FakePosition("AAPL", 1, 100.0, 100.0, 100.0)}
+
+    report = ps.build_sync_report(
+        _FakeSnapshot(positions=held), fundamentals_from_store=True
+    )
+
+    assert provider.fundamentals_calls == []
+    assert report.symbols["AAPL"].has_fundamentals is False
+    assert "fundamentals:store_unavailable" in report.symbols["AAPL"].diagnostic
+
+
+def test_default_mode_still_probes_fundamentals_live(monkeypatch):
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from settings import settings
+
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+    provider = _CountingProvider(covered={"AAPL"}, has_funds={"AAPL"})
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+    held = {"AAPL": _FakePosition("AAPL", 1, 100.0, 100.0, 100.0)}
+
+    report = ps.build_sync_report(_FakeSnapshot(positions=held))
+
+    assert provider.fundamentals_calls == ["AAPL"]
+    assert report.symbols["AAPL"].coverage is ps.CoverageStatus.FULL
 
 
 # ---------------------------------------------------------------------------
@@ -975,3 +1126,155 @@ class TestLoadEnvWatchlist:
         monkeypatch.setattr(ps.settings, "WATCHLIST", "AAPL," + "X" * 40)
         got = ps.load_env_watchlist(str(tmp_path / "does_not_exist.txt"))
         assert got == ["AAPL"]
+
+
+# ---------------------------------------------------------------------------
+# prices_from_store: quotes/bars from the last stored daily close
+# ---------------------------------------------------------------------------
+
+
+class _QuoteCountingProvider(_FakeProvider):
+    """Records every live quote and bars call."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.quote_calls: list[str] = []
+        self.bars_calls: list[str] = []
+
+    def get_latest_quote(self, symbol: str):
+        self.quote_calls.append(symbol)
+        return super().get_latest_quote(symbol)
+
+    def get_intraday_bars(self, symbol: str, lookback_days: int = 5):
+        self.bars_calls.append(symbol)
+        return super().get_intraday_bars(symbol, lookback_days)
+
+
+def _store_with_bars(tmp_path, bars: dict[str, tuple[str, float]], funds=()):
+    from data.historical_store import HistoricalStore
+
+    db = tmp_path / "hist.db"
+    store = HistoricalStore(str(db))
+    conn = store._get_conn()
+    for sym, (date, close) in bars.items():
+        conn.execute(
+            "INSERT OR REPLACE INTO price_bars (symbol, date, open, high, low, "
+            "close, adj_close, volume, source, fetched_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'test', '2026-01-01')",
+            (sym, date, close, close, close, close, close, 1000),
+        )
+    conn.commit()
+    for sym in funds:
+        store._upsert_fundamentals(sym, _typed(pe_ratio=20.0), {"trailingPE": 20.0}, "test")
+    return str(db)
+
+
+def test_stored_price_lookup_flags_outdated_bars(monkeypatch, tmp_path):
+    from data import portfolio_sync as ps
+
+    db = _store_with_bars(tmp_path, {
+        "FRESH": ("2026-10-02", 50.0),   # Friday before a Saturday "today"
+        "OLD": ("2026-09-20", 40.0),
+        "ZERO": ("2026-10-02", 0.0),
+    })
+    _point_store_at(monkeypatch, db)
+    lookup = ps._stored_price_lookup(today=pd.Timestamp("2026-10-03"))
+
+    assert lookup("FRESH") == (50.0, False)
+    assert lookup("old") == (40.0, True)       # case-insensitive, outdated
+    assert lookup("ZERO") is None               # never a $0 price
+    assert lookup("MISSING") is None
+
+
+def test_stored_price_lookup_tolerates_holiday_gap(monkeypatch, tmp_path):
+    from data import portfolio_sync as ps
+
+    # Friday after Thanksgiving (Thu 2026-11-26): the newest bar is
+    # Wednesday's, 2 business days back, and must still count as current.
+    db = _store_with_bars(tmp_path, {"X": ("2026-11-25", 10.0)})
+    _point_store_at(monkeypatch, db)
+    lookup = ps._stored_price_lookup(today=pd.Timestamp("2026-11-27"))
+    assert lookup("X") == (10.0, False)
+
+
+def test_prices_from_store_skips_live_quotes_and_falls_back_for_gaps(monkeypatch, tmp_path):
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from settings import settings
+
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+    today = pd.Timestamp.now(tz="America/New_York").tz_localize(None).normalize()
+    fresh = (today - pd.tseries.offsets.BDay(1)).strftime("%Y-%m-%d")
+    db = _store_with_bars(
+        tmp_path,
+        {"AAPL": (fresh, 150.0), "STAL": ("2020-01-02", 9.0)},
+        funds=("AAPL", "STAL", "MSFT"),
+    )
+    _point_store_at(monkeypatch, db)
+    provider = _QuoteCountingProvider(
+        covered={"AAPL", "STAL", "MSFT"}, has_funds={"AAPL", "STAL", "MSFT"}
+    )
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+    held = {s: _FakePosition(s, 1, 100.0, 100.0, 100.0) for s in ("AAPL", "STAL", "MSFT")}
+
+    report = ps.build_sync_report(
+        _FakeSnapshot(positions=held),
+        fundamentals_from_store=True,
+        prices_from_store=True,
+    )
+
+    # Only MSFT (no stored bar) hits the network.
+    assert provider.quote_calls == ["MSFT"]
+    assert provider.bars_calls == ["MSFT"]
+
+    aapl = report.symbols["AAPL"]
+    assert aapl.coverage is ps.CoverageStatus.FULL
+    assert aapl.current_price == 150.0
+    assert aapl.is_stale_quote is True
+    assert aapl.quote_source == "price_bars (stored close)"
+
+    # An outdated stored bar is still priced, but coverage says STALE.
+    assert report.symbols["STAL"].coverage is ps.CoverageStatus.STALE
+    assert report.symbols["STAL"].current_price == 9.0
+
+    msft = report.symbols["MSFT"]
+    assert msft.coverage is ps.CoverageStatus.FULL
+    assert msft.quote_source == "fmp"
+
+
+def test_prices_from_store_unreadable_store_uses_live_probe(monkeypatch):
+    import data.historical_store as hs
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from settings import settings
+
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+
+    def _boom(*a, **k):
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr(hs, "HistoricalStore", _boom)
+    provider = _QuoteCountingProvider(covered={"AAPL"}, has_funds={"AAPL"})
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+    held = {"AAPL": _FakePosition("AAPL", 1, 100.0, 100.0, 100.0)}
+
+    report = ps.build_sync_report(_FakeSnapshot(positions=held), prices_from_store=True)
+
+    assert provider.quote_calls == ["AAPL"]
+    assert report.symbols["AAPL"].coverage is ps.CoverageStatus.FULL
+
+
+def test_default_mode_keeps_live_quotes(monkeypatch, tmp_path):
+    import data.market_data as md
+    from data import portfolio_sync as ps
+    from settings import settings
+
+    monkeypatch.setattr(settings, "SYNC_WATCHLIST_FILES", None)
+    db = _store_with_bars(tmp_path, {"AAPL": ("2026-10-02", 150.0)})
+    _point_store_at(monkeypatch, db)
+    provider = _QuoteCountingProvider(covered={"AAPL"}, has_funds={"AAPL"})
+    monkeypatch.setattr(md, "get_provider", lambda: provider)
+    held = {"AAPL": _FakePosition("AAPL", 1, 100.0, 100.0, 100.0)}
+
+    ps.build_sync_report(_FakeSnapshot(positions=held))
+    assert provider.quote_calls == ["AAPL"]

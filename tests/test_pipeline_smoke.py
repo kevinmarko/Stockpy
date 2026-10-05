@@ -179,19 +179,21 @@ class TestRunOncePipeline:
 
     @pytest.fixture(autouse=True)
     def _isolate_watchlist_file(self, monkeypatch, tmp_path):
-        """Point main.WATCHLIST_FILE at a nonexistent tmp path so these
+        """Point WATCHLIST_FILE at a nonexistent tmp path so these
         tests' universe-building assertions are deterministic regardless of
         whether a real watchlist.txt happens to exist in the repo root (e.g.
         one written by the Live Inventory "Sync Now" feature) -- these tests
         intend to exercise only the mocked positions / WATCHLIST env var,
         never whatever real watchlist.txt file a given checkout has on disk.
+        Patched on pipeline.advisory_inputs (where load_watchlist() reads it
+        since step 5.0), not on main's re-export, which would not reach it.
         """
-        import main as m
-        monkeypatch.setattr(m, "WATCHLIST_FILE", str(tmp_path / "nonexistent_watchlist.txt"))
+        import pipeline.advisory_inputs as ai
+        monkeypatch.setattr(ai, "WATCHLIST_FILE", str(tmp_path / "nonexistent_watchlist.txt"))
 
     @pytest.fixture(autouse=True)
     def _isolate_scan_discovery(self, monkeypatch):
-        """Neutralize main.discovery() for the same reason as
+        """Neutralize discovery() for the same reason as
         _isolate_watchlist_file above: _build_universe() unconditionally
         unions discovery()'s scan candidates into the universe, and
         pilots.discovery.discovery() reads settings.OUTPUT_DIR -- a
@@ -199,8 +201,8 @@ class TestRunOncePipeline:
         so a real ~/.stockpy_local/output/scan_candidates.json (e.g. from a
         real agentic-discovery skill run) would otherwise leak extra
         symbols into these tests' universe-size assertions."""
-        import main as m
-        monkeypatch.setattr(m, "discovery", lambda *a, **kw: {"candidates": []})
+        import pipeline.advisory_inputs as ai
+        monkeypatch.setattr(ai, "discovery", lambda *a, **kw: {"candidates": []})
 
     def _neutral_macro(self) -> MagicMock:
         m = MagicMock()
@@ -396,7 +398,7 @@ class TestAdvisoryTailoringRules:
 
         with patch("engine.advisory.ProcessingEngine", return_value=pe_mock), \
              patch("engine.advisory.ForecastingEngine", return_value=fe_mock), \
-             patch("engine.advisory.TechnicalOptionsEngine", return_value=toe_mock), \
+             patch("engine.advisory.GarchVolatilityEstimator", return_value=toe_mock), \
              patch("engine.advisory.StrategyEngine", return_value=se_mock):
 
             return evaluate(
@@ -634,7 +636,7 @@ class TestNoOrderFunctions:
     # place_* / submit_order / *_order function or class (only emit a gated
     # JSON queue; the Robinhood MCP placement happens in a Claude Code agent,
     # not in committed Python). Uses the STRICTER check from
-    # tests/test_pilots_mirror.py::TestNoOrderSymbols (exact names ∪
+    # legacy/tests/test_pilots_mirror.py (archived)::TestNoOrderSymbols (exact names ∪
     # startswith("place_") ∪ endswith("_order"), and FunctionDef/
     # AsyncFunctionDef/ClassDef all scanned) rather than the repo-wide scan's
     # looser ``_ORDER_NAMES ∪ startswith("place_")`` — the repo-wide check
@@ -657,9 +659,11 @@ class TestNoOrderFunctions:
     # scan (excluded: it lives under execution/) NOR this per-file check.
     # Audit finding: a real coverage gap (no live violation -- the file
     # currently defines no forbidden name), closed here.
+    # execution/options_queue_builder.py was archived to legacy/ (step 4b,
+    # options desk archive) -- it never had any active-code importer left,
+    # so it's no longer part of the live execution/ zone this guard covers.
     _EXECUTION_ZONE_GUARDED_FILES = (
         "execution/queue_builder.py",
-        "execution/options_queue_builder.py",
         "execution/compose.py",
         "execution/priority_queue.py",
         "execution/macro_snapshot.py",
@@ -678,7 +682,7 @@ class TestNoOrderFunctions:
     def _strict_forbidden_names_in(cls, path: Path) -> list[str]:
         """FunctionDef/AsyncFunctionDef/ClassDef names matching the stricter
         exact-names ∪ place_* ∪ *_order check (mirrors
-        tests/test_pilots_mirror.py::TestNoOrderSymbols._defined_names)."""
+        legacy/tests/test_pilots_mirror.py (archived)::TestNoOrderSymbols._defined_names)."""
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         found = []
         for node in ast.walk(tree):

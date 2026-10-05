@@ -208,6 +208,19 @@ export function RetrospectiveJournal() {
             value={bridge.data ? bridge.data.failed_count : bridge.loading ? "…" : "—"}
             tone={bridge.data && bridge.data.failed_count > 0 ? "neg" : undefined}
           />
+          {/* Deliberately not fed to the models (options, manual clicks,
+              delta hedges, untagged) -- neither a sync nor a failure. An
+              older backend omits the field, so render "—" rather than 0. */}
+          <Tile
+            label="Excluded from Models"
+            value={
+              bridge.data
+                ? bridge.data.excluded_count ?? "—"
+                : bridge.loading
+                ? "…"
+                : "—"
+            }
+          />
         </div>
       </section>
 

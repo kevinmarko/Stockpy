@@ -227,7 +227,7 @@ class ProcessingEngine:
                 # (not an exact `> 0`) guards against a near-zero-but-nonzero
                 # downside_std that's floating-point noise from a near-constant
                 # downside series, not real signal -- the same degenerate-std
-                # convention as risk/etf_transmission.py and
+                # convention as legacy/risk/etf_transmission.py and
                 # validation/metrics.py::sharpe_ratio.
                 sortino = float('nan')
                 if downside_std >= 1e-12:
@@ -748,7 +748,7 @@ def calculate_rolling_beta(
         # Degenerate-std guard (repo convention): a near-constant SPY window
         # produces a rolling_var that is near-zero but not exactly 0.0 due to
         # floating-point noise, which would otherwise explode beta. Mirrors
-        # risk/etf_transmission.py's `_DEGENERATE_STD` (1e-12) threshold.
+        # legacy/risk/etf_transmission.py's `_DEGENERATE_STD` (1e-12) threshold.
         beta = beta.mask(rolling_var < 1e-12, np.nan)
         beta.name = "Rolling_Beta"
         return beta

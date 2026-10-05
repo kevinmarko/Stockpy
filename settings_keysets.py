@@ -59,11 +59,11 @@ classifications. Nothing here changes any current runtime behavior.
     that module's own comment) and now carry no marker here at all — see
     ``HAND_SET_ONLY_KEYS`` below for where they live now.
 
-``api/pilots_api.py``'s five scoped editors
-    ``_TUNABLE_INDEX`` (46) / ``_SENTIMENT_INDEX`` (33) /
-    ``_SECTOR_SELECTION_INDEX`` (11) / ``_FMP_INDEX`` (24) /
-    ``_ETF_TRANSMISSION_INDEX`` (19) = 133 keys, each already shipped with its
-    own ``GET``/``PUT`` pair and write-permission gate.
+``api/pilots_api.py``'s scoped editors
+    ``_TUNABLE_INDEX`` / ``_SENTIMENT_INDEX`` / ``_SECTOR_SELECTION_INDEX`` /
+    ``_FMP_INDEX``, each already shipped with its own ``GET``/``PUT`` pair and
+    write-permission gate. (An ``_ETF_TRANSMISSION_INDEX`` editor existed until
+    the ETF feature was archived in 2026-09.)
 
 ``docs/settings_liveness.json``
     Per-field ``live_safe`` / ``restart_required`` / ``no_op``. Necessary
@@ -286,43 +286,38 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "alongside ADVISORY_ONLY and the kill switch as one of the "
         "independent execution gates that must not be weakened."
     ),
+    "DAEMON_AGENTIC_QUEUE_MODE": (
+        "off | shadow | primary. Decides which process writes the Robinhood "
+        "execution queue the robinhood-execution skill places orders from. "
+        "'primary' (step 5.3) hands the real queue to the orchestrator "
+        "daemon, so a silent flip changes where real trade proposals come "
+        "from. Same risk class as ROBINHOOD_EXECUTION_MODE, hence typed "
+        "confirmation."
+    ),
     "MACRO_REGIME_GATE_ENABLED": (
         "The recession/credit-event BUY veto. When True, "
         "MacroEconomicDTO.killSwitch (Sahm Rule >= 0.5, VIX > 30, or HY OAS "
         "> 6%) vetoes new BUY orders. Setting it False bypasses that veto "
         "entirely — and scripts/preflight_check.py treats gate-off as a "
-        "BLOCKING pre-live failure when ALPACA_PAPER=False, which is the "
+        "BLOCKING pre-live failure when PAPER_TRADING=False, which is the "
         "repo's own statement that this is not a routine toggle."
     ),
-    "OFI_SHIELD_ENABLED": (
-        "Fail-closed extension to the Flash Crash (OFI+VPIN) circuit-breaker "
-        "shield (execution/dynamic_circuit_breaker.py) — when True, a "
-        "missing VPIN reading forces an unconditional SOFT_HALT that blocks "
-        "all risk-increasing BUY orders platform-wide via the same "
-        "GlobalKillSwitch surface MACRO_REGIME_GATE_ENABLED gates. A silent "
-        "flip via a settings-editor write changes live order-blocking "
-        "behavior the same way that flag does."
-    ),
     "BROKER_BACKEND": (
-        "Selects which broker actually receives orders: 'alpaca' (real "
-        "broker) vs. 'fmp_paper' (a local SQLite paper ledger via "
-        "execution/fmp_paper_broker.py -- no order ever reaches a real "
-        "market). execution/broker_selection.py::resolve_broker_backend() "
-        "now force-falls-back to 'alpaca' with a CRITICAL alert when this "
-        "is 'fmp_paper' AND the run is genuinely going live "
-        "(ADVISORY_ONLY=False and ALPACA_PAPER=False), and both "
-        "main_orchestrator.py and robinhood_execution_mcp.py route through "
-        "that one shared guard. But a runtime guard on the CONSTRUCTED "
-        "broker is not the same protection as gating the SETTING itself --"
-        " a silent flip via a settings-editor write is still the single "
-        "field that decides whether an order is real or a paper no-op, "
-        "matching the same justification MACRO_REGIME_GATE_ENABLED already "
-        "gets in this same dict."
+        "Selects which broker receives the pipeline's orders. Since Alpaca "
+        "was removed (2026-09-30) 'fmp_paper' (a local SQLite paper ledger "
+        "via execution/fmp_paper_broker.py -- no order ever reaches a real "
+        "market) is the only accepted value, and "
+        "execution/broker_selection.py::resolve_broker_backend() returns None "
+        "(no automated orders at all) when the run is going live "
+        "(ADVISORY_ONLY=False and PAPER_TRADING=False). Kept under typed "
+        "confirmation because it is still the one field that names where "
+        "the pipeline's orders go, matching the justification "
+        "MACRO_REGIME_GATE_ENABLED gets in this same dict."
     ),
     "LIVE_TRADE_EXECUTION_ENABLED": (
         "Master switch for broker_live_execution_mcp.py's execute_live_trade/"
         "confirm_live_trade tool pair -- the only MCP-driven path that can "
-        "place a real Alpaca/FMP order. A silent flip here is what lets that "
+        "submit an order through the configured broker. A silent flip here is what lets that "
         "path attempt order submission at all."
     ),
     "LIVE_TRADE_APPROVAL_ENABLED": (
@@ -381,10 +376,12 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "operator's actual brokerage account bypassing the daily cache — "
         "not a simulated or sandboxed action."
     ),
-    "CACHE_LONG_SHORT_WRITES_ENABLED": (
-        "Gates POST /pilots/cache-long-short/{start,approve-bulk}, which "
-        "persists a new tracked position or approves a TLH recommendation — "
-        "changes what a trading strategy recommends."
+    "ROBINHOOD_SCHEDULED_LOGIN_ENABLED": (
+        "Makes the orchestrator daemon start a real Robinhood device-approval "
+        "login against the operator's actual brokerage account every "
+        "weekday at ROBINHOOD_SCHEDULED_LOGIN_TIME_ET, pushing an approval "
+        "prompt to their phone -- same risk class as BROKERAGE_REFRESH_ENABLED, "
+        "but unattended and recurring."
     ),
     "COMMAND_EXECUTION_ENABLED": (
         "The highest-risk flag in this group: enables the 'command' job "
@@ -394,11 +391,18 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
     ),
     "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED": (
         "Bridges simulated PaperAccountStore closed trades into the real "
-        "transactions_store 'trades' ledger, which has no paper/live "
-        "discriminator column and feeds strategy_engine.py, "
-        "main_orchestrator.py, pilots/mirror.py, and MCP reporting tools -- "
-        "enabling it mixes simulated PnL into what those consumers report "
-        "as real performance."
+        "transactions_store 'trades' ledger (default ON since 2026-09, "
+        "signal-driven equity trades only), which has no paper/live "
+        "discriminator column and feeds strategy_engine.py's Kelly sizing, "
+        "main_orchestrator.py, and MCP reporting tools -- "
+        "toggling it changes what those consumers learn from and report."
+    ),
+    "PAPER_PIPELINE_PROBE_WEIGHT": (
+        "Turns on automated cold-start paper orders (a fraction of paper equity "
+        "per zero-Kelly BUY). Their closed trades are bridged into the "
+        "transactions_store 'trades' ledger that production Kelly reads "
+        "unfiltered, so changing it changes what live sizing learns from -- "
+        "same blast radius as PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED."
     ),
     "DEAD_LETTER_RETRY_ENABLED": (
         "Gates POST /dead-letter/retry, which spawns a real main.py "

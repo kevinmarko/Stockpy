@@ -183,6 +183,40 @@ class TestSchemaVersion:
         assert store.get_schema_version() == 999
         assert any("NEWER" in rec.message for rec in caplog.records)
 
+    def test_newer_version_warns_once_per_process(self, tmp_path, caplog):
+        """HistoricalStore is constructed per call site, so the NEWER warning
+        must not repeat on every construction (it flooded the daemon log at
+        ~3,000 lines/day). Later constructions still log it at DEBUG."""
+        import logging
+
+        db = str(tmp_path / "test.db")
+        HistoricalStore(db_path=db)
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE schema_version SET version = 998 WHERE id = 1")
+            conn.commit()
+
+        with caplog.at_level(logging.DEBUG, logger="data.historical_store"):
+            for _ in range(5):
+                HistoricalStore(db_path=db)
+
+        newer = [r for r in caplog.records if "NEWER" in r.getMessage()]
+        assert len(newer) == 5
+        assert [r.levelno for r in newer].count(logging.WARNING) == 1
+        assert db in newer[0].getMessage()
+
+    def test_bare_construction_never_resolves_to_live_db(self, tmp_path):
+        """Regression guard for conftest.py's
+        _isolate_historical_store_db_in_tests: a bare HistoricalStore() in a
+        test must land in this test's tmp_path, never the operator's real
+        quant_platform.db (where test runs once wrote a stray
+        schema_version=2 stamp)."""
+        import db_config
+
+        store = HistoricalStore()
+        assert store._db_path != db_config.DEFAULT_DATABASE_URL
+        assert str(tmp_path) in store._db_path
+        assert store.get_schema_version() is not None
+
     def test_get_schema_version_none_when_unset(self, tmp_path):
         """A row-less schema_version table (e.g. DB predating this stamp)
         degrades to None, never a fabricated version number."""
@@ -1787,7 +1821,7 @@ class TestAnalystHistory:
         assert store.get_analyst_snapshot("AAPL")["target_consensus"] is None
 
     def test_as_of_cutoff_excludes_later_rows(self, tmp_path):
-        """Storage-layer causality, same contract as get_etf_holdings."""
+        """Storage-layer causality: rows dated after the cutoff are excluded."""
         store = HistoricalStore(db_path=str(tmp_path / "t.db"))
         store.upsert_analyst_snapshot("AAPL", "2026-06-01", target_consensus=200.0)
         store.upsert_analyst_snapshot("AAPL", "2026-07-30", target_consensus=250.0)
@@ -2128,3 +2162,36 @@ class TestSourceNamePrefersEmbeddedSource:
             pass
 
         assert _source_name(FakeProvider()) == "fakeprovider"
+
+
+class TestEtfHoldingsTableRetired:
+    """Step 4f: HistoricalStore stopped creating/reading ``etf_holdings`` (its
+    only writer, data/etf_holdings.py, was archived in 4d). It must NOT drop
+    the table from an existing operator DB."""
+
+    def test_fresh_db_has_no_etf_holdings_table(self, tmp_path):
+        db = tmp_path / "fresh.db"
+        HistoricalStore(db_path=str(db))
+        with sqlite3.connect(db) as conn:
+            names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "etf_holdings" not in names
+        assert not hasattr(HistoricalStore, "get_etf_holdings")
+        assert not hasattr(HistoricalStore, "save_etf_holdings")
+        assert not hasattr(HistoricalStore, "latest_etf_holdings_date")
+
+    def test_existing_etf_holdings_table_and_rows_are_left_alone(self, tmp_path):
+        db = tmp_path / "old.db"
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "CREATE TABLE etf_holdings (etf_symbol TEXT NOT NULL, holding_symbol TEXT NOT NULL, "
+                "as_of_date TEXT NOT NULL, weight REAL, shares_held REAL, source TEXT, "
+                "fetched_at TEXT NOT NULL, PRIMARY KEY (etf_symbol, holding_symbol, as_of_date))"
+            )
+            conn.execute(
+                "INSERT INTO etf_holdings VALUES "
+                "('SPY', 'AAPL', '2026-06-30', 0.07, 1.0, 'sec_nport', '2026-08-01')"
+            )
+        HistoricalStore(db_path=str(db))
+        with sqlite3.connect(db) as conn:
+            rows = conn.execute("SELECT etf_symbol, holding_symbol, weight FROM etf_holdings").fetchall()
+        assert rows == [("SPY", "AAPL", 0.07)]

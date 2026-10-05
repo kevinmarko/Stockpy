@@ -48,7 +48,7 @@ export function ExecutionModeProvider({ children }: { children: ReactNode }) {
     ? "UNKNOWN"
     : data.advisory_only
     ? "ADVISORY"
-    : data.alpaca_paper
+    : data.paper_trading
     ? "PAPER"
     : "LIVE";
 
@@ -58,7 +58,7 @@ export function ExecutionModeProvider({ children }: { children: ReactNode }) {
     killSwitchActive: data?.kill_switch?.active ?? false,
     killSwitchReason: data?.kill_switch?.reason ?? null,
     dryRun: data?.dry_run ?? true,
-    alpacaPaper: data?.alpaca_paper ?? true,
+    paperTrading: data?.paper_trading ?? true,
     loading,
     error: error != null ? String(error) : null,
     reload,

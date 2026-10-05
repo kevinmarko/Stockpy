@@ -51,7 +51,6 @@ from data.historical_store import HistoricalStore
 from data.market_data import MarketDataError, get_provider
 from processing_engine import ProcessingEngine
 from forecasting_engine import ForecastingEngine
-from technical_options_engine import build_premium_directive, validate_directive_integrity
 from sentiment_risk_engine import SentimentRiskEngine
 from signals.news_catalyst import get_symbol_news_catalyst_details
 from signals.registry import global_registry
@@ -138,22 +137,6 @@ _MACRO_DEFAULT_VIX = 15.0
 _MACRO_DEFAULT_REGIME = "RISK ON"
 
 
-def _macro_from_snapshot() -> tuple:
-    """Extract ``(vix, market_regime)`` from the persisted state snapshot,
-    falling back to neutral defaults when unavailable/malformed. Mirrors
-    ``options_ondemand.py::macro_from_snapshot``. Never raises."""
-    snapshot = load_snapshot()
-    if not isinstance(snapshot, dict):
-        return _MACRO_DEFAULT_VIX, _MACRO_DEFAULT_REGIME
-    raw_vix = snapshot.get("vix")
-    try:
-        vix = float(raw_vix) if raw_vix is not None else _MACRO_DEFAULT_VIX
-    except (TypeError, ValueError):
-        vix = _MACRO_DEFAULT_VIX
-    regime = str(snapshot.get("market_regime") or _MACRO_DEFAULT_REGIME)
-    return vix, regime
-
-
 @app.get("/health")
 def health_check() -> Dict[str, str]:
     return {"status": "ok", "service": "metrics_api"}
@@ -222,47 +205,6 @@ def get_forecast(symbol: str) -> Dict[str, Any]:
     payload = dict(result)
     payload["attention"] = engine.last_bert_lla_attention
     return _clean_nan(payload)
-
-
-@app.get("/metrics/options/{symbol}", dependencies=[Depends(require_token)])
-def get_options(symbol: str) -> Dict[str, Any]:
-    """Hydrated premium-selling directive for ``symbol`` (NaN → null).
-
-    Uses ``build_premium_directive`` — the public dict-returning helper
-    (``TechnicalOptionsEngine.generate_option_strategy_matrix`` takes
-    ``(true_ivr, aroon_osc, coppock_val, ...)`` and returns a *string*, so it is
-    NOT the right call here). Integrity verdict is merged in.
-    """
-    symbol = symbol.upper()
-    bars = _fetch_bars(symbol, 252)
-    if bars is None:
-        raise HTTPException(status_code=404, detail=f"No bar data available for {symbol}")
-    is_stale = True
-    try:
-        quote = get_provider().get_latest_quote(symbol)
-        spot = float(quote.price)
-        is_stale = bool(quote.is_stale)
-    except Exception:
-        spot = float(bars["Close"].iloc[-1])
-    try:
-        vix, market_regime = _macro_from_snapshot()
-        macro_proxy = _MacroProxy(vix, market_regime)
-        directive = build_premium_directive(
-            symbol,
-            bars,
-            spot_price=spot,
-            is_stale=is_stale,
-            macro_dto=macro_proxy,
-            vrp=None,  # VRP requires an options chain — left None to skip that gate
-        )
-        integrity = validate_directive_integrity(directive)
-        directive = dict(directive)
-        directive["Integrity_OK"] = bool(integrity.get("ok"))
-        directive["Integrity_Issues"] = integrity.get("issues", [])
-    except Exception as exc:
-        logger.warning("metrics_api: options directive failed for %s: %s", symbol, exc)
-        raise HTTPException(status_code=404, detail="Options directive unavailable")
-    return _clean_nan(directive)
 
 
 @app.get("/metrics/sentiment/{symbol}", dependencies=[Depends(require_token)])
@@ -657,10 +599,4 @@ def get_model_comparison() -> Dict[str, Any]:
     """
     return _clean_nan({"data": [], "is_synthetic": True})
 
-
-@app.get("/metrics/options/analytics/{symbol}", dependencies=[Depends(require_token)])
-def get_options_analytics(symbol: str) -> Dict[str, Any]:
-    """0DTE options analytics, net dealer premium, and theta decay series."""
-    from execution.options_analytics import get_options_analytics_summary
-    return _clean_nan(get_options_analytics_summary(symbol))
 

@@ -47,162 +47,24 @@ def get_closed_trades(symbol: Optional[str] = None, limit: int = 100) -> List[Di
     store = PaperAccountStore(readonly=True)
     return store.get_full_closed_trades(symbol=symbol, limit=limit)
 
-def execute_paper_order(
+def execute_equity_order(
     symbol: str,
     *,
-    asset_type: str = "option",
     side: str = "buy",
     quantity: Optional[float] = None,
     dollar_amount: Optional[float] = None,
     order_type: str = "market",
     limit_price: Optional[float] = None,
-    expiration: Optional[str] = None,
-    legs: Optional[List[Dict[str, Any]]] = None,
     is_live: bool = False,
-    strategy_id: Optional[str] = None,
-    pilot_id: Optional[str] = None,
-    provenance: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Executes a paper order for stock or options, updating PaperAccountStore.
-    Delegates directly to pilots.paper_broker_options_order.execute_paper_order.
-
-    strategy_id/pilot_id/provenance are optional attribution overrides for a
-    non-human (automated writer) caller -- see that function's own docstring.
-    """
-    from pilots.paper_broker_options_order import execute_paper_order as _exec_order
-    return _exec_order(
-        symbol=symbol,
-        asset_type=asset_type,
+    """Manual equity paper order (Quick Trade). See pilots.paper_equity_order."""
+    from pilots.paper_equity_order import execute_equity_order as _exec_equity
+    return _exec_equity(
+        symbol,
         side=side,
         quantity=quantity,
         dollar_amount=dollar_amount,
         order_type=order_type,
         limit_price=limit_price,
-        expiration=expiration,
-        legs=legs,
         is_live=is_live,
-        strategy_id=strategy_id,
-        pilot_id=pilot_id,
-        provenance=provenance,
     )
-
-def get_strategy_options_candidates(symbols: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    """Fetches current gate-passing strategy option directives ready for automated paper execution."""
-    from execution.options_paper_executor import OptionsPaperExecutor
-    executor = OptionsPaperExecutor()
-    return executor.get_actionable_directives(symbols=symbols)
-
-def execute_strategy_options(
-    symbols: Optional[List[str]] = None,
-    dry_run: bool = False,
-    max_notional: Optional[float] = None
-) -> Dict[str, Any]:
-    """Executes automated strategy option trades into the paper broker."""
-    from execution.options_paper_executor import OptionsPaperExecutor
-    executor = OptionsPaperExecutor()
-    directives = executor.get_actionable_directives(symbols=symbols)
-    return executor.execute_strategy_directives(
-        directives=directives,
-        dry_run=dry_run,
-        max_notional_per_order=max_notional
-    )
-
-def get_portfolio_greeks() -> Dict[str, Any]:
-    """Computes aggregate net portfolio Greeks across all open paper positions.
-
-    Resolves a real SPY quote up front via ``pilots.price_provider`` (the
-    same helper ``pilots.options_hedging.get_delta_hedge_preview`` already
-    uses) and threads it into ``calculate_portfolio_greeks`` explicitly --
-    that function used to silently fabricate a $500.0 SPY price whenever no
-    SPY position happened to be held (CONSTRAINT #4 violation; see
-    docs/known_issues/options_risk_fabricated_spy_spot.md). Passing ``None``
-    on a failed resolution here is intentional: calculate_portfolio_greeks
-    still attempts its own real quote resolution via the market data
-    provider as a second, independent chance, and never fabricates a price
-    either way.
-    """
-    from pilots.options_risk import calculate_portfolio_greeks
-    from pilots.price_provider import get_current_price
-    store = PaperAccountStore(readonly=True)
-    spy_spot = get_current_price("SPY")
-    return calculate_portfolio_greeks(
-        store=store,
-        spy_spot=spy_spot if spy_spot and spy_spot > 0 else None,
-    )
-
-
-def manage_position_exits(
-    dry_run: bool = False,
-    profit_target_pct: Optional[float] = None,
-    stop_loss_multiple: Optional[float] = None,
-    manage_dte_threshold: Optional[int] = None,
-) -> Dict[str, Any]:
-    """Evaluates open positions against profit/stop/DTE rules and executes auto-exits."""
-    from execution.options_paper_executor import OptionsPaperExecutor
-    executor = OptionsPaperExecutor()
-    candidates = executor.evaluate_position_exits(
-        profit_target_pct=profit_target_pct,
-        stop_loss_multiple=stop_loss_multiple,
-        manage_dte_threshold=manage_dte_threshold,
-    )
-    return executor.execute_auto_exits(exit_candidates=candidates, dry_run=dry_run)
-
-
-def execute_roll(
-    symbol: str,
-    close_legs: List[Dict[str, Any]],
-    open_legs: List[Dict[str, Any]],
-    limit_price: Optional[float] = None,
-    contracts: int = 1,
-    is_live: bool = False,
-) -> Dict[str, Any]:
-    """Executes an atomic multi-leg roll in the paper broker."""
-    if is_live:
-        return {
-            "ok": False,
-            "message": "Advisory-Only Mode: Live roll order execution is disabled. "
-                       "Multi-leg roll proposals must be reviewed and executed via Robinhood directly."
-        }
-
-    from datetime import datetime, timezone
-    store = PaperAccountStore()
-    client_order_id = f"ROLL-{symbol}-{int(datetime.now(timezone.utc).timestamp())}"
-
-    # "Manual Trade" is intentional here, not a placeholder: execute_roll has
-    # no strategy_id/strategy_name parameter of its own, and neither does its
-    # one caller (POST /pilots/paper-broker/roll's RollOrderRequest) or the
-    # webapp's PaperBroker.tsx roll dialog, which only ever sends
-    # symbol/close_legs/open_legs/limit_price/contracts -- this is the
-    # operator manually rolling a position from the Paper Broker screen, with
-    # no automated-strategy context to thread through (see docs/known_issues/
-    # paper_trade_strategy_id_vocabulary.md).
-    success = store.apply_roll_fill(
-        client_order_id=client_order_id,
-        symbol=symbol,
-        close_legs=close_legs,
-        open_legs=open_legs,
-        contracts=contracts,
-        limit_price=limit_price,
-        strategy_id="Manual Trade",
-    )
-
-    if success:
-        return {
-            "ok": True,
-            "order_id": client_order_id,
-            "symbol": symbol,
-            "contracts": contracts,
-            "message": f"Successfully rolled {contracts} contract(s) for {symbol}",
-        }
-    else:
-        return {
-            "ok": False,
-            "order_id": client_order_id,
-            "symbol": symbol,
-            "contracts": contracts,
-            "message": f"Roll fill failed for {symbol}: insufficient cash or database lock",
-        }
-
-
-

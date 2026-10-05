@@ -845,3 +845,36 @@ class TestSkillMdInvariantsPinned:
                     f"Missing output-directory-resolution phrase in "
                     f"{skill_md_path}: '{phrase}'"
                 )
+
+    def test_skill_md_refreshes_the_queue_through_the_daemon_in_primary(self):
+        """Step 5.3: with DAEMON_AGENTIC_QUEUE_MODE=primary the daemon writes
+        the queue, so both SKILL.md copies must teach the agent to trigger a
+        daemon cycle (POST /run via shared.daemon_client) and poll it to a
+        terminal state -- while keeping the unchanged freshness rule and the
+        main.py guidance for when the daemon is not primary."""
+        candidate_paths = [
+            Path(".claude/skills/robinhood-execution/SKILL.md"),
+            Path(".agents/skills/robinhood-execution/SKILL.md"),
+        ]
+        skill_md_paths = [p for p in candidate_paths if p.exists()]
+        assert skill_md_paths, f"Could not find any of {candidate_paths}"
+        required_phrases = [
+            "DAEMON_AGENTIC_QUEUE_MODE",
+            "`primary`",
+            "from shared import daemon_client",
+            "trigger_run(",
+            "get_run_status(",
+            "already_running",
+            '("succeeded", "failed")',
+            "kill_switch_active",
+            "**`off` or `shadow`**",
+            "python3 main.py",
+            "more than ~30 minutes old",
+            "This rule is unchanged in `primary`",
+        ]
+        for skill_md_path in skill_md_paths:
+            content = skill_md_path.read_text(encoding="utf-8")
+            for phrase in required_phrases:
+                assert phrase in content, (
+                    f"Missing daemon-refresh phrase in {skill_md_path}: '{phrase}'"
+                )

@@ -39,7 +39,7 @@ def test_strategy_engine_buy_range_and_options_overlays_parity(monkeypatch):
     assert result_equity["Action Signal"] == "STRONG BUY"
     assert result_equity["Score"] == 80
     assert result_equity["buyRange"] == "Buy Zone: $149.62 - $157.50"
-    assert "OTM Covered Call (delta-20)" in result_equity["Option Strategy"]
+    assert "Option Strategy" not in result_equity  # options overlay removed (steps 3d, 4f)
 
     # Scenario B: REIT high-yielder (AGNC) in Buy Setup
     bar_reit = MarketBarDTO(datetime.now(), "AGNC", 9.80, 10.05, 9.75, 9.85, 2500000)
@@ -55,7 +55,7 @@ def test_strategy_engine_buy_range_and_options_overlays_parity(monkeypatch):
     )
 
     assert result_reit["Action Signal"] in ["BUY", "STRONG BUY"]
-    assert "OTM Covered Call (delta-15)" in result_reit["Option Strategy"]
+    assert "Option Strategy" not in result_reit  # options overlay removed (steps 3d, 4f)
 
     # Scenario C: JNJ in Neutral HOLD setup (Price = 157.50, flat forecast, weakening trend)
     result_hold = engine.evaluate_security(

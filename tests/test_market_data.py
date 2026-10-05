@@ -6,14 +6,11 @@ Offline unit tests for data/market_data.py.
 All network I/O is monkeypatched.  The suite verifies:
   - Quote dataclass is frozen and fields are typed correctly
   - _QuoteCache honours TTL and eviction
-  - AlpacaProvider shapes the bar DataFrame to the expected OHLCV contract
   - YFinanceProvider marks quotes is_stale=True unconditionally
   - YFinanceProvider raises MarketDataError on empty bar response
-  - FinnhubProvider maps metric names to yfinance .info keys
-  - FinnhubProvider degrades gracefully (empty dict) when key is absent
-  - CompositeProvider selects Alpaca when keys are set
-  - CompositeProvider selects yfinance when Alpaca keys are absent
+  - CompositeProvider selects yfinance when MARKET_DATA_PROVIDER is unset
   - CompositeProvider raises RuntimeError on unknown MARKET_DATA_PROVIDER value
+    (including 'alpaca', removed 2026-09-30)
   - CompositeProvider caches quotes and avoids redundant provider calls
   - CompositeProvider routes fundamentals to YahooFundamentalsProvider (primary)
     and falls back to raw yfinance .info when the primary returns {}
@@ -107,7 +104,7 @@ class TestQuote:
             ask=175.1,
             timestamp=datetime.now(timezone.utc),
             is_stale=False,
-            source="alpaca",
+            source="fmp",
         )
         defaults.update(overrides)
         return Quote(**defaults)
@@ -136,7 +133,7 @@ class TestQuote:
 # ---------------------------------------------------------------------------
 
 class TestQuoteCache:
-    def _make_quote(self, symbol="AAPL", price=100.0, is_stale=False, source="alpaca"):
+    def _make_quote(self, symbol="AAPL", price=100.0, is_stale=False, source="fmp"):
         from data.market_data import Quote
         return Quote(
             symbol=symbol, price=price, bid=99.9, ask=100.1,
@@ -192,214 +189,9 @@ class TestQuoteCache:
         assert cache.get("MSFT").price == 200.0
 
 
-# ---------------------------------------------------------------------------
-# 3. AlpacaProvider
-# ---------------------------------------------------------------------------
-
-class TestAlpacaProvider:
-    """Tests AlpacaProvider with alpaca-py SDK fully mocked."""
-
-    def _make_mock_client(self, bid=174.9, ask=175.1, ts_utc=None):
-        """Build a mock StockHistoricalDataClient."""
-        if ts_utc is None:
-            ts_utc = datetime.now(timezone.utc)
-        mock_quote = MagicMock()
-        mock_quote.bid_price = bid
-        mock_quote.ask_price = ask
-        mock_quote.timestamp = ts_utc
-
-        mock_client = MagicMock()
-        mock_client.get_stock_latest_quote.return_value = {"AAPL": mock_quote}
-        return mock_client
-
-    def _make_bar_df(self, symbol="AAPL"):
-        dates = pd.date_range("2025-01-01", periods=5, freq="B", tz="UTC")
-        idx = pd.MultiIndex.from_tuples(
-            [(symbol, d) for d in dates], names=["symbol", "timestamp"]
-        )
-        return pd.DataFrame(
-            {"open": [100.0]*5, "high": [101.0]*5, "low": [99.0]*5,
-             "close": [100.5]*5, "volume": [1000]*5},
-            index=idx,
-        )
-
-    def test_get_latest_quote_source_alpaca(self):
-        from data.market_data import AlpacaProvider
-        provider = AlpacaProvider.__new__(AlpacaProvider)
-        provider._api_key = "k"
-        provider._secret_key = "s"
-        provider._stale_threshold = 60
-        provider._client = self._make_mock_client()
-
-        with patch("alpaca.data.requests.StockLatestQuoteRequest"):
-            quote = provider.get_latest_quote("AAPL")
-
-        assert quote.source == "alpaca"
-        assert quote.symbol == "AAPL"
-        assert quote.price == pytest.approx((174.9 + 175.1) / 2, abs=1e-6)
-
-    def test_get_latest_quote_stale_when_old(self):
-        from data.market_data import AlpacaProvider
-        old_ts = datetime(2000, 1, 1, tzinfo=timezone.utc)
-        provider = AlpacaProvider.__new__(AlpacaProvider)
-        provider._api_key = "k"
-        provider._secret_key = "s"
-        provider._stale_threshold = 60
-        provider._client = self._make_mock_client(ts_utc=old_ts)
-
-        with patch("alpaca.data.requests.StockLatestQuoteRequest"):
-            quote = provider.get_latest_quote("AAPL")
-        assert quote.is_stale is True
-
-    def test_get_latest_quote_raises_market_data_error(self):
-        from data.market_data import AlpacaProvider, MarketDataError
-        provider = AlpacaProvider.__new__(AlpacaProvider)
-        provider._api_key = "k"
-        provider._secret_key = "s"
-        provider._stale_threshold = 60
-        provider._client = MagicMock(
-            get_stock_latest_quote=MagicMock(side_effect=RuntimeError("network error"))
-        )
-        with patch("alpaca.data.requests.StockLatestQuoteRequest"):
-            with pytest.raises(MarketDataError):
-                provider.get_latest_quote("AAPL")
-
-    def test_get_intraday_bars_shape(self):
-        from data.market_data import AlpacaProvider
-        provider = AlpacaProvider.__new__(AlpacaProvider)
-        provider._api_key = "k"
-        provider._secret_key = "s"
-        provider._stale_threshold = 60
-
-        mock_resp = MagicMock()
-        mock_resp.df = self._make_bar_df("AAPL")
-        provider._client = MagicMock(get_stock_bars=MagicMock(return_value=mock_resp))
-
-        with patch("alpaca.data.requests.StockBarsRequest"), \
-             patch("alpaca.data.timeframe.TimeFrame"):
-            df = provider.get_intraday_bars("AAPL", lookback_days=5)
-
-        assert set(["Open", "High", "Low", "Close", "Volume"]).issubset(df.columns)
-        assert df.index.tz is None, "Index must be timezone-naive to match existing pipeline"
-        assert df.index.is_monotonic_increasing
-
-    def test_get_intraday_bars_hourly_interval_keeps_intraday_timestamp(self):
-        """Phase-1 audit item B2: interval='1h' must not normalize the index
-        to midnight (that would collapse same-day excursion resolution)."""
-        from data.market_data import AlpacaProvider
-        provider = AlpacaProvider.__new__(AlpacaProvider)
-        provider._api_key = "k"
-        provider._secret_key = "s"
-        provider._stale_threshold = 60
-
-        mock_resp = MagicMock()
-        mock_resp.df = self._make_bar_df("AAPL")
-        provider._client = MagicMock(get_stock_bars=MagicMock(return_value=mock_resp))
-
-        with patch("alpaca.data.requests.StockBarsRequest"), \
-             patch("alpaca.data.timeframe.TimeFrame"):
-            df = provider.get_intraday_bars("AAPL", lookback_days=5, interval="1h")
-
-        assert set(["Open", "High", "Low", "Close", "Volume"]).issubset(df.columns)
-        assert df.index.tz is None
-        assert df.index.is_monotonic_increasing
-
-    def test_get_intraday_bars_unsupported_interval_raises(self):
-        from data.market_data import AlpacaProvider, MarketDataError
-        provider = AlpacaProvider.__new__(AlpacaProvider)
-        provider._api_key = "k"
-        provider._secret_key = "s"
-        provider._stale_threshold = 60
-        provider._client = MagicMock()
-        with pytest.raises(MarketDataError):
-            provider.get_intraday_bars("AAPL", lookback_days=5, interval="5m")
-
-    def test_get_fundamentals_returns_empty(self):
-        from data.market_data import AlpacaProvider
-        provider = AlpacaProvider.__new__(AlpacaProvider)
-        provider._api_key = "k"
-        provider._secret_key = "s"
-        provider._stale_threshold = 60
-        provider._client = MagicMock()
-        assert provider.get_fundamentals("AAPL") == {}
-
-
-# ---------------------------------------------------------------------------
-# 3b. AlpacaProvider._build_client() -- 2026-08 HTTP-timeout-hardening fix.
-# ---------------------------------------------------------------------------
-# StockHistoricalDataClient subclasses the same alpaca-py RESTClient as
-# execution/alpaca_broker.py's TradingClient, which exposes no timeout of
-# its own (confirmed against the installed source) -- get_latest_quote /
-# get_intraday_bars used to be able to block forever on a stalled
-# connection. See data/alpaca_http.py's module docstring and
-# tests/test_alpaca_http.py for full coverage of the adapter itself; these
-# tests are spy assertions on the actual _build_client() call, not a
-# re-statement of the docstring's claim.
-#
-# mount_timeout_adapter is imported LOCALLY inside _build_client()
-# (``from data.alpaca_http import mount_timeout_adapter``), so it must be
-# patched at its DEFINITION site (data.alpaca_http.mount_timeout_adapter) --
-# verified empirically before writing these tests: patching
-# data.alpaca_http.mount_timeout_adapter before constructing AlpacaProvider()
-# does intercept the call, since the local ``from X import Y`` re-resolves
-# X.Y at the moment _build_client() actually runs.
-# ---------------------------------------------------------------------------
-
-class TestAlpacaProviderBuildClientTimeoutWiring:
-    def test_build_client_mounts_timeout_adapter_on_real_client_session(self):
-        from settings import settings
-
-        fake_client = MagicMock()
-        with patch(
-            "alpaca.data.historical.StockHistoricalDataClient",
-            return_value=fake_client,
-        ), patch("data.alpaca_http.mount_timeout_adapter") as _mount:
-            from data.market_data import AlpacaProvider
-            provider = AlpacaProvider(api_key="k", secret_key="s")
-
-        assert provider._client is fake_client
-        _mount.assert_called_once_with(
-            fake_client._session, settings.ALPACA_REQUEST_TIMEOUT_SECONDS
-        )
-
-    def test_build_client_honors_a_monkeypatched_timeout_setting(self, monkeypatch):
-        from settings import settings
-        monkeypatch.setattr(settings, "ALPACA_REQUEST_TIMEOUT_SECONDS", 42.0)
-
-        fake_client = MagicMock()
-        with patch(
-            "alpaca.data.historical.StockHistoricalDataClient",
-            return_value=fake_client,
-        ), patch("data.alpaca_http.mount_timeout_adapter") as _mount:
-            from data.market_data import AlpacaProvider
-            AlpacaProvider(api_key="k", secret_key="s")
-
-        _mount.assert_called_once_with(fake_client._session, 42.0)
-
-    def test_build_client_mount_runs_for_real_against_the_client_session(self):
-        """Unpatched mount_timeout_adapter: the real function must run
-        synchronously inside _build_client() and mount a genuine
-        _TimeoutHTTPAdapter on both schemes of the client's own session --
-        not merely be scheduled or a no-op."""
-        from settings import settings
-        from data.alpaca_http import _TimeoutHTTPAdapter
-
-        fake_client = MagicMock()
-        with patch(
-            "alpaca.data.historical.StockHistoricalDataClient",
-            return_value=fake_client,
-        ):
-            from data.market_data import AlpacaProvider
-            AlpacaProvider(api_key="k", secret_key="s")
-
-        session = fake_client._session  # a MagicMock (fake_client is a MagicMock)
-        assert session.mount.call_count == 2
-        schemes = {call.args[0] for call in session.mount.call_args_list}
-        assert schemes == {"https://", "http://"}
-        for call in session.mount.call_args_list:
-            adapter = call.args[1]
-            assert isinstance(adapter, _TimeoutHTTPAdapter)
-            assert adapter._timeout == settings.ALPACA_REQUEST_TIMEOUT_SECONDS
+# (Section 3, AlpacaProvider, was removed with Alpaca on 2026-09-30; the
+# provider is archived at legacy/data/alpaca_provider.py and its tests went
+# with it.)
 
 
 # ---------------------------------------------------------------------------
@@ -542,64 +334,6 @@ class TestYFinanceProvider:
 
 
 # ---------------------------------------------------------------------------
-# 5. FinnhubProvider
-# ---------------------------------------------------------------------------
-
-class TestFinnhubProvider:
-    def _mock_client(self, metrics: Dict[str, Any] = None, profile: Dict[str, Any] = None):
-        client = MagicMock()
-        client.company_basic_financials.return_value = {
-            "metric": metrics or {"peBasicExclExtraTTM": 25.0, "pbQuarterly": 3.5}
-        }
-        client.company_profile2.return_value = profile or {
-            "name": "Apple Inc.", "finnhubIndustry": "Technology"
-        }
-        client.quote.return_value = {"c": 175.0}
-        return client
-
-    def test_degrades_when_key_absent(self):
-        from data.market_data import FinnhubProvider
-        provider = FinnhubProvider(api_key=None)
-        result = provider.get_fundamentals("AAPL")
-        assert result == {}
-
-    def test_maps_finnhub_to_yfinance_keys(self):
-        from data.market_data import FinnhubProvider
-        provider = FinnhubProvider.__new__(FinnhubProvider)
-        provider._api_key = "test_key"
-        provider._client = self._mock_client(
-            metrics={"peBasicExclExtraTTM": 28.5, "pbQuarterly": 3.5,
-                     "dividendYieldIndicatedAnnual": 0.52}
-        )
-        fund = provider.get_fundamentals("AAPL")
-        assert "trailingPE" in fund
-        assert fund["trailingPE"] == pytest.approx(28.5, abs=1e-6)
-        # Dividend yield should be converted from percent to fraction
-        assert fund["dividendYield"] == pytest.approx(0.0052, abs=1e-6)
-
-    def test_returns_empty_on_network_error(self):
-        from data.market_data import FinnhubProvider
-        provider = FinnhubProvider.__new__(FinnhubProvider)
-        provider._api_key = "key"
-        provider._client = MagicMock(
-            company_basic_financials=MagicMock(side_effect=RuntimeError("API error"))
-        )
-        result = provider.get_fundamentals("AAPL")
-        assert result == {}
-
-    def test_includes_company_name_and_sector(self):
-        from data.market_data import FinnhubProvider
-        provider = FinnhubProvider.__new__(FinnhubProvider)
-        provider._api_key = "key"
-        provider._client = self._mock_client(
-            profile={"name": "Apple Inc.", "finnhubIndustry": "Technology"}
-        )
-        fund = provider.get_fundamentals("AAPL")
-        assert fund.get("shortName") == "Apple Inc."
-        assert fund.get("sector") == "Technology"
-
-
-# ---------------------------------------------------------------------------
 # 5b. YahooFundamentalsProvider (primary fundamentals source)
 # ---------------------------------------------------------------------------
 
@@ -724,47 +458,37 @@ class TestCompositeProviderSelection:
     only mutates ``os.environ`` would pass even if ``CompositeProvider``
     regressed back to reading ``os.environ.get(...)`` directly. See the
     2026-07 ``os.environ`` -> ``settings.settings`` fix (mirrors the
-    ``signals/news_catalyst.py::build_finnhub_client`` precedent).
+    the ``os.environ``-vs-settings precedent).
     """
 
     def _patched(self, **overrides):
         base = dict(
-            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
-            MARKET_DATA_PROVIDER=None, FINNHUB_API_KEY=None,
+            MARKET_DATA_PROVIDER=None,
             FUNDAMENTALS_SOURCE="yahoo",
         )
         base.update(overrides)
         return patch.multiple("settings.settings", **base)
 
-    def test_selects_yfinance_when_no_keys(self):
+    def test_selects_yfinance_when_provider_unset(self):
         from data.market_data import CompositeProvider, YFinanceProvider
         with self._patched():
             cp = CompositeProvider()
         assert isinstance(cp._quote_provider, YFinanceProvider)
 
-    def test_selects_alpaca_when_keys_present(self):
-        from data.market_data import AlpacaProvider
-
-        fake_client = MagicMock()
-        with self._patched(
-            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
-        ), patch(
-            "alpaca.data.historical.StockHistoricalDataClient",
-            return_value=fake_client,
-        ):
-            from data.market_data import CompositeProvider
-            cp = CompositeProvider()
-        assert isinstance(cp._quote_provider, AlpacaProvider)
-        assert cp.is_realtime is True
-
-    def test_explicit_yfinance_overrides_alpaca_keys(self):
+    def test_explicit_yfinance_selects_yfinance(self):
         from data.market_data import CompositeProvider, YFinanceProvider
-        with self._patched(
-            ALPACA_API_KEY="key", ALPACA_SECRET_KEY="sec",
-            MARKET_DATA_PROVIDER="yfinance",
-        ):
+        with self._patched(MARKET_DATA_PROVIDER="yfinance"):
             cp = CompositeProvider()
         assert isinstance(cp._quote_provider, YFinanceProvider)
+
+    def test_removed_alpaca_provider_value_raises(self):
+        """'alpaca' was removed 2026-09-30. A stale .env value must fail
+        loudly as an unknown provider, never silently degrade to another
+        backend the operator did not choose."""
+        from data.market_data import CompositeProvider
+        with self._patched(MARKET_DATA_PROVIDER="alpaca"):
+            with pytest.raises(RuntimeError, match="Unknown MARKET_DATA_PROVIDER"):
+                CompositeProvider()
 
     def test_unknown_provider_raises(self):
         with self._patched(MARKET_DATA_PROVIDER="bloomberg"):
@@ -784,30 +508,24 @@ class TestCompositeProviderSelection:
             cp = CompositeProvider()
         assert cp.quote_source == "yfinance"
 
-    def test_settings_object_alone_selects_alpaca_without_os_environ(self):
+    def test_settings_object_alone_selects_fmp_without_os_environ(self):
         """Regression: provider selection must come from settings.settings,
-        never os.environ. os.environ is deliberately blanked/wrong here so a
+        never os.environ. os.environ is deliberately blanked here so a
         regression back to os.environ.get() would silently fall through to
-        yfinance (or crash) instead of honouring the settings.settings values
-        an operator set only in .env."""
-        from data.market_data import AlpacaProvider, CompositeProvider
+        yfinance instead of honouring the settings.settings values an
+        operator set only in .env."""
+        from data.market_data import CompositeProvider, FMPProvider
 
-        fake_client = MagicMock()
         with patch.dict(
             os.environ,
-            {"MARKET_DATA_PROVIDER": "", "ALPACA_API_KEY": "", "ALPACA_SECRET_KEY": ""},
+            {"MARKET_DATA_PROVIDER": "", "FMP_API_KEY": ""},
             clear=False,
         ), self._patched(
-            MARKET_DATA_PROVIDER="alpaca",
-            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
-        ), patch(
-            "alpaca.data.historical.StockHistoricalDataClient",
-            return_value=fake_client,
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key",
         ):
             cp = CompositeProvider()
 
-        assert isinstance(cp._quote_provider, AlpacaProvider)
-        assert cp.is_realtime is True
+        assert isinstance(cp._quote_provider, FMPProvider)
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +534,7 @@ class TestCompositeProviderSelection:
 
 class TestProviderProvenanceAttributes:
     """``CompositeProvider.is_realtime`` / ``.quote_source`` used to be two
-    hardcoded ``isinstance(self._quote_provider, AlpacaProvider)`` ternaries.
+    hardcoded ``isinstance(self._quote_provider, <realtime provider>)`` ternaries.
     That is fine for exactly two backends and silently wrong for a third:
     ``quote_source`` would report the literal string ``"yfinance"`` for a quote
     served by ANY other provider, and that string is dashboard / Google Sheet
@@ -829,27 +547,23 @@ class TestProviderProvenanceAttributes:
 
     def _patched(self, **overrides):
         base = dict(
-            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
-            MARKET_DATA_PROVIDER=None, FINNHUB_API_KEY=None,
+            MARKET_DATA_PROVIDER=None,
             FUNDAMENTALS_SOURCE="yahoo",
         )
         base.update(overrides)
         return patch.multiple("settings.settings", **base)
 
-    def test_alpaca_reports_realtime_true_and_source_alpaca(self):
-        from data.market_data import AlpacaProvider, CompositeProvider
+    def test_fmp_reports_source_fmp(self):
+        from data.market_data import CompositeProvider, FMPProvider
 
-        fake_client = MagicMock()
         with self._patched(
-            ALPACA_API_KEY="key123", ALPACA_SECRET_KEY="sec456",
-        ), patch(
-            "alpaca.data.historical.StockHistoricalDataClient",
-            return_value=fake_client,
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="a-real-looking-key",
+            FMP_QUOTES_ENABLED=True, FMP_QUOTES_REALTIME=True,
         ):
             cp = CompositeProvider()
 
-        assert isinstance(cp._quote_provider, AlpacaProvider)
-        assert (cp.is_realtime, cp.quote_source) == (True, "alpaca")
+        assert isinstance(cp._quote_provider, FMPProvider)
+        assert (cp.is_realtime, cp.quote_source) == (True, "fmp")
 
     def test_yfinance_reports_realtime_false_and_source_yfinance(self):
         from data.market_data import CompositeProvider, YFinanceProvider
@@ -892,7 +606,7 @@ class TestCompositeProviderCache:
         """Return a CompositeProvider with a mocked YFinanceProvider."""
         from data.market_data import CompositeProvider, Quote, YFinanceProvider
         cp = CompositeProvider.__new__(CompositeProvider)
-        from data.market_data import _QuoteCache, FinnhubProvider
+        from data.market_data import _QuoteCache
         cp._cache = _QuoteCache(ttl_seconds=quote_ttl)
 
         mock_provider = MagicMock(spec=YFinanceProvider)
@@ -911,7 +625,7 @@ class TestCompositeProviderCache:
         )
         mock_provider.get_fundamentals = MagicMock(return_value={})
         cp._quote_provider = mock_provider
-        # Fundamentals now route to YahooFundamentalsProvider (primary), not Finnhub.
+        # Fundamentals now route to YahooFundamentalsProvider (primary), not a vendor SDK.
         from data.market_data import YahooFundamentalsProvider
         cp._fundamentals_provider = MagicMock(spec=YahooFundamentalsProvider)
         cp._fundamentals_provider.get_fundamentals.return_value = {}
@@ -1107,7 +821,7 @@ class TestSingleton:
     def test_singleton_returns_same_instance(self):
         from data.market_data import get_provider, reset_provider
         reset_provider()
-        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
+        with patch.multiple("settings.settings", MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
             p1 = get_provider()
             p2 = get_provider()
         assert p1 is p2
@@ -1115,41 +829,17 @@ class TestSingleton:
     def test_reset_forces_new_instance(self):
         from data.market_data import get_provider, reset_provider
         reset_provider()
-        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
+        with patch.multiple("settings.settings", MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
             p1 = get_provider()
         reset_provider()
-        with patch.multiple("settings.settings", ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
+        with patch.multiple("settings.settings", MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo"):
             p2 = get_provider()
         assert p1 is not p2
 
 
 # ---------------------------------------------------------------------------
-# 9. Rate limiter + fundamentals cache (2026-06 Finnhub 429 mitigation)
+# 9. Fundamentals cache
 # ---------------------------------------------------------------------------
-
-class TestSlidingWindowRateLimiter:
-    """Verifies the rate limiter blocks once the per-window budget is exhausted."""
-
-    def test_first_n_calls_do_not_sleep(self, monkeypatch):
-        from data.market_data import _SlidingWindowRateLimiter
-        slept: list[float] = []
-        monkeypatch.setattr("data.market_data.time.sleep", lambda s: slept.append(s))
-        rl = _SlidingWindowRateLimiter(max_calls=3, window_seconds=60.0)
-        for _ in range(3):
-            rl.acquire()
-        assert slept == []  # No sleep within budget
-
-    def test_exceeds_budget_triggers_sleep(self, monkeypatch):
-        from data.market_data import _SlidingWindowRateLimiter
-        slept: list[float] = []
-        monkeypatch.setattr("data.market_data.time.sleep", lambda s: slept.append(s))
-        rl = _SlidingWindowRateLimiter(max_calls=2, window_seconds=60.0)
-        rl.acquire()
-        rl.acquire()
-        rl.acquire()  # Should trigger a sleep
-        assert len(slept) == 1
-        assert slept[0] > 0
-
 
 class TestFundamentalsCache:
     """Verifies positive AND empty fundamentals are cached with TTL semantics."""
@@ -1187,77 +877,11 @@ class TestFundamentalsCache:
         assert c.get("AAPL") is None
 
 
-class TestFinnhubRateLimitAndCache:
-    """End-to-end: FinnhubProvider must cache and rate-limit per 2026-06 fix."""
-
-    def _make_mock_client(self, *, raise_429: bool = False):
-        client = MagicMock()
-        if raise_429:
-            # Mimic finnhub.exceptions.FinnhubAPIException's status_code attr
-            exc = Exception("Too many requests.")
-            exc.status_code = 429
-            client.company_basic_financials.side_effect = exc
-            client.quote.side_effect = exc
-            client.company_profile2.side_effect = exc
-        else:
-            client.company_basic_financials.return_value = {
-                "metric": {"peBasicExclExtraTTM": 28.5}
-            }
-            client.quote.return_value = {"c": 150.0}
-            client.company_profile2.return_value = {
-                "name": "Apple Inc", "finnhubIndustry": "Tech"
-            }
-        return client
-
-    def test_repeated_calls_hit_cache_not_network(self, monkeypatch):
-        from data.market_data import FinnhubProvider
-        provider = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
-        provider._client = self._make_mock_client()
-
-        provider.get_fundamentals("AAPL")
-        provider.get_fundamentals("AAPL")
-        provider.get_fundamentals("AAPL")
-
-        # Only the FIRST call should reach the network.
-        assert provider._client.company_basic_financials.call_count == 1
-
-    def test_429_is_caught_and_negative_cached(self, monkeypatch):
-        """A 429 should be swallowed, return {}, and prevent re-hammer next call."""
-        from data.market_data import FinnhubProvider
-        monkeypatch.setattr("data.market_data.time.sleep", lambda s: None)
-
-        provider = FinnhubProvider(api_key="key", cache_ttl_seconds=3600)
-        provider._client = self._make_mock_client(raise_429=True)
-
-        result = provider.get_fundamentals("BAC")
-        assert result == {}  # Empty, never raises
-
-        # Second call hits negative cache — zero additional network calls.
-        first_call_count = provider._client.company_basic_financials.call_count
-        provider.get_fundamentals("BAC")
-        assert provider._client.company_basic_financials.call_count == first_call_count
-
-    def test_rate_limiter_blocks_when_budget_exhausted(self, monkeypatch):
-        """Verify the limiter is wired into FinnhubProvider, not just a free function."""
-        from data.market_data import FinnhubProvider
-        slept: list[float] = []
-        monkeypatch.setattr("data.market_data.time.sleep", lambda s: slept.append(s))
-
-        # 2 calls/min budget; each get_fundamentals makes up to 3 internal calls.
-        provider = FinnhubProvider(api_key="key", cache_ttl_seconds=3600,
-                                   rate_limit_per_min=2)
-        provider._client = self._make_mock_client()
-
-        provider.get_fundamentals("AAPL")
-        # The third internal call within the window should have triggered a sleep.
-        assert len(slept) >= 1
-
-
 class TestCompositeProviderFundamentalsCache:
     """The composite-level cache prevents the fundamentals provider re-hammering.
 
     Fundamentals now come from ``YahooFundamentalsProvider`` (primary), not
-    Finnhub. This test injects a call-counting fake onto the composite's
+    a vendor SDK. This test injects a call-counting fake onto the composite's
     ``_fundamentals_provider`` so it stays fully offline (no yfinance network)
     and proves the composite TTL cache deduplicates repeat lookups.
     """
@@ -1266,7 +890,6 @@ class TestCompositeProviderFundamentalsCache:
         from data.market_data import CompositeProvider
         with patch.multiple(
             "settings.settings",
-            FINNHUB_API_KEY=None, ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None,
             MARKET_DATA_PROVIDER=None, FUNDAMENTALS_SOURCE="yahoo",
         ):
             cp = CompositeProvider()
@@ -1326,7 +949,7 @@ class TestRobinhoodOutputSuppression:
 
 # ---------------------------------------------------------------------------
 # 11. CompositeProvider config sourced from settings.settings, not os.environ
-#     (2026-07 fix -- mirrors signals/news_catalyst.py::build_finnhub_client
+#     (2026-07 fix -- mirrors the settings-not-os.environ convention
 #     and prompt_registry/registry.py's precedent: pydantic-settings'
 #     env_file=".env" loading populates settings.settings directly, NOT the
 #     real os.environ, so every knob CompositeProvider reads must come from
@@ -1339,7 +962,7 @@ class TestRobinhoodOutputSuppression:
 class TestCompositeProviderSettingsWiring:
     def _patched(self, **overrides):
         base = dict(
-            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            MARKET_DATA_PROVIDER=None,
             FUNDAMENTALS_SOURCE="yahoo",
         )
         base.update(overrides)
@@ -1439,7 +1062,7 @@ class TestFMPFundamentalsChain:
 
     def _patched(self, **overrides):
         base = dict(
-            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            MARKET_DATA_PROVIDER=None,
             FMP_API_KEY=None, FUNDAMENTALS_SOURCE="yahoo", FMP_FALLBACK_ENABLED=True,
             # Defaults ON here so every existing "FMP actually serves" test
             # below keeps exercising that path -- FMP_FUNDAMENTALS_ENABLED is
@@ -1639,7 +1262,7 @@ class TestFMPFundamentalsChain:
 
 class TestFMPQuoteBarsChain:
     """The single most important invariant here: with MARKET_DATA_PROVIDER at
-    its default, the pre-existing Alpaca/yfinance quote/bars path is
+    its default, the pre-existing yfinance quote/bars path is
     BYTE-IDENTICAL to before FMP existed, even when FMP_API_KEY is set and
     FMP is fully configured to fail. FMP_API_KEY alone must never elect FMP.
     Mirrors ``TestFMPFundamentalsChain``'s structure exactly, one level up
@@ -1654,7 +1277,7 @@ class TestFMPQuoteBarsChain:
 
     def _patched(self, **overrides):
         base = dict(
-            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            MARKET_DATA_PROVIDER=None,
             FMP_API_KEY=None, FUNDAMENTALS_SOURCE="yahoo", FMP_FALLBACK_ENABLED=True,
             # Defaults ON here so every existing "FMP actually serves" test
             # below keeps exercising that path -- FMP_QUOTES_ENABLED /
@@ -1863,7 +1486,7 @@ class TestFMPQuoteBarsChain:
             fmp_mock2.assert_not_called()
             yf_mock2.assert_not_called()
 
-    # -- 6. Existing Alpaca/yfinance quote/bars path completely untouched --
+    # -- 6. Existing yfinance quote/bars path completely untouched --
     def test_default_config_quote_path_untouched_even_with_fmp_fully_configured(self):
         """Regression guard: even with FMP fully configured (a real-looking
         key present) but MARKET_DATA_PROVIDER left at its default, the
@@ -1926,7 +1549,7 @@ class TestFMPCapabilityGates:
 
     def _patched(self, **overrides):
         base = dict(
-            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            MARKET_DATA_PROVIDER=None,
             FMP_API_KEY=None, FUNDAMENTALS_SOURCE="yahoo", FMP_FALLBACK_ENABLED=True,
             FMP_QUOTES_ENABLED=False, FMP_BARS_ENABLED=False, FMP_FUNDAMENTALS_ENABLED=False,
         )
@@ -1936,7 +1559,7 @@ class TestFMPCapabilityGates:
     # -- Quotes gate, independently -------------------------------------
     def test_quotes_gate_off_falls_through_to_default_unconditionally(self):
         """MARKET_DATA_PROVIDER=fmp + FMP_QUOTES_ENABLED=False: quotes must
-        be served by the plain Alpaca-if-keyed-else-yfinance default, with
+        be served by the plain yfinance default, with
         ZERO FMP network activity -- even though FMP_FALLBACK_ENABLED is at
         its default True, this is NOT a fallback (FMP was never attempted)."""
         from data.market_data import CompositeProvider, YFinanceProvider
@@ -2183,7 +1806,7 @@ class TestCompositeProviderGenuineDefaultRouting:
         quote path must select FMPProvider AND actually invoke the FMP HTTP
         layer -- asserting the mock was called is the only way to prove FMP
         was really the path taken, rather than merely that a Quote came back
-        (which the yfinance/Alpaca fallback would also produce)."""
+        (which the yfinance fallback would also produce)."""
         from settings import settings as _settings
         from data.market_data import (
             CompositeProvider, FMPProvider, get_provider_serve_counts,
@@ -2273,7 +1896,7 @@ class TestCompositeProviderGenuineDefaultRouting:
         """The documented graceful-degrade path, exercised at the platform's
         REAL default (MARKET_DATA_PROVIDER=FUNDAMENTALS_SOURCE="fmp") rather
         than a hand-patched one -- proves the "operator forgot to configure
-        FMP_API_KEY" case degrades to the Alpaca/yfinance/Yahoo default with
+        FMP_API_KEY" case degrades to the yfinance/Yahoo default with
         a WARNING instead of raising, on a completely untouched singleton."""
         import logging
         from settings import settings as _settings
@@ -2288,9 +1911,8 @@ class TestCompositeProviderGenuineDefaultRouting:
         with caplog.at_level(logging.WARNING, logger="data.market_data"):
             cp = CompositeProvider()  # zero patches of any kind
 
-        # Quote/bars: falls through to the plain Alpaca-if-keyed-else-yfinance
-        # default (yfinance here, since ALPACA_API_KEY/SECRET are also
-        # genuinely unset) rather than raising.
+        # Quote/bars: falls through to the plain yfinance default rather
+        # than raising.
         assert not isinstance(cp._quote_provider, FMPProvider)
         assert isinstance(cp._quote_provider, YFinanceProvider)
         assert "falling back to the default quote/bars provider" in caplog.text
@@ -2444,6 +2066,65 @@ class TestFMPProviderGetQuotesBatch:
         )
         assert provider.get_quotes_batch([]) == {}
 
+    def test_out_of_plan_batch_endpoint_falls_back_to_per_symbol_quotes(self, monkeypatch):
+        """Starter refuses /batch-quote (HTTP 402) but serves /quote. Once the
+        endpoint is latched out of plan, resolve per symbol instead of
+        returning an empty batch every cycle."""
+        from data import fmp_client
+        from data.market_data import FMPProvider, MarketDataError
+
+        provider = FMPProvider(api_key="test-key-abc123")
+        batch_calls = []
+
+        def _refused(symbols):
+            batch_calls.append(list(symbols))
+            fmp_client._mark_endpoint_dead("batch-quote", "HTTP 402")
+            raise fmp_client.FMPUnavailable("FMP endpoint 'batch-quote' returned HTTP 402.")
+
+        def _single(self, symbol):
+            if symbol.upper() == "BAD":
+                raise MarketDataError("no quote")
+            return _make_fake_quote(symbol.upper(), "fmp")
+
+        monkeypatch.setattr("data.fmp_client.batch_quote", _refused)
+        monkeypatch.setattr(FMPProvider, "get_latest_quote", _single)
+        try:
+            first = provider.get_quotes_batch(["AAPL", "BAD", "MSFT"])
+            second = provider.get_quotes_batch(["AAPL"])
+        finally:
+            fmp_client.reset_fmp_rate_limiter()
+
+        assert set(first) == {"AAPL", "MSFT"}  # BAD dead-lettered, never fabricated
+        assert set(second) == {"AAPL"}
+        assert len(batch_calls) == 1  # latched: the refused endpoint is not re-asked
+
+    def test_per_symbol_fallback_stops_at_its_time_budget(self, monkeypatch):
+        """Serial /quote calls must not block for N x the request interval:
+        past the budget the rest are left absent for the next provider."""
+        from data import fmp_client
+        from data.market_data import FMPProvider
+
+        provider = FMPProvider(api_key="test-key-abc123")
+        monkeypatch.setattr(FMPProvider, "_ONE_BY_ONE_BUDGET_SECONDS", 1.0)
+        clock = {"t": 0.0}
+        monkeypatch.setattr("data.market_data.time.monotonic", lambda: clock["t"])
+        calls = []
+
+        def _single(self, symbol):
+            calls.append(symbol)
+            clock["t"] += 0.4  # each /quote costs 0.4 s of wall clock
+            return _make_fake_quote(symbol.upper(), "fmp")
+
+        monkeypatch.setattr(FMPProvider, "get_latest_quote", _single)
+        fmp_client._mark_endpoint_dead("batch-quote", "HTTP 402")
+        try:
+            out = provider.get_quotes_batch(["A", "B", "C", "D", "E"])
+        finally:
+            fmp_client.reset_fmp_rate_limiter()
+
+        assert calls == ["A", "B", "C"]  # 0.0, 0.4, 0.8 started; 1.2 >= budget
+        assert set(out) == {"A", "B", "C"}
+
 
 class TestCompositeProviderGetQuotesBatch:
     """CompositeProvider's override -- cache-first per symbol, then one
@@ -2451,7 +2132,7 @@ class TestCompositeProviderGetQuotesBatch:
 
     def _patched(self, **overrides):
         base = dict(
-            ALPACA_API_KEY=None, ALPACA_SECRET_KEY=None, MARKET_DATA_PROVIDER=None,
+            MARKET_DATA_PROVIDER=None,
             FMP_API_KEY=None, FUNDAMENTALS_SOURCE="yahoo", FMP_FALLBACK_ENABLED=True,
         )
         base.update(overrides)
@@ -2557,7 +2238,7 @@ class TestCompositeProviderGetQuotesBatch:
         ticker) even though the overall request succeeded and every other
         symbol resolved fine. Before this fix, that one symbol was simply
         dropped from the batch result with no fallback attempted -- unlike
-        get_latest_quote's own Alpaca/yfinance chain -- so a Quick Trade
+        get_latest_quote's own yfinance chain -- so a Quick Trade
         lookup for that symbol alone reported "no live quote available" even
         though yfinance could resolve it."""
         from data.market_data import (
@@ -2605,12 +2286,39 @@ class TestCompositeProviderGetQuotesBatch:
 
         assert result == {}
 
-    def test_fallback_disabled_never_reaches_alpaca_or_yfinance(self):
+    def test_whole_batch_failure_skips_fmp_single_quote_retries(self):
+        """When FMP's /batch-quote returns NOTHING (a whole-request failure:
+        outage, 429, cooldown open), the per-symbol fallback must go straight
+        to the yfinance tail -- never issue one more FMP /quote
+        request per symbol into the already failing host."""
+        from data.market_data import CompositeProvider, FMPProvider, YFinanceProvider
+
+        with self._patched(
+            MARKET_DATA_PROVIDER="fmp", FMP_API_KEY="test-key", FMP_QUOTES_ENABLED=True,
+        ):
+            cp = CompositeProvider()
+
+        with patch.object(FMPProvider, "get_quotes_batch", return_value={}), \
+             patch.object(FMPProvider, "get_latest_quote") as fmp_single_mock, \
+             patch.object(
+                 YFinanceProvider, "get_latest_quote",
+                 side_effect=lambda sym: _make_fake_quote(sym, "yfinance"),
+             ) as yf_mock:
+            result = cp.get_quotes_batch(["AAPL", "MSFT", "CGBD"])
+
+        # The chain catches provider exceptions, so assert on the call itself.
+        fmp_single_mock.assert_not_called()
+
+        assert set(result.keys()) == {"AAPL", "MSFT", "CGBD"}
+        assert all(q.source == "yfinance" for q in result.values())
+        assert yf_mock.call_count == 3
+
+    def test_fallback_disabled_never_reaches_yfinance(self):
         """FMP_FALLBACK_ENABLED=False mirrors get_latest_quote's own
         documented contract exactly: a still-missing symbol is still retried
         against FMP's own single /quote endpoint (the chain is [FMPProvider]
         alone, not skipped entirely -- ``_get_quote_via_fmp_chain``'s
-        existing, unchanged behavior), but the Alpaca/yfinance tail is never
+        existing, unchanged behavior), but the yfinance tail is never
         appended, so a symbol FMP can't resolve either way stays absent
         rather than silently falling through to a non-FMP source."""
         from data.market_data import (

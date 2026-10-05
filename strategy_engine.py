@@ -228,14 +228,14 @@ class StrategyEngine:
                           roc_5: float = 0.0,
                           roc_20: float = 0.0,
                           strategy_id: Optional[str] = None,
-                          etf_transmission_multiplier: Optional[float] = None,
                           robinhood_position: Optional[RobinhoodPositionDTO] = None,
                           context_extras: Optional[Dict[str, Any]] = None,
-                          precomputed_signal_tuple: Optional[tuple] = None) -> Dict[str, Any]:
+                          precomputed_signal_tuple: Optional[tuple] = None,
+                          forecast_is_fallback: Optional[bool] = None) -> Dict[str, Any]:
         """
         Executes multi-phase quantitative scoring across the security.
         Synthesizes technical, fundamental, macro, and volatility factors to produce
-        high-precision signals, custom action ranges, options hedging, and explainability notes.
+        high-precision signals, custom action ranges, and explainability notes.
 
         Parameters
         ----------
@@ -246,15 +246,6 @@ class StrategyEngine:
             used as the sizing weight instead of the global aggregate point
             estimate. Pass None (default) to use the existing global pool path
             (backward-compatible).
-        etf_transmission_multiplier : float or None
-            Per-name ETF-arbitrage volatility-transmission derate
-            (``risk/etf_transmission.py``), read by the orchestrator from the
-            ``ETF_Transmission_Multiplier`` dashboard column and composed in
-            ``size_position()``'s step 3 alongside the HMM regime multiplier.
-            None (the default) / NaN -- the state when
-            ``settings.ETF_TRANSMISSION_SIZING_ENABLED`` is False or this
-            name has no ETF coverage -- is the exact no-op 1.0, NEVER a NaN
-            that would poison the weight (see that module's docstring).
         roc_6m, vol_20, vol_50, vol_ratio, roc_5, roc_20 : float or None
             Additive feature-widening params feeding the Forecast Backfill
             Meta-Labeler Bridge's live row (see
@@ -264,6 +255,12 @@ class StrategyEngine:
             signal ``compute()`` method except
             ``signals/options_flow_sentiment.py``, which reads ``ROC_5``/
             ``ROC_20`` as a momentum-proxy fallback for its own score.
+        forecast_is_fallback : bool or None
+            Forecasting rebuild F2: True when ``forecast_price`` is the
+            engine's every-model-failed fallback (``Forecast_30_Is_Fallback``)
+            rather than a real blend. ``forecast_alignment`` scores such a
+            forecast as neutral (0) instead of bearish. None = unknown (only
+            the missing-value rule applies).
         """
         current_price = bar.close
         ticker = bar.ticker
@@ -278,6 +275,7 @@ class StrategyEngine:
         # 1. Package inputs into pd.Series and SignalContext
         row = pd.Series({
             "forecast_price": forecast_price,
+            "forecast_is_fallback": forecast_is_fallback,
             "trend_strength": trend_strength,
             "atr": atr,
             "macd_line": macd_line,
@@ -368,21 +366,11 @@ class StrategyEngine:
             _weight = _effective_weights.get(_name, 0.0)
             score_components[_name] = float(_output.score) * float(_weight)
 
-        # Determine trend direction for options and sizing
+        # Determine trend direction for sizing and advice
         if aroon_osc is not None and not pd.isna(aroon_osc):
             is_uptrend = aroon_osc >= 50
         else:
             is_uptrend = trend_strength >= 50.0
-
-        # Options overlay uses lookahead-free strong uptrend filter
-        if roc_12m != 0.0:
-            if sma_200 > 0:
-                is_strong_uptrend = (roc_12m > 0) and (current_price > sma_200)
-            else:
-                is_strong_uptrend = roc_12m > 0
-        else:
-            # Fallback to legacy trend filter in unit tests when roc_12m is not provided
-            is_strong_uptrend = is_uptrend
 
         # ---------------------------------------------------------------------
         # PHASE 5: ACTION ADVICE GENERATOR
@@ -436,9 +424,11 @@ class StrategyEngine:
         sell_side_range = apply_sell_side_range(signal, range_params)
 
         # ---------------------------------------------------------------------
-        # PHASE 7 & 8: OPTIONS & SIZING
+        # PHASE 7 & 8: SIZING
         # ---------------------------------------------------------------------
-        option_strategy, option_details = self._select_options_overlay(bar, fundamentals, signal, is_strong_uptrend, atr)
+        # The text-only "OPTIONS HEDGE" overlay left core with the options desk
+        # (2026-09, step 3d), and its always-empty "Option Strategy" output key
+        # left with the COLUMN_SCHEMA trim (step 4f).
         raw_weight, kelly_fraction_pre_regime, sizing_path_tag = self._calculate_kelly_sizing_detailed(
             garch_vol, strategy_id=strategy_id
         )
@@ -479,16 +469,10 @@ class StrategyEngine:
         # before this. The portfolio-level gross cap is a separate, cycle-wide
         # post-pass applied by the orchestrator (pipeline/production_steps.py),
         # not here (this call only ever sees one symbol at a time).
-        # ETF volatility-transmission derate (risk/etf_transmission.py),
-        # supplied by the orchestrator from the ETF_Transmission_Multiplier
-        # dashboard column. size_position() sanitizes None/NaN to the exact
-        # no-op 1.0 itself -- passed through verbatim here so there is exactly
-        # ONE place that decides what "missing" means (CONSTRAINT #7).
         sizing_decision = size_position(
             kelly_fraction_pre_regime,
             regime_multiplier=regime_multiplier,
             meta_label_composite=meta_label_composite,
-            etf_transmission_multiplier=etf_transmission_multiplier,
             max_position_weight=settings.MAX_POSITION_WEIGHT,
             path_tag=sizing_path_tag,
             raw_weight=raw_weight,
@@ -516,7 +500,6 @@ class StrategyEngine:
             f"SCORE {final_score}/100: {'; '.join(score_log)}.",
             f"MACD ENV: {macro.market_regime} | Ticker: {ticker}.",
             f"RISK FRAME: Sizing target {kelly_fraction * 100:.1f}% based on win probability models [{sizing_path_tag}].",
-            f"OPTIONS HEDGE: {option_strategy} - {option_details}"
         ]
         if warnings:
             verbose_notes.append(f"CRITICAL WARNINGS: {', '.join(warnings)}")
@@ -544,17 +527,7 @@ class StrategyEngine:
             # sizing/position_sizer.py's module docstring for why.
             "Sizing_Was_Capped": bool(sizing_decision.was_capped),
             "Sizing_Binding_Constraint": sizing_decision.binding_constraint,
-            # The ETF-transmission derate ACTUALLY APPLIED to this weight
-            # (already sanitized to 1.0 for a missing/NaN input). Surfaced
-            # like Regime_Multiplier -- its own field, never folded into the
-            # was_capped guardrail telemetry above. Note this is the APPLIED
-            # value, so it reads 1.0 where the ETF_Transmission_Multiplier
-            # dashboard column honestly reads NaN ("never computed").
-            "ETF_Transmission_Multiplier_Applied": float(
-                sizing_decision.etf_transmission_multiplier
-            ),
             "GARCH_Vol": float(garch_vol) if garch_vol is not None else float("nan"),
-            "Option Strategy": option_strategy,
             "buyRange": tactical_range,
             # NEW: first-class sell-side range surfaced alongside buyRange.
             # See ``apply_sell_side_range`` docstring for construction details.
@@ -584,55 +557,6 @@ class StrategyEngine:
     # =============================================================================
     # OPTION STRATEGY OVERLAY SELECTION MATRIX
     # =============================================================================
-    def _select_options_overlay(self, 
-                                 bar: MarketBarDTO, 
-                                 fundamentals: FundamentalDataDTO, 
-                                 signal: str, 
-                                 is_uptrend: bool,
-                                 atr: float = 0.0) -> Tuple[str, str]:
-        """
-        Determines the optimal derivatives hedge or income overlay based on volatility.
-        """
-        sector = fundamentals.sector
-        price = bar.close
-        safe_atr = atr if atr > 0 else (price * 0.02)
-        is_yield_asset = "Real Estate" in sector or "Financial" in sector
-        
-        if signal in ["STRONG BUY", "BUY"]:
-            if is_uptrend:
-                strike = math.ceil(price + (1.5 * safe_atr))
-                delta = "delta-15" if is_yield_asset else "delta-20"
-                return (
-                    f"OTM Covered Call ({delta})", 
-                    f"Sell 30-day Call at strike ${strike:.2f} to capture premium while allowing upside."
-                )
-            else:
-                strike = math.floor(price - (1.25 * safe_atr))
-                return (
-                    "Cash Secured Put", 
-                    f"Sell 45-day Put at strike ${strike:.2f} (delta-30) to acquire shares at deep discount."
-                )
-        elif signal == "HOLD":
-            upper_strike = math.ceil(price + (2.0 * safe_atr))
-            lower_strike = math.floor(price - (2.0 * safe_atr))
-            return (
-                "Iron Condor / Strangle", 
-                f"Sell credit spreads at ${lower_strike:.2f} Put and ${upper_strike:.2f} Call to capture volatility."
-            )
-        else: # RISK REDUCE / BEARISH
-            if is_yield_asset:
-                strike = math.floor(price + (0.5 * safe_atr))
-                return (
-                    "Defensive Covered Call", 
-                    f"Sell near-the-money 15-day Call at strike ${strike:.2f} to buffer downward capital drag."
-                )
-            else:
-                strike = math.floor(price * 0.90)
-                return (
-                    "Protective Collar", 
-                    f"Purchase protective Put at strike ${strike:.2f} financed by selling near-the-money Covered Calls."
-                )
-
     # =============================================================================
     # POSITION SIZING: VOLATILITY TARGETING + ESTIMATED-p FRACTIONAL KELLY
     # =============================================================================

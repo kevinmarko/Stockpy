@@ -4,7 +4,7 @@ ZERO I/O, and deliberately zero imports of ``settings``/``db_config``/any
 store -- every threshold this module needs is a plain parameter the caller
 supplies (``settings.SYMBOL_RATING_BAD_SCORE_THRESHOLD``,
 ``settings.SYMBOL_RATING_DROP_THRESHOLD_CYCLES``), exactly the same
-I/O-free-leaf discipline ``risk/etf_transmission.py`` documents for itself:
+I/O-free-leaf discipline ``legacy/risk/etf_transmission.py`` documents for itself:
 keeping this free of the settings/DB import chain is what lets it be
 unit-tested in isolation and imported by a caller that only wants the pure
 math, without dragging SQLAlchemy or the settings singleton along for the
@@ -68,7 +68,7 @@ def should_exclude(consecutive_bad_cycles: int, threshold_cycles: int, is_held: 
     or how far past ``threshold_cycles`` it runs. This is a non-negotiable
     safety invariant, not a tunable -- there is deliberately no flag to
     override it, on the same reasoning ``sizing/position_sizer.py`` and
-    ``risk/etf_transmission.py`` apply to their own hard invariants: you need
+    ``legacy/risk/etf_transmission.py`` apply to their own hard invariants: you need
     live data on something you actually own in order to know when to exit
     it. Excluding a held symbol would blind the platform to a position it is
     still on the hook for, trading a bounded, well-understood risk (keep

@@ -61,7 +61,7 @@ def _bounded_fred_timeout(seconds: float):
 class IDataProvider(ABC):
     """
     Abstract contract dictating data requirements for the quantitative engine.
-    Allows easy swapping of data vendors (e.g., Yahoo, Alpaca, Bloomberg, Mock).
+    Allows easy swapping of data vendors (e.g., Yahoo, FMP, Bloomberg, Mock).
     """
     
     @abstractmethod
@@ -94,6 +94,20 @@ class IDataProvider(ABC):
         If expiration is None, returns a list of expiration date strings.
         """
         pass
+
+
+def live_data_configured() -> bool:
+    """True when the pipeline should use the real ``DataEngine``.
+
+    Real market/macro data needs a FRED key (``DataEngine`` refuses to build
+    without one), so that is the switch. Until 2026-09 the switch was
+    ``os.path.exists("credentials.json")`` -- the Google Sheets service-account
+    file -- which tied the choice of real vs. mock data to an unrelated,
+    being-retired integration: removing the Sheets file would silently put the
+    daemon on ``MockDataEngine``'s fabricated data. Tests patch this function
+    (see ``conftest.py::_force_mock_data_engine_in_tests``).
+    """
+    return bool(settings.FRED_API_KEY)
 
 
 # =============================================================================
@@ -576,8 +590,8 @@ class MockDataEngine(IDataProvider):
         involvement makes sense here. Exists purely so callers that
         unconditionally call ``fetch_technical_raw_cached()``
         (``main_orchestrator.py``'s ``fetch_all_data_async``, which falls
-        back to a fresh ``MockDataEngine()`` when ``credentials.json`` is
-        absent or live data comes back empty) work identically whether
+        back to a fresh ``MockDataEngine()`` when live data is not
+        configured or comes back empty) work identically whether
         ``de`` is a real ``DataEngine`` or this test/offline-fallback fixture.
         """
         return self.fetch_technical_raw(tickers)

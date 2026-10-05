@@ -46,6 +46,15 @@ _NOTES_SENTINEL = "\x00RETRO_NOTES_SENTINEL\x00"
 _MAX_FREETEXT_LEN = 200
 
 
+# close_reason codes written for pipeline exits -> the Action Signal that fired.
+_EXIT_TRIGGER_LABELS: dict[str, str] = {
+    "signal_sell": "SELL",
+    "signal_trim": "TRIM",
+    "signal_risk_reduce": "RISK REDUCE",
+    "signal_avoid": "AVOID",
+}
+
+
 def _sanitize_freetext(val: Any, *, max_len: int = _MAX_FREETEXT_LEN, strip_quotes: bool = False) -> str | None:
     """Sanitize a free-text field (operator note, strategy_id) before it is
     interpolated into the narrative.
@@ -536,6 +545,15 @@ def build_trade_narrative(
             )
     else:
         outcome_clause = f"Position closed at {_fmt_curr(xp)}."
+
+    # Exit trigger: only for the pipeline's signal-driven close codes
+    # (execution/trade_context.py). A fixed lookup table, never free text, so
+    # nothing is inferred; any other close_reason ("flatten", "roll", ...)
+    # leaves the clause exactly as before.
+    _close_reason = kwargs.get("close_reason") if "close_reason" in kwargs else rec.get("close_reason")
+    _exit_label = _EXIT_TRIGGER_LABELS.get(str(_close_reason)) if _close_reason else None
+    if _exit_label:
+        outcome_clause = f"{outcome_clause} Exit trigger: {_exit_label} signal."
 
     # -------------------------------------------------------------------------
     # CLAUSE 3: Excursion & Conviction Calibration

@@ -41,16 +41,16 @@ describe("Comparison screen (R2)", () => {
     expect(screen.getByText("Symbol Comparison")).toBeInTheDocument();
   });
 
-  it("an Options pilot with followable:false renders a disabled 'Restricted' Follow button with an explanation, never hidden", async () => {
+  it("the metrics table has no Follow/AUM/Followers affordances (Follow-a-Pilot was removed)", async () => {
     renderComparison();
-    const cb = await screen.findByTestId("comparison-checkbox-iron-condor");
+    const cb = await screen.findByTestId("comparison-checkbox-trend-following");
     fireEvent.click(cb);
 
-    const restrictedBtn = await screen.findByTestId("follow-pilot-btn-iron-condor-disabled");
-    expect(restrictedBtn).toBeDisabled();
-    expect(restrictedBtn).toHaveTextContent("Restricted");
-    // No active (enabled) Follow button also renders for this pilot.
-    expect(screen.queryByTestId("follow-pilot-btn-iron-condor")).not.toBeInTheDocument();
+    expect(await screen.findByText("Key Metrics Comparison")).toBeInTheDocument();
+    expect(screen.queryByTestId("follow-pilot-btn-trend-following")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Follow$/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("AUM Proxy")).not.toBeInTheDocument();
+    expect(screen.queryByText("Followers")).not.toBeInTheDocument();
   });
 
   // T1.2: Toggle Pilot Checkbox

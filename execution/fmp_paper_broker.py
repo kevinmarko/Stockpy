@@ -14,13 +14,15 @@ submits equity market orders exclusively):
     limit order can never later fill on its own -- rejecting it is the
     honest outcome, not silently filling at a price the order didn't ask
     for and not silently accepting an order that will sit forever.
-  - Multi-leg options orders (OrderIntent.legs non-empty): rejected. A
-    single-symbol FMP quote cannot honestly price a spread/condor; faking
-    one from an equity quote would be fabricated data (CONSTRAINT #4).
+  - Multi-leg options orders (OrderIntent.legs non-empty): priced per leg
+    from the caller-supplied leg prices and filled atomically via
+    PaperAccountStore.apply_multi_leg_fill. The options import is lazy so
+    equity paper trading never depends on the options desk.
 """
 
 import asyncio
 import logging
+import time
 from typing import AsyncIterator, Optional, List
 from datetime import datetime, timezone
 
@@ -36,9 +38,10 @@ from execution.broker_base import (
     TradeUpdateEvent
 )
 from execution.cost_model import TieredCostModel
+from execution.trade_context import apply_fill_kwargs
 from data.paper_account_store import PaperAccountStore
 from data import fmp_client
-from pilots.options_risk import parse_option_symbol
+from settings import settings
 
 logger = logging.getLogger("FMPPaperBroker")
 
@@ -61,8 +64,8 @@ class FMPPaperBroker(BrokerBase):
 
         client_order_id = intent.client_order_id or "unknown"
 
-        # 1. Dry-run interception -- matches AlpacaBroker.submit_order's exact
-        # pattern (execution/alpaca_broker.py). Placed before any quote fetch
+        # 1. Dry-run interception -- the same pattern every broker adapter
+        # uses (defense in depth behind OrderManager's own check). Placed before any quote fetch
         # or store write so a dry_run=True intent never touches fmp_client or
         # PaperAccountStore, and OrderManager tests exercising both broker
         # backends see identical dry-run behavior.
@@ -92,6 +95,11 @@ class FMPPaperBroker(BrokerBase):
         # 3. Multi-leg options execution branch
         if intent.legs:
             try:
+                # Self-contained parser (copied from the retired
+                # pilots/options_risk.py) so equity paper trading has no
+                # options-desk dependency.
+                from data.option_symbols import parse_option_symbol
+
                 parsed_legs = []
                 signed_prices = []
                 strikes = []
@@ -240,6 +248,27 @@ class FMPPaperBroker(BrokerBase):
                 logger.error(f"FMPPaperBroker: Invalid price {raw_price} for {intent.symbol}")
                 return self._error_result(client_order_id, f"Invalid price {raw_price}")
 
+            # A fill must be priced off a CURRENT quote. On a holiday, early
+            # close or trading halt FMP keeps serving the last trade; filling
+            # at that stale price is a fill no real market order would get.
+            # A missing timestamp is rejected too (fail closed).
+            max_age = float(getattr(settings, "PAPER_FILL_MAX_QUOTE_AGE_SECONDS", 900) or 0)
+            if max_age > 0:
+                ts_raw = quote_data.get("timestamp")
+                try:
+                    quote_age = time.time() - float(ts_raw)
+                except (TypeError, ValueError):
+                    quote_age = None
+                if quote_age is None or quote_age > max_age:
+                    reason = (
+                        "quote has no timestamp" if quote_age is None
+                        else f"quote is {quote_age:.0f}s old (max {max_age:.0f}s)"
+                    )
+                    logger.warning(f"FMPPaperBroker: rejecting {intent.symbol}: {reason}")
+                    return self._error_result(
+                        client_order_id, f"Stale quote: {reason}", OrderStatus.REJECTED
+                    )
+
             # marketCap is genuinely unmeasured when FMP omits it, not zero --
             # a fabricated 0.0 previously routed straight into
             # TieredCostModel.get_liquidity_tier's smallest-market-cap bucket
@@ -295,6 +324,16 @@ class FMPPaperBroker(BrokerBase):
         fill_price = raw_price
         
         # 6. Apply Fill
+        # Decision context (execution/trade_context.py) becomes extra
+        # apply_fill kwargs: an entry snapshot on open, a real close_reason +
+        # exit_context_json on close. No context -> {} -> the exact call this
+        # broker always made. Telemetry only: a failure here never blocks the
+        # fill.
+        try:
+            context_kwargs = apply_fill_kwargs(getattr(intent, "decision_context", None))
+        except Exception as ctx_err:  # noqa: BLE001
+            logger.warning(f"FMPPaperBroker: decision context ignored for {intent.symbol}: {ctx_err}")
+            context_kwargs = {}
         success = self.store.apply_fill(
             client_order_id=client_order_id,
             symbol=intent.symbol,
@@ -305,6 +344,7 @@ class FMPPaperBroker(BrokerBase):
             target_qty=getattr(intent, "target_qty", None),
             status=OrderStatus.FILLED.value,
             strategy_id=getattr(intent, "strategy_id", "untagged"),
+            **context_kwargs,
         )
         
         if not success:

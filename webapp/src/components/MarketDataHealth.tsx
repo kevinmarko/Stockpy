@@ -244,8 +244,8 @@ export function MarketDataHealth() {
       )}
       {!providerStatus.loading && providerStatus.data && !providerStatus.data.is_realtime && (
         <p style={{ fontSize: "var(--t-caption)", color: theme.textMuted, margin: "0 0 var(--s-3)" }} data-testid="md-delayed-note">
-          yfinance is delayed by ~15 minutes and marked stale on every quote. Set
-          ALPACA_API_KEY/ALPACA_SECRET_KEY in .env to upgrade to the free IEX real-time feed.
+          FMP is the primary quote provider, with yfinance as the fallback. yfinance
+          quotes are delayed by ~15 minutes and marked stale on every quote.
         </p>
       )}
 

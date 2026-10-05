@@ -19,12 +19,12 @@ was not knowable at the time.
 
 WHAT THIS MODULE DOES (AND DOES NOT DO)
 ----------------------------------------
-yfinance/Finnhub `.info`-style snapshots are CURRENT-STATE dumps — they do
+yfinance/FMP `.info`-style snapshots are CURRENT-STATE dumps — they do
 not carry a genuine "as-of" date per individual field (no field-level
 provenance). What they DO sometimes carry is a coarse company-level
 "most recent quarter" / "last fiscal year end" timestamp
-(yfinance: ``mostRecentQuarter``, ``lastFiscalYearEnd``; Finnhub metrics
-payloads carry no such field at all as of this writing — see
+(yfinance: ``mostRecentQuarter``, ``lastFiscalYearEnd``; other vendor metrics
+payloads may carry no such field — see
 ``_extract_report_date`` for the exact keys checked).
 
 This module therefore checks ONLY what is honestly derivable:
@@ -61,10 +61,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Provider raw-payload keys that carry a genuine report/quarter-end date.
 # Checked in order; the first present (non-None) key wins. Sourced from
-# yfinance's Ticker.info schema — Finnhub's company_basic_financials payload
-# (see data/market_data.py::FinnhubProvider) does not expose an equivalent
-# per-metric or per-report date field as of this writing, so a Finnhub-only
-# snapshot will legitimately fall through to "unverifiable" below.
+# yfinance's Ticker.info schema — a payload with no such per-report date
+# field will legitimately fall through to "unverifiable" below.
 # ---------------------------------------------------------------------------
 REPORT_DATE_KEYS: List[str] = [
     "mostRecentQuarter",   # yfinance: epoch seconds of the most recent 10-Q
@@ -199,7 +197,7 @@ def audit_fundamentals_snapshot(
         Accepts ``str`` ("YYYY-MM-DD"), ``datetime.date``,
         ``datetime.datetime``, or ``pandas.Timestamp``.
     raw_payload:
-        The raw provider dict (yfinance ``.info``, Finnhub metrics dict, or
+        The raw provider dict (yfinance ``.info``, an FMP metrics dict, or
         the ``raw_json``-deserialized dict from
         ``HistoricalStore.fundamentals_history``). May be ``None`` or ``{}``.
     fields_checked:

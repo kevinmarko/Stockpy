@@ -75,14 +75,13 @@ CENSUS_JSON = REPO_ROOT / "docs" / "settings_field_census.json"
 
 MODEL_FIELDS = set(Settings.model_fields)
 
-# The five independently-shipped scoped settings editors in api/pilots_api.py.
+# The four independently-shipped scoped settings editors in api/pilots_api.py.
 # Each already has its own GET/PUT pair and its own write-permission gate.
 EDITOR_INDEXES = {
     "_TUNABLE_INDEX": pilots_api._TUNABLE_INDEX,
     "_SENTIMENT_INDEX": pilots_api._SENTIMENT_INDEX,
     "_SECTOR_SELECTION_INDEX": pilots_api._SECTOR_SELECTION_INDEX,
     "_FMP_INDEX": pilots_api._FMP_INDEX,
-    "_ETF_TRANSMISSION_INDEX": pilots_api._ETF_TRANSMISSION_INDEX,
 }
 ALL_EDITOR_KEYS = set().union(*(set(idx) for idx in EDITOR_INDEXES.values()))
 
@@ -263,7 +262,7 @@ class TestExistingEditorsAreNotBootstrap:
             # gained the 5 BERT_LLA_* keys, the 3 CNN_LSTM_* subprocess-isolation
             # keys, FORECAST_CNN_LSTM_WALKFORWARD_SCALING, and
             # LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED; "Market Data" gained
-            # MARKET_DATA_WS_ENABLED/HISTORICAL_STORE_ENABLED; "Runtime & Ops"
+            # MARKET_DATA_WS_ENABLED (retired 2026-09-30)/HISTORICAL_STORE_ENABLED; "Runtime & Ops"
             # gained ROBINHOOD_AUTO_REFRESH_ENABLED/RUNTIME_FLAGS_REFRESH_ENABLED/
             # RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS; "Advanced / Config" gained
             # GRAVITY_REQUIRE_NATIVE (also fixed to read via settings.X instead
@@ -300,13 +299,32 @@ class TestExistingEditorsAreNotBootstrap:
             # CORRELATION_CLUSTER_LOOKBACK_DAYS, CORRELATION_CLUSTER_THRESHOLD,
             # FEATURE_DRIFT_PSI_ENABLED, DAEMON_SHUTDOWN_TIMEOUT_SECONDS,
             # PIPELINE_STALL_ALERT_SECONDS). 13+6+6 = 25 keys total.
-            "_TUNABLE_INDEX": 114,
-            "_SENTIMENT_INDEX": 33,
+            # 114 -> 108 (2026-09, step 3b): the "Circuit Breaker" group was
+            # removed when the dynamic circuit breaker was unwired.
+            # 108 -> 92 (2026-09, step 4f settings trim): the 13-key "Options
+            # Desk Automation" group, OPTIONS_VRP_THRESHOLD ("Regime Model"),
+            # and OPTIONS_MATRIX_ENABLED/OPTIONS_TRUE_IVR_ENABLED ("Options &
+            # Pairs Snapshots", renamed "Pairs Snapshot") were retired.
+            # 92 -> 91 (2026-09-30 Alpaca removal): MARKET_DATA_WS_ENABLED
+            # ("Market Data") retired with the Alpaca WebSocket streamer.
+            # 91 -> 90 (2026-10 dead-tab cleanup): PAIRS_SNAPSHOT_ENABLED
+            # ("Pairs Snapshot") retired with the Pairs radar screen.
+            "_TUNABLE_INDEX": 90,
+            # 33 -> 31 (2026-09 vendor removal): REDDIT_BACKFILL_MAX_PAGES and
+            # FINNHUB_RATE_LIMIT_PER_MIN retired with Reddit/Finnhub.
+            "_SENTIMENT_INDEX": 31,
             "_SECTOR_SELECTION_INDEX": 11,
-            "_FMP_INDEX": 32,
-            "_ETF_TRANSMISSION_INDEX": 19,
+            # 32 -> 30 (step 4f): FMP_OPTIONS_HEALTH_ENABLED /
+            # FMP_OPTIONS_CONTEXT_ENABLED retired (read only by archived code).
+            "_FMP_INDEX": 30,
         }
-        assert len(ALL_EDITOR_KEYS) == 209
+        # 203 -> 184 (2026-09, step 4d): the 19-key /settings/etf-transmission
+        # editor was removed when ETF volatility transmission was archived.
+        # 184 -> 166 (step 4f): the 16 tunables + 2 FMP keys above.
+        # 166 -> 164 (2026-09 vendor removal): the 2 sentiment keys above.
+        # 164 -> 163 (2026-09-30 Alpaca removal): MARKET_DATA_WS_ENABLED.
+        # 163 -> 162 (2026-10 dead-tab cleanup): PAIRS_SNAPSHOT_ENABLED.
+        assert len(ALL_EDITOR_KEYS) == 162
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {
@@ -494,3 +512,11 @@ class TestDangerousKeysAlreadyExposedByShippedEditors:
             f"contradicts shared/env_io.py's EXCLUDED_FROM_GUI classification — treat "
             f"as a security regression, not a test to update."
         )
+
+
+def test_paper_pipeline_probe_weight_needs_typed_confirmation():
+    """It starts automated paper orders whose closed trades feed production
+    Kelly via the bridge -- same blast radius as the bridge flag itself."""
+    from settings_keysets import DANGEROUS_KEYS
+    assert "PAPER_PIPELINE_PROBE_WEIGHT" in DANGEROUS_KEYS
+    assert "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED" in DANGEROUS_KEYS

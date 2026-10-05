@@ -18,6 +18,7 @@ from unittest import mock
 
 import numpy as np
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from api import data_api
@@ -714,7 +715,7 @@ def test_quotes_batch_provider_outage_degrades_to_empty_not_500(monkeypatch):
 
 
 def test_sync_report(monkeypatch):
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
         lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": [], "generated_at": "x"}),
@@ -725,10 +726,73 @@ def test_sync_report(monkeypatch):
     assert resp.json() == {"symbols": [], "generated_at": "x"}
 
 
+def test_sync_report_and_explain_never_start_a_robinhood_login(monkeypatch):
+    """Both read endpoints must ask for the cached snapshot only: a live fetch
+    with ROBINHOOD_AUTO_REFRESH_ENABLED pushed a device-approval prompt and
+    blocked the request for up to RH_LOGIN_DEADLINE_SECONDS."""
+    calls = []
+
+    def _fetch(*args, **kwargs):
+        calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", _fetch)
+    monkeypatch.setattr(
+        data_api, "build_sync_report",
+        lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": {}}, symbols={}),
+    )
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        client.get("/data/sync-report")
+        client.get("/data/explain/AAPL")
+    assert len(calls) >= 2
+    assert all(c.get("allow_live_fetch") is False for c in calls), calls
+
+
+def test_sync_report_is_cached_and_failures_are_not(monkeypatch):
+    builds = {"n": 0, "fail": True}
+
+    def _build(snap, **kwargs):
+        builds["n"] += 1
+        if builds["fail"]:
+            raise RuntimeError("provider down")
+        return SimpleNamespace(to_dict=lambda: {"symbols": {}, "n": builds["n"]})
+
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: None)
+    monkeypatch.setattr(data_api, "build_sync_report", _build)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        assert client.get("/data/sync-report").status_code == 503
+        builds["fail"] = False
+        first = client.get("/data/sync-report")  # the 503 was not cached
+        second = client.get("/data/sync-report")  # served from the cache
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json() == {"symbols": {}, "n": 2}
+    assert builds["n"] == 2
+
+    monkeypatch.setattr(data_api, "_SYNC_REPORT_TTL_SECONDS", 0.0)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        assert client.get("/data/sync-report").json()["n"] == 3  # expired -> rebuilt
+
+
+def test_sync_report_reads_fundamentals_from_store_not_live(monkeypatch):
+    """The read endpoint must ask for stored fundamentals, never live FMP calls."""
+    seen = {}
+
+    def _build(snap, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(to_dict=lambda: {"symbols": {}})
+
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: None)
+    monkeypatch.setattr(data_api, "build_sync_report", _build)
+    with mock.patch.object(settings, "STATE_API_TOKEN", None):
+        assert client.get("/data/sync-report").status_code == 200
+    assert seen.get("fundamentals_from_store") is True
+    assert seen.get("prices_from_store") is True
+
+
 def test_sync_report_tolerates_missing_snapshot(monkeypatch):
     called = {}
 
-    def _fetch(force=False):
+    def _fetch(**kw):
         raise RuntimeError("no robinhood creds")
 
     def _build(snap, **kwargs):
@@ -792,7 +856,7 @@ def test_sync_report_forecast_available_reflects_real_forecast_tracker(monkeypat
         ),
     }
     fake_snapshot = SimpleNamespace(positions=held)
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: fake_snapshot)
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: fake_snapshot)
 
     # Skip the market-data probe entirely (irrelevant to this test) by making
     # get_provider() fail -- build_sync_report degrades that to
@@ -838,7 +902,7 @@ def test_sync_report_includes_rating_fields(monkeypatch):
         # Not held, streak (2) < threshold -> not excluded.
         "T": {"symbol": "T", "held": False, "coverage": "uncovered"},
     }
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
         lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
@@ -870,7 +934,7 @@ def test_sync_report_rating_enrichment_degrades_gracefully(monkeypatch):
     500 the whole endpoint (CONSTRAINT #6) -- the base sync-report payload
     still returns, just without the two rating keys on each symbol."""
     symbols = {"AAPL": {"symbol": "AAPL", "held": True, "coverage": "full"}}
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
     monkeypatch.setattr(
         data_api, "build_sync_report",
         lambda snap, **kwargs: SimpleNamespace(to_dict=lambda: {"symbols": symbols, "generated_at": "x"}),
@@ -896,7 +960,7 @@ def test_sync_report_rating_enrichment_degrades_gracefully(monkeypatch):
 
 def test_account_snapshot(monkeypatch):
     snap = SimpleNamespace(to_dict=lambda: {"total_equity": 12345.0, "positions": {}})
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: snap)
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: snap)
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/data/account")
     assert resp.status_code == 200
@@ -904,7 +968,7 @@ def test_account_snapshot(monkeypatch):
 
 
 def test_account_404_on_cold_state(monkeypatch):
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: None)
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: None)
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/data/account")
     assert resp.status_code == 404
@@ -961,7 +1025,7 @@ class TestDataSyncWrite:
         assert resp.status_code == 401
 
     def test_happy_path_calls_async_sync_now_and_echoes(self, monkeypatch):
-        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
         monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": []})
         monkeypatch.setattr(data_api, "async_sync_now", self._fake_async_sync_now)
         with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
@@ -981,7 +1045,7 @@ class TestDataSyncWrite:
         headless HTTP request handler."""
         captured = {}
 
-        def _fetch(force=False):
+        def _fetch(force=False, **kw):
             captured["force"] = force
             return object()
 
@@ -994,7 +1058,7 @@ class TestDataSyncWrite:
         assert captured["force"] is False
 
     def test_tolerates_missing_account_snapshot(self, monkeypatch):
-        def _fetch(force=False):
+        def _fetch(**kw):
             raise RuntimeError("no robinhood creds")
 
         called = {}
@@ -1018,7 +1082,7 @@ class TestDataSyncWrite:
         async def _boom(snapshot, **kwargs):
             raise RuntimeError("provider outage")
 
-        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
         monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": []})
         monkeypatch.setattr(data_api, "async_sync_now", _boom)
         with mock.patch.object(settings, "STATE_API_TOKEN", "secret"):
@@ -1029,7 +1093,7 @@ class TestDataSyncWrite:
         assert resp.status_code == 503
 
     def test_write_never_logs_token(self, monkeypatch, caplog):
-        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+        monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
         monkeypatch.setattr(data_api, "load_snapshot", lambda: {"signals": []})
         monkeypatch.setattr(data_api, "async_sync_now", self._fake_async_sync_now)
         with caplog.at_level("DEBUG"):
@@ -1058,7 +1122,7 @@ class TestProviderStatus:
 
     def test_shape_and_values(self, monkeypatch):
         provider = SimpleNamespace(
-            quote_source="alpaca", is_realtime=True, source_name="yahoo_computed",
+            quote_source="fmp", is_realtime=True, source_name="yahoo_computed",
         )
         monkeypatch.setattr(data_api, "get_provider", lambda: provider)
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
@@ -1067,7 +1131,7 @@ class TestProviderStatus:
         assert resp.status_code == 200
         body = resp.json()
         assert body == {
-            "provider": "alpaca",
+            "provider": "fmp",
             "is_realtime": True,
             "mode": "real_time",
             "quote_ttl_seconds": 45,
@@ -1137,402 +1201,27 @@ def test_mounts_tick_ws_route_but_not_the_unrelated_training_status_route():
     assert "/ws/training/status" not in paths
 
 
-class TestCircuitBreakerStatus:
-    """Tests for GET /risk/circuit-breaker/status."""
-
-    def test_degrades_to_normal_when_uninitialized(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
-        resp = client.get("/risk/circuit-breaker/status")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["state"] == "NORMAL"
-        assert data["volatility_zscore"] == 0.0
-        assert data["vpin"] == 0.0
-        assert data["ofi"] == 0.0
-        assert data["loss_velocity_per_min"] == 0.0
-        assert data["reason"] is None
-        assert "updated_at" in data
-
-    def test_reads_persisted_circuit_breaker_file(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
-        cb_file = tmp_path / "circuit_breaker_state.json"
-        import json
-        cb_file.write_text(
-            json.dumps({
-                "state": "SOFT_HALT",
-                "volatility_zscore": 3.82,
-                "vpin": 0.46,
-                "ofi": -1250.0,
-                "loss_velocity_per_min": -210.0,
-                "reason": "VOLATILITY_BURST_HALT: 5m EWMA realized vol Z-score 3.82 > 3.50",
-                "updated_at": "2026-08-17T12:00:00Z",
-            }),
-            encoding="utf-8",
-        )
-
-        resp = client.get("/risk/circuit-breaker/status")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["state"] == "SOFT_HALT"
-        assert data["volatility_zscore"] == 3.82
-        assert data["vpin"] == 0.46
-        assert data["ofi"] == -1250.0
-        assert data["loss_velocity_per_min"] == -210.0
-        assert data["reason"] == "VOLATILITY_BURST_HALT: 5m EWMA realized vol Z-score 3.82 > 3.50"
-        assert data["updated_at"] == "2026-08-17T12:00:00Z"
-
-    def test_auth_read_token(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
-        with mock.patch.object(settings, "STATE_API_TOKEN", "secret-tok"):
-            resp = client.get(
-                "/risk/circuit-breaker/status",
-                headers={"Authorization": "Bearer wrong-tok"},
-            )
-            assert resp.status_code == 401
-
-            resp_ok = client.get(
-                "/risk/circuit-breaker/status",
-                headers={"Authorization": "Bearer secret-tok"},
-            )
-            assert resp_ok.status_code == 200
-            assert resp_ok.json()["state"] == "NORMAL"
-
-
 # ---------------------------------------------------------------------------
-# GET /data/trends/stitch-demo
+# Removed routes stay removed (2026-10 dead-tab cleanup)
 # ---------------------------------------------------------------------------
 
 
-def _make_stitch_demo_bars(n: int = 260) -> pd.DataFrame:
-    """Realistic-enough SPY-bar fixture for the stitch-demo endpoint: a real
-    tz-naive DatetimeIndex (the endpoint relies on this for epoch-ms
-    conversion) and a Volume column with varying, non-degenerate values so
-    the ``sum_b <= 1e-9`` degenerate-scaling guard in
-    ``GoogleTrendsStitcher.get_scaling_metadata`` never trips and the real
-    scaling math is actually exercised."""
-    idx = pd.date_range("2025-01-01", periods=n, freq="B")
-    rng = np.random.default_rng(7)
-    # Trend + noise, all strictly positive -- never a flat/constant series.
-    volume = 1_000_000.0 + np.arange(n) * 500.0 + rng.normal(0, 50_000, size=n)
-    volume = np.clip(volume, 100_000.0, None)
-    return pd.DataFrame(
-        {
-            "Open": np.linspace(400, 450, n),
-            "High": np.linspace(401, 451, n),
-            "Low": np.linspace(399, 449, n),
-            "Close": np.linspace(400.5, 450.5, n),
-            "Volume": volume,
-        },
-        index=idx,
-    )
-
-
-class _FakeStoreBars:
-    """Minimal HistoricalStore stand-in exposing only ``get_bars`` -- the one
-    method the stitch-demo endpoint calls."""
-
-    def __init__(self, bars: pd.DataFrame):
-        self._bars = bars
-
-    def get_bars(self, symbol, lookback_days=252, provider=None):
-        return self._bars
-
-
-def test_get_trends_stitch_demo_happy_path(monkeypatch):
-    bars = _make_stitch_demo_bars(260)
-    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(bars))
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("get", "/data/trends/stitch-demo"),
+        ("get", "/data/svi-stitching-demo"),
+        ("post", "/data/pairs/analyze"),
+        ("post", "/data/pairs/scan"),
+        ("post", "/data/cache-long-short/simulate"),
+    ],
+)
+def test_removed_demo_and_archived_routes_are_gone(method, path):
+    """The SVI stitching demo, the Pairs radar recompute and the Cache L/S
+    simulate routes were removed with their webapp screens."""
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
-        resp = client.get("/data/trends/stitch-demo")
-    assert resp.status_code == 200
-    body = resp.json()
-
-    assert set(body.keys()) == {"raw_curves", "stitched_curve"}
-
-    raw_curves = body["raw_curves"]
-    assert isinstance(raw_curves, list)
-    assert len(raw_curves) == 3
-    for curve in raw_curves:
-        assert set(curve.keys()) == {"name", "data"}
-        # Honest labeling: never claims to be real Google Trends data.
-        assert "SPY Volume Proxy" in curve["name"]
-        assert "Google Trends" not in curve["name"]
-        assert isinstance(curve["data"], list)
-        assert len(curve["data"]) > 0
-        for point in curve["data"]:
-            assert len(point) == 2
-            ts_ms, value = point
-            assert isinstance(ts_ms, int)
-            assert ts_ms > 0
-            assert value is not None
-            assert not (isinstance(value, float) and math.isnan(value))
-
-    stitched = body["stitched_curve"]
-    assert set(stitched.keys()) == {"name", "data"}
-    assert "SPY Volume Proxy" in stitched["name"]
-    assert isinstance(stitched["data"], list)
-    assert len(stitched["data"]) > 0
-    for point in stitched["data"]:
-        ts_ms, value = point
-        assert isinstance(ts_ms, int)
-        assert value is not None
-        assert not (isinstance(value, float) and math.isnan(value))
-
-    # Stitched series should span (roughly) the union of periods A/B/C, i.e.
-    # materially more points than any single one of the three raw curves.
-    assert len(stitched["data"]) > len(raw_curves[0]["data"])
-
-    # Fidelity check (CONSTRAINT #4 regression guard): the above only proves the
-    # response is well-shaped and honestly labeled -- it does NOT prove the values
-    # actually trace back to the injected HistoricalStore's real Volume series. A
-    # silent fallback to fabricated-but-plausible-looking data (e.g. a flat/linspace
-    # ramp) would pass every assertion above unnoticed. Recompute period A's expected
-    # values and dates the exact same way the endpoint does and compare directly.
-    true_series = bars["Volume"].tail(240)
-    slice_a = true_series.iloc[0:90]
-    expected_period_a = (slice_a / slice_a.max() * 100.0).to_numpy()
-    actual_period_a = np.array([point[1] for point in raw_curves[0]["data"]])
-    assert len(actual_period_a) == len(expected_period_a)
-    np.testing.assert_allclose(actual_period_a, expected_period_a, rtol=1e-9)
-
-    expected_ts_ms = [int(ts.timestamp() * 1000) for ts in slice_a.index]
-    actual_ts_ms = [point[0] for point in raw_curves[0]["data"]]
-    assert actual_ts_ms == expected_ts_ms
-
-
-def test_get_trends_stitch_demo_prefers_real_trends_store_data_when_available(monkeypatch):
-    """When real, already-persisted Google Trends SVI data exists in TrendsStore,
-    the endpoint must use it directly rather than falling back to the SPY-volume
-    proxy -- regression guard for the finding that this endpoint used to never
-    even attempt the real (opt-in) SVI source before substituting an unrelated
-    proxy. Uses "AAPL" (not "SPY") to also regression-guard the fix for the
-    finding that the query term used to be hardcoded to "SPY", which never
-    matches what desktop/daemon_runtime.py actually ingests (settings.
-    DEFAULT_TICKERS, whose default has no SPY member) -- the endpoint must now
-    discover the term via TrendsStore.get_query_terms_with_raw_windows()."""
-    import data.trends_store as trends_store_mod
-
-    raw_rows = [
-        SimpleNamespace(window_id="w1", date=date(2026, 1, 1), value=10.0),
-        SimpleNamespace(window_id="w1", date=date(2026, 1, 2), value=20.0),
-        SimpleNamespace(window_id="w2", date=date(2026, 1, 2), value=25.0),
-        SimpleNamespace(window_id="w2", date=date(2026, 1, 3), value=30.0),
-    ]
-    stitched_rows = [
-        {"date": date(2026, 1, 1), "value": 10.0},
-        {"date": date(2026, 1, 2), "value": 22.5},
-        {"date": date(2026, 1, 3), "value": 30.0},
-    ]
-
-    class _FakeTrendsStore:
-        def __init__(self, *a, **k):
-            pass
-
-        def get_query_terms_with_raw_windows(self):
-            return ["AAPL"]
-
-        def load_raw_windows(self, query_term):
-            assert query_term == "AAPL"
-            return raw_rows
-
-        def get_stitched_series(self, query_term):
-            assert query_term == "AAPL"
-            return stitched_rows
-
-    monkeypatch.setattr(trends_store_mod, "TrendsStore", _FakeTrendsStore)
-
-    # A HistoricalStore that raises if ever touched -- proves the real-data path
-    # short-circuits before falling through to the SPY-volume proxy below it.
-    class _BoomIfCalled:
-        def get_bars(self, *a, **k):
-            raise AssertionError("should not fall through to the SPY-volume proxy")
-
-    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _BoomIfCalled())
-
-    with mock.patch.object(settings, "STATE_API_TOKEN", None), mock.patch.object(
-        settings, "GOOGLE_TRENDS_ENABLED", True
-    ):
-        resp = client.get("/data/trends/stitch-demo")
-    assert resp.status_code == 200
-    body = resp.json()
-
-    raw_curves = body["raw_curves"]
-    assert len(raw_curves) == 2
-    # Windows ordered chronologically by their own earliest date (window_id is an
-    # opaque UUID in production, not a chronological identifier).
-    assert raw_curves[0]["name"] == "Google Trends SVI (AAPL) — w1"
-    assert raw_curves[1]["name"] == "Google Trends SVI (AAPL) — w2"
-    for curve in raw_curves:
-        assert "SPY Volume Proxy" not in curve["name"]
-
-    stitched = body["stitched_curve"]
-    assert stitched["name"] == "Stitched Google Trends SVI (AAPL)"
-    assert [point[1] for point in stitched["data"]] == [10.0, 22.5, 30.0]
-
-
-def test_get_trends_stitch_demo_computes_stitched_series_when_not_yet_persisted(monkeypatch):
-    """Real raw windows on file but no persisted stitched series yet (a real
-    timing gap -- the daemon only calls save_stitched_series once stitching has
-    actually produced a non-empty result) must still use the real raw data,
-    computing a stitched curve on the fly via GoogleTrendsStitcher, rather than
-    discarding it for the SPY-volume proxy."""
-    import data.trends_store as trends_store_mod
-
-    raw_rows = [
-        SimpleNamespace(window_id="w1", date=date(2026, 1, 1), value=10.0),
-        SimpleNamespace(window_id="w1", date=date(2026, 1, 2), value=20.0),
-    ]
-
-    class _FakeTrendsStore:
-        def __init__(self, *a, **k):
-            pass
-
-        def get_query_terms_with_raw_windows(self):
-            return ["AAPL"]
-
-        def load_raw_windows(self, query_term):
-            return raw_rows
-
-        def get_stitched_series(self, query_term):
-            return []  # not persisted yet
-
-    monkeypatch.setattr(trends_store_mod, "TrendsStore", _FakeTrendsStore)
-
-    class _BoomIfCalled:
-        def get_bars(self, *a, **k):
-            raise AssertionError("should not fall through to the SPY-volume proxy")
-
-    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _BoomIfCalled())
-
-    with mock.patch.object(settings, "STATE_API_TOKEN", None), mock.patch.object(
-        settings, "GOOGLE_TRENDS_ENABLED", True
-    ):
-        resp = client.get("/data/trends/stitch-demo")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["raw_curves"][0]["name"] == "Google Trends SVI (AAPL) — w1"
-    # A single window stitched via stitch_multiple_intervals returns it unchanged.
-    assert [point[1] for point in body["stitched_curve"]["data"]] == [10.0, 20.0]
-
-
-def test_get_trends_stitch_demo_falls_back_to_proxy_when_trends_store_empty(monkeypatch):
-    """No real SVI windows on file for any query term must still degrade to
-    the honest SPY-volume proxy, not an error."""
-    import data.trends_store as trends_store_mod
-
-    class _EmptyTrendsStore:
-        def __init__(self, *a, **k):
-            pass
-
-        def get_query_terms_with_raw_windows(self):
-            return []
-
-        def load_raw_windows(self, query_term):
-            return []
-
-        def get_stitched_series(self, query_term):
-            return []
-
-    monkeypatch.setattr(trends_store_mod, "TrendsStore", _EmptyTrendsStore)
-
-    bars = _make_stitch_demo_bars(260)
-    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(bars))
-    with mock.patch.object(settings, "STATE_API_TOKEN", None), mock.patch.object(
-        settings, "GOOGLE_TRENDS_ENABLED", True
-    ):
-        resp = client.get("/data/trends/stitch-demo")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert all("SPY Volume Proxy" in curve["name"] for curve in body["raw_curves"])
-
-
-def test_get_trends_stitch_demo_skips_trends_store_when_feature_disabled(monkeypatch):
-    """GOOGLE_TRENDS_ENABLED=False (the default) must skip TrendsStore entirely
-    -- never even constructing it -- instead of unconditionally querying it (and
-    its likely-nonexistent tables) on every request regardless of the flag."""
-    import data.trends_store as trends_store_mod
-
-    def _boom(*a, **k):
-        raise AssertionError("TrendsStore must not be constructed when GOOGLE_TRENDS_ENABLED is False")
-
-    monkeypatch.setattr(trends_store_mod, "TrendsStore", _boom)
-
-    bars = _make_stitch_demo_bars(260)
-    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(bars))
-    with mock.patch.object(settings, "STATE_API_TOKEN", None), mock.patch.object(
-        settings, "GOOGLE_TRENDS_ENABLED", False
-    ):
-        resp = client.get("/data/trends/stitch-demo")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert all("SPY Volume Proxy" in curve["name"] for curve in body["raw_curves"])
-
-
-def test_get_trends_stitch_demo_insufficient_history_degrades_to_503_not_fabricated(monkeypatch):
-    # Fewer than the required 240 bars -- the endpoint must refuse to build
-    # the demo rather than proceed on a too-short window.
-    bars = _make_stitch_demo_bars(50)
-    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(bars))
-    with mock.patch.object(settings, "STATE_API_TOKEN", None):
-        resp = client.get("/data/trends/stitch-demo")
-    assert resp.status_code == 503
-    body = resp.json()
-    assert "detail" in body
-    # No fabricated/placeholder series is ever returned alongside the error.
-    assert "raw_curves" not in body
-    assert "stitched_curve" not in body
-
-
-def test_get_trends_stitch_demo_degenerate_zero_volume_slice_degrades_to_503(monkeypatch):
-    # A slice whose volume is genuinely all-zero (e.g. a data-quality bug or a
-    # placeholder/forward-filled feed) must fail closed like every other error
-    # path here -- not silently divide by zero into an all-NaN curve that
-    # to_curve() then drops, returning an honest-looking 200 with data: [].
-    bars = _make_stitch_demo_bars(260).copy()
-    # Period A is true_series.iloc[0:90], i.e. bars.iloc[-240:-150] once tail(240)
-    # is applied -- zero out exactly that window.
-    bars.iloc[-240:-150, bars.columns.get_loc("Volume")] = 0.0
-    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(bars))
-    with mock.patch.object(settings, "STATE_API_TOKEN", None):
-        resp = client.get("/data/trends/stitch-demo")
-    assert resp.status_code == 503
-    body = resp.json()
-    assert "raw_curves" not in body
-    assert "stitched_curve" not in body
-
-
-def test_get_trends_stitch_demo_empty_bars_degrades_to_503(monkeypatch):
-    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _FakeStoreBars(pd.DataFrame()))
-    with mock.patch.object(settings, "STATE_API_TOKEN", None):
-        resp = client.get("/data/trends/stitch-demo")
-    assert resp.status_code == 503
-    body = resp.json()
-    assert "raw_curves" not in body
-    assert "stitched_curve" not in body
-
-
-def test_get_trends_stitch_demo_generic_exception_degrades_to_503_not_500(monkeypatch):
-    class _BoomStore:
-        def get_bars(self, *a, **k):
-            raise RuntimeError("db locked")
-
-    monkeypatch.setattr(data_api, "HistoricalStore", lambda **k: _BoomStore())
-    with mock.patch.object(settings, "STATE_API_TOKEN", None):
-        resp = client.get("/data/trends/stitch-demo")
-    assert resp.status_code == 503  # dead-letter, never a raw 500
-    body = resp.json()
-    assert "raw_curves" not in body
-    assert "stitched_curve" not in body
-
-
-def test_svi_stitching_demo_duplicate_route_stays_removed():
-    """Regression guard: an earlier version of this branch shipped a separate,
-    duplicate GET /data/svi-stitching-demo route (commit e1504dbd) that was later
-    consolidated into the single GET /data/trends/stitch-demo endpoint above.
-    Nothing else in this suite would catch that duplicate route being silently
-    reintroduced by a future merge/rebase."""
-    with mock.patch.object(settings, "STATE_API_TOKEN", None):
-        resp = client.get("/data/svi-stitching-demo")
-    assert resp.status_code == 404
+        resp = getattr(client, method)(path, json={}) if method == "post" else client.get(path)
+    assert resp.status_code in (404, 405)
 
 
 # ---------------------------------------------------------------------------
@@ -1563,7 +1252,7 @@ def test_explain_ticker_tracked_full_success(monkeypatch):
         coverage=SimpleNamespace(value="full"),
         watchlists=("file:watchlist.txt",),
     )
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: object())
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: object())
     monkeypatch.setattr(
         data_api,
         "build_sync_report",
@@ -1664,7 +1353,7 @@ def test_explain_ticker_tracked_full_success(monkeypatch):
 
 def test_explain_ticker_untracked_symbol_honesty(monkeypatch):
     monkeypatch.setattr(data_api, "company_profile", lambda sym: None)
-    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda force=False: None)
+    monkeypatch.setattr(data_api, "fetch_account_snapshot", lambda **kw: None)
     monkeypatch.setattr(
         data_api,
         "build_sync_report",

@@ -1,0 +1,543 @@
+"""
+tests/test_technical_options_engine.py
+=======================================
+Unit coverage for technical_options_engine.py's lower-level primitives, which
+sit underneath the matrix-level behavior already pinned by
+tests/test_options_matrix.py (Gravity STEP 38).
+
+That file proves the deterministic strategy directive (Put Credit Spread /
+Iron Condor / etc.) and end-to-end build_premium_directive integrity. This
+file fills the remaining gaps:
+
+  * black_scholes_pricing_and_greeks's T<=0 boundary, put-call parity, and
+    Greeks sign/range sanity -- the Greeks feeding the GUI Options Matrix and
+    every strike-resolution call.
+  * find_strike_for_delta's brentq-failure fallback (CONSTRAINT #6).
+  * calculate_realizable_theta's documented DTE haircut ladder.
+  * (sanitize_ohlcv / calculate_indicators / the GJR-GARCH estimators moved
+    to core modules in 2026-09 -- their tests live in
+    tests/test_volatility_garch.py.)
+  * calculate_realized_vol_rank's flat-volatility degenerate case.
+  * _on_strike_grid / _determine_trend_bias pure-function edge cases.
+  * build_premium_directive's GJR-GARCH-failure and ATM-Greeks-failure
+    dead-letter paths.
+"""
+
+import math
+from unittest import mock
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from technical_options_engine import (
+    OptionsPricingRecommender,
+    TechnicalOptionsEngine,
+    _determine_trend_bias,
+    _on_strike_grid,
+    build_premium_directive,
+    validate_directive_integrity,
+)
+
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+def _ohlcv(n: int, seed: int = 0, start: float = 100.0, flat: bool = False) -> pd.DataFrame:
+    dates = pd.date_range("2023-01-01", periods=n, freq="B")
+    if flat:
+        close = np.full(n, start)
+    else:
+        rng = np.random.RandomState(seed)
+        close = start * np.exp(np.cumsum(rng.normal(0.0003, 0.015, n)))
+    return pd.DataFrame(
+        {
+            "Open": close, "High": close * 1.01, "Low": close * 0.99,
+            "Close": close, "Volume": np.full(n, 1_000_000.0),
+        },
+        index=dates,
+    )
+
+
+# ============================================================================
+# black_scholes_pricing_and_greeks
+# ============================================================================
+
+class TestBlackScholesPricingAndGreeks:
+    def test_zero_time_to_expiry_call_returns_intrinsic_value_zero_greeks(self):
+        rec = OptionsPricingRecommender(stock_price=110.0)
+        result = rec.black_scholes_pricing_and_greeks(K=100.0, T=0.0, sigma=0.25, option_type="call")
+        assert result["Price"] == 10.0  # max(0, 110-100)
+        # Delta collapses to the ITM indicator at expiration (1.0 -- this
+        # call is in the money), not a hardcoded 0.0; Gamma/Vega/Theta still
+        # decay to 0 since there's no time value left.
+        assert result == {**result, "Delta": 1.0, "Gamma": 0.0, "Vega": 0.0, "Theta_Daily": 0.0}
+
+    def test_zero_time_to_expiry_put_returns_intrinsic_value(self):
+        rec = OptionsPricingRecommender(stock_price=90.0)
+        result = rec.black_scholes_pricing_and_greeks(K=100.0, T=0.0, sigma=0.25, option_type="put")
+        assert result["Price"] == 10.0  # max(0, 100-90)
+
+    def test_negative_time_to_expiry_treated_as_expired(self):
+        rec = OptionsPricingRecommender(stock_price=110.0)
+        result = rec.black_scholes_pricing_and_greeks(K=100.0, T=-0.01, sigma=0.25, option_type="call")
+        assert result["Price"] == 10.0
+
+    def test_invalid_option_type_raises(self):
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        with pytest.raises(ValueError):
+            rec.black_scholes_pricing_and_greeks(K=100.0, T=0.5, sigma=0.2, option_type="straddle")
+
+    def test_zero_sigma_call_returns_intrinsic_value_zero_greeks(self):
+        """Regression: a zero (or NaN) volatility previously reached the
+        d1 = ... / (sigma * sqrt(T)) division uncaught, crashing the whole
+        main_orchestrator.py pipeline with ZeroDivisionError. Must degrade to
+        the same intrinsic-value shape as the T<=0 branch instead."""
+        rec = OptionsPricingRecommender(stock_price=110.0)
+        result = rec.black_scholes_pricing_and_greeks(K=100.0, T=30 / 365.0, sigma=0.0, option_type="call")
+        assert result["Price"] == 10.0  # max(0, 110-100)
+        # Delta collapses to the ITM indicator (1.0 -- this call is in the
+        # money) rather than a hardcoded 0.0; Gamma/Vega/Theta still decay to
+        # 0 since a degenerate volatility carries no real time value.
+        assert result == {**result, "Delta": 1.0, "Gamma": 0.0, "Vega": 0.0, "Theta_Daily": 0.0}
+
+    def test_negative_sigma_treated_same_as_zero(self):
+        rec = OptionsPricingRecommender(stock_price=90.0)
+        result = rec.black_scholes_pricing_and_greeks(K=100.0, T=30 / 365.0, sigma=-0.1, option_type="put")
+        assert result["Price"] == 10.0  # max(0, 100-90)
+
+    def test_nan_sigma_does_not_raise(self):
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        result = rec.black_scholes_pricing_and_greeks(K=100.0, T=30 / 365.0, sigma=float("nan"), option_type="call")
+        assert result["Delta"] == 0.0
+        assert not math.isnan(result["Price"])
+
+    def test_call_delta_in_zero_one_range(self):
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        result = rec.black_scholes_pricing_and_greeks(K=100.0, T=30 / 365.0, sigma=0.25, option_type="call")
+        assert 0.0 <= result["Delta"] <= 1.0
+
+    def test_put_delta_in_negative_one_zero_range(self):
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        result = rec.black_scholes_pricing_and_greeks(K=100.0, T=30 / 365.0, sigma=0.25, option_type="put")
+        assert -1.0 <= result["Delta"] <= 0.0
+
+    def test_gamma_and_vega_are_non_negative(self):
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        call = rec.black_scholes_pricing_and_greeks(K=100.0, T=30 / 365.0, sigma=0.25, option_type="call")
+        assert call["Gamma"] >= 0.0
+        assert call["Vega"] >= 0.0
+
+    def test_put_call_parity_holds(self):
+        """C - P = S - K*exp(-rT) (Black-Scholes consistency check)."""
+        S, K, T, sigma, r = 100.0, 105.0, 30 / 365.0, 0.30, 0.04
+        rec = OptionsPricingRecommender(stock_price=S, risk_free_rate=r)
+        call = rec.black_scholes_pricing_and_greeks(K=K, T=T, sigma=sigma, option_type="call")
+        put = rec.black_scholes_pricing_and_greeks(K=K, T=T, sigma=sigma, option_type="put")
+        lhs = call["Price"] - put["Price"]
+        rhs = S - K * math.exp(-r * T)
+        assert math.isclose(lhs, rhs, abs_tol=1e-6)
+
+    def test_deep_itm_call_delta_approaches_one(self):
+        rec = OptionsPricingRecommender(stock_price=200.0)
+        result = rec.black_scholes_pricing_and_greeks(K=50.0, T=30 / 365.0, sigma=0.20, option_type="call")
+        assert result["Delta"] > 0.95
+
+    def test_deep_otm_call_delta_approaches_zero(self):
+        rec = OptionsPricingRecommender(stock_price=50.0)
+        result = rec.black_scholes_pricing_and_greeks(K=300.0, T=30 / 365.0, sigma=0.20, option_type="call")
+        assert result["Delta"] < 0.05
+
+
+# ============================================================================
+# find_strike_for_delta
+# ============================================================================
+
+class TestFindStrikeForDelta:
+    def test_resolved_strike_reproduces_target_delta(self):
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        target = 0.30
+        strike = rec.find_strike_for_delta(target, T=30 / 365.0, sigma=0.25, option_type="call")
+        greeks = rec.black_scholes_pricing_and_greeks(strike, T=30 / 365.0, sigma=0.25, option_type="call")
+        assert math.isclose(greeks["Delta"], target, abs_tol=0.02)
+
+    def test_strike_lands_on_fifty_cent_grid(self):
+        rec = OptionsPricingRecommender(stock_price=137.0)
+        strike = rec.find_strike_for_delta(-0.16, T=30 / 365.0, sigma=0.30, option_type="put")
+        assert _on_strike_grid(strike)
+
+    def test_brentq_failure_falls_back_to_rounded_spot_price(self):
+        """CONSTRAINT #6: if root-finding cannot converge, the documented
+        fallback is the rounded spot price -- never an exception, never an
+        unbounded/nonsensical strike."""
+        rec = OptionsPricingRecommender(stock_price=123.37)
+        with mock.patch("technical_options_engine.brentq", side_effect=ValueError("no bracket")):
+            strike = rec.find_strike_for_delta(0.30, T=30 / 365.0, sigma=0.25, option_type="call")
+        assert strike == round(123.37 * 2) / 2
+
+    def test_zero_sigma_never_raises(self):
+        """Regression: find_strike_for_delta's brentq bracketing calls
+        black_scholes_pricing_and_greeks internally with the same sigma it was
+        given -- a zero sigma must not raise ZeroDivisionError here either."""
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        strike = rec.find_strike_for_delta(0.30, T=30 / 365.0, sigma=0.0, option_type="call")
+        assert strike > 0.0
+
+
+# ============================================================================
+# generate_strategy_pricing_matrix — end-to-end zero-sigma regression
+# ============================================================================
+
+class TestGenerateStrategyPricingMatrixZeroSigma:
+    """Reproduces the exact production crash (main_orchestrator.py ->
+    generate_option_strategy_matrix -> generate_strategy_pricing_matrix ->
+    black_scholes_pricing_and_greeks, ZeroDivisionError on a zero current_iv)
+    end-to-end across every trend_bias/true_ivr branch, none of which validated
+    sigma before today."""
+
+    @pytest.mark.parametrize("true_ivr,trend_bias", [
+        (70.0, "Bullish"), (70.0, "Bearish"), (70.0, "Neutral"),
+        (20.0, "Bullish"), (20.0, "Bearish"),
+        (50.0, "Bullish"), (50.0, "Bearish"),
+    ])
+    def test_zero_sigma_does_not_crash_any_branch(self, true_ivr, trend_bias):
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        directive = rec.generate_strategy_pricing_matrix(
+            true_ivr=true_ivr, current_iv=0.0, trend_bias=trend_bias, target_dte=30,
+        )
+        assert isinstance(directive, dict)
+        assert "Strategy" in directive
+
+
+# ============================================================================
+# calculate_realizable_theta — DTE haircut ladder
+# ============================================================================
+
+class TestCalculateRealizableTheta:
+    @pytest.mark.parametrize(
+        "dte,expected_retained_fraction",
+        [(1, 0.60), (7, 0.78), (30, 0.88), (90, 0.95)],
+    )
+    def test_haircut_matches_documented_ladder(self, dte, expected_retained_fraction):
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        theoretical = -1.0  # arbitrary unit theta
+        result = rec.calculate_realizable_theta(theoretical, dte)
+        assert math.isclose(result, theoretical * expected_retained_fraction, rel_tol=1e-9)
+
+    def test_boundary_dte_one_vs_two_use_different_buckets(self):
+        rec = OptionsPricingRecommender(stock_price=100.0)
+        r1 = rec.calculate_realizable_theta(-1.0, dte=1)
+        r2 = rec.calculate_realizable_theta(-1.0, dte=2)
+        assert r1 != r2  # dte=1 -> 40% haircut, dte=2 -> 22% haircut
+
+
+# ============================================================================
+# calculate_realized_vol_rank
+# ============================================================================
+
+class TestCalculateRealizedVolRank:
+    def test_insufficient_history_returns_fifty(self):
+        engine = TechnicalOptionsEngine()
+        assert engine.calculate_realized_vol_rank(_ohlcv(10, seed=9), current_vol=0.30) == 50.0
+
+    def test_flat_price_series_returns_fifty_degenerate_case(self):
+        """vol_max == vol_min (a perfectly flat price series has zero rolling
+        vol throughout) must return the neutral midpoint, not divide by
+        zero."""
+        engine = TechnicalOptionsEngine()
+        result = engine.calculate_realized_vol_rank(_ohlcv(300, flat=True), current_vol=0.0)
+        assert result == 50.0
+
+    def test_current_vol_at_historical_max_ranks_near_hundred(self):
+        engine = TechnicalOptionsEngine()
+        df = _ohlcv(300, seed=10)
+        returns = df["Close"].pct_change().dropna()
+        rolling_vol = (returns.rolling(window=20).std() * np.sqrt(252)).dropna().tail(252)
+        result = engine.calculate_realized_vol_rank(df, current_vol=float(rolling_vol.max()))
+        assert result == pytest.approx(100.0, abs=1e-6)
+
+    def test_current_vol_at_historical_min_ranks_near_zero(self):
+        engine = TechnicalOptionsEngine()
+        df = _ohlcv(300, seed=11)
+        returns = df["Close"].pct_change().dropna()
+        rolling_vol = (returns.rolling(window=20).std() * np.sqrt(252)).dropna().tail(252)
+        result = engine.calculate_realized_vol_rank(df, current_vol=float(rolling_vol.min()))
+        assert result == pytest.approx(0.0, abs=1e-6)
+
+    def test_result_is_clamped_to_zero_hundred_range(self):
+        engine = TechnicalOptionsEngine()
+        df = _ohlcv(300, seed=12)
+        # An absurdly high current_vol must still clamp to 100, not overshoot.
+        result = engine.calculate_realized_vol_rank(df, current_vol=50.0)
+        assert 0.0 <= result <= 100.0
+
+
+# ============================================================================
+# _on_strike_grid / _determine_trend_bias — pure-function edge cases
+# ============================================================================
+
+class TestOnStrikeGrid:
+    @pytest.mark.parametrize("strike", [100.0, 100.5, 95.0, 0.5])
+    def test_on_grid_values(self, strike):
+        assert _on_strike_grid(strike) is True
+
+    @pytest.mark.parametrize("strike", [100.37, 95.01, 0.25])
+    def test_off_grid_values(self, strike):
+        assert _on_strike_grid(strike) is False
+
+    def test_non_finite_strike_is_false(self):
+        assert _on_strike_grid(float("nan")) is False
+        assert _on_strike_grid(float("inf")) is False
+
+    def test_non_positive_grid_is_false(self):
+        assert _on_strike_grid(100.0, grid=0.0) is False
+        assert _on_strike_grid(100.0, grid=-0.5) is False
+
+
+class TestDetermineTrendBias:
+    def test_positive_both_is_bullish(self):
+        assert _determine_trend_bias(10.0, 5.0) == "Bullish"
+
+    def test_negative_both_is_bearish(self):
+        assert _determine_trend_bias(-10.0, -5.0) == "Bearish"
+
+    def test_mixed_signs_is_neutral(self):
+        assert _determine_trend_bias(10.0, -5.0) == "Neutral"
+        assert _determine_trend_bias(-10.0, 5.0) == "Neutral"
+
+    def test_zero_values_are_neutral(self):
+        assert _determine_trend_bias(0.0, 0.0) == "Neutral"
+
+
+# ============================================================================
+# build_premium_directive — dead-letter paths
+# ============================================================================
+
+class TestBuildPremiumDirectiveDeadLetter:
+    def test_garch_failure_yields_nan_sigma_and_cash_wait(self):
+        bars = _ohlcv(252, seed=13)
+        with mock.patch.object(
+            TechnicalOptionsEngine, "estimate_gjr_garch_volatility", side_effect=RuntimeError("boom")
+        ):
+            row = build_premium_directive(
+                "FAIL", bars, spot_price=float(bars["Close"].iloc[-1]), is_stale=False,
+            )
+        assert math.isnan(row["Sigma_GARCH"])
+        assert row["Strategy"] == "Cash"
+        # No fabricated legs/integrity-violating output when pricing cannot proceed.
+        assert row["Legs"] == []
+
+    def test_non_finite_spot_price_short_circuits_to_diagnostic_row(self):
+        bars = _ohlcv(252, seed=14)
+        row = build_premium_directive("BADPRICE", bars, spot_price=float("nan"), is_stale=True)
+        assert math.isnan(row["Price"])
+        assert row["Strategy"] == "Cash"
+        assert row["Stale"] is True
+
+    def test_atm_greeks_failure_does_not_abort_strategy_directive(self):
+        """ATM Greeks are informational; a failure there must not prevent the
+        strategy directive (Step 5) from still being computed."""
+        bars = _ohlcv(252, seed=15)
+        with mock.patch.object(
+            OptionsPricingRecommender, "black_scholes_pricing_and_greeks",
+            side_effect=RuntimeError("greeks failed"),
+        ):
+            row = build_premium_directive(
+                "ATMFAIL", bars, spot_price=float(bars["Close"].iloc[-1]), is_stale=False,
+            )
+        assert math.isnan(row["ATM_Delta"])
+        # The function returns early after the ATM Greeks failure (per the
+        # source's except->return row), so Strategy stays at its Cash default
+        # -- this pins that documented short-circuit rather than assuming a
+        # downstream strategy directive is still attempted.
+        assert row["Strategy"] == "Cash"
+
+    def test_trend_indicator_failure_defaults_to_neutral(self):
+        bars = _ohlcv(252, seed=16)
+        with mock.patch.object(TechnicalOptionsEngine, "calculate_indicators", side_effect=RuntimeError("boom")):
+            row = build_premium_directive(
+                "TRENDFAIL", bars, spot_price=float(bars["Close"].iloc[-1]), is_stale=False,
+            )
+        assert row["Trend_Bias"] == "Neutral"
+
+    def test_integrity_ok_true_for_well_formed_engine_output(self):
+        bars = _ohlcv(252, seed=17)
+        row = build_premium_directive("OK", bars, spot_price=float(bars["Close"].iloc[-1]))
+        assert isinstance(row["Integrity_OK"], bool)
+        if row["Strategy"] != "Cash":
+            assert row["Integrity_OK"] is True
+
+
+# ============================================================================
+# build_premium_directive — FMP fundamental-health kwargs + earnings-risk
+# folding into Integrity_OK (fmp-updates-data-apps PR)
+# ============================================================================
+
+class TestBuildPremiumDirectiveFmpHealthAndEarnings:
+    """Coverage for the eight new pass-through kwargs (Altman Z, Piotroski F,
+    Net Debt/EBITDA, FCF Yield, days_to_earnings, realized_vol_30d, news
+    snippets, peers) and the days_to_earnings -> Earnings_Risk -> Integrity_OK
+    folding logic. build_premium_directive is a pure, no-I/O helper -- none of
+    these values are fetched here, only echoed onto the row verbatim."""
+
+    def _bullish_sell_regime_row(self, seed, **extra):
+        """A deterministic Put Credit Spread: trend bias is forced Bullish by
+        mocking calculate_indicators (rather than relying on the random
+        synthetic bars to happen to produce one), and ivr_sell_threshold=0.0
+        forces the high-IVR/premium-selling branch regardless of whatever the
+        bars' own realized-vol IVR proxy computes to -- the same technique
+        test_options_matrix.py's test_call_debit_spread_directive_... uses for
+        the opposite (low-IVR) regime."""
+        bars = _ohlcv(252, seed=seed)
+        with mock.patch.object(
+            TechnicalOptionsEngine,
+            "calculate_indicators",
+            return_value={
+                "Aroon_Oscillator": 50.0, "Coppock_Curve": 10.0,
+                "Chandelier_Long": 0.0, "Chandelier_Short": 0.0,
+            },
+        ):
+            return build_premium_directive(
+                "EARN", bars, spot_price=float(bars["Close"].iloc[-1]), is_stale=False,
+                target_dte=30, ivr_sell_threshold=0.0, **extra,
+            )
+
+    def test_fmp_health_kwargs_default_to_none_and_empty_lists(self):
+        """Flag-off / no caller-supplied values -- byte-identical to
+        pre-overlay behavior: every new field is None, Earnings_Risk is
+        False, and the two list fields are empty (never None)."""
+        bars = _ohlcv(252, seed=20)
+        row = build_premium_directive("DEFAULT", bars, spot_price=float(bars["Close"].iloc[-1]))
+        assert row["Altman_Z_Score"] is None
+        assert row["Piotroski_F_Score"] is None
+        assert row["Net_Debt_EBITDA"] is None
+        assert row["FCF_Yield"] is None
+        assert row["Days_To_Earnings"] is None
+        assert row["Earnings_Risk"] is False
+        assert row["Realized_Vol_30D"] is None
+        assert row["Analyst_Target_Consensus"] is None
+        assert row["Analyst_Target_Upside"] is None
+        assert row["Analyst_Grade_Score"] is None
+        assert row["News_Snippets"] == []
+        assert row["Peers"] == []
+
+    def test_fmp_health_kwargs_pass_through_verbatim(self):
+        """This function never fetches or recomputes these -- whatever the
+        caller passes in comes back out unchanged."""
+        bars = _ohlcv(252, seed=21)
+        news = [{"title": "headline", "url": "http://x", "published_date": "2026-08-01",
+                 "site": "s", "text": "t"}]
+        peers = ["MSFT", "GOOGL"]
+        row = build_premium_directive(
+            "PASS", bars, spot_price=float(bars["Close"].iloc[-1]),
+            altman_z_score=3.4, piotroski_f_score=7, net_debt_ebitda=1.2,
+            fcf_yield=0.05, realized_vol_30d=0.22,
+            news_snippets=news, peers_list=peers,
+        )
+        assert row["Altman_Z_Score"] == 3.4
+        assert row["Piotroski_F_Score"] == 7
+        assert row["Net_Debt_EBITDA"] == 1.2
+        assert row["FCF_Yield"] == 0.05
+        assert row["Realized_Vol_30D"] == 0.22
+        assert row["News_Snippets"] == news
+        assert row["Peers"] == peers
+
+    def test_analyst_kwargs_pass_through_verbatim(self):
+        """The three analyst-consensus kwargs are a pure passthrough too --
+        this function never fetches or recomputes them (they're sourced from
+        the existing HistoricalStore analyst-snapshot table by the one
+        production caller, reporting/options_snapshot.py)."""
+        bars = _ohlcv(252, seed=26)
+        row = build_premium_directive(
+            "ANALYST", bars, spot_price=float(bars["Close"].iloc[-1]),
+            analyst_target_consensus=180.0, analyst_target_upside=0.2,
+            analyst_grade_score=0.4,
+        )
+        assert row["Analyst_Target_Consensus"] == 180.0
+        assert row["Analyst_Target_Upside"] == 0.2
+        assert row["Analyst_Grade_Score"] == 0.4
+
+    def test_earnings_within_target_dte_sets_earnings_risk_true(self):
+        bars = _ohlcv(252, seed=22)
+        row = build_premium_directive(
+            "SOON", bars, spot_price=float(bars["Close"].iloc[-1]),
+            target_dte=30, days_to_earnings=10,
+        )
+        assert row["Days_To_Earnings"] == 10
+        assert row["Earnings_Risk"] is True
+
+    def test_earnings_beyond_target_dte_sets_earnings_risk_false(self):
+        bars = _ohlcv(252, seed=23)
+        row = build_premium_directive(
+            "LATER", bars, spot_price=float(bars["Close"].iloc[-1]),
+            target_dte=30, days_to_earnings=45,
+        )
+        assert row["Days_To_Earnings"] == 45
+        assert row["Earnings_Risk"] is False
+
+    def test_earnings_risk_folds_into_integrity_ok_false_for_a_structurally_clean_directive(self):
+        """Pins the dead-code fix: removing the redundant inner
+        `row["Integrity_OK"] = False` must not change behavior -- the
+        unconditional line right after already produced the correct verdict.
+        A structurally clean directive (Integrity_OK True, no issues) must
+        flip to Integrity_OK False and gain exactly the earnings warning
+        (nothing else) once days_to_earnings falls inside target_dte."""
+        row_no_risk = self._bullish_sell_regime_row(seed=24, days_to_earnings=None)
+        assert row_no_risk["Strategy"] == "Put Credit Spread"
+        assert row_no_risk["Integrity_OK"] is True
+        assert row_no_risk["Integrity_Issues"] == []
+
+        row_with_risk = self._bullish_sell_regime_row(seed=24, days_to_earnings=5)
+        assert row_with_risk["Strategy"] == "Put Credit Spread"
+        assert row_with_risk["Earnings_Risk"] is True
+        assert row_with_risk["Integrity_OK"] is False
+        assert len(row_with_risk["Integrity_Issues"]) == 1
+        assert "Earnings Announcement" in row_with_risk["Integrity_Issues"][0]
+
+    def test_earnings_risk_boundary_is_inclusive_of_target_dte(self):
+        """has_earnings_risk uses `0 <= days_to_earnings <= target_dte` --
+        an event exactly ON the target DTE boundary still counts as risk."""
+        row = self._bullish_sell_regime_row(seed=25, days_to_earnings=30)
+        assert row["Earnings_Risk"] is True
+        assert row["Integrity_OK"] is False
+
+        row_just_past = self._bullish_sell_regime_row(seed=25, days_to_earnings=31)
+        assert row_just_past["Earnings_Risk"] is False
+        assert row_just_past["Integrity_OK"] is True
+
+
+# ============================================================================
+# validate_directive_integrity — gaps not covered by test_options_matrix.py
+# ============================================================================
+
+class TestValidateDirectiveIntegrityGaps:
+    def test_cash_directive_is_trivially_valid(self):
+        directive = {"Strategy": "Cash", "Action": "Wait", "Legs": []}
+        result = validate_directive_integrity(directive)
+        assert result == {"ok": True, "issues": [], "checks": []}
+
+    def test_iron_condor_leg_without_delta_skips_delta_check_not_fail(self):
+        """Iron Condor legs omit Delta by engine convention -- the validator
+        must SKIP (not fail) the delta check for those legs while still
+        checking the strike grid."""
+        directive = {
+            "Strategy": "Iron Condor",
+            "Legs": [
+                {"Side": "Short", "Type": "Put", "Strike": 95.0, "Price": 1.0},  # no Delta key
+            ],
+        }
+        result = validate_directive_integrity(directive)
+        assert result["ok"] is True
+        assert result["checks"][0]["DeltaOK"] is None
+
+    def test_delta_outside_tolerance_is_flagged(self):
+        directive = {
+            "Strategy": "Put Credit Spread",
+            "Legs": [
+                {"Side": "Short", "Type": "Put", "Strike": 95.0, "Price": 1.0, "Delta": -0.80},
+            ],
+        }
+        result = validate_directive_integrity(directive, delta_tolerance=0.05)
+        assert result["ok"] is False
+        assert any("deviates from target" in issue for issue in result["issues"])

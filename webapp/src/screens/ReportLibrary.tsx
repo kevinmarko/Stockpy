@@ -356,7 +356,7 @@ function NotebookLmExportSection({ files, onReload }: { files: ReportFile[]; onR
       <div className="drag-handle" style={{ padding: "var(--s-3)", borderBottom: `1px solid rgba(255, 255, 255, 0.08)` }}>
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>🧠 NotebookLM export</h2>
         <p style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-1)" }}>
-          A snapshot of portfolio, follows, and macro context formatted for ingestion into Google NotebookLM.
+          A snapshot of portfolio and macro context formatted for ingestion into Google NotebookLM.
         </p>
       </div>
       <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>

@@ -49,7 +49,7 @@ Emitted key set
 ----------------
 Exactly ``yahoo_fundamentals.FUNDAMENTAL_KEYS`` **minus**
 ``"heldPercentInstitutions"`` (no institutional-ownership feed exists on FMP
-Starter — see ``risk/etf_transmission.py``'s existing fallback for that gap)
+Starter — see ``legacy/risk/etf_transmission.py``'s existing fallback for that gap)
 **plus** ``"sharesOutstanding"`` (real float-share count from
 ``/shares-float``, additive) and ``"_source"`` (constant ``"fmp"``, consumed
 by ``data/historical_store.py::_source_name`` for per-response provenance).

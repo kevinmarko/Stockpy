@@ -33,9 +33,9 @@ def test_paper_account_creation(store):
 
 def test_apply_fill_buy_and_sell(store):
     # Mocked so this test never depends on real network reachability --
-    # get_account()/get_open_positions() call fmp_client.batch_quote to
+    # get_account()/get_open_positions() call _fetch_stock_prices to
     # mark open positions to market.
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={'AAPL': 150.0}):
         # Buy 10 AAPL at 150
         initial_cash = store.get_account().cash
         success = store.apply_fill("client_order_1", "AAPL", "buy", 10.0, 150.0, 5.0)
@@ -63,7 +63,7 @@ def test_apply_fill_buy_and_sell(store):
         assert positions[0].avg_entry_price == 150.0
 
 def test_sell_full_position_removes_it(store):
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={}):
         store.apply_fill("client_order_5", "AAPL", "buy", 10.0, 150.0, 0.0)
         success = store.apply_fill("client_order_6", "AAPL", "sell", 10.0, 150.0, 0.0)
         assert success is True
@@ -81,7 +81,7 @@ def test_sell_full_position_with_float_drift_succeeds(store):
     """A full-position sell where pos.qty has drifted to
     12.499999999999998 (float noise) for a requested qty=12.5 must succeed,
     not be wrongly rejected by an exact `<` comparison (Finding 28)."""
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={}):
         # Buy in three fractional chunks so the summed qty carries the same
         # kind of float noise a real fill sequence would produce.
         store.apply_fill("drift_buy_1", "AAPL", "buy", 4.166666666666666, 150.0, 0.0)
@@ -625,7 +625,7 @@ def test_settle_expired_options_profit_matches_cash_credit(store):
     buggy apples-to-oranges (7 - 500) subtraction).
     """
     symbol = "AAPL 2020-01-17 $150.00 CALL"
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[{"symbol": "AAPL", "price": 157.0}]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={'AAPL': 157.0}):
         success = store.apply_fill(
             "settle_buy", symbol, "buy", 1.0, 500.0,
             commission_and_fees=0.0, status=OrderStatus.FILLED,
@@ -696,7 +696,7 @@ def test_closed_trade_has_real_entry_ts_and_positive_holding_period(store):
     survive into the closed-trade ledger row (not falsified to exit_ts /
     "now"), and holding_period_days must be computed from the real gap.
     """
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={}):
         success = store.apply_fill("ht_buy", "AAPL", "buy", 10.0, 100.0, 0.0)
         assert success is True
 
@@ -775,7 +775,7 @@ def test_migration_success_preserves_legacy_positions(tmp_path):
 
     store = PaperAccountStore(db_url=f"sqlite:///{db_file}")
 
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={}):
         positions = {p.symbol: p for p in store.get_open_positions()}
     assert set(positions) == {"AAPL", "MSFT"}
     assert positions["AAPL"].qty == pytest.approx(10.0)
@@ -785,7 +785,7 @@ def test_migration_success_preserves_legacy_positions(tmp_path):
     # A second construction against the same (now-migrated) DB must be a
     # no-op, not attempt the destructive rebuild again.
     store2 = PaperAccountStore(db_url=f"sqlite:///{db_file}")
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={}):
         positions2 = {p.symbol: p for p in store2.get_open_positions()}
     assert set(positions2) == {"AAPL", "MSFT"}
 
@@ -866,7 +866,7 @@ def test_untagged_fallback_does_not_silently_close_by_default(store):
     'untagged' long as the position being closed, under the new default
     (allow_untagged_fallback=False). The untagged position stays
     untouched and strategy_A gets its own new short position instead."""
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={'AAPL': 150.0}):
         # Legacy untagged long position (e.g. from a Bug 6 migration).
         assert store.apply_fill("legacy_buy", "AAPL", "buy", 10.0, 100.0, 0.0) is True
 
@@ -900,7 +900,7 @@ def test_untagged_fallback_works_when_explicitly_requested(store):
     via allow_untagged_fallback=True, and the resulting closed trade is
     correctly attributed to 'untagged' (the actual position owner being
     closed), not to the calling strategy_id."""
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={'AAPL': 150.0}):
         assert store.apply_fill("legacy_buy2", "AAPL", "buy", 10.0, 100.0, 0.0) is True
 
         success = store.apply_fill(
@@ -928,7 +928,7 @@ def test_untagged_fallback_multi_leg_gated_by_default(store):
     """The same strict opt-in gate applies to apply_multi_leg_fill's
     per-leg untagged fallback -- a strategy_A multi-leg open must not
     silently borrow an untagged single-leg position on one of its legs."""
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={}):
         # Legacy untagged short call position on the leg strategy_A is
         # about to "buy" (which, under the old unconditional fallback,
         # would have been reinterpreted as closing this untagged short).
@@ -1005,7 +1005,7 @@ def test_multi_leg_reject_uses_bare_symbol_not_strategy_prefixed(store):
 
 def test_retag_position_simple_move(store):
     """retag_position moves a position with no existing target row."""
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={}):
         assert store.apply_fill("retag_buy", "AAPL", "buy", 10.0, 150.0, 0.0) is True
 
     moved = store.retag_position("AAPL", "untagged", "strategy_B")
@@ -1029,7 +1029,7 @@ def test_retag_position_merges_with_existing_target_same_sign(store):
     """When the target (symbol, to_strategy_id) already has a same-sign
     position, retag_position weighted-averages the two cost bases rather
     than raising a PK collision."""
-    with patch("data.paper_account_store.fmp_client.batch_quote", return_value=[]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={}):
         # untagged: 10 shares @ 100
         assert store.apply_fill("merge_untagged_buy", "AAPL", "buy", 10.0, 100.0, 0.0) is True
         # strategy_B already has its own: 10 shares @ 200
@@ -1129,12 +1129,18 @@ def test_transactions_store_bridge_failure_is_non_fatal_and_visible(monkeypatch,
     ), "expected a greppable 'transactions_store bridge failed' WARNING log"
 
 
-def test_transactions_store_bridge_disabled_by_default(tmp_path):
-    """PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED defaults False -- a
-    PaperAccountStore constructed with today's real default settings must
-    never construct the bridge companion store at all (today's exact
-    pre-feature behavior preserved)."""
-    assert settings.PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED is False
+def test_transactions_store_bridge_enabled_by_default(tmp_path):
+    """PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED defaults True (operator
+    decision, 2026-09: paper outcomes feed the models) -- a store built with
+    today's real default settings constructs the bridge companion store."""
+    assert settings.PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED is True
+    db_url = f"sqlite:///{tmp_path / 'bridge_on.db'}"
+    store = PaperAccountStore(db_url=db_url)
+    assert store._transactions_store is not None
+
+
+def test_transactions_store_bridge_off_when_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED", False)
     db_url = f"sqlite:///{tmp_path / 'bridge_off.db'}"
     store = PaperAccountStore(db_url=db_url)
     assert store._transactions_store is None

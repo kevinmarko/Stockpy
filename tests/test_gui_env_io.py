@@ -52,9 +52,9 @@ def test_get_value_refuses_secret(temp_env):
 
 def test_write_setting_refuses_secret(temp_env):
     with pytest.raises(env_io.SecretWriteError):
-        env_io.write_setting("ALPACA_SECRET_KEY", "anything")
+        env_io.write_setting("FRED_API_KEY", "anything")
     # The secret must not have been written.
-    assert "ALPACA_SECRET_KEY" not in temp_env.read_text(encoding="utf-8")
+    assert "anything" not in temp_env.read_text(encoding="utf-8")
 
 
 def test_is_secret_classification():
@@ -200,7 +200,6 @@ def test_excluded_from_gui_keys_are_neither_writable_nor_secret():
         "AI_GENERATION_API_ENABLED",
         "AUTOMATION_WRITES_ENABLED",
         "BROKERAGE_REFRESH_ENABLED",
-        "CACHE_LONG_SHORT_WRITES_ENABLED",
         "COMMAND_EXECUTION_ENABLED",
         "DEAD_LETTER_RETRY_ENABLED",
         "GENERAL_SETTINGS_WRITES_ENABLED",
@@ -258,8 +257,7 @@ def test_alerting_mcp_credentials_mirror_secret_siblings(temp_env):
         assert env_io.get_value(key) == "587"
 
 
-def test_reddit_user_agent_mirrors_edgar_user_agent_precedent():
-    assert env_io.is_secret("REDDIT_USER_AGENT") is True
+def test_edgar_user_agent_is_secret():
     assert env_io.is_secret("EDGAR_USER_AGENT") is True
 
 
@@ -286,7 +284,7 @@ def test_dual_momentum_and_regime_weights_json_roundtrip(temp_env):
         "META_LABELING_ENABLED",
         "HISTORICAL_STORE_ENABLED",
         "PILOTS_TOP_N",
-        "ALPACA_KEY_ROTATED_DATE",
+        "PAPER_TRADING",
         "PAPER_TRADING_START_DATE",
     ],
 )

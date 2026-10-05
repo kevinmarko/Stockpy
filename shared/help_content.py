@@ -224,18 +224,6 @@ def _sizing_cap_escalation_factor() -> float:
     return settings.SIZING_CAP_ESCALATION_FACTOR
 
 
-def _etf_transmission_max_derate_pct() -> int:
-    return int(settings.ETF_TRANSMISSION_MAX_DERATE * 100)
-
-
-def _etf_transmission_ownership_reference_pct() -> int:
-    return int(settings.ETF_TRANSMISSION_OWNERSHIP_REFERENCE * 100)
-
-
-def _etf_transmission_min_multiplier() -> float:
-    return settings.ETF_TRANSMISSION_MIN_MULTIPLIER
-
-
 # Retrain window (days) used by the Analytics ML-model-monitoring section to
 # flag a stale model. No dedicated setting exists, so this mirrors the default
 # ml.meta_labeling.MetaLabeler(retrain_freq_days=30) cadence and the LGBM ranker's
@@ -743,8 +731,8 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     "paper trading": _g(
         "Paper Trading",
         "Running the pipeline with real market data and real logic, but against a "
-        "simulated broker account (no real money).  Alpaca provides a free paper "
-        "account.  The preflight check requires 90 days of paper trading before "
+        "simulated broker account (no real money): the local FMP paper ledger, "
+        "which fills at live FMP quotes.  The preflight check requires 90 days of paper trading before "
         "going live.  Only relevant when `ADVISORY_ONLY=false`.",
         "#11-paper-trading-workflow",
     ),
@@ -1051,8 +1039,8 @@ TAB_HELP: Dict[str, TabHelp] = {
     "market_data": _t(
         "market_data",
         "🛰️ Market Data",
-        "Shows which data provider is active (Alpaca real-time or yfinance ~15-min "
-        "delayed), quote freshness per symbol, and a sliding-window connectivity "
+        "Shows which data provider is active (FMP or the yfinance ~15-min "
+        "delayed fallback), quote freshness per symbol, and a sliding-window connectivity "
         "health badge.  Lets you fetch a batch of quotes with per-symbol error "
         "classification (Rate Limited, Not Found, Timeout, etc.) and a validation "
         "Status column to catch malformed quotes before they reach the quant pipeline.",
@@ -1096,7 +1084,7 @@ TAB_HELP: Dict[str, TabHelp] = {
         "Two DISTINCT, independent sentiment signals for a chosen symbol — "
         "never conflated. (1) News Catalyst Sentiment: the always-on "
         "pipeline's real `news_sentiment` field (FinBERT / keyword-lexicon "
-        "over recent Finnhub headlines), read straight from the latest "
+        "over recent FMP headlines), read straight from the latest "
         "state snapshot. (2) Antigravity Agent + GJR-GARCH: an on-demand "
         "LLM-agent news read (sentiment / intensity / credibility) plus a "
         "real per-request GJR-GARCH(1,1,1) fit measuring the asymmetric "
@@ -1163,7 +1151,7 @@ TAB_HELP: Dict[str, TabHelp] = {
         "🪄 AI Insights",
         "Per-symbol AI reads layered on top of the pipeline's own signals: an "
         "Opal research brief (thesis/catalysts/risk factors grounded in real "
-        "Finnhub news), a Claude analyst rationale note, a Gemini chart-pattern "
+        "FMP news), a Claude analyst rationale note, a Gemini chart-pattern "
         "read, and a Claude-vs-Gemini disagreement view.  Every section is "
         "button-gated — nothing calls an AI provider until you click it — and "
         "purely informational: no AI output here places or modifies an order.",
@@ -1199,7 +1187,7 @@ TAB_HELP: Dict[str, TabHelp] = {
 
 SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     "strategy_matrix.mode_consistency": (
-        "ALPACA_PAPER and DRY_RUN are written together so the mode is "
+        "PAPER_TRADING and DRY_RUN are written together so the mode is "
         "fully consistent — no half-flips."
     ),
     "strategy_matrix.version_registry": (
@@ -1253,7 +1241,7 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     ),
     "dependency_map": (
         "Shows which GUI panels and reports are affected when a data source "
-        "(Alpaca, Finnhub, FRED, Robinhood) degrades or becomes unavailable."
+        "(FMP, yfinance, FRED, Robinhood) degrades or becomes unavailable."
     ),
     "strategy_version_registry": (
         "SHA-256 prefix and file mtime for each registered signal module.  "
@@ -1273,7 +1261,7 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     "latency_heatmap": (
         "Per-symbol quote latency (time from quote timestamp to ingestion).  "
         "Populated by the Market Data tab's 'Fetch quotes' batch.  "
-        "High latency on a real-time provider (Alpaca) suggests network issues."
+        "High latency on a real-time provider (FMP) suggests network issues."
     ),
     "preflight_panel": (
         "Runs scripts/preflight_check.py and shows pass/fail per check.  "
@@ -1330,20 +1318,6 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         "(FRED data).  They reflect conditions at pipeline execution time, "
         "not real-time — run the orchestrator to refresh."
     ),
-    "observability.etf_transmission": lambda: (
-        "Ben-David, Franzoni & Moussawi (2018): ETF arbitrage transmits a "
-        "shock in one constituent to its otherwise-healthy basket peers, so "
-        "a heavily ETF-wrapped name carries extra non-fundamental, "
-        "non-diversifiable variance. Three independent, opt-in layers: "
-        "measurement (`ETF_Ownership_Pct`/`ETF_Comovement_R2`/"
-        "`ETF_Primary_Wrapper`), a per-name sizing derate (up to "
-        f"{_etf_transmission_max_derate_pct()}% at "
-        f"{_etf_transmission_ownership_reference_pct()}%+ ETF ownership, "
-        f"floored at {_etf_transmission_min_multiplier():.2f}x), and a "
-        "portfolio-level covariance overlay that inflates co-movement "
-        "between co-held names in the gross-exposure cap. This panel is "
-        "read-only — it never writes a setting."
-    ),
     "observability.sizing_cap_audit": lambda: (
         "Durable log of position-sizing guardrail events — `sizing/"
         "position_sizer.py`'s `was_capped`/`binding_constraint` telemetry, "
@@ -1369,14 +1343,8 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     ),
     "options.matrix_methodology": (
         "σ from GJR-GARCH(1,1) with 20-day realized fallback; **IVR proxy** is a "
-        "realized-vol percentile (true IVR requires an options chain). **True IVR** "
-        "(opt-in, `OPTIONS_TRUE_IVR_ENABLED`, default off) fetches a live 30-day "
-        "ATM implied vol and ranks it against strictly-prior history in the same "
-        "`iv_history` table the daily pipeline writes to — N/A until that history "
-        "warms up, and adds one live options-chain network call per symbol per "
-        "render when on. When both a finite True IVR and the flag are present, the "
-        "strategy directive is priced off True IVR instead of the proxy; otherwise "
-        "the proxy is used exactly as before. Trend bias is Aroon+Coppock sign "
+        "realized-vol percentile (true IVR requires an options chain). Trend bias "
+        "is Aroon+Coppock sign "
         "agreement. **Stale=True** marks delayed (~15 min) yfinance quotes. "
         "Realizable Theta applies a DTE-scaled execution-friction haircut "
         "(40% @ 1DTE, 22% @ 7DTE, 12% @ 30DTE, 5% baseline)."
@@ -1395,7 +1363,7 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     ),
     "sentiment_dynamics.news_catalyst": (
         "The always-on pipeline's real `news_sentiment` field for this symbol "
-        "(FinBERT / keyword-lexicon over recent Finnhub headlines), read from "
+        "(FinBERT / keyword-lexicon over recent FMP headlines), read from "
         "the latest state snapshot — not the on-demand Antigravity section below."
     ),
     "sentiment_dynamics.antigravity_agent": (
@@ -1469,17 +1437,6 @@ METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     "IVR Proxy": (
         "Realized-vol IVR proxy [0–100].  Values above 50 suggest options IV is "
         "elevated relative to recent history — favorable for premium selling."
-    ),
-    "True_IVR": (
-        "Opt-in real, options-chain-derived IV rank [0-100] (settings."
-        "OPTIONS_TRUE_IVR_ENABLED, default off).  Fetches a live 30-day ATM "
-        "implied vol and ranks it against strictly-prior history in the same "
-        "iv_history table the daily pipeline writes to — N/A (never a fabricated "
-        "number) until the flag is on AND enough history has accumulated, or on "
-        "any chain-fetch/network failure.  Adds one live options-chain fetch per "
-        "symbol per render when enabled.  Preferred over IVR Proxy for pricing "
-        "the strategy directive whenever it resolves to a finite value; IVR Proxy "
-        "is always shown alongside it, never replaced."
     ),
     "RSI": "Relative Strength Index (14-period).  Above 70 = overbought; below 30 = oversold.",
     "RSI_2": (
@@ -1724,7 +1681,7 @@ METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     # ── Sentiment Dynamics tab ────────────────────────────────────────────
     "sentiment_dynamics.news_sentiment": (
         "The pipeline's real `news_sentiment` field for this symbol, roughly "
-        "in [-1, +1] (FinBERT / keyword-lexicon over recent Finnhub headlines). "
+        "in [-1, +1] (FinBERT / keyword-lexicon over recent FMP headlines). "
         "This section is omitted entirely when the symbol has no scored news — "
         "never shown as a fabricated neutral 0."
     ),

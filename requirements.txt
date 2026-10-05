@@ -17,10 +17,12 @@ dill==0.4.1
 executing==2.2.1
 fonttools==4.63.0
 fredapi==0.5.2
+# google-auth kept: still required transitively by google-genai (Gemini
+# provider), even though the Google Sheets
+# publisher that used to be its main direct-import reader (via gspread) was
+# retired to legacy/ in step 4e (2026-09). google-auth-oauthlib, gspread,
+# and gspread-dataframe were gspread-only and are removed with it.
 google-auth==2.55.0
-google-auth-oauthlib==1.4.0
-gspread==6.2.1
-gspread-dataframe==4.0.0
 hmmlearn==0.3.3
 lightgbm>=4.0.0
 idna==3.18
@@ -49,7 +51,7 @@ numba==0.61.2
 # first upgrading numba to a release that supports it, or the JIT paths in
 # vectorbt/pandas-ta will break at runtime.
 numpy>=2.0,<2.3
-oauthlib==3.3.1
+oauthlib==4.0.0
 packaging==26.0
 pandas==2.3.3
 pandas-ta-classic==0.6.20
@@ -91,7 +93,7 @@ scikit-learn==1.9.0
 scipy==1.17.1
 setuptools==83.0.0
 six==1.17.0
-soupsieve==2.8.4
+soupsieve==2.9.0
 stack-data==0.6.3
 statsmodels==0.14.6
 threadpoolctl==3.6.0
@@ -103,7 +105,7 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 tzdata==2026.2
 tzlocal==5.4.3
-urllib3==2.7.0
+urllib3==2.8.0
 vectorbt==1.0.0
 wcwidth==0.8.1
 websockets==16.0
@@ -113,10 +115,9 @@ yfinance>=1.5,<1.6
 arch>=7.0.0
 pandas-ta>=0.3.14b
 prophet>=1.1.5
-google-cloud-language>=2.14.0
 # QuantFAA>=0.1.0
 pandas-datareader>=0.10.0
-SQLAlchemy>=2.0.0
+SQLAlchemy>=2.0.0,<2.1  # 2.1 switches the default postgresql:// driver to psycopg (v3); this repo ships psycopg2-binary
 psycopg2-binary>=2.9.9
 openai>=1.40.0  # Tier 9 Scope 4 — Opal research agent; >=1.40 for Structured Outputs .parse() helper
 anthropic>=0.25.0
@@ -125,28 +126,20 @@ pydantic-settings==2.14.2
 python-dotenv==1.2.2
 pyarrow>=15.0.0
 lxml==6.1.0
-# data/etf_holdings.py parses SEC N-PORT XML fetched over the network via
+# legacy/data/etf_holdings.py parses SEC N-PORT XML fetched over the network via
 # defusedxml (not stdlib xml.etree.ElementTree directly) to forbid DTD/
 # entity expansion -- hardening against a compromised/spoofed upstream
 # response, not something the app's own local data ever needs.
 defusedxml>=0.7.1
 pykalman==0.11.2
-alpaca-py>=0.40.0
 streamlit>=1.37.0
 PyYAML>=6.0.0
 robin_stocks>=3.1.0
-finnhub-python>=2.4.0
 # Optional: install transformers for FinBERT neural headline sentiment in
 # signals/news_catalyst.py.  Requires either PyTorch or TensorFlow backend.
 # Without it, a built-in keyword lexicon is used automatically (no crash).
 transformers>=4.35.0
 
-# Native desktop shell (pywebview) — hosts gui/app.py's Streamlit UI in a
-# real window instead of a browser tab. macOS backend needs pyobjc.
-pywebview>=5.0
-pyobjc-core>=10.0; sys_platform == 'darwin'
-pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'
-pyobjc-framework-WebKit>=10.0; sys_platform == 'darwin'
 
 # Read-only web-API scaffold (api/state_api.py) — future web/mobile frontend foundation
 fastapi>=0.110.0

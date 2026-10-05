@@ -24,15 +24,15 @@ from settings import settings
 
 logger = logging.getLogger("ML.ForecastBackfillRegistryBridge")
 
-# Must be an exact match with the 6 signals that declare meta_label_features
-# in ml/forecast_backfill.py's active_strategies universe.
+# Must be an exact match with the signals that declare meta_label_features
+# in ml/forecast_backfill.py's active_strategies universe. vrp_premium_selling
+# and options_flow_sentiment dropped out when they were retired from live
+# scoring (2026-09, step 3d').
 BACKFILL_ELIGIBLE_SIGNAL_IDS = frozenset([
     "timeseries_momentum",
     "cross_sectional_momentum",
     "rsi2_mean_reversion",
     "sector_quality_rank",
-    "vrp_premium_selling",
-    "options_flow_sentiment",
 ])
 
 DEFAULT_LIVE_HORIZON_DAYS = 10

@@ -2,11 +2,8 @@
 tests/test_regime_filter.py
 ===========================
 Unit tests for the cross-tab macro-regime filter (``gui/regime_filter.py``) and
-a small contract check on the shared severity palette + Styler helpers
-(``gui/styling.py``).
 
-These are fully offline and Streamlit-free — ``shared.regime_filter`` and the
-pure parts of ``shared.styling`` import cleanly without a running Streamlit app.
+These are fully offline and Streamlit-free.
 """
 
 from __future__ import annotations
@@ -158,71 +155,3 @@ def test_filter_snapshot_missing_signals_key_unchanged():
 # ---------------------------------------------------------------------------
 # styling — shared palette exposes light + dark; Styler helpers return CSS
 # ---------------------------------------------------------------------------
-
-
-def test_severity_palette_has_light_and_dark_with_same_keys():
-    from shared import styling
-
-    assert set(styling.SEVERITY_PALETTE) == {"light", "dark"}
-    light_keys = set(styling.SEVERITY_PALETTE["light"])
-    dark_keys = set(styling.SEVERITY_PALETTE["dark"])
-    assert light_keys == dark_keys
-    assert {"positive", "negative", "warning", "neutral"} <= light_keys
-    # Every value is a hex colour string.
-    for variant in styling.SEVERITY_PALETTE.values():
-        for hexval in variant.values():
-            assert isinstance(hexval, str) and hexval.startswith("#")
-    # Light and dark differ for the low-contrast mid-tones we fixed.
-    assert (
-        styling.SEVERITY_PALETTE["light"]["warning"]
-        != styling.SEVERITY_PALETTE["dark"]["warning"]
-    )
-
-
-def test_severity_color_accessor():
-    from shared import styling
-
-    assert styling.severity_color("positive", "light") == styling.SEVERITY_PALETTE["light"]["positive"]
-    assert styling.severity_color("negative", "dark") == styling.SEVERITY_PALETTE["dark"]["negative"]
-    # Unknown theme falls back to light; unknown severity → "".
-    assert styling.severity_color("positive", "bogus") == styling.SEVERITY_PALETTE["light"]["positive"]
-    assert styling.severity_color("bogus", "light") == ""
-
-
-def test_styler_helpers_return_valid_css_strings():
-    from shared import styling
-
-    # Positive P&L → green; negative → red; non-numeric → empty.
-    assert "color:" in styling._color_pnl(5.0)
-    assert styling.SEVERITY_PALETTE["light"]["positive"] in styling._color_pnl(5.0)
-    assert styling.SEVERITY_PALETTE["light"]["negative"] in styling._color_pnl(-5.0)
-    assert styling._color_pnl("N/A") == ""
-
-    # Sharpe below the gate → red, above → green.
-    below = styling._color_sharpe(styling.VALIDATION_SHARPE_MIN - 0.1)
-    above = styling._color_sharpe(styling.VALIDATION_SHARPE_MIN + 0.1)
-    assert styling.SEVERITY_PALETTE["light"]["negative"] in below
-    assert styling.SEVERITY_PALETTE["light"]["positive"] in above
-
-    # Kelly at/above the ceiling → red.
-    assert styling.SEVERITY_PALETTE["light"]["negative"] in styling._color_kelly_target(
-        styling.KELLY_CEILING_PCT
-    )
-
-
-def test_build_global_css_contains_vars_and_theme_blocks():
-    from shared import styling
-
-    css = styling.build_global_css()
-    assert "<style>" in css and "</style>" in css
-    # Custom properties defined on :root.
-    assert "--sev-positive:" in css
-    assert "--sev-negative:" in css
-    assert "--sev-warning:" in css
-    # Theme-awareness: both prefers-color-scheme and data-theme override blocks.
-    assert "@media (prefers-color-scheme: dark)" in css
-    assert '[data-theme="dark"]' in css
-    # Dark warning value appears (the override block).
-    assert styling.SEVERITY_PALETTE["dark"]["warning"] in css
-    # Responsive tab-bar rule present.
-    assert "flex-wrap: wrap" in css

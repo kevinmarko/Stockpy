@@ -31,7 +31,6 @@ Macro-triggered gating (engine/advisory.evaluate):
 
 from __future__ import annotations
 
-import os
 import types
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -145,7 +144,7 @@ def _patched_evaluate(symbol: str, macro_dto: Any, sector: str = "Technology") -
 
     with (
         mock.patch("engine.advisory.ProcessingEngine") as _pe_cls,
-        mock.patch("engine.advisory.TechnicalOptionsEngine") as _toe_cls,
+        mock.patch("engine.advisory.GarchVolatilityEstimator") as _toe_cls,
         mock.patch("engine.advisory.ForecastingEngine") as _fe_cls,
         mock.patch("engine.advisory.StrategyEngine") as _se_cls,
         mock.patch("engine.advisory.TransactionsStore") as _ts_cls,
@@ -381,19 +380,9 @@ class TestOrchestratorKillSwitchGate:
             import asyncio
             import main_orchestrator as _mo
 
-            # Patch file-system check for credentials.json only -- a blanket
-            # `os.path.exists -> False` also fakes away GlobalKillSwitch's own
-            # `self._path.exists()` sentinel check on Python 3.13+, where
-            # pathlib.Path.exists() delegates straight to os.path.exists (it
-            # did not on 3.12, this repo's pinned interpreter). That would
-            # spuriously report the sentinel as absent and defeat the exact
-            # gate this test verifies. See tests/test_daemon_runtime.py's
-            # `_patch_data_engine_construction` fixture for the same pattern.
-            _real_exists = os.path.exists
-            with mock.patch(
-                "os.path.exists",
-                side_effect=lambda p: False if p == "credentials.json" else _real_exists(p),
-            ):
+            # Force the MockDataEngine branch (conftest's autouse fixture does
+            # this too; explicit here because the test depends on it).
+            with mock.patch("data_engine.live_data_configured", return_value=False):
                 asyncio.run(_mo._main_body(effective_dry_run=True))
 
         assert pipeline_called == [], "run_pipeline must NOT be called when kill switch is active"

@@ -37,7 +37,7 @@ class MockBroker(BrokerBase):
     A faithful *superset* of the three ad-hoc per-file mocks this codebase
     grew (``tests/test_order_manager_idempotency.py``,
     ``tests/test_kill_switch.py``, ``tests/test_reconciliation.py``). It
-    performs no network I/O whatsoever, so tests that use it need no ALPACA
+    performs no network I/O whatsoever, so tests that use it need no broker
     credentials and never touch a real broker.
 
     Behaviour

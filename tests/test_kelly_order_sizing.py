@@ -1,6 +1,6 @@
 """Unit tests for main_orchestrator._kelly_target_qty.
 
-The Alpaca BUY path previously submitted a hardcoded qty=1.0 for every new long,
+The pipeline's broker BUY path previously submitted a hardcoded qty=1.0 for every new long,
 ignoring the Kelly Target weight and neutering the position-size risk check. The
 sizing is now `shares = kelly_weight * equity / price`, extracted into this pure
 helper so it can be verified without a live broker.

@@ -18,7 +18,6 @@ from datetime import datetime, timezone
 
 from data.robinhood_portfolio import AccountSnapshot
 from execution.kill_switch import GlobalKillSwitch
-from reporting.sheets_client import SHEET_NAME
 from settings import settings
 
 from pipeline.base import PipelineStep
@@ -82,11 +81,9 @@ class UniverseStep(PipelineStep):
                 "Empty symbol universe — nothing to evaluate. "
                 "Fix one of: (1) set RH_USERNAME / RH_PASSWORD in "
                 ".env so Robinhood positions populate the universe, (2) set the "
-                "WATCHLIST env var (e.g. WATCHLIST=SPY,QQQ,AAPL,MSFT), (3) "
-                "create %s with one ticker per line, or (4) add tickers to "
-                "Sheet2 column A in the '%s' Google Sheet (requires credentials.json).",
+                "WATCHLIST env var (e.g. WATCHLIST=SPY,QQQ,AAPL,MSFT), or (3) "
+                "create %s with one ticker per line.",
                 ctx.watchlist_file,
-                SHEET_NAME,
             )
             ctx.stopped = True
             ctx.stop_reason = "empty_universe"

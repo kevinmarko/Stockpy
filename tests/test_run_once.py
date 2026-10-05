@@ -27,7 +27,6 @@ import main as m
 from main import (
     RunResult,
     _build_universe,
-    _load_tickers_from_sheet2,
     _load_watchlist,
     run_once,
 )
@@ -69,7 +68,8 @@ def _make_position(symbol: str, qty: float = 10.0, avg_cost: float = 100.0) -> M
 
 @pytest.fixture(autouse=True)
 def _isolate_scan_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Neutralize main.discovery() so every test's universe-building
+    """Neutralize discovery() (patched on pipeline.advisory_inputs, where
+    build_universe() calls it since step 5.0) so every test's universe-building
     assertions are deterministic regardless of whether a real
     ~/.stockpy_local/output/scan_candidates.json happens to exist on the
     machine running the suite (e.g. from a real agentic-discovery skill
@@ -80,7 +80,7 @@ def _isolate_scan_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     one, so neither monkeypatch.chdir(tmp_path) nor a fresh checkout
     isolates it. A test that wants to exercise the merge itself should
     override this fixture's patch with its own monkeypatch.setattr call."""
-    monkeypatch.setattr("main.discovery", lambda *a, **kw: {"candidates": []})
+    monkeypatch.setattr("pipeline.advisory_inputs.discovery", lambda *a, **kw: {"candidates": []})
 
 
 def _make_recommendation(symbol: str, action: str = "HOLD") -> Recommendation:
@@ -209,50 +209,27 @@ class TestBuildUniverse:
     def test_empty_account_empty_watchlist(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
+        """Held ∪ watchlist ∪ discovered ∪ DEFAULT_TICKERS all empty -> the
+        universe is []. The Google Sheets Sheet2 last-resort fallback that
+        used to run here was retired in step 4e (2026-09)."""
         monkeypatch.setattr(m.settings, "WATCHLIST", "")
         monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
-        with patch("main._load_tickers_from_sheet2", return_value=[]):
-            assert _build_universe(snap) == []
+        assert _build_universe(snap) == []
 
-    def test_sheet2_fallback_used_when_empty(
+    def test_default_tickers_fallback_used_when_empty(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
-        """Sheet2 is consulted only when held + watchlist are both empty."""
+        """DEFAULT_TICKERS is the sole fallback now that Sheet2 is retired --
+        consulted only when held + watchlist + discovered are all empty."""
         monkeypatch.setattr(m.settings, "WATCHLIST", "")
-        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", [])
+        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", ["SPY", "QQQ"])
         monkeypatch.chdir(tmp_path)
         snap = _make_snapshot(positions={})
-        with patch("main._load_tickers_from_sheet2", return_value=["SPY", "QQQ"]):
-            result = _build_universe(snap)
+        result = _build_universe(snap)
         assert set(result) == {"SPY", "QQQ"}
         assert result == sorted(result)
-
-    def test_sheet2_not_called_when_watchlist_present(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
-    ) -> None:
-        """Sheet2 must NOT be consulted when the watchlist already has tickers."""
-        monkeypatch.setattr(m.settings, "WATCHLIST", "AAPL")
-        # Isolate from a real repo-root watchlist.txt -- see test_from_env_var.
-        monkeypatch.chdir(tmp_path)
-        snap = _make_snapshot(positions={})
-        with patch("main._load_tickers_from_sheet2") as mock_sheet2:
-            result = _build_universe(snap)
-        mock_sheet2.assert_not_called()
-        assert result == ["AAPL"]
-
-    def test_sheet2_not_called_when_held_present(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
-    ) -> None:
-        """Sheet2 must NOT be consulted when Robinhood positions are held."""
-        monkeypatch.setattr(m.settings, "WATCHLIST", "")
-        monkeypatch.chdir(tmp_path)
-        snap = _make_snapshot(positions={"TSLA": _make_position("TSLA")})
-        with patch("main._load_tickers_from_sheet2") as mock_sheet2:
-            result = _build_universe(snap)
-        mock_sheet2.assert_not_called()
-        assert "TSLA" in result
 
     def test_build_universe_symbol_rating_exclusion_failure_handled(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
@@ -285,37 +262,6 @@ class TestBuildUniverse:
         result = _build_universe(snap)
         assert set(result) == {"AAPL", "NVDA", "MSFT", "AMD", "INTC"}
         assert result == sorted(result)
-
-
-# ---------------------------------------------------------------------------
-# _load_tickers_from_sheet2 tests
-# ---------------------------------------------------------------------------
-
-class TestLoadTickersFromSheet2:
-    """Tests for _load_tickers_from_sheet2()."""
-
-    def test_returns_empty_when_no_credentials(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)  # no credentials.json here
-        assert _load_tickers_from_sheet2() == []
-
-    def test_returns_tickers_from_sheet2_col_a(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "credentials.json").write_text("{}")  # presence check only
-        mock_ws = MagicMock()
-        mock_ws.col_values.return_value = ["SPY", "QQQ", "", "# ignore", "AAPL"]
-        mock_sh = MagicMock()
-        mock_sh.worksheet.return_value = mock_ws
-        mock_gc = MagicMock()
-        mock_gc.open.return_value = mock_sh
-        with patch("gspread.service_account", return_value=mock_gc):
-            result = _load_tickers_from_sheet2()
-        assert result == ["SPY", "QQQ", "AAPL"]  # empty + comment stripped
-
-    def test_returns_empty_on_sheet_error(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "credentials.json").write_text("{}")
-        with patch("gspread.service_account", side_effect=Exception("network error")):
-            assert _load_tickers_from_sheet2() == []
 
 
 # ---------------------------------------------------------------------------
@@ -828,7 +774,7 @@ class TestBuildMacroDtoHistoricalStoreRouting:
         with patch("data_engine.DataEngine") as MockDE, \
              patch("macro_engine.MacroEngine") as MockME, \
              patch("data.historical_store.HistoricalStore") as MockHS, \
-             patch("main.get_provider") as mock_get_provider:
+             patch("pipeline.advisory_inputs.get_provider") as mock_get_provider:
             fake_de = MagicMock()
             fake_de.fetch_macro_raw.return_value = {}
             MockDE.return_value = fake_de
@@ -1060,7 +1006,7 @@ class TestBuildMacroDtoDataUnavailable:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(m.settings, "FRED_API_KEY", "dummy_key_for_test")
-        with patch("main._get_macro_engine", side_effect=RuntimeError("boom")):
+        with patch("pipeline.advisory_inputs.get_macro_engine", side_effect=RuntimeError("boom")):
             dto = m._build_macro_dto()
         assert dto.data_unavailable is True
         assert dto.killSwitch is True

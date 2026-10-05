@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-07-17T15:00:00+00:00",
+  "mode": "review",
+  "kill_switch_active": false,
+  "max_notional_per_order": 0.0,
+  "limit_buffer_bps": 0,
+  "n_intents": 3,
+  "n_placeable": 0,
+  "intents": [
+    {
+      "client_order_id": "59d1b934b3440e04338b6d33a3faf755aeb3de97ad60862c",
+      "symbol": "AAPL",
+      "action": "BUY",
+      "side": "buy",
+      "qty": null,
+      "target_notional": 5000.0,
+      "order_type": "market",
+      "limit_price": null,
+      "conviction": 0.85,
+      "gate_allowed": true,
+      "gate_reasons": [],
+      "allow_place": false,
+      "rationale": "AAPL: Accumulate a new position. The multi-signal composite score is 75/100 (strongly bullish; regime: RISK ON); the 30-day blended forecast implies 6.0% upside (target $157.67 vs current $148.75); existing position shows a 25.0% unrealised gain on a dividend-adjusted cost basis ($0 cumulative dividends received). (Raw strategy signal: STRONG BUY.)",
+      "strategy": "high-conviction multi-signal composite [RISK ON]",
+      "sources": [
+        {
+          "source_id": "advisory",
+          "target_notional": 5000.0
+        }
+      ],
+      "overridden": []
+    },
+    {
+      "client_order_id": "610884579b0ae481dabf54e8d6f306a470a1605f02cc5216",
+      "symbol": "NVDA",
+      "action": "BUY",
+      "side": "buy",
+      "qty": null,
+      "target_notional": 5000.0,
+      "order_type": "market",
+      "limit_price": null,
+      "conviction": 0.85,
+      "gate_allowed": true,
+      "gate_reasons": [],
+      "allow_place": false,
+      "rationale": "NVDA: Accumulate a new position. The multi-signal composite score is 55/100 (moderately bullish; regime: RISK ON); the 30-day blended forecast implies 8.0% upside (target $360.28 vs current $333.59); Aroon oscillator (-48) indicates a choppy/neutral trend. (Raw strategy signal: BUY.)",
+      "strategy": "multi-signal composite [RISK ON]",
+      "sources": [
+        {
+          "source_id": "advisory",
+          "target_notional": 5000.0
+        }
+      ],
+      "overridden": []
+    },
+    {
+      "client_order_id": "ce0824a408d28b93cf251dc4ff3986842f616f4de2859d7e",
+      "symbol": "XOM",
+      "action": "BUY",
+      "side": "buy",
+      "qty": null,
+      "target_notional": 5000.0,
+      "order_type": "market",
+      "limit_price": null,
+      "conviction": 0.85,
+      "gate_allowed": true,
+      "gate_reasons": [],
+      "allow_place": false,
+      "rationale": "XOM: Accumulate a new position. The multi-signal composite score is 100/100 (strongly bullish; regime: RISK ON); the 30-day blended forecast implies 5.0% upside (target $212.46 vs current $202.34); Aroon oscillator (100) indicates a strong uptrend. (Raw strategy signal: STRONG BUY.)",
+      "strategy": "high-conviction multi-signal composite [RISK ON]",
+      "sources": [
+        {
+          "source_id": "advisory",
+          "target_notional": 5000.0
+        }
+      ],
+      "overridden": []
+    }
+  ]
+}

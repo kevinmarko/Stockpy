@@ -737,9 +737,3 @@ class TestPlacedLedgerPathConvention:
 # ---------------------------------------------------------------------------
 # Panel wiring
 # ---------------------------------------------------------------------------
-
-class TestPanelWiring:
-    def test_launcher_references_robinhood_execution_status(self):
-        source = Path("legacy/streamlit_command_center/panels/launcher.py").read_text(encoding="utf-8")
-        assert "_render_robinhood_execution_status" in source
-        assert "shared.robinhood_execution_panel" in source

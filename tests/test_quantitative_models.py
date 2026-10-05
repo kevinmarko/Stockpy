@@ -197,8 +197,8 @@ def test_strategy_engine_buy_range_and_options_overlays(monkeypatch):
 
     assert result_equity["Action Signal"] == "STRONG BUY"
     assert result_equity["buyRange"] == "Buy Zone: $149.62 - $157.50"
-    # Should select standard equity OTM covered call (delta-20)
-    assert "OTM Covered Call (delta-20)" in result_equity["Option Strategy"]
+
+    assert "Option Strategy" not in result_equity  # options overlay removed (steps 3d, 4f)
 
     # Case 2: REIT high-yielder in a Buy setup (AGNC - Real Estate)
     bar_reit = MarketBarDTO(datetime.now(), "AGNC", 9.80, 10.05, 9.75, 9.85, 2500000)
@@ -213,9 +213,9 @@ def test_strategy_engine_buy_range_and_options_overlays(monkeypatch):
         forecast_price=10.50, trend_strength=60.0, atr=0.15
     )
 
-    # Should select OTM Covered Call with delta-15 (since Real Estate sector is a yield asset)
+
     assert result_reit["Action Signal"] in ["BUY", "STRONG BUY"]
-    assert "OTM Covered Call (delta-15)" in result_reit["Option Strategy"]
+    assert "Option Strategy" not in result_reit  # options overlay removed (steps 3d, 4f)
 
     # Case 3: Neutral Stock in HOLD setup
     # Make trend strength neutral (40.0)
@@ -364,16 +364,25 @@ def test_macro_engine_fama_french_regression():
 
 
 # =============================================================================
-# 6. TECHNICAL & OPTIONS ENGINE FUNCTIONAL TESTS
+# 6. TECHNICAL INDICATOR / GARCH FUNCTIONAL TESTS
+#
+# These two tests used to go through technical_options_engine.TechnicalOptionsEngine
+# (archived to legacy/ in step 4b), which was a thin delegate to the two core
+# modules below (verified byte-identical at archive time -- see
+# tests/test_volatility_garch.py's TestPinnedCoreValues and
+# tests/test_garch_extraction_equivalence.py). They now call the core modules
+# directly. The archived engine's own options-only surface (IVR ranking,
+# generate_option_strategy_matrix, OptionsPricingRecommender) moved with it;
+# that coverage lives on in legacy/tests/test_technical_options_engine.py.
 # =============================================================================
 def test_technical_options_engine_indicators():
     """
     Verifies calculation of Aroon, Coppock, and Chandelier Exit indicators.
     """
-    from technical_options_engine import TechnicalOptionsEngine
+    from trend_indicators import calculate_trend_exit_indicators
     import pandas as pd
     import numpy as np
-    
+
     # Generate 50 days of synthetic price data (ascending channel)
     dates = pd.date_range(end="2026-06-19", periods=50)
     prices = np.linspace(100.0, 150.0, 50)
@@ -384,46 +393,45 @@ def test_technical_options_engine_indicators():
         "Close": prices,
         "Volume": [10000] * 50
     }, index=dates)
-    
-    engine = TechnicalOptionsEngine()
-    indicators = engine.calculate_indicators(df)
-    
+
+    indicators = calculate_trend_exit_indicators(df)
+
     assert "Aroon_Oscillator" in indicators
     assert "Coppock_Curve" in indicators
     assert "Chandelier_Long" in indicators
     assert "Chandelier_Short" in indicators
-    
+
     # Since prices are rising steadily, Aroon Oscillator should be positive
     assert indicators["Aroon_Oscillator"] > 0
     assert indicators["Chandelier_Long"] < df["High"].iloc[-1]
     assert indicators["Chandelier_Short"] > df["Low"].iloc[-22:].min()
-    
+
     # Since prices are rising steadily, Aroon Oscillator should be positive
     assert indicators["Aroon_Oscillator"] > 0
     assert indicators["Chandelier_Long"] < df["High"].iloc[-1]
     assert indicators["Chandelier_Short"] > df["Low"].iloc[-22:].min()
 
 
-def test_technical_options_engine_garch_volatility_and_ivr():
+def test_garch_volatility_estimation():
     """
-    Verifies GJR-GARCH(1,1) volatility calculation, its scaling/descaling,
-    recession fallback stability, and IVR rankings.
+    Verifies GJR-GARCH(1,1) volatility calculation and its scaling/descaling
+    and recession fallback stability.
     """
-    from technical_options_engine import TechnicalOptionsEngine
+    from volatility.garch import GarchVolatilityEstimator
     import pandas as pd
     import numpy as np
-    
+
     # Create random return series (50 days) with normal noise
     np.random.seed(42)
     dates = pd.date_range(end="2026-06-19", periods=50)
     returns = np.random.normal(0.0005, 0.015, 50)
-    
+
     # Reconstruct prices from returns
     prices = [100.0]
     for r in returns:
         prices.append(prices[-1] * (1.0 + r))
     prices = prices[1:]
-    
+
     df = pd.DataFrame({
         "Open": prices,
         "High": [p * 1.01 for p in prices],
@@ -431,84 +439,13 @@ def test_technical_options_engine_garch_volatility_and_ivr():
         "Close": prices,
         "Volume": [20000] * 50
     }, index=dates)
-    
-    engine = TechnicalOptionsEngine()
-    
+
+    estimator = GarchVolatilityEstimator()
+
     # Fit GJR-GARCH and retrieve day-ahead annualized vol
-    vol = engine.estimate_gjr_garch_volatility(df)
+    vol = estimator.estimate_gjr_garch_volatility(df)
     assert isinstance(vol, float)
     assert vol > 0.0
-    
-    # Calculate realized vol rank using this volatility
-    realized_vol_rank = engine.calculate_realized_vol_rank(df, vol)
-    assert 0.0 <= realized_vol_rank <= 100.0
-
-def test_technical_options_engine_strategy_matrix():
-    """
-    Validates Automated Option Strategy Matrix logic mapping true_ivr and Trend to strategies.
-    """
-    from technical_options_engine import TechnicalOptionsEngine
-    
-    engine = TechnicalOptionsEngine()
-    
-    # High IVR + Bullish Trend
-    s1 = engine.generate_option_strategy_matrix(true_ivr=75.0, aroon_osc=50.0, coppock_val=0.5)
-    assert "Put Credit Spread" in s1
-    
-    # High IVR + Bearish Trend
-    s2 = engine.generate_option_strategy_matrix(true_ivr=75.0, aroon_osc=-30.0, coppock_val=-0.2)
-    assert "Call Credit Spread" in s2
-    
-    # High IVR + Neutral Trend
-    s3 = engine.generate_option_strategy_matrix(true_ivr=80.0, aroon_osc=10.0, coppock_val=-0.1)
-    assert "Iron Condor" in s3
-    
-    # Low IVR + Bullish Trend
-    s4 = engine.generate_option_strategy_matrix(true_ivr=25.0, aroon_osc=40.0, coppock_val=0.3)
-    assert "Call Debit Spread" in s4
-    
-    # Low IVR + Bearish Trend
-    s5 = engine.generate_option_strategy_matrix(true_ivr=10.0, aroon_osc=-45.0, coppock_val=-0.5)
-    assert "Put Debit Spread" in s5
-    
-    # Neutral IVR + Bullish Trend
-    s6 = engine.generate_option_strategy_matrix(true_ivr=50.0, aroon_osc=50.0, coppock_val=0.5)
-    assert "Covered Call" in s6
-
-
-def test_options_pricing_recommender():
-    """
-    Validates OptionsPricingRecommender class mathematical calculations,
-    root-finding Delta strikes, and realizable theta haircuts.
-    """
-    from technical_options_engine import OptionsPricingRecommender
-    
-    recommender = OptionsPricingRecommender(stock_price=100.0, risk_free_rate=0.045)
-    
-    # 1. Test Black-Scholes pricing and Greeks
-    # S=100, K=100, T=30/365 (30 DTE), IV=0.20, Call
-    greeks_call = recommender.black_scholes_pricing_and_greeks(K=100.0, T=30.0/365.0, sigma=0.20, option_type='call')
-    assert greeks_call['Price'] > 0
-    assert 0.0 < greeks_call['Delta'] < 1.0
-    assert greeks_call['Gamma'] > 0
-    assert greeks_call['Vega'] > 0
-    assert greeks_call['Theta_Daily'] < 0
-    
-    # 2. Test Brentq Delta strike search (Target Delta = 0.30)
-    k_call_30 = recommender.find_strike_for_delta(0.30, T=30.0/365.0, sigma=0.20, option_type='call')
-    # Since target Delta is 0.30 (OTM call), the strike K should be above stock price
-    assert k_call_30 > 100.0
-    assert k_call_30 % 0.5 == 0.0
-    
-    # 3. Test Realizable Theta haircut percentages
-    # DTE <= 1 -> 40% drag (60% remaining)
-    # DTE <= 7 -> 22% drag (78% remaining)
-    # DTE <= 30 -> 12% drag (88% remaining)
-    # DTE > 30 -> 5% drag (95% remaining)
-    assert math.isclose(recommender.calculate_realizable_theta(-1.0, 1), -0.60)
-    assert math.isclose(recommender.calculate_realizable_theta(-1.0, 7), -0.78)
-    assert math.isclose(recommender.calculate_realizable_theta(-1.0, 30), -0.88)
-    assert math.isclose(recommender.calculate_realizable_theta(-1.0, 45), -0.95)
 
 
 # =============================================================================
@@ -718,7 +655,7 @@ def test_main_orchestrator_pipeline():
     assert "Action Signal" in final_df.columns
     assert "buyRange" in final_df.columns
     assert "Kelly Target" in final_df.columns
-    assert "Option Strategy" in final_df.columns
+    assert "Option Strategy" not in final_df.columns  # retired in step 4f
 
     # run_pipeline() now returns the macro_dto with HMM probability
     assert _macro_dto is not None

@@ -4,7 +4,7 @@ import { theme } from "../theme";
 
 /**
  * ResearchHub — landing screen for the "Research" nav section (see
- * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's 12
+ * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's 11
  * screens as clickable cards; someone else wires the section-header tap that
  * routes here. This screen owns only its own content and navigation.
  *
@@ -40,20 +40,11 @@ const CARDS: HubCard[] = [
   { to: "/compare", label: "Compare", ico: "⚖️", description: TAB_HELP.compare.description },
   { to: "/models", label: "Models", ico: "🧠", description: TAB_HELP.models.description },
   { to: "/strategy-health", label: "Strategy Health", ico: "🛡️", description: TAB_HELP["strategy-health"].description },
-  { to: "/pairs", label: "Pairs radar", ico: "🔗", description: TAB_HELP.pairs.description },
-  { to: "/options", label: "Options", ico: "🎯", description: TAB_HELP.options.description },
   { to: "/signals", label: "Signal Breakdown", ico: "🧬", description: TAB_HELP.signals.description },
   { to: "/sentiment", label: "Sentiment Dynamics", ico: "🎭", description: TAB_HELP.sentiment.description },
   { to: "/sector-selection", label: "Sector Selection", ico: "🧩", description: TAB_HELP["sector-selection"].description },
   { to: "/forecast", label: "Forecast Viewer", ico: "📈", description: TAB_HELP.forecast.description },
   { to: "/data-explorer", label: "Data Explorer", ico: "🗂️", description: TAB_HELP["data-explorer"].description },
-  {
-    to: "/research/trends-stitcher",
-    label: "SVI Stitching Algorithm Demo",
-    ico: "📊",
-    description:
-      "Demonstrates the overlapping-window stitching algorithm used to reconstruct a continuous Google Trends SVI series from adjacent 90-day intervals (live Google Trends data isn't wired up in this platform, so the demo runs on labeled proxy data).",
-  },
 ];
 
 export function ResearchHub() {

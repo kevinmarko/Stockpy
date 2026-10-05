@@ -8,7 +8,7 @@ advisory path) that persist ``rating.symbol_rating.classify_tier``'s
 GOOD/BAD verdict to ``rating.symbol_rating_store.SymbolRatingStore``.
 
 Deliberately targets ``_record_symbol_ratings`` directly (same pattern as
-``tests/test_production_steps_etf_transmission.py``) rather than the whole of
+``legacy/tests/test_production_steps_etf_transmission.py``) rather than the whole of
 ``StrategyEvalStep.run()``, which imports ``main_orchestrator`` and its full
 heavy engine chain and has no existing dedicated wiring test suite of its own
 (neither does the analogous CAP-EVENT AUDIT LOG block it mirrors) -- keeping
@@ -305,3 +305,30 @@ class TestAdvisoryEvalStepSymbolRatingWrite:
         assert len(ctx.recommendations) == 1
         assert ctx.recommendations[0].symbol == "AAPL"
         assert ctx.errors == []  # the write failure is logged, not surfaced as a symbol error
+
+
+class TestDaemonRatingWritesStayOff:
+    """The daemon must not write symbol ratings until a once-per-trading-day
+    cadence exists (see production_steps._DAEMON_RECORDS_SYMBOL_RATINGS): with
+    auto-drop on, an hourly writer would drop symbols within hours."""
+
+    def test_gate_is_off(self):
+        assert ps_mod._DAEMON_RECORDS_SYMBOL_RATINGS is False
+
+    def test_call_is_gated_by_the_constant(self):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(ps_mod.StrategyEvalStep.run)))
+        gated = False
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.If)
+                and isinstance(node.test, ast.Name)
+                and node.test.id == "_DAEMON_RECORDS_SYMBOL_RATINGS"
+            ):
+                for inner in ast.walk(node):
+                    if (
+                        isinstance(inner, ast.Call)
+                        and isinstance(inner.func, ast.Name)
+                        and inner.func.id == "_record_symbol_ratings"
+                    ):
+                        gated = True
+        assert gated, "_record_symbol_ratings must only run under `if _DAEMON_RECORDS_SYMBOL_RATINGS:`"

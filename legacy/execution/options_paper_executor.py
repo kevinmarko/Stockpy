@@ -1,0 +1,1388 @@
+"""Automated Strategy Options Paper Trading Executor.
+
+Identifies gate-passing options strategy directives (Put Credit Spreads, Iron Condors,
+Bull Call Spreads, etc.) from technical_options_engine and automatically executes them
+into the paper broker with atomic fills, contract sizing, and position deduplication.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+from data.paper_account_store import PaperAccountStore, PaperOrder, PaperPosition
+from db_config import session_scope
+from execution.options_queue_builder import (
+    CONFIG as OQB_CONFIG,
+    _directive_for_symbol,
+    _leg_dicts,
+    _resolve_symbols,
+    passes_premium_gate,
+)
+from pilots.options_risk import parse_option_symbol
+from pilots.order_sizing import calculate_multi_leg_option_sizing
+from settings import settings
+
+logger = logging.getLogger(__name__)
+
+# Directive "Strategy" string -> the strategy_id this executor stamps on a
+# paper order. This map used to live in pilots/catalog.py; it moved here when
+# the 10 options Pilots were removed from the catalog (2026-09, step 4a) so
+# this module (archived to legacy/ in step 4b) no longer imports the catalog.
+# The ids stay stable so historical paper trades keep attributing on the
+# Strategy Report Card.
+OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID = {
+    "Put Credit Spread": "put-credit-spread",
+    "Call Credit Spread": "call-credit-spread",
+    "Iron Condor": "iron-condor",
+    "Call Debit Spread": "call-debit-spread",
+    "Put Debit Spread": "put-debit-spread",
+    "Covered Call": "covered-call",
+}
+
+
+def _calculate_default_expiration(target_dte: int = 30) -> str:
+    """Calculates target expiration date string (YYYY-MM-DD) target_dte days in future on a Friday."""
+    target = datetime.now(timezone.utc).date() + timedelta(days=target_dte)
+    # Adjust to closest Friday (weekday 4)
+    weekday = target.weekday()
+    days_to_friday = (4 - weekday) % 7
+    if days_to_friday > 3:
+        days_to_friday -= 7
+    friday = target + timedelta(days=days_to_friday)
+    return friday.strftime("%Y-%m-%d")
+
+
+def _real_option_price_per_contract(
+    underlying: str,
+    expiration: str,
+    strike: float,
+    opt_type: str,
+    spot: Optional[float],
+    *,
+    side: Optional[str] = None,
+    prefer_model: bool = False,
+    as_of: Optional[date] = None,
+) -> Optional[float]:
+    """Real per-CONTRACT ($/share x 100) price for one option leg, or ``None``.
+
+    Thin wrapper over ``data.paper_account_store.resolve_option_price_per_share``
+    (intrinsic if expired -> side-aware live quote -> bid/ask mid ->
+    Black-Scholes on the contract's OWN live implied volatility -> last
+    trade). There is no fixed-volatility fallback: ``None`` means no real
+    price exists and the caller must refuse/skip rather than fill or
+    evaluate at a made-up number.
+    """
+    from data.paper_account_store import resolve_option_price_per_share
+
+    now = None
+    if as_of is not None:
+        now = datetime.combine(as_of, datetime.min.time()).replace(hour=14, tzinfo=timezone.utc)
+    per_share = resolve_option_price_per_share(
+        underlying, expiration, float(strike), opt_type, spot, now,
+        side=side, prefer_model=prefer_model,
+    )
+    # A fill needs a positive price: an expired/worthless leg (intrinsic $0)
+    # is not fillable here -- PaperAccountStore rejects fill_price <= 0, and
+    # settle_expired_options cash-settles expired contracts instead.
+    if per_share is None or per_share <= 0:
+        return None
+    return round(per_share, 4) * 100.0
+
+
+def _positive_float(value: Any) -> Optional[float]:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return v if (math.isfinite(v) and v > 0.0) else None
+
+
+def _live_spot(symbol: str) -> Optional[float]:
+    """Real live spot for ``symbol`` via the shared quote seam, or ``None``."""
+    from data.paper_account_store import _fetch_stock_prices
+
+    return _fetch_stock_prices([symbol.upper()]).get(symbol.upper())
+
+
+def _resolve_short_delta(directive: Dict[str, Any]) -> Optional[float]:
+    """Resolves abs(Black-Scholes delta) of the directive's short leg for the
+    Stage 4 ML Meta-Labeler's ``short_delta`` feature, mirroring
+    ``validation/options_harness.py``'s ``entry_short_delta`` semantics
+    (``abs(...)`` of the first short leg) so live inference features are
+    measured the same way the model's training features were. Returns
+    ``None`` (never a fabricated delta) when the directive has no short leg
+    (``Short_Delta`` stays at its ``nan`` default -- see
+    ``technical_options_engine.py::build_premium_directive``) or the value
+    is otherwise unresolvable.
+    """
+    raw = directive.get("Short_Delta")
+    if raw is None:
+        return None
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return abs(val) if math.isfinite(val) else None
+
+
+def _resolve_credit_to_width_ratio(directive: Dict[str, Any]) -> Optional[float]:
+    """Computes abs(net entry premium) / strike width for the Stage 4 ML
+    Meta-Labeler's ``credit_to_width_ratio`` feature, mirroring
+    ``validation/options_harness.py::OptionsValidationHarness.run_backtest``'s
+    ``entry_credit_to_width_ratio`` formula so live inference features match
+    what the model was trained on. ``Net_Premium``/``Short_Strike``/
+    ``Long_Strike`` are all per-share scale here (unlike the harness's
+    *100-scaled internal quantities) -- the *100 contract multiplier cancels
+    in the ratio either way. Returns ``None`` (never a fabricated ratio) when
+    a strike or the net premium is unresolvable, or the strike width isn't
+    meaningfully positive.
+    """
+    short_k = directive.get("Short_Strike")
+    long_k = directive.get("Long_Strike")
+    net_prem = directive.get("Net_Premium")
+    if short_k is None or long_k is None or net_prem is None:
+        return None
+    try:
+        short_k = float(short_k)
+        long_k = float(long_k)
+        net_prem = float(net_prem)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(short_k) and math.isfinite(long_k) and math.isfinite(net_prem)):
+        return None
+    width = abs(short_k - long_k)
+    if width <= 1e-9:
+        return None
+    return abs(net_prem) / width
+
+
+def _ensure_meta_labeler_loaded() -> None:
+    """Warm up the process-wide Stage 4 ML meta-labeler singleton.
+
+    ``global_options_meta_labeler`` (``ml/options_meta_labeler.py``) starts every
+    process with ``self.model = None`` until something calls ``load_model()`` --
+    previously the ONLY production call site for that was the
+    ``GET /pilots/options/meta-model/status`` endpoint handler
+    (``api/pilots_api.py``). A fresh daemon/API process that never happened to hit
+    that endpoint scored every real options directive through
+    ``predict_probability()``'s "declined to score" path (``nan``, which
+    ``get_sizing_multiplier`` treats as a neutral 1.0x -- see that function's
+    own docstring) forever -- silently turning the "Stage 4 ML gate" into an
+    always-approve, always-full-size no-op even when a genuinely trained
+    model existed on disk at ``model_path``.
+
+    Guarded on ``self.model is None`` so every call after the first successful
+    (or attempted) load in this process is a cheap no-op -- called once per
+    ``OptionsPaperExecutor`` construction, but the underlying singleton is
+    loaded at most once per process regardless of how many executors get
+    constructed, mirroring this codebase's load-once/cache convention for
+    per-signal meta-labelers (``ml/meta_bootstrap.py``).
+
+    Never raises into the caller (CONSTRAINT #6): a missing trained-model file
+    is an honest, expected state on a fresh install, and
+    ``predict_probability()``'s existing fallback already handles that
+    correctly. The bug this fixes is the fallback firing even when a real
+    model file DOES exist and was simply never loaded -- not the fallback
+    itself, which stays correct behavior for a genuinely untrained install.
+    """
+    if not getattr(settings, "OPTIONS_META_LABELER_ENABLED", True):
+        return
+    try:
+        from ml.options_meta_labeler import global_options_meta_labeler
+        if global_options_meta_labeler.model is None:
+            loaded = global_options_meta_labeler.load_model()
+            if not loaded:
+                logger.info(
+                    "OptionsPaperExecutor: no trained Stage 4 ML meta-labeler found at %s -- "
+                    "predict_probability() will use its honest fallback (0.65 / 1.0x) until "
+                    "one is trained.",
+                    global_options_meta_labeler.model_path,
+                )
+    except Exception as exc:
+        logger.warning("OptionsPaperExecutor: failed to warm up Stage 4 ML meta-labeler: %s", exc)
+
+
+class OptionsPaperExecutor:
+    """Executes quantitative strategy option directives directly into the paper broker."""
+
+    def __init__(self, store: Optional[PaperAccountStore] = None):
+        self.store = store or PaperAccountStore()
+        _ensure_meta_labeler_loaded()
+
+    def get_actionable_directives(
+        self,
+        run_result: Any = None,
+        symbols: Optional[List[str]] = None,
+        market: Any = None,
+        macro_dto: Optional[Any] = None,
+        vrp: Optional[float] = None,
+        target_dte: int = 30,
+    ) -> List[Dict[str, Any]]:
+        """Scans universe for gate-passing, actionable option strategy directives."""
+        if symbols is None:
+            if run_result is not None:
+                symbols = _resolve_symbols(run_result)
+            else:
+                symbols = []
+
+        if not symbols:
+            # Fallback to watchlist or default tickers
+            raw = getattr(settings, "WATCHLIST", "") or ""
+            symbols = [s.strip().upper() for s in raw.split(",") if s.strip()]
+
+        if market is None:
+            try:
+                from data.market_data import get_provider
+                market = get_provider()
+            except Exception as exc:
+                logger.warning("OptionsPaperExecutor: failed to get market provider: %s", exc)
+                market = None
+
+        vrp_val: Optional[float] = None
+        if vrp is not None:
+            try:
+                vrp_f = float(vrp)
+                if math.isfinite(vrp_f):
+                    vrp_val = vrp_f
+            except (TypeError, ValueError):
+                vrp_val = None
+
+        vix_val: Optional[float] = None
+        if macro_dto is not None:
+            try:
+                vix_f = float(getattr(macro_dto, "vix", float("nan")))
+                if math.isfinite(vix_f):
+                    vix_val = vix_f
+            except (TypeError, ValueError):
+                vix_val = None
+
+        actionable = []
+        for sym in symbols:
+            try:
+                directive = _directive_for_symbol(
+                    sym,
+                    market=market,
+                    macro_dto=macro_dto,
+                    vrp=vrp,
+                    target_dte=target_dte,
+                )
+                if not directive:
+                    continue
+
+                strategy = str(directive.get("Strategy", "Cash"))
+                action = str(directive.get("Action", "Wait"))
+                if strategy.lower() == "cash" or action.lower() == "wait":
+                    continue
+
+                passed, reasons = passes_premium_gate(
+                    directive,
+                    macro_dto=macro_dto,
+                    vrp=vrp,
+                    config=OQB_CONFIG,
+                )
+                if not passed or not directive.get("Integrity_OK", False):
+                    continue
+
+                legs = _leg_dicts(directive, target_dte)
+                if not legs:
+                    continue
+
+                actionable.append({
+                    "symbol": sym,
+                    "strategy": strategy,
+                    "action": action,
+                    "directive": directive,
+                    "legs": legs,
+                    "net_premium": directive.get("Net_Premium"),
+                    "ivr": directive.get("True_IVR") if math.isfinite(directive.get("True_IVR", float("nan"))) else directive.get("IVR_Proxy"),
+                    "trend_bias": directive.get("Trend_Bias", "Neutral"),
+                    "target_dte": target_dte,
+                    # Real Stage 4 ML Meta-Labeler inference features (audit
+                    # fix -- see docs/known_issues/options_meta_labeler_serving_time_gaps.md).
+                    # Previously omitted entirely, silently triggering
+                    # OptionsMetaLabeler._extract_feature_vector's hardcoded
+                    # constant defaults on every live prediction. Always set
+                    # explicitly (None when unresolvable) rather than
+                    # omitted, so the meta-labeler's finiteness gate can
+                    # decline to score instead of silently defaulting.
+                    "vrp": vrp_val,
+                    "vix": vix_val,
+                    "short_delta": _resolve_short_delta(directive),
+                    "credit_to_width_ratio": _resolve_credit_to_width_ratio(directive),
+                })
+            except Exception as exc:
+                logger.warning("OptionsPaperExecutor: directive scan failed for %s: %s", sym, exc)
+
+        return actionable
+
+    def execute_strategy_directives(
+        self,
+        directives: Optional[List[Dict[str, Any]]] = None,
+        dry_run: bool = False,
+        max_notional_per_order: Optional[float] = None,
+        macro_dto: Optional[Any] = None,
+        vrp: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Executes a list of actionable strategy directives into PaperAccountStore.
+
+        ``macro_dto``/``vrp`` are forwarded to ``get_actionable_directives()`` when
+        ``directives`` is not already supplied, so the VIX/CREDIT-EVENT/VRP
+        premium-selling regime gate (see ``execution/options_queue_builder.py``'s
+        ``passes_premium_gate``) is actually evaluated rather than silently
+        skipped because both were left at their ``None`` default.
+        """
+        if max_notional_per_order is None:
+            max_notional_per_order = getattr(settings, "MAX_OPTION_NOTIONAL_PER_TRADE", 2500.0)
+
+        max_concurrent = getattr(settings, "MAX_CONCURRENT_OPTION_POSITIONS", 10)
+
+        account = self.store.get_account()
+        open_positions = self.store.get_open_positions()
+
+        # Count current option positions and collect symbols
+        held_option_symbols = set()
+        total_option_positions = 0
+        for pos in open_positions:
+            is_opt = " " in pos.symbol and "$" in pos.symbol
+            if is_opt:
+                total_option_positions += 1
+                base_sym = pos.symbol.split(" ")[0].upper()
+                held_option_symbols.add(base_sym)
+
+        executed = []
+        skipped = []
+        failed = []
+
+        if directives is None:
+            directives = self.get_actionable_directives(macro_dto=macro_dto, vrp=vrp)
+
+        for item in directives:
+            sym = str(item.get("symbol", "")).upper().strip()
+            if not sym:
+                continue
+
+            strategy = item.get("strategy", "Multi-Leg Option")
+            action = item.get("action", "Open")
+            net_premium = item.get("net_premium")
+            legs_raw = item.get("legs", [])
+            # Retrospective Learning Loop: real prob_win from the Stage 4 ML
+            # Meta-Labeler when it actually scored this directive (set inside
+            # the "5b" gating block below) -- None otherwise, never
+            # fabricated. Used as this trade's `conviction` at capture time.
+            ml_score_for_snapshot: Optional[Dict[str, Any]] = None
+            target_dte = item.get("target_dte", 30)
+
+            strategy_id = item.get("strategy_id", strategy)
+            strategy_id = OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID.get(strategy_id, strategy_id)
+            pilot_id = item.get("pilot_id")
+            experiment_arm = item.get("experiment_arm")
+
+            # 1. Check max concurrent position limit
+            if total_option_positions >= max_concurrent:
+                skipped.append({
+                    "symbol": sym,
+                    "reason": f"Max concurrent option positions limit reached ({max_concurrent})"
+                })
+                continue
+
+            # 2. Position deduplication guard: avoid duplicate spreads on same ticker
+            if sym in held_option_symbols:
+                skipped.append({
+                    "symbol": sym,
+                    "reason": f"Position in {sym} already exists in paper account"
+                })
+                continue
+
+            # 3. Resolve expiration date
+            expiration = item.get("expiration") or _calculate_default_expiration(target_dte)
+
+            # 4. Calculate strike width & pricing for sizing
+            strikes = []
+            parsed_legs = []
+            signed_prices = []
+
+            for idx, leg in enumerate(legs_raw):
+                strike = float(leg.get("strike", 0.0) or leg.get("Strike", 0.0))
+                if strike > 0:
+                    strikes.append(strike)
+
+                leg_type = str(leg.get("type", leg.get("Type", "CALL"))).upper()
+                leg_side = str(leg.get("side", leg.get("Side", "BUY"))).lower()
+                leg_ratio = float(leg.get("ratio_qty", leg.get("Ratio", 1.0)))
+
+                # Formatted leg symbol
+                leg_symbol = f"{sym} {expiration} ${strike:.2f} {leg_type}"
+
+                # Leg price
+                price = float(leg.get("price", leg.get("Price", 0.0)) or 0.0)
+                if price <= 0 and net_premium and len(legs_raw) > 0:
+                    price = abs(net_premium) / len(legs_raw)
+                if price <= 0:
+                    price = 0.50  # Fallback minimum option price
+
+                signed_price = (price * leg_ratio) if leg_side == "buy" else (-price * leg_ratio)
+                signed_prices.append(signed_price)
+
+                parsed_legs.append({
+                    "symbol": leg_symbol,
+                    "side": leg_side,
+                    "ratio_qty": leg_ratio,
+                    "fill_price": price * 100.0,
+                    "raw_price": price,
+                })
+
+            strike_width = None
+            if len(strikes) >= 2:
+                strikes_sorted = sorted(strikes)
+                strike_width = abs(strikes_sorted[-1] - strikes_sorted[0])
+
+            calc_net_price = sum(signed_prices)
+            is_debit = calc_net_price >= 0
+            net_price_per_share = abs(calc_net_price)
+
+            # 5. Contract Sizing
+            signed_net_price = calc_net_price
+            sizing = calculate_multi_leg_option_sizing(
+                dollar_amount=max_notional_per_order,
+                net_price_per_share=signed_net_price,
+                strike_width=strike_width,
+                multiplier=100,
+            )
+            contracts = max(1, sizing)
+
+            # 5b. Stage 4 ML Meta-Labeler Gating & Sizing
+            if getattr(settings, "OPTIONS_META_LABELER_ENABLED", True):
+                try:
+                    from ml.options_meta_labeler import global_options_meta_labeler
+                    ml_score = global_options_meta_labeler.score_option_directive(item)
+                    ml_score_for_snapshot = ml_score
+                    # prob_win is None (not a fabricated number) when the ML
+                    # score was unavailable -- see score_option_directive's
+                    # docstring. A plain f"{...:.2f}" on None would raise, so
+                    # this renders "n/a" instead of crashing the whole cycle
+                    # over a log message.
+                    _prob_win = ml_score.get("prob_win")
+                    _prob_win_str = f"{_prob_win:.2f}" if _prob_win is not None else "n/a"
+                    if not ml_score.get("approved", True):
+                        skipped.append({
+                            "symbol": sym,
+                            "reason": f"Stage 4 ML Meta-Labeler rejected directive (P(Win)={_prob_win_str} < threshold)",
+                            "ml_score": ml_score,
+                        })
+                        continue
+                    mult = float(ml_score.get("sizing_multiplier", 1.0))
+                    # No `max(1, ...)` floor here: re-flooring to 1 after a
+                    # low-confidence multiplier (e.g. 0.30x) would silently
+                    # re-inflate a derated trade back to full size whenever
+                    # the base sizing was already 1 contract -- the common
+                    # case -- defeating the confidence-based derating
+                    # entirely. A directive that derates below 1 contract is
+                    # skipped instead of forced back up to 1.
+                    ml_contracts = int(round(contracts * mult))
+                    if ml_contracts < 1:
+                        skipped.append({
+                            "symbol": sym,
+                            "reason": f"Stage 4 ML Meta-Labeler sizing multiplier ({mult:.2f}x) derated position below 1 contract (P(Win)={_prob_win_str})",
+                            "ml_score": ml_score,
+                        })
+                        continue
+                    contracts = ml_contracts
+                except Exception as exc:
+                    # CONSTRAINT #6: a scoring failure must never silently
+                    # relax this risk gate to full, un-derated size -- fail
+                    # closed by skipping the trade entirely for this cycle
+                    # (matching how a genuine ML rejection a few lines above
+                    # is already handled) rather than falling through with
+                    # `contracts` still at its full pre-ML-gate value.
+                    # Logged at WARNING (not DEBUG): this is a risk-gate
+                    # failure, not a routine, expected skip.
+                    logger.warning(
+                        "OptionsPaperExecutor: Stage 4 ML Meta-Labeler evaluation "
+                        "raised an exception for %s -- skipping this trade "
+                        "rather than proceeding at full un-derated size: %s",
+                        sym, exc,
+                    )
+                    skipped.append({
+                        "symbol": sym,
+                        "reason": f"Stage 4 ML Meta-Labeler evaluation raised an exception ({exc}); skipping trade to fail closed",
+                    })
+                    continue
+
+            # 6. Commission & Cash Impact
+
+            commission = 0.65 * contracts * len(parsed_legs)
+            if is_debit:
+                net_cash_impact = -((contracts * net_price_per_share * 100.0) + commission)
+                collateral = abs(net_cash_impact)
+            else:
+                net_cash_impact = (contracts * net_price_per_share * 100.0) - commission
+                collateral = (strike_width * 100.0 * contracts) if strike_width else (contracts * net_price_per_share * 100.0)
+
+            # 7. Check buying power
+            if is_debit and abs(net_cash_impact) > account.buying_power:
+                skipped.append({
+                    "symbol": sym,
+                    "reason": f"Insufficient buying power (Required: ${abs(net_cash_impact):.2f}, Available: ${account.buying_power:.2f})"
+                })
+                continue
+
+            if dry_run:
+                executed.append({
+                    "symbol": sym,
+                    "strategy": strategy,
+                    "contracts": contracts,
+                    "net_price": net_price_per_share,
+                    "net_cash_impact": net_cash_impact,
+                    "dry_run": True,
+                })
+                total_option_positions += 1
+                held_option_symbols.add(sym)
+                continue
+
+            # 8. Execute atomic fill
+            client_order_id = f"AUTO-OPT-{sym}-{int(datetime.now(timezone.utc).timestamp())}"
+            try:
+                fill_legs = [{
+                    "symbol": l["symbol"],
+                    "side": l["side"],
+                    "qty": contracts * l["ratio_qty"],
+                    "fill_price": l["fill_price"],
+                } for l in parsed_legs]
+
+                # Retrospective Learning Loop: real, named decision context
+                # this scan actually had for THIS directive, threaded through
+                # to _create_entry_snapshot via apply_multi_leg_fill's own
+                # provenance/conviction/key_indicators_json kwargs -- every
+                # value here is copied verbatim from `item` (built by
+                # get_actionable_directives above from a real
+                # technical_options_engine directive), never interpolated or
+                # inferred. `conviction` is the Stage 4 ML Meta-Labeler's own
+                # prob_win when it scored this directive, else None
+                # (CONSTRAINT #4 -- never fabricated). A JSON-serialization
+                # failure degrades to no factor context rather than
+                # blocking the fill (matches _create_entry_snapshot's own
+                # fails-open posture for snapshot capture).
+                snapshot_conviction = (
+                    ml_score_for_snapshot.get("prob_win")
+                    if ml_score_for_snapshot is not None
+                    else None
+                )
+                try:
+                    snapshot_factors_json = json.dumps({
+                        "strategy": strategy,
+                        "ivr": item.get("ivr"),
+                        "vrp": item.get("vrp"),
+                        "vix": item.get("vix"),
+                        "trend_bias": item.get("trend_bias"),
+                        "short_delta": item.get("short_delta"),
+                        "credit_to_width_ratio": item.get("credit_to_width_ratio"),
+                        "net_premium": net_premium,
+                    })
+                except (TypeError, ValueError):
+                    snapshot_factors_json = None
+                success = self.store.apply_multi_leg_fill(
+                    client_order_id=client_order_id,
+                    symbol=sym,
+                    strategy_name=strategy,
+                    contracts=contracts,
+                    legs=fill_legs,
+                    net_cash_impact=net_cash_impact,
+                    commission_and_fees=commission,
+                    collateral_required=collateral,
+                    strategy_id=strategy_id,
+                    pilot_id=pilot_id,
+                    experiment_arm=experiment_arm,
+                    provenance="automated:options_auto_scan",
+                    conviction=snapshot_conviction,
+                    key_indicators_json=snapshot_factors_json,
+                )
+
+                if success:
+                    executed.append({
+                        "order_id": client_order_id,
+                        "symbol": sym,
+                        "strategy": strategy,
+                        "contracts": contracts,
+                        "net_price": net_price_per_share,
+                        "net_cash_impact": net_cash_impact,
+                        "legs": [l["symbol"] for l in parsed_legs],
+                    })
+                    total_option_positions += 1
+                    held_option_symbols.add(sym)
+                    # Refresh account snapshot
+                    account = self.store.get_account()
+                else:
+                    failed.append({
+                        "symbol": sym,
+                        "reason": "apply_multi_leg_fill returned False (insufficient funds or database lock)"
+                    })
+            except Exception as exc:
+                logger.error("OptionsPaperExecutor: execution failed for %s: %s", sym, exc)
+                failed.append({
+                    "symbol": sym,
+                    "reason": str(exc)
+                })
+
+        return {
+            "executed_count": len(executed),
+            "skipped_count": len(skipped),
+            "failed_count": len(failed),
+            "executed": executed,
+            "skipped": skipped,
+            "failed": failed,
+        }
+
+    def evaluate_position_exits(
+        self,
+        spot_map: Optional[Dict[str, float]] = None,
+        profit_target_pct: Optional[float] = None,
+        stop_loss_multiple: Optional[float] = None,
+        manage_dte_threshold: Optional[int] = None,
+        current_date: Optional[date] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Evaluates open option positions against profit target (e.g. 50%), stop loss (e.g. 200%),
+        and 21-DTE gamma management thresholds.
+
+        Aggregates positions per underlying and expiration (spreads/multi-leg/single-leg),
+        calculates unrealized P&L against max initial credit or debit, and generates
+        closing multi-leg order requests when an exit condition is triggered.
+        """
+        if profit_target_pct is None:
+            profit_target_pct = float(getattr(settings, "OPTIONS_PROFIT_TARGET_PCT", 0.50))
+        if stop_loss_multiple is None:
+            stop_loss_multiple = float(getattr(settings, "OPTIONS_STOP_LOSS_MULTIPLE", 2.0))
+        if manage_dte_threshold is None:
+            manage_dte_threshold = int(getattr(settings, "OPTIONS_MANAGE_DTE_THRESHOLD", 21))
+
+        from pilots.options_risk import parse_option_symbol
+
+        positions = self.store.get_open_positions()
+        today = current_date or datetime.now(timezone.utc).date()
+
+        # Group positions by (ticker, expiration)
+        grouped_positions: Dict[tuple[str, str], List[Any]] = {}
+        for pos in positions:
+            opt_info = parse_option_symbol(pos.symbol)
+            if not opt_info:
+                continue
+            ticker = opt_info["ticker"].upper()
+            exp_str = opt_info["expiration"]
+            key = (ticker, exp_str)
+            if key not in grouped_positions:
+                grouped_positions[key] = []
+            grouped_positions[key].append((pos, opt_info))
+
+        candidates = []
+
+        for (ticker, exp_str), group in grouped_positions.items():
+            try:
+                exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                dte = max(0, (exp_date - today).days)
+            except Exception:
+                dte = 30
+
+            # Spot price lookup
+            spot = spot_map.get(ticker.upper()) if spot_map else None
+
+            # Without a caller-supplied spot, legs are marked from the store's
+            # live marks. If any leg's mark is a cost-basis placeholder (no
+            # real quote/chain data), there is no real price to evaluate P&L
+            # against or to close at -- skip the group rather than act on a
+            # fabricated zero-P&L mark.
+            if (spot is None or spot <= 0) and any(
+                getattr(pos, "mark_is_estimated", False) for pos, _ in group
+            ):
+                logger.warning(
+                    "OptionsPaperExecutor: skipping exit evaluation for %s %s -- "
+                    "no live mark for at least one leg.", ticker, exp_str,
+                )
+                continue
+
+            # Calculate mark price, P&L, entry cash for each leg in group
+            total_entry_debit = 0.0
+            total_entry_credit = 0.0
+            total_unrealized_pl = 0.0
+            closing_legs = []
+
+            group_unpriced = False
+            for pos, opt_info in group:
+                strike = float(opt_info["strike"])
+                opt_type = opt_info["option_type"].lower()
+                qty = float(pos.qty)
+                abs_qty = abs(qty)
+                entry_price = float(pos.avg_entry_price)
+
+                # Option pricing
+                if spot is not None and spot > 0:
+                    # Caller-supplied (what-if) spot: value the leg with
+                    # Black-Scholes on its OWN live implied volatility at
+                    # that spot. No real IV/quote -> skip the whole group.
+                    mark_price = _real_option_price_per_contract(
+                        ticker, exp_str, strike, opt_type, spot,
+                        prefer_model=True, as_of=today,
+                    )
+                    if mark_price is None:
+                        group_unpriced = True
+                        break
+                else:
+                    if pos.market_value is not None and abs_qty > 0:
+                        mark_price = abs(float(pos.market_value)) / abs_qty
+                    else:
+                        mark_price = entry_price
+
+                if qty > 0:
+                    # Long leg: entry was debit, close by selling
+                    leg_pl = (mark_price - entry_price) * abs_qty
+                    total_entry_debit += abs_qty * entry_price
+                    closing_side = "sell"
+                else:
+                    # Short leg: entry was credit, close by buying
+                    leg_pl = (entry_price - mark_price) * abs_qty
+                    total_entry_credit += abs_qty * entry_price
+                    closing_side = "buy"
+
+                total_unrealized_pl += leg_pl
+                closing_legs.append({
+                    "symbol": pos.symbol,
+                    "side": closing_side,
+                    "qty": abs_qty,
+                    "fill_price": mark_price,
+                })
+
+            if group_unpriced:
+                logger.warning(
+                    "OptionsPaperExecutor: skipping exit evaluation for %s %s -- no live "
+                    "implied volatility/quote to value a leg at the supplied spot.",
+                    ticker, exp_str,
+                )
+                continue
+
+            net_entry_credit = total_entry_credit - total_entry_debit
+            is_credit = net_entry_credit > 0
+
+            # Profit % and Loss Multiple calculation
+            if is_credit:
+                max_profit = net_entry_credit
+                profit_pct = total_unrealized_pl / max_profit if max_profit > 0 else 0.0
+                loss_multiple = (-total_unrealized_pl / max_profit) if (total_unrealized_pl < 0 and max_profit > 0) else 0.0
+            else:
+                initial_debit = abs(net_entry_credit) if net_entry_credit != 0 else total_entry_debit
+                profit_pct = total_unrealized_pl / initial_debit if initial_debit > 0 else 0.0
+                loss_multiple = (-total_unrealized_pl / initial_debit) if (total_unrealized_pl < 0 and initial_debit > 0) else 0.0
+
+            # Evaluate triggers
+            trigger = None
+            reason_detail = None
+
+            if profit_pct >= profit_target_pct:
+                trigger = "PROFIT_TARGET"
+                reason_detail = f"Profit target reached: {profit_pct:.1%} >= {profit_target_pct:.1%}"
+            elif total_unrealized_pl < 0 and loss_multiple >= stop_loss_multiple:
+                trigger = "STOP_LOSS"
+                reason_detail = f"Stop loss triggered: {loss_multiple:.1f}x max risk >= {stop_loss_multiple:.1f}x"
+            elif dte <= manage_dte_threshold:
+                trigger = "DTE_MANAGEMENT"
+                reason_detail = f"DTE threshold reached: {dte}d <= {manage_dte_threshold}d"
+
+            if trigger:
+                contracts = max(int(l["qty"]) for l in closing_legs) if closing_legs else 1
+                sell_proceeds = sum(l["qty"] * l["fill_price"] for l in closing_legs if l["side"] == "sell")
+                buy_costs = sum(l["qty"] * l["fill_price"] for l in closing_legs if l["side"] == "buy")
+                commission = 0.65 * len(closing_legs) * contracts
+                net_cash_impact = (sell_proceeds - buy_costs) - commission
+
+                candidates.append({
+                    "symbol": ticker,
+                    "expiration": exp_str,
+                    "position_symbol": closing_legs[0]["symbol"] if len(closing_legs) == 1 else f"{ticker} {exp_str} ({len(closing_legs)} legs)",
+                    "strategy": f"Close {ticker} {exp_str}",
+                    "action": "CLOSE",
+                    "trigger_reason": trigger,
+                    "reason_detail": reason_detail,
+                    "dte": dte,
+                    "profit_pct": round(profit_pct, 4),
+                    "loss_multiple": round(loss_multiple, 4),
+                    "unrealized_pl": round(total_unrealized_pl, 2),
+                    "net_entry": round(net_entry_credit, 2),
+                    "is_credit": is_credit,
+                    "contracts": contracts,
+                    "closing_side": closing_legs[0]["side"] if len(closing_legs) == 1 else "multi",
+                    "qty": float(contracts),
+                    "legs": closing_legs,
+                    "net_cash_impact": round(net_cash_impact, 2),
+                    "commission": round(commission, 2),
+                    "strategy_id": group[0][0].strategy_id,  # from pos.strategy_id
+                    "pilot_id": group[0][0].pilot_id,
+                    "experiment_arm": group[0][0].experiment_arm,
+                })
+
+        return candidates
+
+    def execute_auto_exits(
+        self,
+        exit_candidates: Optional[List[Dict[str, Any]]] = None,
+        spot_map: Optional[Dict[str, float]] = None,
+        dry_run: bool = False,
+        force: bool = False,
+        current_date: Optional[date] = None,
+    ) -> Dict[str, Any]:
+        """
+        Executes closing orders for triggered exit candidates.
+        Applies multi-leg fills to PaperAccountStore.
+        If force=False and dry_run=False and settings.OPTIONS_AUTO_EXIT_ENABLED is False,
+        skips execution and returns pending exit candidates.
+        """
+        if exit_candidates is None:
+            exit_candidates = self.evaluate_position_exits(spot_map=spot_map, current_date=current_date)
+
+        auto_exit_enabled = force or dry_run or getattr(settings, "OPTIONS_AUTO_EXIT_ENABLED", False)
+        if not auto_exit_enabled:
+            return {
+                "enabled": False,
+                "evaluated_count": len(exit_candidates),
+                "executed_count": 0,
+                "failed_count": 0,
+                "executed": [],
+                "failed": [],
+                "pending_exits": exit_candidates,
+            }
+
+        executed = []
+        failed = []
+
+        for idx, candidate in enumerate(exit_candidates):
+            sym = candidate["symbol"]
+            strategy = candidate.get("strategy", f"Close {sym}")
+            contracts = candidate.get("contracts", 1)
+            legs = candidate.get("legs", [])
+            net_cash_impact = candidate.get("net_cash_impact", 0.0)
+            commission = candidate.get("commission", 0.0)
+            reason = candidate.get("trigger_reason")
+            # Leave fallback untouched since exit trades must trace back exactly to whatever ID the entry actually used
+            strategy_id = candidate.get("strategy_id", strategy)
+            pilot_id = candidate.get("pilot_id")
+            experiment_arm = candidate.get("experiment_arm")
+            client_order_id = f"AUTO-EXIT-{sym}-{int(datetime.now(timezone.utc).timestamp())}-{idx+1}"
+
+            if dry_run:
+                executed.append({
+                    "order_id": client_order_id,
+                    "symbol": sym,
+                    "reason": reason,
+                    "contracts": contracts,
+                    "net_cash_impact": net_cash_impact,
+                    "dry_run": True,
+                    "legs": [l["symbol"] for l in legs],
+                })
+                continue
+
+            try:
+                success = self.store.apply_multi_leg_fill(
+                    client_order_id=client_order_id,
+                    symbol=sym,
+                    strategy_name=strategy,
+                    contracts=contracts,
+                    legs=legs,
+                    net_cash_impact=net_cash_impact,
+                    commission_and_fees=commission,
+                    strategy_id=strategy_id,
+                    pilot_id=pilot_id,
+                    experiment_arm=experiment_arm,
+                )
+
+                if success:
+                    executed.append({
+                        "order_id": client_order_id,
+                        "symbol": sym,
+                        "reason": reason,
+                        "reason_detail": candidate.get("reason_detail"),
+                        "contracts": contracts,
+                        "net_cash_impact": net_cash_impact,
+                        "unrealized_pl": candidate.get("unrealized_pl"),
+                        "legs": [l["symbol"] for l in legs],
+                    })
+                else:
+                    failed.append({
+                        "symbol": sym,
+                        "reason": "apply_multi_leg_fill returned False",
+                    })
+            except Exception as exc:
+                logger.error("OptionsPaperExecutor: exit execution failed for %s: %s", sym, exc)
+                failed.append({
+                    "symbol": sym,
+                    "reason": str(exc),
+                })
+
+        return {
+            "enabled": True,
+            "evaluated_count": len(exit_candidates),
+            "executed_count": len(executed),
+            "failed_count": len(failed),
+            "executed": executed,
+            "failed": failed,
+        }
+
+    def execute_earnings_crush_trade(
+        self,
+        candidate: Dict[str, Any],
+        contracts: int = 1,
+        strategy_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Executes a multi-leg options strategy (Iron Condor, Short Straddle, Short Strangle,
+        credit/debit spreads, ...) into PaperAccountStore.
+
+        `strategy_name` controls the label written to `apply_multi_leg_fill`'s
+        `strategy_name=` (and thus the paper-broker blotter). Defaults to `None`, which
+        preserves the historical behavior of this function exactly: the fill is always
+        labeled "Earnings Crush" regardless of `candidate["strategy"]`. Pass an explicit
+        `strategy_name` (e.g. "Vol Mispricing") to correctly label trades submitted by a
+        different caller reusing this same generic multi-leg executor.
+
+        Candidate format:
+        {
+            "symbol" / "ticker": "NVDA",
+            "strategy": "Iron Condor" / "Short Straddle" / "Earnings Crush",
+            "expiration": "2026-08-21",
+            "legs": [
+                {"symbol": "NVDA 2026-08-21 $120.00 PUT", "side": "sell", "qty": 1.0, "fill_price": 250.0},
+                ...
+            ]
+            or individual strikes / wing definitions:
+            "spot": 120.0,
+            "short_put": 110.0, "long_put": 105.0,
+            "short_call": 130.0, "long_call": 135.0,
+            "net_credit": 3.50,
+            "earnings_date": "2026-08-20",
+        }
+        """
+        sym = str(candidate.get("symbol") or candidate.get("ticker", "")).upper().strip()
+        if not sym:
+            return {"success": False, "reason": "Missing symbol in earnings crush candidate"}
+
+        strategy = str(candidate.get("strategy") or "Earnings Crush")
+        earnings_date = candidate.get("earnings_date")
+        effective_strategy_name = strategy_name if strategy_name is not None else "Earnings Crush"
+        strategy_id = candidate.get("strategy_id", effective_strategy_name)
+        strategy_id = OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID.get(strategy_id, strategy_id)
+        if strategy_id == "Earnings Crush":
+            strategy_id = "earnings-crush"
+        pilot_id = candidate.get("pilot_id")
+        experiment_arm = candidate.get("experiment_arm")
+        target_dte = candidate.get("target_dte", 7)
+        expiration = candidate.get("expiration") or candidate.get("exp_date") or _calculate_default_expiration(target_dte)
+
+        # Parse / build legs
+        raw_legs = candidate.get("legs", [])
+        parsed_legs = []
+        strikes = []
+        signed_prices = []
+
+        unpriced_legs: List[str] = []
+
+        if raw_legs:
+            for idx, leg in enumerate(raw_legs):
+                leg_sym = leg.get("symbol")
+                side = str(leg.get("side", leg.get("Side", "BUY"))).lower()
+                ratio = float(leg.get("ratio_qty", leg.get("Ratio", leg.get("qty", 1.0))))
+
+                strike = float(leg.get("strike", 0.0) or leg.get("Strike", 0.0))
+                opt_type = str(leg.get("type", leg.get("Type", "CALL"))).upper()
+
+                if leg_sym:
+                    opt_info = parse_option_symbol(leg_sym)
+                    if opt_info:
+                        strike = opt_info["strike"]
+                        opt_type = opt_info["option_type"].upper()
+                else:
+                    leg_sym = f"{sym} {expiration} ${strike:.2f} {opt_type}"
+
+                if strike > 0:
+                    strikes.append(strike)
+
+                # Price in $/contract (fill_price) or $/share (raw_price)
+                fill_price = float(leg.get("fill_price", 0.0) or 0.0)
+                raw_price = float(leg.get("price", leg.get("Price", 0.0) or leg.get("raw_price", 0.0)) or 0.0)
+
+                if fill_price <= 0 and raw_price > 0:
+                    fill_price = raw_price * 100.0 if raw_price < 50.0 else raw_price
+                elif fill_price > 0 and raw_price <= 0:
+                    raw_price = fill_price / 100.0
+                elif fill_price <= 0 and raw_price <= 0:
+                    # CONSTRAINT #4: never fabricate a price. A leg with no resolvable
+                    # fill_price/raw_price is skipped here and the whole trade is refused
+                    # below (rather than submitting a partially-fabricated multi-leg fill).
+                    unpriced_legs.append(leg_sym)
+                    continue
+
+                signed_price = (raw_price * ratio) if side == "buy" else (-raw_price * ratio)
+                signed_prices.append(signed_price)
+
+                parsed_legs.append({
+                    "symbol": leg_sym,
+                    "side": side,
+                    "qty": contracts * ratio,
+                    "ratio_qty": ratio,
+                    "fill_price": fill_price,
+                    "raw_price": raw_price,
+                })
+
+        if unpriced_legs:
+            return {
+                "success": False,
+                "reason": (
+                    f"No real price available for leg(s) {unpriced_legs} in {sym} trade; "
+                    "refusing to fabricate a fill price."
+                ),
+            }
+        else:
+            # Construct from strikes in candidate dict
+            # Support Iron Condor (short_put, long_put, short_call, long_call)
+            # or Straddle (put_strike, call_strike or atm_strike).
+            # Every leg is priced from REAL chain data (buys at the ask, sells
+            # at the bid; else mid; else Black-Scholes on the leg's own live
+            # IV) -- never a fixed volatility or a placeholder spot.
+            spot_raw = candidate.get("spot", candidate.get("spot_price"))
+            spot = _positive_float(spot_raw) if spot_raw is not None else None
+
+            leg_specs: List[tuple] = []
+            if parsed_legs:
+                # Caller already supplied priced legs -- never overlay a
+                # second, strike-constructed set on top of them.
+                pass
+            elif "short_put" in candidate or "short_put_strike" in candidate:
+                sp = float(candidate.get("short_put", candidate.get("short_put_strike", 0.0)))
+                lp = float(candidate.get("long_put", candidate.get("long_put_strike", 0.0)))
+                sc = float(candidate.get("short_call", candidate.get("short_call_strike", 0.0)))
+                lc = float(candidate.get("long_call", candidate.get("long_call_strike", 0.0)))
+                if sp > 0:
+                    strikes.extend([sp, lp, sc, lc])
+                    leg_specs = [(lp, "PUT", "buy"), (sp, "PUT", "sell"), (sc, "CALL", "sell"), (lc, "CALL", "buy")]
+            elif "atm_strike" in candidate or "strike" in candidate:
+                atm_raw = candidate.get("atm_strike", candidate.get("strike"))
+                atm = _positive_float(atm_raw) if atm_raw is not None else None
+                if atm is None:
+                    spot = spot if spot is not None else _live_spot(sym)
+                    atm = spot
+                if atm is not None:
+                    strikes.append(atm)
+                    leg_specs = [(atm, "PUT", "sell"), (atm, "CALL", "sell")]
+
+            if leg_specs and spot is None:
+                # Only needed for an expired-contract intrinsic value or the
+                # Black-Scholes-on-live-IV fallback; a live quote needs none.
+                spot = _live_spot(sym)
+            for k, typ, leg_side in leg_specs:
+                leg_sym = f"{sym} {expiration} ${k:.2f} {typ}"
+                px = _real_option_price_per_contract(sym, expiration, k, typ, spot, side=leg_side)
+                if px is None:
+                    unpriced_legs.append(leg_sym)
+                    continue
+                parsed_legs.append({
+                    "symbol": leg_sym, "side": leg_side, "qty": float(contracts),
+                    "ratio_qty": 1.0, "fill_price": px, "raw_price": px / 100.0,
+                })
+
+            if unpriced_legs:
+                return {
+                    "success": False,
+                    "reason": (
+                        f"No real option price available for leg(s) {unpriced_legs} in {sym} "
+                        "trade (no live quote/implied volatility); refusing to fabricate a fill price."
+                    ),
+                }
+
+        if not parsed_legs:
+            return {"success": False, "reason": f"No valid legs constructed for {sym} Earnings Crush"}
+
+        # Calculate net cash impact & collateral
+        commission = 0.65 * contracts * len(parsed_legs)
+        net_credit_arg = candidate.get("net_credit", candidate.get("net_premium"))
+
+        if net_credit_arg is not None:
+            net_cash_impact = (float(net_credit_arg) * 100.0 * contracts) - commission
+        else:
+            # Sum leg fill prices
+            sell_proceeds = sum(l["qty"] * l["fill_price"] for l in parsed_legs if l["side"] == "sell")
+            buy_costs = sum(l["qty"] * l["fill_price"] for l in parsed_legs if l["side"] == "buy")
+            net_cash_impact = (sell_proceeds - buy_costs) - commission
+
+        # Collateral
+        strike_width = None
+        if len(strikes) >= 2:
+            sorted_strikes = sorted(strikes)
+            strike_width = abs(sorted_strikes[-1] - sorted_strikes[0])
+        collateral = (strike_width * 100.0 * contracts) if strike_width else abs(net_cash_impact)
+
+        client_order_id = f"EC-{sym}-{int(datetime.now(timezone.utc).timestamp())}"
+        fill_legs = [{
+            "symbol": l["symbol"],
+            "side": l["side"],
+            "qty": l["qty"],
+            "fill_price": l["fill_price"],
+        } for l in parsed_legs]
+
+        # `strategy_name=None` preserves the historical, always-"Earnings Crush" label
+        # exactly (matching every existing caller/test). An explicit `strategy_name`
+        # (e.g. "Vol Mispricing") overrides it so a non-earnings-crush caller reusing this
+        # generic multi-leg executor gets a correctly-labeled paper-broker blotter entry.
+
+        success = self.store.apply_multi_leg_fill(
+            client_order_id=client_order_id,
+            symbol=sym,
+            strategy_name=effective_strategy_name,
+            contracts=contracts,
+            legs=fill_legs,
+            net_cash_impact=net_cash_impact,
+            commission_and_fees=commission,
+            collateral_required=collateral,
+            strategy_id=strategy_id,
+            pilot_id=pilot_id,
+            experiment_arm=experiment_arm,
+        )
+
+        return {
+            "success": bool(success),
+            "order_id": client_order_id,
+            "symbol": sym,
+            "strategy": effective_strategy_name,
+            "contracts": contracts,
+            "net_cash_impact": net_cash_impact,
+            "commission": commission,
+            "legs": fill_legs,
+            "earnings_date": earnings_date,
+            "reason": None if success else "apply_multi_leg_fill returned False",
+        }
+
+    def settle_post_earnings_trades(
+        self,
+        current_date: Optional[date] = None,
+        spot_map: Optional[Dict[str, float]] = None,
+        iv_crush_factor: float = 0.40,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Scans open positions for trades opened under the 'Earnings Crush' strategy where the
+        earnings announcement has completed (as of current_date), and closes all constituent legs
+        at market open to harvest pure IV crush.
+
+        Legs close at real prices only (see ``_real_option_price_per_contract``);
+        a trade with any unpriced leg is reported in ``failed`` and left open.
+        ``iv_crush_factor`` is accepted for backward compatibility but no longer
+        used -- it previously filled at ``entry_price * iv_crush_factor``, a
+        made-up price.
+        """
+        today = current_date or datetime.now(timezone.utc).date()
+        settled = []
+        failed = []
+
+        with session_scope(self.store.Session) as session:
+            # Query parent orders placed with strategy_name="Earnings Crush" or client_order_id like 'EC-%'
+            ec_orders = (
+                session.query(PaperOrder)
+                .filter(
+                    (PaperOrder.strategy_id.in_(["Earnings Crush", "earnings-crush"]))
+                    | ((PaperOrder.client_order_id.like("EC-%")) & (~PaperOrder.client_order_id.like("%_L%")))
+                )
+                .filter(
+                    (PaperOrder.status == "filled")
+                    | (PaperOrder.status == "FILLED")
+                )
+                .all()
+            )
+
+            # Map order ID -> list of leg symbols and target ticker
+            ec_order_legs: Dict[str, Dict[str, Any]] = {}
+            for eco in ec_orders:
+                # Find child leg orders
+                child_legs = (
+                    session.query(PaperOrder)
+                    .filter(PaperOrder.client_order_id.like(f"{eco.client_order_id}_L%"))
+                    .all()
+                )
+                leg_symbols = [cl.symbol.upper() for cl in child_legs]
+                parts = eco.symbol.split()
+                ticker = parts[-1].upper() if len(parts) > 1 else (leg_symbols[0].split()[0] if leg_symbols else "UNKNOWN")
+
+                if not leg_symbols:
+                    continue
+
+                order_date = eco.timestamp.date()
+                ec_order_legs[eco.client_order_id] = {
+                    "order_id": eco.client_order_id,
+                    "ticker": ticker,
+                    "order_date": order_date,
+                    "leg_symbols": leg_symbols,
+                }
+
+            # Query current open positions
+            open_pos_rows = session.query(PaperPosition).filter(PaperPosition.qty != 0).all()
+            open_pos_map = {
+                p.symbol.upper(): {
+                    "symbol": p.symbol,
+                    "qty": float(p.qty),
+                    "avg_entry_price": float(p.avg_entry_price),
+                    "strategy_id": p.strategy_id,
+                    "pilot_id": p.pilot_id,
+                    "experiment_arm": p.experiment_arm,
+                }
+                for p in open_pos_rows
+            }
+
+            # Check each EC order
+            active_ec_trades = []
+            for coid, info in ec_order_legs.items():
+                open_legs_for_order = []
+                for lsym in info["leg_symbols"]:
+                    if lsym in open_pos_map:
+                        open_legs_for_order.append(open_pos_map[lsym])
+
+                if open_legs_for_order:
+                    # Earnings announcement is completed if:
+                    # 1. force is True, OR
+                    # 2. current_date was explicitly passed and current_date >= info["order_date"], OR
+                    # 3. today > info["order_date"]
+                    earnings_completed = force or (current_date is not None and current_date >= info["order_date"]) or (today > info["order_date"])
+                    if earnings_completed:
+                        active_ec_trades.append({
+                            "parent_order_id": coid,
+                            "ticker": info["ticker"],
+                            "positions": open_legs_for_order,
+                        })
+
+        for trade in active_ec_trades:
+            ticker = trade["ticker"]
+            closing_legs = []
+            unpriced_legs: List[str] = []
+            spot = spot_map.get(ticker.upper()) if spot_map else None
+            if spot is None or spot <= 0:
+                spot = _live_spot(ticker)
+
+            for pos in trade["positions"]:
+                qty = float(pos["qty"])
+                abs_qty = abs(qty)
+                opt_info = parse_option_symbol(pos["symbol"])
+                closing_side = "sell" if qty > 0 else "buy"
+
+                # Close at a REAL price: the live quote on the closing side
+                # (sell at the bid / buy at the ask), else mid, else
+                # Black-Scholes on the leg's own live implied volatility
+                # (which already reflects the post-earnings IV crush), or
+                # intrinsic value if expired. No fixed volatility and no
+                # entry-price haircut.
+                mark_price = None
+                if opt_info:
+                    mark_price = _real_option_price_per_contract(
+                        ticker, opt_info["expiration"], float(opt_info["strike"]),
+                        str(opt_info["option_type"]), spot,
+                        side=closing_side, as_of=today,
+                    )
+                if mark_price is None:
+                    unpriced_legs.append(pos["symbol"])
+                    continue
+
+                closing_legs.append({
+                    "symbol": pos["symbol"],
+                    "side": closing_side,
+                    "qty": abs_qty,
+                    "fill_price": mark_price,
+                })
+
+            if unpriced_legs:
+                # Never close part of a multi-leg position (that would leave a
+                # naked leg) and never close at a made-up price.
+                failed.append({
+                    "symbol": ticker,
+                    "parent_order_id": trade["parent_order_id"],
+                    "reason": (
+                        f"No real option price for leg(s) {unpriced_legs} "
+                        "(no live quote/implied volatility); not closing this cycle."
+                    ),
+                })
+                continue
+
+            if not closing_legs:
+                continue
+
+            contracts = max(int(l["qty"]) for l in closing_legs)
+            sell_proceeds = sum(l["qty"] * l["fill_price"] for l in closing_legs if l["side"] == "sell")
+            buy_costs = sum(l["qty"] * l["fill_price"] for l in closing_legs if l["side"] == "buy")
+            commission = 0.65 * len(closing_legs) * contracts
+            net_cash_impact = (sell_proceeds - buy_costs) - commission
+
+            close_order_id = f"CLOSE-EC-{ticker}-{int(datetime.now(timezone.utc).timestamp())}"
+            try:
+                success = self.store.apply_multi_leg_fill(
+                    client_order_id=close_order_id,
+                    symbol=ticker,
+                    strategy_name="Close Earnings Crush",
+                    contracts=contracts,
+                    legs=closing_legs,
+                    net_cash_impact=net_cash_impact,
+                    commission_and_fees=commission,
+                    # `.get(..., "Earnings Crush")` is NOT safe here: dict.get's
+                    # default only fires when the key is absent, not when its
+                    # value is explicitly falsy -- and a real PaperPosition row
+                    # queried above (`"strategy_id": p.strategy_id` a few dozen
+                    # lines up) can legitimately carry a falsy strategy_id (an
+                    # empty string; PaperPosition.strategy_id's NOT NULL
+                    # composite-PK constraint rules out a real None specifically,
+                    # but not ""). Every trade reaching this close path was found
+                    # via ec_order_legs, itself filtered to
+                    # PaperOrder.strategy_id == "Earnings Crush" (or a
+                    # client_order_id matching "EC-%") -- so a falsy value here
+                    # never means "some other real strategy," only "the tag
+                    # didn't round-trip onto the position row"; `or` correctly
+                    # falls back to the one strategy identity this closing flow
+                    # can ever apply to.
+                    strategy_id=trade["positions"][0].get("strategy_id") or "Earnings Crush",
+                    pilot_id=trade["positions"][0].get("pilot_id"),
+                    experiment_arm=trade["positions"][0].get("experiment_arm"),
+                )
+
+                if success:
+                    settled.append({
+                        "order_id": close_order_id,
+                        "symbol": ticker,
+                        "parent_order_id": trade["parent_order_id"],
+                        "strategy": "Earnings Crush (Post-Earnings Close)",
+                        "contracts": contracts,
+                        "net_cash_impact": net_cash_impact,
+                        "commission": commission,
+                        "closing_legs": closing_legs,
+                    })
+                else:
+                    failed.append({
+                        "symbol": ticker,
+                        "parent_order_id": trade["parent_order_id"],
+                        "reason": "apply_multi_leg_fill returned False",
+                    })
+            except Exception as exc:
+                logger.error("OptionsPaperExecutor: failed to settle EC trade for %s: %s", ticker, exc)
+                failed.append({
+                    "symbol": ticker,
+                    "parent_order_id": trade["parent_order_id"],
+                    "reason": str(exc),
+                })
+
+        return {
+            "settled_count": len(settled),
+            "failed_count": len(failed),
+            "settled": settled,
+            "failed": failed,
+        }
+
+    def execute_dispersion_trade(
+        self,
+        basket: Any,
+        dry_run: bool = False,
+    ) -> Dict[str, Any]:
+        """Executes a calibrated DispersionBasket into PaperAccountStore."""
+        from pilots.dispersion_trading import execute_dispersion_trade
+        return execute_dispersion_trade(basket=basket, store=self.store, dry_run=dry_run)
+

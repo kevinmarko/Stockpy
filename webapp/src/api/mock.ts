@@ -8,10 +8,6 @@
  */
 
 import { ApiError, ForecastBackfillConflictError, JobConflictError, JobsListResponse } from "./types";
-import {
-  stitchMultipleIntervals,
-  type TrendsPoint,
-} from "../utils/trendsStitch";
 import type { StrategyReportCardSnapshot,
   RetrospectiveTradeRecord,
   BatchRetrospectiveInsightsResponse,
@@ -48,8 +44,6 @@ import type { StrategyReportCardSnapshot,
   CalibrationSummary,
   CircuitBreakerSummary,
   CircuitBreakerTrip,
-  CircuitBreakerState,
-  CircuitBreakerStatusResponse,
   ControlStatus,
   CronStatus,
   CorrelationCluster,
@@ -61,8 +55,6 @@ import type { StrategyReportCardSnapshot,
   EquityDrawdownPoint,
   ExplainTickerResponse,
   FactorExposure,
-  Follow,
-  FollowResult,
   ForecastSkill,
   ForecastBackfillSummary,
   ForecastBackfillJob,
@@ -88,15 +80,6 @@ import type { StrategyReportCardSnapshot,
   MacroGateUpdateResult,
   ModelRow,
   ObservabilitySummary,
-  OptionsDirective,
-  OptionsMatrix,
-  OptionsRecomputeRequest,
-  OptionsRecomputeResult,
-  PairsAnalyzeRequest,
-  PairsAnalyzeResult,
-  PairsRadar,
-  PairsScanRequest,
-  PairsScanResult,
   PerfRange,
   PerformanceResponse,
   PilotDetail,
@@ -169,9 +152,7 @@ import type { StrategyReportCardSnapshot,
   UniverseSymbol,
   Thresholds,
   SymbolHeldBy,
-  SymbolOptions,
   TriggerRunResult,
-  OptionChainResponse,
   Bar,
   Fundamentals,
   MacroHistorySeries,
@@ -187,7 +168,6 @@ import type { StrategyReportCardSnapshot,
   SentimentHistory,
   SizingCapAuditTrail,
   SizingCapEvent,
-  EtfTransmissionSummary,
   HeartbeatSummary,
   StrategyPnlSummary,
   EquityCurveResponse,
@@ -198,7 +178,6 @@ import type { StrategyReportCardSnapshot,
   DeadLetterQueueEntry,
   DeadLetterQueue,
   DeadLetterRetryResult,
-  PortfolioRiskStreamEvent,
   PromptListResponse,
   PromptEntry,
   PromptBody,
@@ -206,102 +185,13 @@ import type { StrategyReportCardSnapshot,
   PromptPinResult,
   DataSyncResult,
   ProviderStatus,
-  CacheLongShortConcentratedPosition,
-  CacheLongShortSimulateRequest,
-  CacheLongShortSimulateResult,
-  CacheLongShortStartRequest,
-  CacheLongShortStartResult,
-  CacheLongShortDashboard,
-  CacheLongShortPendingTrade,
-  CacheLongShortApproveBulkResult,
   PaperBrokerAccount,
   PaperBrokerPosition,
   PaperBrokerOrder,
   PaperBrokerClosedTrade,
   LiveTradeProposal,
-  OptionsOrderRequest,
-  OptionsOrderResult,
-  ScenarioMatrixResponse,
-  ScenarioMatrixCell,
-  VolSurfaceResponse,
-  VolSmilePoint,
-  VolTermStructurePoint,
-  SkewData,
-  DeltaHedgePreview,
-  DeltaHedgeResult,
-  RollOrderRequest,
-  ManageExitsResult,
-  HistoricalScenarioPreset,
-  EarningsCrushCandidate,
-  EarningsCrushCandidatesResponse,
-  EarningsCrushExecutionResult,
-  OptionsDeskGateBlockedResult,
-  UnusualOptionTrade,
-  UnusualOptionsFlowResponse,
-  FlowSentimentData,
-  FlowSentimentResponse,
-  HarRvForecastResponse,
-  VolMispricingResponse,
-  VolMispricingStrike,
-  GammaScalpRequest,
-  GammaScalpResponse,
-  GammaScalpHedgeTrade,
-  OptionsAlertTestResult,
-  DispersionConstituent,
-  DispersionOpportunity,
-  DispersionBasketResponse,
-  DispersionBasketOrderRequest,
-  DispersionExecutionResult,
-  ZeroDteSignal,
-  ZeroDteSignalResponse,
-  ZeroDteTradeRequest,
-  ZeroDteExecutionResult,
-  VpinBucket,
-  VpinMetricsResponse,
-  SorLegBreakdown,
-  SorAnalysisRequest,
-  SorAnalysisResponse,
-  LeggingSimulationRequest,
-  LeggingSimulationResponse,
-  GexStrikePoint,
-  GexProfileResponse,
-  LobQueueSimulationRequest,
-  LobQueueSimulationResponse,
-  LobQueuePercentiles,
-  CopulaPairsResponse,
-  CopulaTailData,
-  CopulaSeriesPoint,
-  MarketMakerSimRequest,
-  MarketMakerSimResponse,
-  MarketMakerStepPoint,
-  TransformerForecastResponse,
-  DiffusionStressRequest,
-  DiffusionStressResponse,
-  HrpCvarOptimizeRequest,
-  HrpCvarOptimizeResponse,
-  AlmgrenChrissOptimizeRequest,
-  AlmgrenChrissOptimizeResponse,
-  FixRouteOrderRequest,
-  FixRouteOrderResponse,
-  FixSessionStatusResponse,
-  FixSessionControlResponse,
-  FixTestRequestPayload,
-  FixResetSeqRequest,
-  ResearchSynthesizeRequest,
-  ResearchSynthesizeResponse,
-  AutonomousBacktestRequest,
-  AutonomousBacktestResponse,
-  VolSurface3DMeshResponse,
-  VolSurface3DPoint,
-  MultiBrokerStatusResponse,
-  BrokerHealthStatusDto,
-  RoutingAuditDto,
-  BrokerFailoverRequest,
-  BrokerFailoverResponse,
-  SecRule606ReportResponse,
-  SecRule606VenueRow,
-  SecRule606CategoryBreakdown,
-  TrendsStitchDemoResponse,
+  EquityOrderRequest,
+  EquityOrderResult,
   DigestPayload,
 } from "./types";
 
@@ -504,8 +394,6 @@ const RAW: Array<{
   description: string;
   headline: Headline;
   long_only: boolean;
-  aum: number;
-  followers: number;
   hasCurve: boolean;
   drift: number;
   vol: number;
@@ -513,7 +401,6 @@ const RAW: Array<{
   // Optional; defaults to true (a distinct SPY macro overlay is available).
   // Set false to model the honest redundancy case (underlying already IS SPY).
   macroBenchmark?: boolean;
-  followable?: boolean;
 }> = [
   {
     id: "trend-following",
@@ -523,8 +410,6 @@ const RAW: Array<{
       "Rides sustained multi-month price trends across large caps. Time-series momentum (Moskowitz/Ooi/Pedersen) — buys strength, cuts weakness.",
     headline: h(1.12, 0.972, 0.31, 0.19, true),
     long_only: false,
-    aum: 184200,
-    followers: 62,
     hasCurve: true,
     drift: 0.14,
     vol: 0.13,
@@ -546,8 +431,6 @@ const RAW: Array<{
       "Connors-style RSI(2) mean reversion, long-only above the 200-day line. Buys short-term oversold dips in uptrending names; regime-gated off in stress.",
     headline: h(0.83, 0.961, 0.38, 0.14, true),
     long_only: true,
-    aum: 97400,
-    followers: 41,
     hasCurve: true,
     drift: 0.09,
     vol: 0.1,
@@ -567,8 +450,6 @@ const RAW: Array<{
       "Fama-French-style multifactor tilt — Value, Quality, Low-Vol and Size, cross-sectionally z-scored. Diversified, low-turnover core sleeve.",
     headline: h(0.94, 0.958, 0.34, 0.16, true),
     long_only: true,
-    aum: 251900,
-    followers: 88,
     hasCurve: true,
     drift: 0.11,
     vol: 0.11,
@@ -590,8 +471,6 @@ const RAW: Array<{
       "MACD + Aroon trend confirmation with a chop filter to suppress false crossovers. Medium-horizon momentum with a volatility-aware corridor.",
     headline: h(1.01, 0.965, 0.29, 0.21, true),
     long_only: false,
-    aum: 132600,
-    followers: 54,
     hasCurve: true,
     drift: 0.12,
     vol: 0.14,
@@ -615,8 +494,6 @@ const RAW: Array<{
       "Jegadeesh-Titman cross-sectional momentum (12-1m). Ranks the universe and holds the top decile of relative strength, rebalanced monthly.",
     headline: h(1.05, 0.969, 0.33, 0.23, true),
     long_only: false,
-    aum: 118300,
-    followers: 47,
     hasCurve: true,
     drift: 0.13,
     vol: 0.15,
@@ -639,8 +516,6 @@ const RAW: Array<{
     // it, so validation_strategy_id=None -> curve:null (mirrors pilots/catalog.py).
     headline: h(null, null, null, null, false, false),
     long_only: false,
-    aum: 402700,
-    followers: 133,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -663,8 +538,6 @@ const RAW: Array<{
       "Concentrated Value and Quality tilt (cheap, profitable, well-capitalized). Backtest series pending point-in-time fundamentals — metrics shown honestly.",
     headline: h(null, null, null, null, false, false),
     long_only: true,
-    aum: 38100,
-    followers: 19,
     hasCurve: false, // curve:null — no fabricated line
     drift: 0,
     vol: 0,
@@ -685,8 +558,6 @@ const RAW: Array<{
       "Tilts toward durable dividend payers with healthy, well-covered yields — an income-oriented quality screen. Backtest pending point-in-time fundamentals.",
     headline: h(null, null, null, null, false, false),
     long_only: true,
-    aum: 71500,
-    followers: 33,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -706,8 +577,6 @@ const RAW: Array<{
       "Screens for stocks trading cheap versus their Graham intrinsic value. Backtest pending point-in-time fundamentals — metrics shown honestly.",
     headline: h(null, null, null, null, false, false),
     long_only: true,
-    aum: 44300,
-    followers: 21,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -723,13 +592,10 @@ const RAW: Array<{
     id: "regime-navigator",
     name: "Regime Navigator",
     category: "Macro",
-    followable: false,
     description:
       "Top-down macro regime read — leans defensive in Recession/Credit-Event regimes and rotates toward risk-on sectors when the systemic backdrop clears.",
     headline: h(null, null, null, null, false, false),
     long_only: false,
-    aum: 58900,
-    followers: 27,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -749,8 +615,6 @@ const RAW: Array<{
       "Per-symbol statistical edge ratio combined with a GARCH tail-risk volatility veto — rewards names with a favorable historical risk/reward profile, penalized in high-volatility regimes.",
     headline: h(0.88, 0.961, 0.35, 0.12, true),
     long_only: false,
-    aum: 96700,
-    followers: 44,
     hasCurve: true,
     drift: 0.1,
     vol: 0.09,
@@ -773,8 +637,6 @@ const RAW: Array<{
       "Fades short-term extremes with the classic RSI(14) rule — buys oversold washouts and trims overbought spikes back toward the mean.",
     headline: h(0.62, 0.951, 0.41, 0.17, true),
     long_only: false,
-    aum: 51200,
-    followers: 24,
     hasCurve: true,
     drift: 0.06,
     vol: 0.12,
@@ -795,8 +657,6 @@ const RAW: Array<{
       "Favors the names outrunning the S&P 500 — a relative-strength tilt that holds the market's leaders and sidesteps the laggards.",
     headline: h(0.79, 0.957, 0.36, 0.22, true),
     long_only: false,
-    aum: 88400,
-    followers: 39,
     hasCurve: true,
     drift: 0.12,
     vol: 0.14,
@@ -817,8 +677,6 @@ const RAW: Array<{
       "Reacts to fresh headline sentiment and earnings catalysts, dampening signals around scheduled events where the reaction is unpredictable.",
     headline: h(null, null, null, null, false, false),
     long_only: false,
-    aum: 33800,
-    followers: 18,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -838,8 +696,6 @@ const RAW: Array<{
       "Tilts toward names whose projected multi-horizon forecast points to meaningful upside, and away from those forecast to decline.",
     headline: h(null, null, null, null, false, false),
     long_only: false,
-    aum: 41100,
-    followers: 20,
     hasCurve: false,
     drift: 0,
     vol: 0,
@@ -859,8 +715,6 @@ const RAW: Array<{
       "Rewards durable risk-adjusted performance — favoring high-Sortino names while penalizing deep, painful drawdowns.",
     headline: h(0.71, 0.953, 0.39, 0.11, true),
     long_only: false,
-    aum: 36400,
-    followers: 17,
     hasCurve: true,
     drift: 0.08,
     vol: 0.08,
@@ -881,8 +735,6 @@ const RAW: Array<{
       "High-turnover short-horizon momentum. Fails the overfitting gate (PBO high, DSR below threshold) — shown as NOT deployable. Educational example of an honest fail.",
     headline: h(0.41, 0.72, 0.63, 0.34, false, true),
     long_only: false,
-    aum: 12400,
-    followers: 8,
     hasCurve: true,
     drift: 0.05,
     vol: 0.26,
@@ -891,53 +743,6 @@ const RAW: Array<{
       ["META", 26, 0.55],
       ["AMZN", 22, 0.48],
       ["ADBE", 18, 0.4],
-    ],
-  },
-  // Two real "Options"-category catalog Pilots (mirrors pilots/catalog.py --
-  // EVERY Options Pilot there is followable=False, since these are
-  // manually-executed options structures, not a simple auto-follow blend).
-  // Exercises: (a) the "Options" PilotCategory value actually appearing in
-  // Marketplace's category filter/rail with a real member, and (b) the
-  // followable:false disabled-Follow-button branch on PilotDetail/Comparison
-  // for an Options pilot specifically (previously only "regime-navigator",
-  // a Macro pilot, exercised followable:false at all).
-  {
-    id: "iron-condor",
-    name: "Iron Condor",
-    category: "Options",
-    description:
-      "Range-bound premium selling strategy combining credit spreads. No validated backtest exists for this structure yet -- metrics shown honestly as unavailable.",
-    followable: false,
-    headline: h(null, null, null, null, false, false),
-    long_only: false,
-    aum: 31800,
-    followers: 14,
-    hasCurve: false,
-    drift: 0,
-    vol: 0,
-    syms: [["SPY", 100, 0.5]],
-  },
-  {
-    id: "copula-stat-arb",
-    name: "Copula Stat Arb",
-    category: "Options",
-    description:
-      "Statistical arbitrage using copula-derived joint probabilities (KO/PEP pair). Honest FAIL: overfitting gate not cleared -- see Strategy Report Card for the full predicted-vs-actual detail.",
-    followable: false,
-    // Real measured numbers (docs/VALIDATION_STRATEGY_FIX_LOG.md 2026-08-19):
-    // Sharpe -0.455, PBO 0.000, DSR 0.246, MaxDD 35.1% -- worst drawdown lands
-    // on 2008-10-13 (the GFC). deployable=false is a genuine, documented FAIL,
-    // never softened.
-    headline: h(-0.455, 0.246, 0.0, 0.351, false, false),
-    long_only: false,
-    aum: 9600,
-    followers: 5,
-    hasCurve: true,
-    drift: -0.02,
-    vol: 0.31,
-    syms: [
-      ["KO", 50, 0.5],
-      ["PEP", 50, 0.48],
     ],
   },
 ];
@@ -952,10 +757,7 @@ const CATALOG: MockPilot[] = RAW.map((r) => {
     headline: r.headline,
     holdings_count: hs.length,
     top_holdings: hs.slice(0, 3),
-    aum_proxy: r.aum,
-    followers_proxy: r.followers,
     long_only: r.long_only,
-    followable: r.followable ?? true,
   };
   return {
     summary,
@@ -1170,68 +972,9 @@ export function __resetMockRatingOverrides() {
   };
 }
 
-// ---- Local follows store (persisted to localStorage so the mock feels live) ----
-const FOLLOWS_KEY = "stockpy.mock.follows";
-
-function readFollows(): Follow[] {
-  try {
-    const raw = localStorage.getItem(FOLLOWS_KEY);
-    return raw ? (JSON.parse(raw) as Follow[]) : [];
-  } catch {
-    return [];
-  }
-}
-function writeFollows(fs: Follow[]) {
-  try {
-    localStorage.setItem(FOLLOWS_KEY, JSON.stringify(fs));
-  } catch {
-    /* ignore quota */
-  }
-}
-
 const MOCK_MODE = "review" as const; // paper-first: nothing is ever placed
-const NOTIONAL_CAP = 2500;
-const MIN_AMOUNT = 100;
 
-// Mirrors api/pilots_api.py::OPTIONS_DESK_DEPLOYABILITY_GATES for the three
-// UNGATEABLE_DATA_GAP options-desk paper-execute endpoints wired into the webapp
-// (earnings_crush, dispersion_trading, zero_dte_engine — vol_mispricing has no
-// webapp caller yet). Real reason text kept verbatim so mock-mode UI development
-// exercises the same blocked/override flow the live backend enforces, instead of
-// always reporting success — see docs/known_issues/ for the parity gap this fixed.
-const OPTIONS_DESK_DEPLOYABILITY_GATES = {
-  earnings_crush: {
-    deployable: false as const,
-    gate_status: "UNGATEABLE_DATA_GAP" as const,
-    reason: "Not gateable: No historical single-name IV exists in data layer to perform walk-forward validation.",
-  },
-  dispersion_trading: {
-    deployable: false as const,
-    gate_status: "UNGATEABLE_DATA_GAP" as const,
-    reason: "Not gateable: Index IV (VIX) is historical; constituent single-name IVs are substituted (+1.18 vol-pt substitution bias).",
-  },
-  zero_dte_engine: {
-    deployable: false as const,
-    gate_status: "UNGATEABLE_DATA_GAP" as const,
-    reason: "Not gateable: No 1-minute intraday history exists for mandatory historical stress windows outside 30-day retention.",
-  },
-};
 
-// Mirrors api/pilots_api.py's three UNGATEABLE_DATA_GAP execute endpoints' blocked
-// branch exactly: the strategy-agnostic message AND the full gate dict (tested there
-// via tests/test_options_desk_deployability_runtime_gap.py's explicit
-// gate_status["gate_status"] == "UNGATEABLE_DATA_GAP" assertion) -- a caller can
-// render the actual reason before the operator decides whether to override, same as
-// on the success branch below (which echoes the identical dict post-hoc once
-// execution actually proceeds).
-function optionsDeskGateBlockedResult(key: keyof typeof OPTIONS_DESK_DEPLOYABILITY_GATES): OptionsDeskGateBlockedResult {
-  return {
-    ok: false,
-    blocked: true,
-    message: "Strategy has an UNGATEABLE_DATA_GAP and is blocked by default. Pass override_deployability_gate=True to execute.",
-    gate_status: OPTIONS_DESK_DEPLOYABILITY_GATES[key],
-  };
-}
 
 // A real (if trivial) 1x1 transparent PNG, base64-encoded — stands in for the
 // live endpoint's actual rendered chart image so <img src="data:image/png;..."/>
@@ -2229,7 +1972,7 @@ function mockStrategyMatrix(): StrategyMatrix {
 // SIZING_CAP_ALERT_THRESHOLD_PCT, LOG_LEVEL) and stay `null` here, never
 // fabricated (CONSTRAINT #4). MARKET_DATA_PROVIDER is honestly `value: null, default:
 // null` too -- its real settings.py default IS None (auto-select; unset until
-// an operator forces "alpaca"/"yfinance"). Accepted writes persist to
+// an operator forces "fmp"/"yfinance"). Accepted writes persist to
 // localStorage so a later GET reflects them AND marks those keys as env_drift
 // (a real .env write does not reach the running process until restart --
 // mirrors mockStrategyMatrix's STRATEGY_DRIFT_KEY convention above). A value
@@ -2268,68 +2011,61 @@ interface MockTunableDef {
 // comment.
 // ---------------------------------------------------------------------------
 const MOCK_CAPTURE_SITES: Record<string, string[]> = {
-  RISK_FREE_RATE: ["processing_engine.py:36", "technical_options_engine.py:22"],
-  MARKET_RISK_PREMIUM: ["processing_engine.py:37"],
-  REQUIRED_RETURN_RATE: ["processing_engine.py:38"],
-  MAX_PORTFOLIO_HEAT: ["execution/risk_gate.py:136"],
-  MAX_POSITION_WEIGHT: ["execution/risk_gate.py:133"],
-  MAX_CORRELATION: ["execution/risk_gate.py:139"],
-  DAILY_LOSS_LIMIT_PCT: ["execution/risk_gate.py:144"],
-  MAX_ORDER_RATE_PER_MIN: ["execution/risk_gate.py:149"],
-  HMM_RISK_OFF_BLOCK_THRESHOLD: ["execution/risk_gate.py:154"],
-  RISK_GATE_ENFORCE_MARKET_HOURS: ["execution/risk_gate.py:159"],
-  DRY_RUN: ["gui/app.py:145"],
-  MARKET_DATA_PROVIDER: ["data/market_data.py:1834"],
-  MARKET_DATA_QUOTE_TTL_SECONDS: ["data/market_data.py:1771"],
+  RISK_FREE_RATE: ["processing_engine.py:37", "technical_options_engine.py:24"],
+  MARKET_RISK_PREMIUM: ["processing_engine.py:38"],
+  REQUIRED_RETURN_RATE: ["processing_engine.py:39"],
+  MAX_PORTFOLIO_HEAT: ["execution/risk_gate.py:153"],
+  CORRELATION_CLUSTER_LOOKBACK_DAYS: ["api/pilots_api.py:4082"],
+  MAX_POSITION_WEIGHT: ["execution/risk_gate.py:150"],
+  MAX_CORRELATION: ["execution/risk_gate.py:156"],
+  DAILY_LOSS_LIMIT_PCT: ["execution/dynamic_circuit_breaker.py:312", "execution/risk_gate.py:161"],
+  MAX_ORDER_RATE_PER_MIN: ["execution/risk_gate.py:166"],
+  HMM_RISK_OFF_BLOCK_THRESHOLD: ["execution/risk_gate.py:171"],
+  RISK_GATE_ENFORCE_MARKET_HOURS: ["execution/risk_gate.py:176"],
+  MARKET_DATA_PROVIDER: ["data/market_data.py:1922"],
+  MARKET_DATA_QUOTE_TTL_SECONDS: ["data/market_data.py:1854"],
   MARKET_DATA_BARS_TTL_SECONDS: [
-    "data/market_data.py:1776",
-    "data/market_data.py:2094",
+    "data/market_data.py:1859",
+    "data/market_data.py:2287",
   ],
-  FUNDAMENTALS_SOURCE: ["data/market_data.py:1809"],
-  DASHBOARD_REFRESH_SECONDS: ["gui/app.py:146", "gui/panels/__init__.py:87"],
-  LOG_LEVEL: ["alerting.py:118", "gui/app.py:83"],
-  ADVISORY_ONLY: ["gui/app.py:249"],
-  SECTOR_FORECAST_CONFIG_PATH: ["forecasting_engine.py:144"],
-  SECTOR_FORECAST_CONFIGS: ["forecasting_engine.py:146"],
-  CORS_ALLOWED_ORIGINS: ["api/control_api.py:166", "api/data_api.py:117"],
-  SENTIMENT_SOURCES: ["data/sentiment_sources.py:1865"],
-  SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: ["data/sentiment_sources.py:1895"],
-  EDGAR_FULLTEXT_FORMS: ["api/pilots_api.py:4128"],
-  EDGAR_FULLTEXT_CHUNK_TOKENS: ["api/pilots_api.py:4129"],
-  FINNHUB_RATE_LIMIT_PER_MIN: [
-    "data/market_data.py:1470",
-    "data/market_data.py:1504",
-  ],
-  FMP_QUOTES_REALTIME: ["data/market_data.py:979"],
-  FMP_BARS_ADJUSTMENT: ["data/market_data.py:1850"],
-  FMP_ECON_INDICATORS: ["api/pilots_api.py:4233"],
-  ETF_HOLDINGS_TICKERS: ["api/pilots_api.py:4253"],
-  SYMBOL_RATING_DROP_THRESHOLD_CYCLES: ["pipeline/production_steps.py:531"],
+  FUNDAMENTALS_SOURCE: ["data/market_data.py:1892"],
+  DASHBOARD_REFRESH_SECONDS: ["api/pilots_api.py:4194", "pilots/settings_domains.py:132"],
+  SECTOR_FORECAST_CONFIG_PATH: ["forecasting_engine.py:165"],
+  SECTOR_FORECAST_CONFIGS: ["forecasting_engine.py:167"],
+  CORS_ALLOWED_ORIGINS: ["api/control_api.py:169", "api/data_api.py:131", "api/metrics_api.py:74", "api/pilots_api.py:342", "api/state_api.py:87"],
+  SENTIMENT_SOURCES: ["data/sentiment_sources.py:1932"],
+  SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: ["data/sentiment_sources.py:1962"],
+  EDGAR_FULLTEXT_FORMS: ["api/pilots_api.py:4839"],
+  EDGAR_FULLTEXT_CHUNK_TOKENS: ["api/pilots_api.py:4840"],
+  FMP_QUOTES_REALTIME: ["data/market_data.py:1011"],
+  FMP_BARS_ADJUSTMENT: ["data/market_data.py:1942"],
+  FMP_ECON_INDICATORS: ["api/pilots_api.py:4981"],
+  SYMBOL_RATING_DROP_THRESHOLD_CYCLES: ["ml/forecast_backfill.py:142"],
 };
 
 // `settings_keysets.DANGEROUS_KEYS`, in full -- copied from the real set.
-// All 20 real settings_keysets.DANGEROUS_KEYS members are now covered here,
-// since the Feature Flags screen (webapp/src/api/mock.ts's
+// Every real settings_keysets.DANGEROUS_KEYS member is covered here, since
+// the Feature Flags screen (webapp/src/api/mock.ts's
 // FEATURE_FLAGS_TUNABLE_DEFS) serves every one of them, exercising the
-// typed-confirmation flow for all 20 in mock mode.
+// typed-confirmation flow for all of them in mock mode.
 const MOCK_DANGEROUS_KEYS = new Set([
   "BROKER_BACKEND",
   "ADVISORY_ONLY",
   "DRY_RUN",
   "ROBINHOOD_EXECUTION_MODE",
+  "DAEMON_AGENTIC_QUEUE_MODE",
   "CORS_ALLOWED_ORIGINS",
   "FMP_BARS_ENABLED",
   "FMP_BARS_ADJUSTMENT",
-  "CACHE_LONG_SHORT_WRITES_ENABLED",
-  // 2026-08-08: settings_keysets.SAFETY_CRITICAL_KEY_REASONS gained these 13
-  // fields (CACHE_LONG_SHORT_WRITES_ENABLED above being one of them) when the
-  // fail-closed write/execution gates were reclassified out of
-  // EXCLUDED_FROM_GUI into ALLOWED_KEYS -- now all exposed by the Feature
+  // 2026-08-08: settings_keysets.SAFETY_CRITICAL_KEY_REASONS gained these
+  // fields when the fail-closed write/execution gates were reclassified out
+  // of EXCLUDED_FROM_GUI into ALLOWED_KEYS -- now all exposed by the Feature
   // Flags screen.
   "MACRO_REGIME_GATE_ENABLED",
   "AI_GENERATION_API_ENABLED",
   "AUTOMATION_WRITES_ENABLED",
   "BROKERAGE_REFRESH_ENABLED",
+  "ROBINHOOD_SCHEDULED_LOGIN_ENABLED",
   "COMMAND_EXECUTION_ENABLED",
   "DEAD_LETTER_RETRY_ENABLED",
   "GENERAL_SETTINGS_WRITES_ENABLED",
@@ -2362,14 +2098,15 @@ const MOCK_DEMO_ONLY_STATES: Record<string, "env_pinned" | "no_effect"> = {
   LOG_LEVEL: "env_pinned",
   REQUIRED_RETURN_RATE: "no_effect",
   // Unlike the two above, this ONE entry does describe real platform
-  // behaviour: OPTIONS_EARNINGS_CRUSH_ENABLED is a genuine no_op per
+  // behaviour: PROMPT_MAX_CHARS is a genuine no_op per
   // docs/settings_liveness.json (read nowhere in production code). Without
   // this override it falls through to the generic live_safe/restart_required
-  // mock classification below, which -- caught live in the Settings
-  // Reference screen -- rendered it as "Applies now" with an interactive
-  // Toggle, exactly the misleading "control that does nothing" trap
-  // `writable`'s no_op exclusion (mockSettingsReference()) exists to prevent.
-  OPTIONS_EARNINGS_CRUSH_ENABLED: "no_effect",
+  // mock classification below, which would render it as "Applies now" --
+  // the misleading "control that does nothing" trap `writable`'s no_op
+  // exclusion (mockSettingsReference()) exists to prevent. (The boolean
+  // no_op examples used here before -- OPTIONS_EARNINGS_CRUSH_ENABLED,
+  // CIRCUIT_BREAKER_ENABLED -- were retired in 2026-09, step 4f.)
+  PROMPT_MAX_CHARS: "no_effect",
 };
 
 function mockLiveness(key: string): TunableLiveness {
@@ -2767,18 +2504,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
       "Minimum days between HMM refits; fit() calls within this window of the last real fit are no-ops. A lower number means the model adapts faster to sudden market shifts (like flash crashes), but increases computational overhead and may cause temporary over-sensitivity to noise.",
   },
   {
-    group: "Regime Model",
-    key: "OPTIONS_VRP_THRESHOLD",
-    type: "number",
-    value: 0.02,
-    default: 0.02,
-    min: 0,
-    max: 1,
-    step: 0.01,
-    description:
-      "Minimum Volatility Risk Premium (VRP) required to authorize premium selling (e.g. credit spreads). VRP is the difference between Implied Volatility and Realized Volatility. A higher threshold (e.g. 0.03 = 3%) demands a larger premium buffer before entering trades, increasing selectivity and safety but reducing trade frequency.",
-  },
-  {
     group: "Risk Gate",
     key: "RISK_GATE_ENFORCE_MARKET_HOURS",
     type: "boolean",
@@ -2950,15 +2675,15 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   // ---- Market Data ----
   {
     // Honest absent value: settings.py's real default IS None (auto-select
-    // by key availability) -- never fabricated as "alpaca"/"yfinance".
+    // by key availability) -- never fabricated as "fmp"/"yfinance".
     group: "Market Data",
     key: "MARKET_DATA_PROVIDER",
     type: "enum",
     value: null,
     default: null,
-    options: ["alpaca", "yfinance", "fmp"],
+    options: ["fmp", "yfinance"],
     description:
-      "Force a specific market-data backend: 'fmp', 'alpaca' or 'yfinance'. When unset the platform auto-selects based on key availability (Alpaca if its keys are present, else yfinance). Setting FMP_API_KEY alone NEVER auto-elects FMP: unlike the Alpaca ladder, FMP is chosen only by explicitly setting this to 'fmp', so an operator who adds the key to enable the analyst or earnings feed does not silently have their quote/bars source change underneath them. FMP quotes/bars additionally require FMP_QUOTES_ENABLED / FMP_BARS_ENABLED (the two-gate convention).",
+      "Force a specific market-data backend: 'fmp' or 'yfinance'. When unset the platform auto-selects based on key availability. Setting FMP_API_KEY alone NEVER auto-elects FMP: FMP is chosen only by explicitly setting this to 'fmp', so an operator who adds the key to enable the analyst or earnings feed does not silently have their quote/bars source change underneath them. FMP quotes/bars additionally require FMP_QUOTES_ENABLED / FMP_BARS_ENABLED (the two-gate convention).",
   },
   {
     group: "Market Data",
@@ -2992,12 +2717,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     default: "yahoo",
     options: ["yahoo", "yfinance_info", "fmp"],
     description:
-      "Primary fundamentals backend: 'yahoo' (statement-derived, default), 'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling Prep — see section 25). Finnhub is no longer a fundamentals source. Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen explicitly here, so adding the key for one feed cannot silently change what every valuation metric is computed from. 'fmp' additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate convention); with either half missing the Yahoo path is used, exactly as today.",
-  },
-  {
-    group: "Market Data", key: "MARKET_DATA_WS_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Opt-in: subscribe to Alpaca's real-time StockDataStream WebSocket for quotes, SUPPLEMENTING (never replacing) the REST-polling CompositeProvider -- see data/market_data_ws.py. Only takes effect when the active quote provider is AlpacaProvider; otherwise a no-op with an INFO log. False (default) reproduces the exact current REST-only behavior -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention. Any WS failure (connect, subscribe, disconnect, missing credentials) degrades to the existing REST path -- never crashes the pipeline.",
+      "Primary fundamentals backend: 'yahoo' (statement-derived, default), 'yfinance_info' (raw .info fallback), or 'fmp' (Financial Modeling Prep — see section 25). Setting FMP_API_KEY alone NEVER auto-elects FMP: it must be chosen explicitly here, so adding the key for one feed cannot silently change what every valuation metric is computed from. 'fmp' additionally requires FMP_FUNDAMENTALS_ENABLED=true (the two-gate convention); with either half missing the Yahoo path is used, exactly as today.",
   },
   {
     group: "Market Data", key: "HISTORICAL_STORE_ENABLED", type: "boolean",
@@ -3305,15 +3025,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     group: "Forecasting",
   },
   {
-    key: "MARKET_DATA_WS_ENABLED",
-    value: false,
-    default: false,
-    type: "boolean",
-    description:
-      "Opt-in: subscribe to Alpaca's real-time StockDataStream WebSocket for quotes, SUPPLEMENTING (never replacing) the REST-polling CompositeProvider -- see data/market_data_ws.py. Only takes effect when the active quote provider is AlpacaProvider; otherwise a no-op with an INFO log. False (default) reproduces the exact current REST-only behavior -- matches the FORECAST_USE_GARCH_SIGMA opt-in convention. Any WS failure (connect, subscribe, disconnect, missing credentials) degrades to the existing REST path -- never crashes the pipeline.",
-    group: "Market Data",
-  },
-  {
     key: "HISTORICAL_STORE_ENABLED",
     value: true,
     default: true,
@@ -3355,33 +3066,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     default: false,
     type: "boolean",
     description: "Require native implementation for Gravity Review Suite.",
-    group: "Advanced / Config",
-  },
-  {
-    key: "OPTIONS_MATRIX_ENABLED",
-    value: true,
-    default: true,
-    type: "boolean",
-    description:
-      "When True, the pipeline persists the per-symbol options premium directive matrix to output/options_matrix.json for the Pilots PWA (GET /options, GET /symbols/{ticker}/options). Default False.",
-    group: "Advanced / Config",
-  },
-  {
-    key: "OPTIONS_TRUE_IVR_ENABLED",
-    value: true,
-    default: true,
-    type: "boolean",
-    description:
-      "Opt-in: wires a real, options-chain-derived True_IVR into technical_options_engine.build_premium_directive() -- the GUI Technical Options Matrix tab, the get_options_directive MCP tool, api/metrics_api.py, execution/options_queue_builder.py, and every other build_premium_directive caller -- instead of leaving true IV rank exclusive to main_orchestrator.py's pipeline/production_steps.py::OptionsAnalysisStep path. When True, build_premium_directive fetches a live 30-calendar-day ATM IV via volatility.iv_engine.get_30d_atm_iv() (a fresh, lightweight DataEngine constructed with no FRED key purely for its fetch_options_chain() -- CompositeProvider/data/market_data.py has no chain-shaped method to reuse, so this mirrors exactly what OptionsAnalysisStep already does rather than inventing a second convention) and ranks it against the SAME iv_history table (volatility.iv_engine.IVHistoryStore) OptionsAnalysisStep writes to via calculate_true_ivr() -- strictly prior days only, never a lookahead. The result is surfaced as a NEW True_IVR row key alongside the existing realized-vol-only IVR_Proxy (never replacing it -- both stay so provenance is honest); generate_strategy_pricing_matrix's true_ivr argument prefers True_IVR over IVR_Proxy when the flag is on and a finite value was computed, falling back to IVR_Proxy exactly as today otherwise. Any failure at any step -- no live chain data, an empty iv_history table during warm-start (this repo's dev/CI sandboxes never populate GUI/MCP-path history since only OptionsAnalysisStep's orchestrator path writes to it), a network error, or any exception -- degrades to float('nan') for True_IVR and never crashes or changes IVR_Proxy/Cash-Wait fallback behavior (CONSTRAINT #4/#6). False (the default) reproduces today's exact behavior byte-for-byte -- no new network call, no new DB read, True_IVR always NaN. Enabling this adds one live options-chain fetch per symbol per render (GUI)/per call (MCP) -- a real, non-trivial network cost the realized-vol proxy never had.",
-    group: "Advanced / Config",
-  },
-  {
-    key: "PAIRS_SNAPSHOT_ENABLED",
-    value: true,
-    default: true,
-    type: "boolean",
-    description:
-      "When True, the pipeline persists the cointegrated pairs radar (ranking + current spread state) to output/pairs.json for the Pilots PWA (GET /pairs). Expensive O(n^2) scan; default False.",
     group: "Advanced / Config",
   },
   {
@@ -3453,29 +3137,13 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     default: false,
     type: "boolean",
     description:
-      "Opt-in fix for StrategyValidationHarness's deployability gate. Two related integrity gaps: (1) report.sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover were computed from self.strategy_fn(X, y, X, y) -- a 'test' set IDENTICAL to the training set, i.e. an IN-SAMPLE number feeding the 'net-of-cost Sharpe > 0.5' / 'MaxDD < 30%' deployability criteria -- while only PBO/DSR were genuinely out-of-sample (via CombinatorialPurgedCV). (2) CombinatorialPurgedCV's own DSR/PBO Sharpes were computed on GROSS (cost-free) returns even though the in-sample Sharpe/MaxDD leg applied _apply_cost_model's turnover-scaled cost -- an inconsistent cost basis between the two gate legs. When True, run_cpcv_evaluation applies the same turnover-scaled cost model to every CPCV path's train/test returns before any Sharpe/PBO/DSR/drawdown statistic is computed from them, and the harness's reported sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover become the MEAN of each metric computed independently on every CPCV path's own genuinely held-out (purged+embargoed) OOS returns for the DSR-selected strategy, instead of the full-sample in-sample fit -- see run_cpcv_evaluation's docstring for why this is a per-path mean rather than one concatenated equity curve (CPCV's combinatorial test blocks are deliberately reused across paths). equity_curve/benchmark_curve/macro_benchmark_curve are UNCHANGED either way (still the full-sample series) -- a single non-overlapping OOS equity curve needs the AFML CPCV backtest-path-recombination algorithm, not implemented here (a real, separate follow-up, not silently faked). False (the default) reproduces pre-existing behavior exactly: every currently-recorded docs/VALIDATION_STRATEGY_FIX_LOG.md PBO/DSR/Sharpe/MaxDD baseline for the registered STRATEGY_REGISTRY fleet was measured with this flag off, and this sandboxed dev/CI environment has no live-market network access to re-verify the fleet against the corrected numbers -- flipping this on requires re-running scripts/refresh_validations.py against live data and updating that log, exactly like this codebase's other opt-in correctness levers (e.g. FORECAST_CNN_LSTM_WALKFORWARD_SCALING above, ETF_TRANSMISSION_SIZING_ENABLED).",
+      "Opt-in fix for StrategyValidationHarness's deployability gate. Two related integrity gaps: (1) report.sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover were computed from self.strategy_fn(X, y, X, y) -- a 'test' set IDENTICAL to the training set, i.e. an IN-SAMPLE number feeding the 'net-of-cost Sharpe > 0.5' / 'MaxDD < 30%' deployability criteria -- while only PBO/DSR were genuinely out-of-sample (via CombinatorialPurgedCV). (2) CombinatorialPurgedCV's own DSR/PBO Sharpes were computed on GROSS (cost-free) returns even though the in-sample Sharpe/MaxDD leg applied _apply_cost_model's turnover-scaled cost -- an inconsistent cost basis between the two gate legs. When True, run_cpcv_evaluation applies the same turnover-scaled cost model to every CPCV path's train/test returns before any Sharpe/PBO/DSR/drawdown statistic is computed from them, and the harness's reported sharpe/max_dd/sortino/calmar/hit_rate/avg_trade_pct/turnover become the MEAN of each metric computed independently on every CPCV path's own genuinely held-out (purged+embargoed) OOS returns for the DSR-selected strategy, instead of the full-sample in-sample fit -- see run_cpcv_evaluation's docstring for why this is a per-path mean rather than one concatenated equity curve (CPCV's combinatorial test blocks are deliberately reused across paths). equity_curve/benchmark_curve/macro_benchmark_curve are UNCHANGED either way (still the full-sample series) -- a single non-overlapping OOS equity curve needs the AFML CPCV backtest-path-recombination algorithm, not implemented here (a real, separate follow-up, not silently faked). False (the default) reproduces pre-existing behavior exactly: every currently-recorded docs/VALIDATION_STRATEGY_FIX_LOG.md PBO/DSR/Sharpe/MaxDD baseline for the registered STRATEGY_REGISTRY fleet was measured with this flag off, and this sandboxed dev/CI environment has no live-market network access to re-verify the fleet against the corrected numbers -- flipping this on requires re-running scripts/refresh_validations.py against live data and updating that log, exactly like this codebase's other opt-in correctness levers (e.g. FORECAST_CNN_LSTM_WALKFORWARD_SCALING above).",
     group: "Advanced / Config",
   },
   {
     group: "Advanced / Config", key: "GRAVITY_REQUIRE_NATIVE", type: "boolean",
     value: false, default: false,
     description: "Require native implementation for Gravity Review Suite.",
-  },
-  // ---- Options & Pairs Snapshots ----
-  {
-    group: "Options & Pairs Snapshots", key: "OPTIONS_MATRIX_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "When True, the pipeline persists the per-symbol options premium directive matrix to output/options_matrix.json for the Pilots PWA (GET /options, GET /symbols/{ticker}/options). Default False.",
-  },
-  {
-    group: "Options & Pairs Snapshots", key: "OPTIONS_TRUE_IVR_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Opt-in: wires a real, options-chain-derived True_IVR into technical_options_engine.build_premium_directive() -- the GUI Technical Options Matrix tab, the get_options_directive MCP tool, api/metrics_api.py, execution/options_queue_builder.py, and every other build_premium_directive caller -- instead of leaving true IV rank exclusive to main_orchestrator.py's pipeline path. When True, build_premium_directive fetches a live 30-calendar-day ATM IV and ranks it against the iv_history table, strictly prior days only, never a lookahead. Surfaced as a new True_IVR row key alongside the existing realized-vol-only IVR_Proxy (never replacing it). Any failure degrades to float('nan') for True_IVR and never crashes or changes IVR_Proxy/Cash-Wait fallback behavior (CONSTRAINT #4/#6). False (the default) reproduces today's exact behavior byte-for-byte -- no new network call, no new DB read, True_IVR always NaN.",
-  },
-  {
-    group: "Options & Pairs Snapshots", key: "PAIRS_SNAPSHOT_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "When True, the pipeline persists the cointegrated pairs radar (ranking + current spread state) to output/pairs.json for the Pilots PWA (GET /pairs). Expensive O(n^2) scan; default False.",
   },
   // ---- ML, Data Capture & Audit ----
   {
@@ -3534,196 +3202,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     group: "RLHF Calibration", key: "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED", type: "boolean",
     value: false, default: false,
     description: "When True, a proposal that receives a 5-star human_rating is automatically appended to the SFT JSONL export the moment the review is submitted, instead of requiring a separate POST /rlhf/export-sft call. Default False (opt-in).",
-  },
-  // ---- Options Desk Automation ----
-  {
-    group: "Options Desk Automation",
-    key: "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Automatically execute valid options strategy directives into the paper broker every cycle.",
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_AUTO_EXIT_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Automatically manage and exit option positions on profit target, stop loss, or DTE threshold.",
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_PROFIT_TARGET_PCT",
-    type: "number",
-    value: 0.5,
-    default: 0.5,
-    description: "Profit target percentage threshold to trigger automated exit (e.g. 0.50 for 50% max profit).",
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_STOP_LOSS_MULTIPLE",
-    type: "number",
-    value: 2.0,
-    default: 2.0,
-    description: "Stop loss multiple of max credit/debit to trigger automated exit (e.g. 2.0 for 200% loss).",
-    min: 0.5,
-    max: 10.0,
-    step: 0.1,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_MANAGE_DTE_THRESHOLD",
-    type: "number",
-    value: 21,
-    default: 21,
-    description: "DTE threshold at or below which options positions are proactively closed/rolled (e.g. 21 days).",
-    min: 0,
-    max: 60,
-    step: 1,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_DELTA_HEDGE_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Enable automatic dynamic SPY delta hedging for options paper portfolio.",
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
-    type: "number",
-    value: 25.0,
-    default: 25.0,
-    description: "Deadband threshold in SPY delta shares before triggering a dynamic delta hedge order.",
-    min: 1,
-    max: 500,
-    step: 5,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_0DTE_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Enable automated 0DTE options momentum breakout trading and lifecycle management.",
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_0DTE_PROFIT_TARGET_PCT",
-    type: "number",
-    value: 0.75,
-    default: 0.75,
-    description: "Profit target percentage threshold to trigger 0DTE exit (e.g. 0.75 for +75% gain in premium).",
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_0DTE_STOP_LOSS_PCT",
-    type: "number",
-    value: 0.3,
-    default: 0.3,
-    description: "Stop loss percentage threshold to trigger 0DTE exit (e.g. 0.30 for -30% loss).",
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "OPTIONS_0DTE_HARD_EXIT_TIME",
-    type: "string",
-    value: "15:45",
-    default: "15:45",
-    description: "Mandatory hard exit time (ET, HH:MM) to close all open 0DTE positions and avoid pin/settlement risk.",
-  },
-  {
-    group: "Options Desk Automation",
-    key: "MAX_OPTION_NOTIONAL_PER_TRADE",
-    type: "number",
-    value: 2500.0,
-    default: 2500.0,
-    description: "Max risk notional collateral per automated options paper trade.",
-    min: 100.0,
-    max: 100000.0,
-    step: 500.0,
-  },
-  {
-    group: "Options Desk Automation",
-    key: "MAX_CONCURRENT_OPTION_POSITIONS",
-    type: "number",
-    value: 10,
-    default: 10,
-    description: "Max total concurrent open option positions in the paper broker.",
-    min: 1,
-    max: 100,
-    step: 1,
-  },
-  // ---- Circuit Breaker ----
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Master switch for automatic live circuit-breaker updates. Live when enabled: volatility-jump detector, VPIN (coarse bar-level BVC approximation), and the loss-velocity brake (sampled from PaperAccountStore equity). OFI remains unwired (no configured provider populates bid/ask size), so the compound OFI+VPIN flash-crash shield still cannot trigger automatically even with VPIN now real — see docstring on the daemon updater (desktop/daemon_runtime.py::maybe_update_circuit_breaker) for full scope. Defaults False to preserve today's exact (inert) behavior.",
-  },
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
-    type: "number",
-    value: 3.5,
-    default: 3.5,
-    description: "Volatility jump Z-score threshold to trigger SOFT_HALT (VOLATILITY_BURST_HALT).",
-    min: 1.0,
-    max: 10.0,
-    step: 0.25,
-  },
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_VPIN_THRESHOLD",
-    type: "number",
-    value: 0.4,
-    default: 0.4,
-    description: "Volume-Synchronized Probability of Toxicity threshold to trigger FLASH_CRASH_SHIELD.",
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-  },
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_OFI_THRESHOLD",
-    type: "number",
-    value: 1000.0,
-    default: 1000.0,
-    description: "Order Flow Imbalance threshold (selling pressure) to trigger FLASH_CRASH_SHIELD.",
-    min: 0.0,
-    max: 10000.0,
-    step: 10.0,
-  },
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS",
-    type: "number",
-    value: 30.0,
-    default: 30.0,
-    description: "Loss velocity rolling time window in minutes relative to daily loss limit.",
-    min: 1,
-    max: 120,
-    step: 1,
-  },
-  {
-    group: "Circuit Breaker",
-    key: "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
-    type: "string",
-    value: "SPY",
-    default: "SPY",
-    description: "Reference symbol used for the live volatility-jump circuit-breaker updater's baseline/reactive vol computation.",
   },
 ];
 
@@ -4000,14 +3478,14 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
     value: false,
     default: false,
     description:
-      "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/Reddit/EDGAR). False is a complete no-op.",
+      "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/EDGAR). False is a complete no-op.",
   },
   {
     group: "Sentiment Ingestion Core",
     key: "SENTIMENT_SOURCES",
     type: "string",
-    value: "yahoo_rss,gdelt,reddit,edgar",
-    default: "yahoo_rss,gdelt,reddit,edgar",
+    value: "yahoo_rss,gdelt,edgar",
+    default: "yahoo_rss,gdelt,edgar",
     description:
       "Comma-separated list of enabled sentiment-source provider names.",
   },
@@ -4067,9 +3545,9 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
     description:
       "Consecutive failures for a single source within one cycle before it's skipped for the rest of the cycle.",
   },
-  // ---- Sources — Reddit, StockTwits, EDGAR, GDELT, Google News ----
+  // ---- Sources — StockTwits, EDGAR, GDELT, Google News ----
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "STOCKTWITS_ENABLED",
     type: "boolean",
     value: false,
@@ -4078,28 +3556,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Master switch for the free, uncredentialed StockTwits source.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
-    key: "REDDIT_USER_AGENT",
-    type: "string",
-    value: "stockpy-sentiment-ingestion/0.1",
-    default: "stockpy-sentiment-ingestion/0.1",
-    description:
-      "User-Agent header sent with every Reddit API request, per Reddit's API rules.",
-  },
-  {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
-    key: "REDDIT_BACKFILL_MAX_PAGES",
-    type: "number",
-    value: 10,
-    default: 10,
-    min: 1,
-    max: 100,
-    step: 1,
-    description:
-      "Max pages RedditSource paginates through for a historical backfill request.",
-  },
-  {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GOOGLE_NEWS_LOOKBACK_WINDOW",
     type: "string",
     value: "7d",
@@ -4108,7 +3565,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Lookback window passed as Google News RSS's `when:` query parameter.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "EDGAR_FULLTEXT_ENABLED",
     type: "boolean",
     value: false,
@@ -4117,7 +3574,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Master switch for the SEC EDGAR full-text search (10-K/10-Q) additions to EdgarSource.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "EDGAR_FULLTEXT_FORMS",
     type: "string",
     value: "8-K,10-K,10-Q",
@@ -4126,7 +3583,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Comma-separated SEC form types requested from EDGAR full-text search.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "EDGAR_FULLTEXT_CHUNK_TOKENS",
     type: "number",
     value: 512,
@@ -4137,7 +3594,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
     description: "Maximum tokens per filing-text chunk for FinBERT scoring.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GDELT_MIN_REQUEST_INTERVAL_SECONDS",
     type: "number",
     value: 5.0,
@@ -4149,7 +3606,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Minimum seconds between GDELT DOC API request issuance, shared process-wide.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GDELT_MAX_RETRIES",
     type: "number",
     value: 2,
@@ -4161,7 +3618,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Retries after a GDELT HTTP 429/5xx before the request is given up on.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GDELT_RETRY_BACKOFF_SECONDS",
     type: "number",
     value: 5.0,
@@ -4172,7 +3629,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
     description: "Base seconds for the GDELT retry backoff.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GDELT_COOLDOWN_THRESHOLD",
     type: "number",
     value: 3,
@@ -4184,7 +3641,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
       "Consecutive failed GDELT requests after which calls are skipped outright for a cooldown period.",
   },
   {
-    group: "Sources — Reddit, StockTwits, EDGAR, GDELT, Google News",
+    group: "Sources — StockTwits, EDGAR, GDELT, Google News",
     key: "GDELT_COOLDOWN_SECONDS",
     type: "number",
     value: 300.0,
@@ -4236,19 +3693,7 @@ const SENTIMENT_TUNABLE_DEFS: MockTunableDef[] = [
     max: 90,
     step: 1,
     description:
-      "Calendar days of Finnhub company_news headlines scored per symbol per cycle.",
-  },
-  {
-    group: "FinBERT & Catalyst Scoring",
-    key: "FINNHUB_RATE_LIMIT_PER_MIN",
-    type: "number",
-    value: 50,
-    default: 50,
-    min: 1,
-    max: 60,
-    step: 1,
-    description:
-      "Finnhub sliding-window call budget per 60s (free tier ceiling: 60).",
+      "Calendar days of FMP company-news headlines scored per symbol per cycle.",
   },
   {
     group: "FinBERT & Catalyst Scoring",
@@ -4480,12 +3925,6 @@ const SECTOR_SELECTION_TUNABLE_DEFS: MockTunableDef[] = [
 
 const FMP_TUNABLES_KEY = "stockpy.mock.fmp_tunables";
 const FMP_TUNABLES_DRIFT_KEY = "stockpy.mock.fmp_tunables_drift";
-const ETF_TRANSMISSION_TUNABLES_KEY = "stockpy.mock.etf_transmission_tunables";
-const ETF_TRANSMISSION_TUNABLES_DRIFT_KEY =
-  "stockpy.mock.etf_transmission_tunables_drift";
-const CACHE_LONG_SHORT_TUNABLES_KEY = "stockpy.mock.cache_long_short_tunables";
-const CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY =
-  "stockpy.mock.cache_long_short_tunables_drift";
 
 const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   {
@@ -4570,7 +4009,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
     value: true,
     default: true,
     description:
-      "Fall through to secondary providers (Alpaca/yfinance/Yahoo) on FMP failure.",
+      "Fall through to secondary providers (yfinance/Yahoo) on FMP failure.",
   },
   {
     group: "Client & Resiliency",
@@ -4726,7 +4165,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   {
     group: "Diagnostic & Supplement Feeds", key: "FMP_NEWS_ENABLED", type: "boolean",
     value: false, default: false,
-    description: "Master switch for the FMP company-news feed (data.fmp_client.stock_news, wrapping /news/stock). False (the default) is a complete no-op reproducing today's exact behavior — signals/news_catalyst.py's headline fetch stays on its existing Finnhub-only path, and data/sentiment_sources.py's 'fmp_news' SentimentSource returns [] without any network call. When True AND FMP_API_KEY is set, FMP becomes the PRIMARY provider for company headlines (fetch_company_headlines dispatches FMP-first, falling back to Finnhub only on an FMP failure) and 'fmp_news' becomes eligible for SENTIMENT_SOURCES. Verified live 2026-08 against a real FMP key: /news/stock returns >=6 months of real history (vs. Finnhub's free-tier ~3-month cap). Deliberately does NOT touch /news/press-releases — that endpoint returned a plan-entitlement rejection ('Restricted Endpoint') against the account this integration was verified with.",
+    description: "Master switch for the FMP company-news feed (data.fmp_client.stock_news, wrapping /news/stock). False (the default) is a complete no-op reproducing today's exact behavior — signals/news_catalyst.py's headline fetch returns no headlines, and data/sentiment_sources.py's 'fmp_news' SentimentSource returns [] without any network call. When True AND FMP_API_KEY is set, FMP becomes the PRIMARY provider for company headlines (fetch_company_headlines is FMP-only) and 'fmp_news' becomes eligible for SENTIMENT_SOURCES. Verified live 2026-08 against a real FMP key: /news/stock returns >=6 months of real history . Deliberately does NOT touch /news/press-releases — that endpoint returned a plan-entitlement rejection ('Restricted Endpoint') against the account this integration was verified with.",
   },
   {
     group: "Diagnostic & Supplement Feeds", key: "FMP_NEWS_PAGE_LIMIT", type: "number",
@@ -4739,19 +4178,9 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
     description: "Hard ceiling on pages fetched per symbol per call into data.fmp_client.stock_news, bounding a wide backfill window (e.g. scripts/backfill_news_history.py --months 6) so a dense news day/symbol cannot loop indefinitely. Once the ceiling is reached the remaining (older) articles in the window are simply not fetched -- callers that need full coverage should narrow --months or accept the honest gap (CONSTRAINT #4: never a fabricated substitute for the missing pages, just fewer real rows). Only consulted when FMP_NEWS_ENABLED is True.",
   },
   {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_OPTIONS_HEALTH_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for the FMP fundamental-health overlay bundled into the options premium-directive matrix (reporting/options_snapshot.py::write_options_matrix → technical_options_engine.build_premium_directive). False (the default) is a complete no-op reproducing today's exact behavior: Altman_Z_Score, Piotroski_F_Score, Net_Debt_EBITDA, FCF_Yield, and Realized_Vol_30D all stay None and zero additional FMP requests are attempted. When True, gates three endpoints for every symbol in the options matrix: Altman Z-Score + Piotroski F-Score (/financial-scores), Net Debt/EBITDA + FCF Yield (/ratios-ttm), and 30-day realized volatility (/standard-deviation). Does NOT gate Days_To_Earnings/Earnings_Risk — those reuse the existing FMP_EARNINGS_ENABLED earnings-calendar gate.",
-  },
-  {
-    group: "Diagnostic & Supplement Feeds", key: "FMP_OPTIONS_CONTEXT_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for the FMP market/qualitative-context overlay bundled into the options premium-directive matrix (reporting/options_snapshot.py::write_options_matrix → technical_options_engine.build_premium_directive). False (the default) is a complete no-op reproducing today's exact behavior: News_Snippets stays [], Peers stays [], and zero additional FMP requests are attempted. When True, gates two endpoints for every symbol in the options matrix: recent news headlines, capped at 3 per symbol (/news/stock), and the peer-comparison ticker group (/peers). Kept separate from FMP_OPTIONS_HEALTH_ENABLED because it is a different overlay concept — market/qualitative context rather than balance-sheet health.",
-  },
-  {
     group: "Diagnostic & Supplement Feeds", key: "FMP_PEERS_ENABLED", type: "boolean",
     value: false, default: false,
-    description: "Master switch for the on-demand GET /data/peers/{symbol} endpoint (api/data_api.py) — a single, per-click, operator-triggered FMP peer-group lookup (/peers) for the webapp's 'Suggest peers for this ticker' affordance on SymbolComparison. False (the default) is a complete no-op: the endpoint returns an empty peer list + an honest reason, with ZERO network calls. Deliberately kept SEPARATE from FMP_OPTIONS_CONTEXT_ENABLED, which already gates a DIFFERENT call site of the same fetch_peer_group function: a per-cycle BATCH fetch across the whole options-matrix universe. A single user-triggered click and a per-cycle loop over an entire universe have completely different cost/cadence profiles and must be independently controllable.",
+    description: "Master switch for the on-demand GET /data/peers/{symbol} endpoint (api/data_api.py) — a single, per-click, operator-triggered FMP peer-group lookup (/peers) for the webapp's 'Suggest peers for this ticker' affordance on SymbolComparison. False (the default) is a complete no-op: the endpoint returns an empty peer list + an honest reason, with ZERO network calls.",
   },
   {
     group: "Diagnostic & Supplement Feeds", key: "FMP_UNIVERSE_ENABLED", type: "boolean",
@@ -4760,274 +4189,7 @@ const FMP_TUNABLE_DEFS: MockTunableDef[] = [
   },
 ];
 
-const ETF_TRANSMISSION_TUNABLE_DEFS: MockTunableDef[] = [
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Master switch for ETF constituent holdings ingestion (EDGAR N-PORT).",
-  },
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_TICKERS",
-    type: "string",
-    value:
-      '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
-    default:
-      '["SPY","IVV","VOO","QQQ","DIA","IWM","XLK","XLF","XLV","XLE","XLI","XLY","XLP","XLU","XLB","XLRE","XLC"]',
-    description: "JSON array of ETF tickers to ingest holdings for.",
-  },
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_REFRESH_DAYS",
-    type: "number",
-    value: 7,
-    default: 7,
-    min: 1,
-    max: 90,
-    step: 1,
-    description: "Refresh interval for ETF constituent holdings in days.",
-  },
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_ISSUER_CSV_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description: "Allow secondary CSV ingestion directly from issuer sites.",
-  },
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE",
-    type: "number",
-    value: 60.0,
-    default: 60.0,
-    min: 1.0,
-    max: 300.0,
-    step: 1.0,
-    description:
-      "Max wall-clock seconds allocated for ETF holdings ingestion per cycle.",
-  },
-  {
-    group: "Holdings Ingestion",
-    key: "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD",
-    type: "number",
-    value: 3,
-    default: 3,
-    min: 1,
-    max: 20,
-    step: 1,
-    description: "Consecutive ingestion failures before circuit breaker trips.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_TRANSMISSION_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Master switch for ETF volatility-transmission measurement columns.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_HOLDINGS_MARKET_PROXY",
-    type: "string",
-    value: "SPY",
-    default: "SPY",
-    description: "Market benchmark ticker used for residualization.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_TRANSMISSION_WRAPPERS",
-    type: "string",
-    value:
-      '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
-    default:
-      '["SPY","QQQ","IWM","DIA","XLB","XLC","XLE","XLF","XLI","XLK","XLP","XLRE","XLU","XLV","XLY"]',
-    description:
-      "JSON array of candidate wrapper ETFs considered as transmission wrappers.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
-    type: "string",
-    value: "[]",
-    default: "[]",
-    description:
-      "JSON array of extra symbols excluded from ETF transmission calculation.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_TRANSMISSION_WINDOW_DAYS",
-    type: "number",
-    value: 60,
-    default: 60,
-    min: 10,
-    max: 504,
-    step: 1,
-    description: "Rolling window days for ETF comovement R² calculation.",
-  },
-  {
-    group: "Measurement & Residualization",
-    key: "ETF_TRANSMISSION_MIN_OBS",
-    type: "number",
-    value: 60,
-    default: 60,
-    min: 5,
-    max: 252,
-    step: 1,
-    description: "Minimum required observation days in the rolling window.",
-  },
-  {
-    group: "Position Sizing Derate",
-    key: "ETF_TRANSMISSION_SIZING_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Enable position sizing derate based on ETF ownership & comovement.",
-  },
-  {
-    group: "Position Sizing Derate",
-    key: "ETF_TRANSMISSION_MAX_DERATE",
-    type: "number",
-    value: 0.3,
-    default: 0.3,
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-    description:
-      "Maximum sizing derate fraction (e.g. 0.30 = up to 30% reduction).",
-  },
-  {
-    group: "Position Sizing Derate",
-    key: "ETF_TRANSMISSION_OWNERSHIP_REFERENCE",
-    type: "number",
-    value: 0.2,
-    default: 0.2,
-    min: 0.01,
-    max: 1.0,
-    step: 0.01,
-    description: "Reference ETF ownership percentage scaling the derate.",
-  },
-  {
-    group: "Position Sizing Derate",
-    key: "ETF_TRANSMISSION_MIN_MULTIPLIER",
-    type: "number",
-    value: 0.5,
-    default: 0.5,
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-    description: "Floor for the position sizing multiplier.",
-  },
-  {
-    group: "Portfolio Covariance Adjustment",
-    key: "ETF_TRANSMISSION_PORTFOLIO_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Enable ETF-co-ownership-adjusted portfolio covariance matrix.",
-  },
-  {
-    group: "Portfolio Covariance Adjustment",
-    key: "ETF_TRANSMISSION_COV_INFLATION",
-    type: "number",
-    value: 0.25,
-    default: 0.25,
-    min: 0.0,
-    max: 5.0,
-    step: 0.05,
-    description:
-      "Off-diagonal covariance inflation factor for overlapping ETF holdings.",
-  },
-  {
-    group: "Portfolio Covariance Adjustment",
-    key: "ETF_TRANSMISSION_COV_WINDOW_DAYS",
-    type: "number",
-    value: 60,
-    default: 60,
-    min: 10,
-    max: 504,
-    step: 1,
-    description:
-      "Rolling window days for ETF portfolio covariance calculation.",
-  },
-];
-
-const CACHE_LONG_SHORT_TUNABLE_DEFS: MockTunableDef[] = [
-  {
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Master switch for the Cache Long/Short tax-loss-harvesting advisory strategy.",
-  },
-  {
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_WRITES_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Dedicated fail-closed flag for the position-writing endpoints (start, approve-bulk).",
-  },
-  {
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_MIN_CORRELATION",
-    type: "number",
-    value: 0.75,
-    default: 0.75,
-    min: 0.0,
-    max: 1.0,
-    step: 0.05,
-    description: "Min correlation to trigger drift alert.",
-  },
-  {
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
-    type: "number",
-    value: 0.05,
-    default: 0.05,
-    min: 0.0,
-    max: 1.0,
-    step: 0.01,
-    description:
-      "Percentage loss to trigger a tax-loss-harvesting recommendation.",
-  },
-  {
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
-    type: "number",
-    value: 3600,
-    default: 3600,
-    min: 60,
-    max: 86400,
-    step: 60,
-    description:
-      "Interval (seconds) for the Cache Long/Short background worker loop.",
-  },
-  {
-    // JSON-array field -- kept as a "string" type like every other JSON-blob
-    // tunable (ETF_HOLDINGS_TICKERS, SECTOR_FORECAST_CONFIGS, etc.); the
-    // frontend's TunableFieldType has no separate "json" member.
-    group: "Cache Long/Short Overlay",
-    key: "CACHE_LONG_SHORT_PROXY_CANDIDATES",
-    type: "string",
-    value: '["SPY","QQQ","XLK","XLF","XLV","XLE"]',
-    default: '["SPY","QQQ","XLK","XLF","XLV","XLE"]',
-    description:
-      "JSON array of candidate proxy ETFs screened for a concentrated ticker's hedge leg.",
-  },
-];
-
-// Mirrors api/pilots_api.py's _FEATURE_FLAGS_GROUPS exactly: the 19
+// Mirrors api/pilots_api.py's _FEATURE_FLAGS_GROUPS exactly: the
 // settings_keysets.DANGEROUS_KEYS + the 6 pilots/feature_flags.py
 // WRITE_GATE_REASONS keys in one group, the 7 DIAGNOSTIC_FLAG_REASONS keys
 // in the other. Values/defaults mirror the real settings.py defaults after
@@ -5062,6 +4224,16 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     options: ["off", "review", "live"],
     description:
       "Moving this to 'live' is what lets the Robinhood execution bridge place real orders.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "DAEMON_AGENTIC_QUEUE_MODE",
+    type: "enum",
+    value: "off",
+    default: "off",
+    options: ["off", "shadow", "primary"],
+    description:
+      "Which process writes the Robinhood execution queue. 'shadow' writes a comparison copy under OUTPUT_DIR/shadow/ only; 'primary' (step 5.3) hands the real queue to the daemon.",
   },
   {
     group: "Write & Execution Gates",
@@ -5131,12 +4303,12 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Write & Execution Gates",
-    key: "CACHE_LONG_SHORT_WRITES_ENABLED",
+    key: "ROBINHOOD_SCHEDULED_LOGIN_ENABLED",
     type: "boolean",
-    value: true,
-    default: true,
+    value: false,
+    default: false,
     description:
-      "Gates the Cache Long/Short position-writing endpoints (start, approve-bulk) -- changes what a trading strategy recommends.",
+      "Makes the orchestrator daemon start a real Robinhood device-approval login every weekday at ROBINHOOD_SCHEDULED_LOGIN_TIME_ET, pushing an approval prompt to the operator's phone.",
   },
   {
     group: "Write & Execution Gates",
@@ -5224,9 +4396,9 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     type: "enum",
     value: "fmp_paper",
     default: "fmp_paper",
-    options: ["fmp_paper", "alpaca"],
+    options: ["fmp_paper"],
     description:
-      "Selects which broker actually receives orders: 'alpaca' (real broker) vs. 'fmp_paper' (a local SQLite-backed paper broker).",
+      "The automated pipeline's broker is the local FMP paper ledger ('fmp_paper', SQLite-backed). Alpaca was removed; real money moves only through the Robinhood execution queue.",
   },
   {
     group: "Write & Execution Gates",
@@ -5257,21 +4429,24 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Write & Execution Gates",
+    key: "PAPER_PIPELINE_PROBE_WEIGHT",
+    type: "number",
+    value: 0.0,
+    default: 0.0,
+    min: 0,
+    max: 0.05,
+    step: 0.005,
+    description:
+      "Cold-start paper probe: fraction of paper equity per zero-Kelly BUY while the pipeline has fewer than 30 closed trades. 0 = off.",
+  },
+  {
+    group: "Write & Execution Gates",
     key: "META_LABELING_BACKFILL_BRIDGE_ENABLED",
     type: "boolean",
     value: false,
     default: false,
     description:
       "Master switch for the Forecast Backfill screen's live meta-labeler bridge -- when True, screen-trained models can gate real position sizing if they clear the PBO/DSR deployability check.",
-  },
-  {
-    group: "Write & Execution Gates",
-    key: "OFI_SHIELD_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Fail-closed extension to the Flash Crash (OFI+VPIN) circuit-breaker shield (execution/dynamic_circuit_breaker.py).",
   },
   {
     group: "Write & Execution Gates",
@@ -5365,24 +4540,6 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     description:
       "Gates POST /pilots/paper-broker/reset on the Pilots API -- wipes the local FMP paper account's positions/orders and reseeds cash.",
   },
-  {
-    group: "Write & Execution Gates",
-    key: "FIX_GATEWAY_ENABLED",
-    type: "boolean",
-    value: true,
-    default: true,
-    description:
-      "Gates POST /pilots/execution/fix/route and FIX session-management endpoints on the Pilots API -- simulated FIX 4.4 gateway.",
-  },
-  {
-    group: "Write & Execution Gates",
-    key: "MULTI_BROKER_GATEWAY_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Enables multi-broker smart routing via MultiBrokerGateway in broker execution tools (broker_live_execution_mcp.py).",
-  },
   // -- Diagnostic & Data Features (read-only measurement/data-source
   // master switches, feed no scoring or sizing decision) --
   // NOTE: all 7 of these default to False in settings.py (each is a data
@@ -5406,24 +4563,6 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     default: false,
     description:
       "Enables Attention Score computation from Wikipedia pageviews.",
-  },
-  {
-    group: "Diagnostic & Data Features",
-    key: "ETF_HOLDINGS_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Enables fetching ETF constituent baskets for exposure analysis.",
-  },
-  {
-    group: "Diagnostic & Data Features",
-    key: "ETF_TRANSMISSION_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Enables ETF volatility-transmission measurement columns (diagnostic only -- not read by scoring or sizing).",
   },
   {
     group: "Diagnostic & Data Features",
@@ -5461,7 +4600,7 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
 ];
 
 // Representative multi-domain sample for Settings Reference offline mock.
-// Covers all 14 domains with diverse types, secret masking, and liveness states.
+// Covers all 13 domains with diverse types, secret masking, and liveness states.
 // Overrides key for `PUT /settings/reference` boolean toggles — a dedicated
 // storage bucket, distinct from the per-editor override keys above, since
 // this screen can write a field regardless of which (if any) dedicated
@@ -5477,7 +4616,6 @@ function mockSettingsReference(): SettingsReferenceResponse {
     "Market Data/DB",
     "Universe/Watchlist",
     "Forecasting/ML",
-    "ETF Transmission",
     "Sentiment/News/Attention",
     "AI/LLM/RAG",
     "Orchestrator/Daemon/Jobs",
@@ -5525,7 +4663,7 @@ function mockSettingsReference(): SettingsReferenceResponse {
       value: "fmp_paper",
       default: "fmp_paper",
       type: "string",
-      description: "Selects which broker actually receives orders: 'alpaca' (real broker) vs. 'fmp_paper' (a local SQLite-backed paper broker).",
+      description: "The automated pipeline's broker is the local FMP paper ledger ('fmp_paper', SQLite-backed). Alpaca was removed; real money moves only through the Robinhood execution queue.",
       domain: "Execution/Brokers",
       dangerous: true,
       liveness: mockLiveness("BROKER_BACKEND"),
@@ -5537,27 +4675,27 @@ function mockSettingsReference(): SettingsReferenceResponse {
       editable_at: "/settings/paper-broker",
     },
     {
-      key: "OPTIONS_0DTE_ENABLED",
+      key: "OPTIONS_RISK_FREE_RATE",
       category: "allowed",
-      value: false,
-      default: false,
-      type: "boolean",
-      description: "Enable automated 0DTE options momentum breakout trading and lifecycle management.",
+      value: 0.045,
+      default: 0.045,
+      type: "number",
+      description: "Annualized risk-free interest rate for options pricing and Greeks calculation.",
       domain: "Options Desk",
       dangerous: false,
-      liveness: mockLiveness("OPTIONS_0DTE_ENABLED"),
-      editable_at: "/settings/tunables",
+      liveness: mockLiveness("OPTIONS_RISK_FREE_RATE"),
+      editable_at: null,
     },
     {
-      key: "OPTIONS_EARNINGS_CRUSH_ENABLED",
+      key: "PROMPT_MAX_CHARS",
       category: "allowed",
-      value: false,
-      default: false,
-      type: "boolean",
-      description: "Enable earnings crush options strategy module.",
-      domain: "Options Desk",
+      value: 50000,
+      default: 50000,
+      type: "number",
+      description: "Hard upper bound on prompt body size enforced by guardrails.validate_prompt(). Bodies exceeding this are rejected as a denial-of-service mitigation.",
+      domain: "AI/LLM/RAG",
       dangerous: false,
-      liveness: mockLiveness("OPTIONS_EARNINGS_CRUSH_ENABLED"),
+      liveness: mockLiveness("PROMPT_MAX_CHARS"),
       editable_at: null,
     },
     {
@@ -5597,24 +4735,12 @@ function mockSettingsReference(): SettingsReferenceResponse {
       editable_at: "/settings/tunables",
     },
     {
-      key: "ETF_HOLDINGS_ENABLED",
-      category: "allowed",
-      value: false,
-      default: false,
-      type: "boolean",
-      description: "Enables fetching ETF constituent baskets for exposure analysis.",
-      domain: "ETF Transmission",
-      dangerous: false,
-      liveness: mockLiveness("ETF_HOLDINGS_ENABLED"),
-      editable_at: "/settings/etf-transmission",
-    },
-    {
       key: "SENTIMENT_INGESTION_ENABLED",
       category: "allowed",
       value: false,
       default: false,
       type: "boolean",
-      description: "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/Reddit/EDGAR).",
+      description: "Master switch for multi-source sentiment ingestion (Yahoo RSS/GDELT/EDGAR).",
       domain: "Sentiment/News/Attention",
       dangerous: false,
       liveness: mockLiveness("SENTIMENT_INGESTION_ENABLED"),
@@ -5657,15 +4783,15 @@ function mockSettingsReference(): SettingsReferenceResponse {
       editable_at: null,
     },
     {
-      key: "CIRCUIT_BREAKER_ENABLED",
+      key: "HMM_N_STATES",
       category: "allowed",
-      value: false,
-      default: false,
-      type: "boolean",
-      description: "Master switch for automatic live circuit-breaker updates.",
+      value: 3,
+      default: 3,
+      type: "number",
+      description: "Number of hidden states for the Gaussian HMM regime detector (bull/sideways/bear).",
       domain: "Strategy Overlays",
       dangerous: false,
-      liveness: mockLiveness("CIRCUIT_BREAKER_ENABLED"),
+      liveness: mockLiveness("HMM_N_STATES"),
       editable_at: "/settings/tunables",
     },
     {
@@ -5702,7 +4828,7 @@ function mockSettingsReference(): SettingsReferenceResponse {
     ...f,
     value: f.key in overrides ? overrides[f.key] : f.value,
     // Mirrors the real backend's exclusion exactly: a no_op field (e.g.
-    // OPTIONS_EARNINGS_CRUSH_ENABLED, read nowhere in production) never gets
+    // PROMPT_MAX_CHARS, read nowhere in production) never gets
     // a live-looking Toggle -- that would imply the control does something
     // when it provably doesn't. `mockLiveness(key).applies === "no_effect"`
     // is this mock's equivalent of the real backend's `no_op` bucket check.
@@ -5868,48 +4994,6 @@ function applyFmpTunables(
     FMP_TUNABLE_DEFS,
     FMP_TUNABLES_KEY,
     FMP_TUNABLES_DRIFT_KEY,
-    confirm,
-  );
-}
-
-function mockEtfTransmissionTunables(): TunablesResponse {
-  return buildTunablesResponse(
-    ETF_TRANSMISSION_TUNABLE_DEFS,
-    ETF_TRANSMISSION_TUNABLES_KEY,
-    ETF_TRANSMISSION_TUNABLES_DRIFT_KEY,
-  );
-}
-
-function applyEtfTransmissionTunables(
-  values: Record<string, number | boolean | string>,
-  confirm: Record<string, string> = {},
-): TunablesUpdateResult {
-  return applyTunablesGeneric(
-    values,
-    ETF_TRANSMISSION_TUNABLE_DEFS,
-    ETF_TRANSMISSION_TUNABLES_KEY,
-    ETF_TRANSMISSION_TUNABLES_DRIFT_KEY,
-    confirm,
-  );
-}
-
-function mockCacheLongShortTunables(): TunablesResponse {
-  return buildTunablesResponse(
-    CACHE_LONG_SHORT_TUNABLE_DEFS,
-    CACHE_LONG_SHORT_TUNABLES_KEY,
-    CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY,
-  );
-}
-
-function applyCacheLongShortTunables(
-  values: Record<string, number | boolean | string>,
-  confirm: Record<string, string> = {},
-): TunablesUpdateResult {
-  return applyTunablesGeneric(
-    values,
-    CACHE_LONG_SHORT_TUNABLE_DEFS,
-    CACHE_LONG_SHORT_TUNABLES_KEY,
-    CACHE_LONG_SHORT_TUNABLES_DRIFT_KEY,
     confirm,
   );
 }
@@ -6416,20 +5500,6 @@ const MODELS: ModelRow[] = [
     cpcv_mean_oos_max_dd: null,
   },
   {
-    name: "options_meta_labeler",
-    role: "options_meta_labeler",
-    trained_date: MODEL_STALE_TRAINED_DATE,
-    cpcv_dsr: null,
-    pbo: null,
-    n_train: 1250,
-    deployable: false,
-    notes: "Options meta labeler for dynamic position sizing and entry filtering.",
-    age_days: daysSinceTrained(MODEL_STALE_TRAINED_DATE),
-    needs_retrain: daysSinceTrained(MODEL_STALE_TRAINED_DATE) >= MODEL_RETRAIN_WINDOW_DAYS,
-    cpcv_mean_oos_sharpe: null,
-    cpcv_mean_oos_max_dd: null,
-  },
-  {
     // ml/registry.yaml's meta_labeler_backfill_<signal_id> stubs: trained
     // (if at all) only by the Forecast Backfill screen's own job, never by
     // this screen's "Retrain Now" -> POST /jobs {job_type:"train_meta"}
@@ -6932,348 +6002,8 @@ const GRAVITY_AUDIT_STATUS_MOCK: GravityAuditStatus = {
   },
 };
 
-// ---- Options premium matrix fixture ----
-// Hand-written to exercise every honesty branch the screen must handle. The
-// previous seeded fixture emitted only clean Put Credit Spreads with
-// Integrity_OK=true and a non-zero theta, so it could not surface a single one:
-//   - Iron Condor: 4 Legs, no per-leg Delta -> Short_Delta/Long_Delta null
-//   - Call Debit Spread: Realizable_Daily_Theta 0.0 is a DEFAULT, not a value
-//     (the engine only assigns theta on credit structures); Net_Premium < 0
-//   - Covered Call: 1 leg, no long leg -> Long_Strike null
-//   - Cash/Wait: Net_Premium 0.0 is a REAL zero (no position, no premium)
-//   - Integrity_OK=false + Integrity_Issues (off-grid / delta-tolerance)
-//   - error stub: Strategy null, the writer's per-symbol dead-letter row
-// ATM_* Greeks are for a hypothetical ATM CALL regardless of Strategy (engine
-// invariant) — present on actionable rows, null on Cash/error rows.
-const OPTIONS_DIRECTIVES: OptionsDirective[] = [
-  {
-    Symbol: "AAPL",
-    Price: 214.9,
-    Stale: false,
-    Strategy: "Put Credit Spread",
-    Action: "Sell to Open",
-    Trend_Bias: "Bullish",
-    Sigma_GARCH: 0.243,
-    IVR_Proxy: 58.4,
-    Aroon_Oscillator: 64.3,
-    Coppock_Curve: 11.2,
-    Net_Premium: 1.24,
-    Realizable_Daily_Theta: 0.031,
-    ATM_Delta: 0.512,
-    ATM_Gamma: 0.021,
-    ATM_Vega: 0.184,
-    ATM_Theta_Daily: -0.052,
-    Short_Strike: 204.0,
-    Long_Strike: 199.0,
-    Short_Delta: -0.3,
-    Long_Delta: -0.15,
-    Legs: [
-      { Side: "Short", Type: "Put", Strike: 204.0, Price: 2.68, Delta: -0.3 },
-      { Side: "Long", Type: "Put", Strike: 199.0, Price: 1.44, Delta: -0.15 },
-    ],
-    Integrity_OK: true,
-    Integrity_Issues: [],
-    // FMP fundamental-health overlay (settings.FMP_OPTIONS_HEALTH_ENABLED) --
-    // Altman Z >= 2.6 is the "Safe" zone; no upcoming earnings this cycle.
-    Altman_Z_Score: 5.8,
-    Piotroski_F_Score: 7,
-    Net_Debt_EBITDA: 1.2,
-    FCF_Yield: 0.045,
-    Days_To_Earnings: null,
-    Earnings_Risk: false,
-    Realized_Vol_30D: 0.21,
-    // FMP market/qualitative-context overlay (settings.FMP_OPTIONS_CONTEXT_ENABLED)
-    // + analyst consensus (settings.FMP_ANALYST_ENABLED, read from the existing
-    // HistoricalStore analyst-snapshot table).
-    News_Snippets: [
-      {
-        title: "Apple Unveils New Services Push Ahead of Holiday Quarter",
-        url: "https://example.com/news/aapl-1",
-        published_date: "2026-08-01T14:05:00Z",
-        site: "Reuters",
-      },
-      {
-        title: "Analysts Raise Price Targets on Apple After Strong Guidance",
-        url: "https://example.com/news/aapl-2",
-        published_date: "2026-07-31T09:20:00Z",
-        site: "Bloomberg",
-      },
-    ],
-    Peers: ["MSFT", "GOOGL", "AMZN"],
-    Analyst_Target_Consensus: 235.5,
-    Analyst_Target_Upside: 235.5 / 214.9 - 1,
-    Analyst_Grade_Score: 0.42,
-  },
-  {
-    // 4 legs, engine omits per-leg Delta -> Short_Delta/Long_Delta null.
-    Symbol: "MSFT",
-    Price: 431.2,
-    Stale: false,
-    Strategy: "Iron Condor",
-    Action: "Sell to Open",
-    Trend_Bias: "Neutral",
-    Sigma_GARCH: 0.201,
-    IVR_Proxy: 51.7,
-    Aroon_Oscillator: -7.1,
-    Coppock_Curve: 3.4,
-    Net_Premium: 2.06,
-    Realizable_Daily_Theta: 0.048,
-    ATM_Delta: 0.503,
-    ATM_Gamma: 0.011,
-    ATM_Vega: 0.221,
-    ATM_Theta_Daily: -0.061,
-    Short_Strike: 410.0,
-    Long_Strike: 405.0,
-    Short_Delta: null,
-    Long_Delta: null,
-    Legs: [
-      { Side: "Short", Type: "Put", Strike: 410.0, Price: 3.1 },
-      { Side: "Long", Type: "Put", Strike: 405.0, Price: 1.9 },
-      { Side: "Short", Type: "Call", Strike: 452.0, Price: 3.4 },
-      { Side: "Long", Type: "Call", Strike: 457.0, Price: 2.1 },
-    ],
-    // Integrity_OK carries a dual meaning (structural + earnings-timing --
-    // see technical_options_engine.py's build_premium_directive step-6
-    // comment): this directive is structurally clean, but earnings inside
-    // the target DTE window flips Integrity_OK to false anyway.
-    Integrity_OK: false,
-    Integrity_Issues: [
-      "⚠️ Earnings Announcement scheduled in 12 days (within target DTE 30)",
-    ],
-    // Altman Z < 1.8 is the "Distress" zone.
-    Altman_Z_Score: 1.4,
-    Piotroski_F_Score: 3,
-    Net_Debt_EBITDA: 3.8,
-    FCF_Yield: -0.01,
-    Days_To_Earnings: 12,
-    Earnings_Risk: true,
-    Realized_Vol_30D: 0.19,
-    // FMP market/qualitative-context overlay + analyst consensus -- a
-    // downside/sell-leaning case (target below Price, negative grade score)
-    // so the detail sheet's decline coloring and "weak" grade badge are
-    // exercised alongside AAPL's upside/buy-leaning case above.
-    News_Snippets: [
-      {
-        title: "Microsoft Cloud Growth Slows Amid Enterprise Spending Pullback",
-        url: "https://example.com/news/msft-1",
-        published_date: "2026-07-30T11:00:00Z",
-        site: "CNBC",
-      },
-    ],
-    Peers: ["AAPL", "GOOGL", "ORCL"],
-    Analyst_Target_Consensus: 405.0,
-    Analyst_Target_Upside: 405.0 / 431.2 - 1,
-    Analyst_Grade_Score: -0.22,
-  },
-  {
-    // Debit spread: theta is the initializer default 0.0, NOT a measurement.
-    // Net_Premium negative = debit. Stale quote. Legs omit Delta.
-    Symbol: "NVDA",
-    Price: 132.6,
-    Stale: true,
-    Strategy: "Call Debit Spread",
-    Action: "Buy to Open",
-    Trend_Bias: "Bullish",
-    Sigma_GARCH: 0.462,
-    IVR_Proxy: 24.1,
-    Aroon_Oscillator: 78.6,
-    Coppock_Curve: 22.8,
-    Net_Premium: -2.15,
-    Realizable_Daily_Theta: 0.0,
-    ATM_Delta: 0.537,
-    ATM_Gamma: 0.033,
-    ATM_Vega: 0.142,
-    ATM_Theta_Daily: -0.071,
-    Short_Strike: 140.0,
-    Long_Strike: 132.5,
-    Short_Delta: null,
-    Long_Delta: null,
-    Legs: [
-      { Side: "Long", Type: "Call", Strike: 132.5, Price: 6.4 },
-      { Side: "Short", Type: "Call", Strike: 140.0, Price: 4.25 },
-    ],
-    Integrity_OK: true,
-    Integrity_Issues: [],
-    // Altman Z in [1.8, 2.6) is the "Grey" zone; earnings 45d out is beyond
-    // this row's 30-day target DTE, so Earnings_Risk stays false.
-    Altman_Z_Score: 2.1,
-    Piotroski_F_Score: 5,
-    Net_Debt_EBITDA: 0.5,
-    FCF_Yield: 0.08,
-    Days_To_Earnings: 45,
-    Earnings_Risk: false,
-    Realized_Vol_30D: 0.41,
-    // Peers only, no News_Snippets/analyst fields -- proves the News & Peers
-    // section's two sub-blocks are independently conditional (peers render,
-    // news doesn't), and that the Analyst Consensus section stays absent
-    // (no placeholder) when the store had no snapshot for this symbol.
-    Peers: ["AMD", "AVGO", "QCOM"],
-  },
-  {
-    // Covered Call: 1 short leg, no long leg -> Long_Strike null. Theta default.
-    Symbol: "V",
-    Price: 279.8,
-    Stale: false,
-    Strategy: "Covered Call",
-    Action: "Sell to Open",
-    Trend_Bias: "Neutral",
-    Sigma_GARCH: 0.176,
-    IVR_Proxy: 44.2,
-    Aroon_Oscillator: 14.3,
-    Coppock_Curve: -1.9,
-    Net_Premium: 3.05,
-    Realizable_Daily_Theta: 0.0,
-    ATM_Delta: 0.498,
-    ATM_Gamma: 0.014,
-    ATM_Vega: 0.163,
-    ATM_Theta_Daily: -0.044,
-    Short_Strike: 290.0,
-    Long_Strike: null,
-    Short_Delta: 0.3,
-    Long_Delta: null,
-    Legs: [
-      { Side: "Short", Type: "Call", Strike: 290.0, Price: 3.05, Delta: 0.3 },
-    ],
-    Integrity_OK: true,
-    Integrity_Issues: [],
-  },
-  {
-    // Cash/Wait: Net_Premium 0.0 is a REAL zero. No legs, no ATM greeks.
-    Symbol: "XOM",
-    Price: 118.4,
-    Stale: false,
-    Strategy: "Cash",
-    Action: "Wait",
-    Trend_Bias: "Bearish",
-    Sigma_GARCH: 0.229,
-    IVR_Proxy: 33.5,
-    Aroon_Oscillator: -42.9,
-    Coppock_Curve: -8.7,
-    Net_Premium: 0.0,
-    Realizable_Daily_Theta: 0.0,
-    ATM_Delta: null,
-    ATM_Gamma: null,
-    ATM_Vega: null,
-    ATM_Theta_Daily: null,
-    Short_Strike: null,
-    Long_Strike: null,
-    Short_Delta: null,
-    Long_Delta: null,
-    Legs: [],
-    Integrity_OK: true,
-    Integrity_Issues: [],
-  },
-  {
-    // Failing integrity: off-grid strike + delta out of tolerance.
-    Symbol: "KO",
-    Price: 62.35,
-    Stale: false,
-    Strategy: "Put Credit Spread",
-    Action: "Sell to Open",
-    Trend_Bias: "Bullish",
-    Sigma_GARCH: 0.153,
-    IVR_Proxy: 61.2,
-    Aroon_Oscillator: 35.7,
-    Coppock_Curve: 6.1,
-    Net_Premium: 0.42,
-    Realizable_Daily_Theta: 0.012,
-    ATM_Delta: 0.506,
-    ATM_Gamma: 0.041,
-    ATM_Vega: 0.088,
-    ATM_Theta_Daily: -0.019,
-    Short_Strike: 59.37,
-    Long_Strike: 57.0,
-    Short_Delta: -0.41,
-    Long_Delta: -0.15,
-    Legs: [
-      { Side: "Short", Type: "Put", Strike: 59.37, Price: 0.71, Delta: -0.41 },
-      { Side: "Long", Type: "Put", Strike: 57.0, Price: 0.29, Delta: -0.15 },
-    ],
-    Integrity_OK: false,
-    Integrity_Issues: [
-      "Short leg strike 59.37 is not on the $0.50 grid",
-      "Short leg delta -0.41 exceeds tolerance of target -0.30 (±0.05)",
-    ],
-  },
-  {
-    // Writer's per-symbol dead-letter row: Strategy null, error captured.
-    Symbol: "ZZZ",
-    Price: null,
-    Stale: false,
-    Strategy: null,
-    Action: null,
-    Trend_Bias: null,
-    Sigma_GARCH: null,
-    IVR_Proxy: null,
-    Aroon_Oscillator: null,
-    Coppock_Curve: null,
-    Net_Premium: null,
-    Realizable_Daily_Theta: null,
-    ATM_Delta: null,
-    ATM_Gamma: null,
-    ATM_Vega: null,
-    ATM_Theta_Daily: null,
-    Short_Strike: null,
-    Long_Strike: null,
-    Short_Delta: null,
-    Long_Delta: null,
-    Legs: [],
-    Integrity_OK: false,
-    Integrity_Issues: ["insufficient bars to compute directive"],
-  },
-];
 
-const OPTIONS_BY_SYMBOL: Record<string, OptionsDirective> = Object.fromEntries(
-  OPTIONS_DIRECTIVES.map((d) => [d.Symbol, d]),
-);
 
-function mockOptionsMatrix(): OptionsMatrix {
-  return {
-    as_of: new Date(Date.now() - 5_400_000).toISOString(),
-    target_dte: 30,
-    vix: 15.2,
-    market_regime: "RISK ON",
-    directives: OPTIONS_DIRECTIVES,
-    reason: null,
-  };
-}
-
-// ---- Pairs radar fixture ----
-function mockPairs(): PairsRadar {
-  const rows = [
-    ["XOM", "CVX"],
-    ["V", "JPM"],
-    ["MSFT", "AAPL"],
-    ["HD", "COST"],
-  ].map(([t1, t2]) => {
-    const rng = seeded([...t1, ...t2].reduce((a, c) => a + c.charCodeAt(0), 0));
-    const z = +((rng() - 0.5) * 6).toFixed(2);
-    return {
-      ticker1: t1,
-      ticker2: t2,
-      p_value: +(rng() * 0.05).toFixed(4),
-      half_life: +(8 + rng() * 40).toFixed(1),
-      z_score: z,
-      beta: +(0.5 + rng()).toFixed(3),
-      rolling_p: +(rng() * 0.1).toFixed(4),
-      position: z > 2 ? -1 : z < -2 ? 1 : 0,
-      signal:
-        Math.abs(z) > 4
-          ? "STOP — |z|>4"
-          : Math.abs(z) > 2
-            ? z > 0
-              ? "ENTER SHORT spread"
-              : "ENTER LONG spread"
-            : "Flat — no entry (|z|<2)",
-    };
-  });
-  return {
-    as_of: new Date(Date.now() - 5_400_000).toISOString(),
-    universe: ["XOM", "CVX", "V", "JPM", "MSFT", "AAPL", "HD", "COST"],
-    pairs: rows,
-    reason: null,
-  };
-}
 
 // Factor z-scores for a subset of PORTFOLIO's holdings, deliberately NOT
 // covering every symbol -- DUK (held) has no entry, exercising the "held
@@ -7717,7 +6447,7 @@ function mockForecastSkillBySymbol(horizon: number): ForecastSkillBySymbol {
 }
 
 // The honest "no forecast history yet" degrade -- exported for the same
-// reason as mockSizingCapAuditDisabled/mockEtfTransmissionDisabled above:
+// reason as mockSizingCapAuditDisabled above:
 // Observability.test.tsx's COLD_START fixture pins to this canonical shape
 // rather than hand-rolling its own copy.
 export function mockForecastSkillBySymbolEmpty(): ForecastSkillBySymbol {
@@ -7744,7 +6474,7 @@ function mockLatencyHeatmap(): LatencyHeatmap {
     const quoteTs = new Date(now - (i + 1) * 90_000 - latency * 1000);
     return {
       symbol,
-      source: i % 2 === 0 ? "alpaca" : "yfinance",
+      source: i % 2 === 0 ? "fmp" : "yfinance",
       quote_timestamp: quoteTs.toISOString(),
       ingested_at: new Date(quoteTs.getTime() + latency * 1000).toISOString(),
       latency_seconds: latency,
@@ -8018,52 +6748,6 @@ export function mockSizingCapAuditDisabled(): SizingCapAuditTrail {
   };
 }
 
-// ---- ETF Volatility Transmission (G7) ----
-function mockEtfTransmissionSummary(): EtfTransmissionSummary {
-  return {
-    rows: [
-      {
-        symbol: "SPY",
-        etf_ownership_pct: 1.0,
-        etf_comovement_r2: 1.0,
-        etf_primary_wrapper: "SPY",
-        etf_transmission_multiplier: null,
-      },
-      {
-        symbol: "NVDA",
-        etf_ownership_pct: 0.42,
-        etf_comovement_r2: 0.81,
-        etf_primary_wrapper: "QQQ",
-        etf_transmission_multiplier: 0.74,
-      },
-      {
-        symbol: "JPM",
-        etf_ownership_pct: 0.18,
-        etf_comovement_r2: 0.55,
-        etf_primary_wrapper: "XLF",
-        etf_transmission_multiplier: 0.94,
-      },
-    ],
-    measurement_enabled: true,
-    sizing_enabled: true,
-    portfolio_enabled: false,
-    reason: null,
-  };
-}
-
-// The honest "measurement disabled" degrade -- exported for the same reason
-// as mockSizingCapAuditDisabled above.
-export function mockEtfTransmissionDisabled(): EtfTransmissionSummary {
-  return {
-    rows: [],
-    measurement_enabled: false,
-    sizing_enabled: false,
-    portfolio_enabled: false,
-    reason:
-      "ETF_TRANSMISSION_ENABLED is False -- measurement columns are not computed this cycle.",
-  };
-}
-
 // ---- Heartbeat Age (G7) ----
 // A "Fresh" (<60s) sample by default so mock mode exercises the normal
 // rendering path; mockHeartbeatNoData below is the honest cold-start degrade.
@@ -8146,16 +6830,13 @@ function mockObservabilitySummary(
       : mockSystemTelemetry(),
     // Tracking defaults OFF in real deployments -- mock mode's cold-start
     // toggle mirrors that as the "clean" state, matching every other
-    // opt-in-flag section here (sizing_cap_audit, etf_transmission).
+    // opt-in-flag section here (sizing_cap_audit).
     latency_heatmap: readObservabilityColdStart()
       ? mockLatencyHeatmapDisabled()
       : mockLatencyHeatmap(),
     sizing_cap_audit: readObservabilityColdStart()
       ? mockSizingCapAuditDisabled()
       : mockSizingCapAuditTrail(),
-    etf_transmission: readObservabilityColdStart()
-      ? mockEtfTransmissionDisabled()
-      : mockEtfTransmissionSummary(),
     heartbeat: readObservabilityColdStart()
       ? mockHeartbeatNoData()
       : mockHeartbeatSummary(),
@@ -8590,7 +7271,6 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
   // The live STRATEGY_REGISTRY from scripts/refresh_validations.py, kept in
   // sync with commandParse.ts's REGISTERED_STRATEGIES constant on purpose.
   strategy_registry: [
-    "options_flow_sentiment",
     "rsi2_mean_reversion",
     "timeseries_momentum",
     "macd_trend",
@@ -8609,38 +7289,8 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
     "signal_replay_balanced_blend",
     "sector_quality_rank",
     "lgbm_ranker",
-    "vrp_premium_selling",
-    "vol_mispricing",
-    "put_credit_spread",
-    "call_credit_spread",
-    "call_debit_spread",
-    "put_debit_spread",
-    "covered_call",
     "pairs_trading",
-    "copula_stat_arb",
     "aroon_trend",
-  ],
-  // The live STANDARD_OPTIONS_STRATEGIES from validation/options_harness.py --
-  // validation.harness's bulk (--strategies) mode only supports these.
-  options_strategy_registry: [
-    "Bear Put Spread",
-    "Bull Call Spread",
-    "Call Credit Spread",
-    "Iron Condor",
-    "Long Straddle",
-    "Put Credit Spread",
-  ],
-  // The subset of strategy_registry above that's actually production-gated
-  // (VRP/IVR/VIX/trend-bias) via validation/options_selling_backtest.py --
-  // what the Paper Broker would really trade, unlike options_strategy_registry's
-  // naive/ungated shapes above.
-  paper_broker_options_strategy_registry: [
-    "call_credit_spread",
-    "call_debit_spread",
-    "covered_call",
-    "put_credit_spread",
-    "put_debit_spread",
-    "vrp_premium_selling",
   ],
   commands: [
     {
@@ -8728,40 +7378,6 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
           arg_kind: "optional",
           metavar: null,
           takes_value: true,
-        },
-        {
-          name: "--strategies",
-          aliases: ["--strategies"],
-          description:
-            "Comma-separated OPTIONS strategy names to validate in bulk (mutually exclusive with --strategy).",
-          default: null,
-          choices: null,
-          required: false,
-          arg_kind: "optional",
-          metavar: null,
-          takes_value: true,
-        },
-        {
-          name: "--workers",
-          aliases: ["--workers", "-w"],
-          description: "Number of concurrent workers for bulk (--strategies) validation (default: 1).",
-          default: 1,
-          choices: null,
-          required: false,
-          arg_kind: "optional",
-          metavar: null,
-          takes_value: true,
-        },
-        {
-          name: "--json",
-          aliases: ["--json"],
-          description: "In bulk mode, also print one machine-readable JSON line.",
-          default: false,
-          choices: null,
-          required: false,
-          arg_kind: "optional",
-          metavar: null,
-          takes_value: false,
         },
       ],
     },
@@ -9074,8 +7690,8 @@ const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
   ],
 };
 
-// ---- Local scan-config store (localStorage) — mirrors the follows-store
-// pattern above; backs the Agentic Trading tab's Discovery section. Seeded
+// ---- Local scan-config store (localStorage) — a small localStorage-backed
+// mock store; backs the Agentic Trading tab's Discovery section. Seeded
 // with one enabled config so the demo shows a populated Discovery section by
 // default; a fresh browser with a cleared localStorage still degrades
 // honestly (readScanConfigs falls back to this same seed, not an empty
@@ -9287,8 +7903,8 @@ const MOCK_PROMPT_REGISTRY_WRITABLE = true;
 
 /**
  * Honest cold-start fixture for GET /metrics/sentiment/{symbol}'s news-feed
- * fields: no news provider configured (neither FMP_NEWS_ENABLED nor a
- * Finnhub client), so there are no headlines and no earnings-catalyst read
+ * fields: no news provider configured (FMP_NEWS_ENABLED is off or
+ * FMP_API_KEY is unset), so there are no headlines and no earnings-catalyst read
  * at all — never a fabricated headline list or a guessed dampening state.
  * Deliberately independent of the Antigravity-agent `source` field (a
  * different, unrelated data path — see `source: "unavailable"` covered
@@ -9566,7 +8182,19 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
     realized_pnl: 320.0,
     realized_pnl_pct: 0.0381,
     holding_period_days: 2.26,
-    close_reason: "target_reached",
+    // Pipeline-style exit: the Action Signal that fired + its exit context.
+    close_reason: "signal_risk_reduce",
+    exit_context: {
+      context_schema_version: 1,
+      context_status: "partial",
+      exit_signal: "RISK REDUCE",
+      score: 31,
+      price_at_decision: 218.0,
+      macro_status: null,
+      dual_momentum_signal: "BIL",
+      held_qty: 40,
+    },
+    exit_context_status: "captured",
     provenance: "signal_driven",
     snapshot: {
       captured: true,
@@ -9774,11 +8402,12 @@ export const MOCK_RETROSPECTIVE_INSIGHTS: BatchRetrospectiveInsightsResponse = {
   ],
   bridge_health: {
     bridge_enabled: true,
-    total_closed_trades: 21,
+    total_closed_trades: 24,
     attempted_count: 21,
     bridged_count: 19,
     failed_count: 2,
     disabled_count: 0,
+    excluded_count: 3,
     completeness_pct: 90.48,
     status: "degraded",
     last_failure: {
@@ -9891,58 +8520,22 @@ export const mockApi = {
         },
       },
       {
-        pilot_id: "copula-stat-arb",
-        name: "Copula Stat Arb",
-        category: "Options",
-        is_pilot: true,
-        predicted: {
-          // Real measured numbers (docs/VALIDATION_STRATEGY_FIX_LOG.md
-          // 2026-08-19): an honest, documented FAIL -- worst drawdown lands
-          // on 2008-10-13 (the GFC). `reason` is null here (not a fabricated
-          // "why" string) because the backend's `_predicted_side` only ever
-          // populates `reason` when a validated backtest is MISSING for this
-          // pilot -- when one exists (as it does here), `deployable: false`
-          // speaks for itself.
-          sharpe: -0.455,
-          max_drawdown: 0.351,
-          pbo: 0.0,
-          dsr: 0.246,
-          deployable: false,
-          reason: null,
-          n_trials: 2500,
-          is_options_selling: false,
-          stress_gate_passed: null,
-          report_date: new Date().toISOString(),
-        },
-        actual: {
-          realized_sharpe_proxy: 0.12,
-          max_cumulative_drawdown_usd: 45000,
-          trade_count: 118,
-          win_rate: 0.45,
-          avg_realized_pnl_pct: -0.01,
-          total_realized_pnl_usd: -5000,
-          first_exit_ts: "2024-01-01T00:00:00Z",
-          last_exit_ts: "2024-06-01T00:00:00Z",
-          reason: null,
-        },
-      },
-      {
         pilot_id: "iron-condor",
         name: "Iron Condor",
-        category: "Options",
-        is_pilot: true,
-        // No registry key (`validation_strategy_id=None` in
-        // pilots/catalog.py) -- the backend's `_predicted_side` returns the
-        // fully-nulled shape with this EXACT reason string; every other
-        // field (including `is_options_selling`) is null too, never a
-        // fabricated `true` while the rest of the row is honestly unknown.
+        category: "Retired",
+        is_pilot: false,
+        // A retired options Pilot (removed from pilots/catalog.py with the
+        // options desk, 2026-09 step 4a). Historical paper trades still
+        // attribute here; the backend's retired-bucket branch returns the
+        // fully-nulled predicted shape with this EXACT reason string, never
+        // a fabricated backtest.
         predicted: {
           sharpe: null,
           max_drawdown: null,
           pbo: null,
           dsr: null,
           deployable: null,
-          reason: "no validated backtest for this pilot",
+          reason: "retired options pilot (options desk removed 2026-09)",
           n_trials: null,
           is_options_selling: null,
           stress_gate_passed: null,
@@ -10271,7 +8864,7 @@ export const mockApi = {
           covered && held ? +((rng() - 0.5) * 40).toFixed(2) : null,
         market_value: covered ? +(1000 + rng() * 9000).toFixed(2) : null,
         is_stale_quote: coverage === "stale",
-        quote_source: covered ? "alpaca" : "",
+        quote_source: covered ? "fmp" : "",
         has_fundamentals: coverage === "full" || coverage === "stale",
         forecast_available: covered,
         watchlists: held ? [] : ["file:watchlist.txt"],
@@ -10287,7 +8880,7 @@ export const mockApi = {
       positions: PORTFOLIO.positions.map((p) => p.symbol),
       watchlists: { "file:watchlist.txt": ["T", "XOM"] },
       symbols,
-      provider_source: "alpaca",
+      provider_source: "fmp",
       fundamentals_source: "yahoo_computed",
     });
   },
@@ -10673,7 +9266,6 @@ export const mockApi = {
       kelly_fraction: 0.5,
       kelly_cap: 0.2,
       robinhood_max_notional_per_order: 0.0,
-      follow_min_amount: 100.0,
       agentic_max_candidates: 25,
       retrain_window_days: MODEL_RETRAIN_WINDOW_DAYS,
     });
@@ -10916,75 +9508,6 @@ export const mockApi = {
     });
   },
 
-  async getFollows(): Promise<Follow[]> {
-    return delay(readFollows(), 80);
-  },
-
-  async follow(id: string, amount: number): Promise<FollowResult> {
-    const p = findPilot(id);
-    if (!p) throw notFound(id);
-    const now = new Date().toISOString();
-    const existing = readFollows();
-    const prior = existing.find((f) => f.pilot_id === id);
-    const follow: Follow = {
-      pilot_id: id,
-      // Matches the real backend exactly: `follow.amount` is always the
-      // raw requested amount (FollowsStore().upsert(pilot_id, body.amount)
-      // in api/pilots_api.py) -- it is NEVER the Kelly-clamped amount. The
-      // clamped figure only exists as the sum of `planned_intents[].
-      // target_notional` below; that discrepancy is exactly what
-      // FollowModal.tsx's "capped" notice exists to surface honestly.
-      amount,
-      created_at: prior?.created_at ?? now,
-      updated_at: now,
-      // Matches the real `pilots/follows_store.py` vocabulary ("active" |
-      // "cancelled") — the mock previously used "queued", which the real
-      // backend never emits.
-      status: amount <= 0 ? "cancelled" : "active",
-    };
-    const next = existing.filter((f) => f.pilot_id !== id);
-    if (amount > 0) next.push(follow);
-    writeFollows(next);
-
-    // Kelly-ceiling sizing simulation (mirrors pilots/mirror.py's
-    // plan_follow) -- a deliberately simplified, deterministic stand-in for
-    // the real bootstrap-Kelly/vol-target math, not a replication of it.
-    // MOCK_TOTAL_EQUITY matches getPortfolioSummary's mock fixture so the
-    // implied kelly_weight fraction stays internally consistent.
-    const MOCK_TOTAL_EQUITY = 48213.55;
-    const MOCK_KELLY_CEILING = 1800; // deliberately below the $2500 quick-chip, above $1000
-    const kellyWeight = +(MOCK_KELLY_CEILING / MOCK_TOTAL_EQUITY).toFixed(4);
-    const capped = amount > MOCK_KELLY_CEILING;
-    const allocated = capped ? MOCK_KELLY_CEILING : amount;
-    const sizingPath = capped
-      ? "vol_target_fallback_no_scalein(n=0)"
-      : "bootstrap_kelly_5th_pct(n=45,k5=0.09,k50=0.14,k95=0.21)";
-
-    const planned = p.holdings.map((hd) => ({
-      symbol: hd.symbol,
-      side: "BUY" as const,
-      target_notional: +Math.min(allocated * hd.weight, NOTIONAL_CAP).toFixed(
-        2,
-      ),
-      weight: hd.weight,
-      conviction: +(0.55 + hd.score * 0.35).toFixed(2),
-      allow_place: false, // mock is review-mode; nothing is ever placeable
-    }));
-
-    return delay({
-      follow,
-      planned_intents: amount > 0 ? planned : [],
-      mode: MOCK_MODE,
-      queue_written: amount > 0,
-      notional_cap: NOTIONAL_CAP,
-      min_amount: MIN_AMOUNT,
-      sizing_path: amount > 0 ? sizingPath : undefined,
-      kelly_weight: amount > 0 ? kellyWeight : undefined,
-      notice:
-        "This creates a gated, paper-first order queue that you must confirm. No order is placed automatically.",
-    });
-  },
-
   async getAutomationStatus(): Promise<AutomationStatus> {
     const now = Date.now();
     return delay(
@@ -11028,7 +9551,7 @@ export const mockApi = {
         },
         advisory_only: true,
         dry_run: false,
-        alpaca_paper: false,
+        paper_trading: false,
       },
       120,
     );
@@ -11174,7 +9697,7 @@ export const mockApi = {
   ): Promise<ExecutionModeUpdateResult> {
     // Mirrors api/pilots_api.py's _require_dangerous_confirmation: every
     // settings_keysets.DANGEROUS_KEYS field this write is about to touch
-    // (ADVISORY_ONLY always; DRY_RUN too when mode != "advisory" -- ALPACA_PAPER
+    // (ADVISORY_ONLY always; DRY_RUN too when mode != "advisory" -- PAPER_TRADING
     // is written but is NOT a DANGEROUS_KEYS member, so it needs no confirmation)
     // must be echoed in `confirm` mapped to its own name, or nothing is written
     // -- same all-or-nothing, same 422. Hardcoded rather than derived (this file
@@ -11196,16 +9719,28 @@ export const mockApi = {
         422,
       );
     }
+    // Mirrors the live endpoint's store write: every written key is also put
+    // in the runtime-flags store. The mock's store always accepts, so this is
+    // the in-force shape; the degraded `store_conflict` shape (quarantine NOT
+    // engaged) is pinned in SettingsGeneral.test.tsx and
+    // tests/test_pilots_api.py::TestExecutionModeStoreOverride.
+    const written =
+      req.mode === "advisory"
+        ? ["ADVISORY_ONLY"]
+        : ["ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"];
     return delay(
       {
-        written:
-          req.mode === "advisory"
-            ? ["ADVISORY_ONLY"]
-            : ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"],
+        written,
         advisory_only: req.advisory_only,
         mode: req.mode,
-        applies: "next_daemon_restart",
-        note: "Execution mode updated.",
+        applies: "immediately",
+        per_key_applies: Object.fromEntries(
+          written.map((k) => [k, "immediately" as const]),
+        ),
+        ok: true,
+        quarantine_engaged: req.advisory_only,
+        store_conflict: null,
+        note: "Execution mode updated and in force.",
       },
       150,
     );
@@ -11391,67 +9926,6 @@ export const mockApi = {
     return delay(MODELS);
   },
 
-  async getOptions(): Promise<OptionsMatrix> {
-    return delay(mockOptionsMatrix());
-  },
-
-  async getSymbolOptions(ticker: string): Promise<SymbolOptions> {
-    const sym = ticker.trim().toUpperCase();
-    const directive = OPTIONS_BY_SYMBOL[sym] ?? null;
-    return delay({
-      symbol: sym,
-      directive,
-      reason: directive ? null : "No options directive for this symbol yet.",
-    });
-  },
-
-  async getOptionsChain(ticker: string, expiration?: string): Promise<OptionChainResponse> {
-    const sym = ticker.trim().toUpperCase();
-    
-    if (!expiration) {
-      return delay({
-        symbol: sym,
-        spot_price: 150.0,
-        expirations: ["2026-08-21", "2026-08-28", "2026-09-18", "2026-10-16", "2027-01-15"]
-      });
-    }
-
-    const strikes = [140, 145, 150, 155, 160];
-    const calls = strikes.map(strike => ({
-      contractSymbol: `${sym}260821C00${strike}000`,
-      strike,
-      lastPrice: Math.max(0.1, 150 - strike + 5),
-      bid: Math.max(0.05, 150 - strike + 4.9),
-      ask: Math.max(0.15, 150 - strike + 5.1),
-      volume: 1200,
-      openInterest: 5000,
-      impliedVolatility: 0.25,
-      inTheMoney: strike < 150,
-      greeks: { delta: strike < 150 ? 0.7 : 0.3, gamma: 0.05, theta: -0.02, vega: 0.1, rho: 0.01, chanceOfProfit: strike < 150 ? 0.7 : 0.3 }
-    }));
-    
-    const puts = strikes.map(strike => ({
-      contractSymbol: `${sym}260821P00${strike}000`,
-      strike,
-      lastPrice: Math.max(0.1, strike - 150 + 5),
-      bid: Math.max(0.05, strike - 150 + 4.9),
-      ask: Math.max(0.15, strike - 150 + 5.1),
-      volume: 800,
-      openInterest: 3000,
-      impliedVolatility: 0.26,
-      inTheMoney: strike > 150,
-      greeks: { delta: strike > 150 ? -0.7 : -0.3, gamma: 0.05, theta: -0.02, vega: 0.1, rho: -0.01, chanceOfProfit: strike > 150 ? 0.7 : 0.3 }
-    }));
-
-    return delay({
-      symbol: sym,
-      expiration,
-      spot_price: 150.0,
-      calls,
-      puts
-    });
-  },
-
   // ---- On-demand AI generation (data base, :8603) ----
   // Deliberately keyed off `NVDA` for the honest `available: false` branch of
   // ALL THREE (a different `reason` each time) so a single symbol exercises
@@ -11547,534 +10021,42 @@ export const mockApi = {
           ],
           data_confidence: "medium",
           sources_note:
-            "Based on 4 Finnhub headlines from the past 7 days and the most recent earnings date.",
+            "Based on 4 FMP headlines from the past 7 days and the most recent earnings date.",
         },
       },
       400,
     );
   },
 
-  async getPairs(): Promise<PairsRadar> {
-    return delay(mockPairs());
-  },
-
-  // ---- On-demand Options/Pairs recompute (webapp porting backlog 8a/8b) ----
-  // "ZZZ" is this file's existing dead-letter/no-data convention (see the
-  // OPTIONS_DIRECTIVES fixture row above) -- reused here so a symbol/pair
-  // typo exercises the SAME honest degrade path a real unresolved ticker
-  // would hit against the live API, not a happy-path-only fixture.
-  async analyzePairs(req: PairsAnalyzeRequest): Promise<PairsAnalyzeResult> {
-    const symY = req.symbol_y.trim().toUpperCase();
-    const symX = req.symbol_x.trim().toUpperCase();
-    const notFoundBase = {
-      ticker1: symY,
-      ticker2: symX,
-      found: false as const,
-      p_value: null,
-      half_life: null,
-      half_life_tradeable: null,
-      z_score: null,
-      beta: null,
-      rolling_p: null,
-      position: null,
-      signal: "No signal — insufficient history",
-      aligned_bars: 0,
-      z_score_series: [],
-    };
-    if (!symY || !symX) {
-      return delay(
-        { ...notFoundBase, reason: "Both Symbol Y and Symbol X are required." },
-        250,
-      );
-    }
-    if (symY === symX) {
-      return delay(
-        {
-          ...notFoundBase,
-          reason: "Symbol Y and Symbol X must be different tickers.",
-        },
-        250,
-      );
-    }
-    if (symY === "ZZZ" || symX === "ZZZ") {
-      return delay(
-        {
-          ...notFoundBase,
-          reason: `Insufficient aligned history for ${symY}/${symX} — one or both symbols may be unavailable from the provider.`,
-        },
-        450,
-      );
-    }
-
-    const rng = seeded(
-      [...symY, ...symX].reduce((a, c) => a + c.charCodeAt(0), 0),
-    );
-    const z = +((rng() - 0.5) * 6).toFixed(2);
-    const halfLife = +(8 + rng() * 40).toFixed(1);
-    const rollingP = +(rng() * 0.15).toFixed(4);
-    const position = z > 2 ? -1 : z < -2 ? 1 : 0;
-    const halfLifeTradeable =
-      halfLife >= 5 && halfLife <= 60 && rollingP <= 0.1;
-    const signal =
-      rollingP > 0.1
-        ? "No signal — not cointegrated (ADF p>0.10)"
-        : Math.abs(z) > 4
-          ? "STOP — |z|>4 (exit spread)"
-          : Math.abs(z) > 2
-            ? z > 0
-              ? "ENTER SHORT spread"
-              : "ENTER LONG spread"
-            : "Flat — no entry (|z|<2)";
-    const n = 90;
-    const series = Array.from({ length: n }, (_, i) => ({
-      date: new Date(Date.now() - (n - i) * 86_400_000)
-        .toISOString()
-        .slice(0, 10),
-      z_score: +(Math.sin(i / 9 + rng()) * 2 + (rng() - 0.5)).toFixed(2),
-    }));
-    series[series.length - 1] = {
-      date: series[series.length - 1].date,
-      z_score: z,
-    };
-
-    return delay(
-      {
-        ticker1: symY,
-        ticker2: symX,
-        found: true,
-        reason: null,
-        p_value: +(rng() * 0.05).toFixed(4),
-        half_life: halfLife,
-        half_life_tradeable: halfLifeTradeable,
-        z_score: z,
-        beta: +(0.5 + rng()).toFixed(3),
-        rolling_p: rollingP,
-        position,
-        signal,
-        aligned_bars: 240,
-        z_score_series: series,
-      },
-      450,
-    );
-  },
-
-  async scanPairs(req: PairsScanRequest): Promise<PairsScanResult> {
-    const requested = Array.from(
-      new Set(req.symbols.map((s) => s.trim().toUpperCase()).filter(Boolean)),
-    );
-    const known = new Set([
-      "XOM",
-      "CVX",
-      "V",
-      "JPM",
-      "MSFT",
-      "AAPL",
-      "HD",
-      "COST",
-    ]);
-    const missing = requested.filter((s) => !known.has(s));
-    const usable = requested.filter((s) => known.has(s));
-
-    if (usable.length < 2) {
-      return delay(
-        {
-          pairs: [],
-          missing,
-          aligned_symbols: usable.length,
-          aligned_bars: usable.length > 0 ? 240 : 0,
-          reason:
-            "Insufficient aligned history to scan — need at least two symbols with ~60+ overlapping daily bars after the inner-join.",
-        },
-        400,
-      );
-    }
-
-    const usableSet = new Set(usable);
-    const pairs = mockPairs().pairs.filter(
-      (p) => usableSet.has(p.ticker1) && usableSet.has(p.ticker2),
-    );
-    return delay(
-      {
-        pairs,
-        missing,
-        aligned_symbols: usable.length,
-        aligned_bars: 240,
-        reason:
-          pairs.length > 0
-            ? null
-            : "No cointegrated pairs found for this universe at the selected p-value with a 5–60 day half-life.",
-      },
-      500,
-    );
-  },
-
-  async recomputeOptions(
-    req: OptionsRecomputeRequest,
-  ): Promise<OptionsRecomputeResult> {
-    const requested = Array.from(
-      new Set(req.symbols.map((s) => s.trim().toUpperCase()).filter(Boolean)),
-    );
-    const directives: OptionsDirective[] = [];
-    const errors: string[] = [];
-    for (const sym of requested) {
-      const existing = OPTIONS_BY_SYMBOL[sym];
-      if (existing) {
-        directives.push(existing);
-        if (existing.Strategy == null) {
-          errors.push(`${sym}: insufficient bars to compute directive`);
-        }
-        continue;
-      }
-      // Unknown symbol (not one of the 5 pre-baked fixture rows) -- synthesize
-      // a plausible directive so the recompute form works for any ticker, not
-      // just the fixed matrix. Deterministic per-symbol seed, not random.
-      const rng = seeded([...sym].reduce((a, c) => a + c.charCodeAt(0), 0));
-      const price = +(40 + rng() * 350).toFixed(2);
-      const sigma = +(0.15 + rng() * 0.35).toFixed(3);
-      const ivrProxy = +(rng() * 100).toFixed(1);
-      const bullish = rng() > 0.45;
-      const sellRegime = ivrProxy > (req.ivr_sell_threshold ?? 50);
-      const strategy = sellRegime
-        ? bullish
-          ? "Put Credit Spread"
-          : "Iron Condor"
-        : bullish
-          ? "Call Debit Spread"
-          : "Cash";
-      const action =
-        strategy === "Cash"
-          ? "Wait"
-          : sellRegime
-            ? "Sell to Open"
-            : "Buy to Open";
-      const netPremium =
-        strategy === "Cash"
-          ? 0
-          : +((sellRegime ? 1 : -1) * (0.3 + rng()) * 2).toFixed(2);
-      directives.push({
-        Symbol: sym,
-        Price: price,
-        Stale: false,
-        Strategy: strategy,
-        Action: action,
-        Trend_Bias: bullish ? "Bullish" : "Bearish",
-        Sigma_GARCH: sigma,
-        IVR_Proxy: ivrProxy,
-        Aroon_Oscillator: +((rng() - 0.5) * 100).toFixed(1),
-        Coppock_Curve: +((rng() - 0.5) * 20).toFixed(1),
-        Net_Premium: netPremium,
-        Realizable_Daily_Theta:
-          strategy === "Cash" ? 0 : +(netPremium * 0.03).toFixed(3),
-        ATM_Delta: +(0.4 + rng() * 0.2).toFixed(3),
-        ATM_Gamma: +(rng() * 0.05).toFixed(4),
-        ATM_Vega: +(rng() * 0.15).toFixed(3),
-        ATM_Theta_Daily: +(-rng() * 0.05).toFixed(3),
-        Short_Strike:
-          strategy === "Cash"
-            ? null
-            : +(price * (sellRegime ? 0.97 : 1.03)).toFixed(2),
-        Long_Strike:
-          strategy === "Cash"
-            ? null
-            : +(price * (sellRegime ? 0.94 : 1.06)).toFixed(2),
-        Short_Delta:
-          strategy === "Cash" ? null : +(sellRegime ? -0.3 : 0.3).toFixed(2),
-        Long_Delta:
-          strategy === "Cash" ? null : +(sellRegime ? -0.15 : 0.15).toFixed(2),
-        Legs: [],
-        Integrity_OK: true,
-        Integrity_Issues: [],
-      });
-    }
-    return delay(
-      {
-        directives,
-        errors,
-        vix: 15.2,
-        market_regime: "RISK ON",
-        target_dte: req.target_dte ?? 30,
-      },
-      600,
-    );
-  },
-
-  async postOptionsOrder(req: OptionsOrderRequest): Promise<OptionsOrderResult> {
-    console.log(`[mockApi] postOptionsOrder (${req.isLive ? 'LIVE' : 'PAPER'}):`, req);
+  // Equity-only Quick Trade ticket -- options-free counterpart to
+  // postOptionsOrder's stock branch above (see EquityOrderTicket.tsx).
+  // Shares its fill math with that branch via applyMockStockFill so the two
+  // can't silently drift apart.
+  async postPaperEquityOrder(req: EquityOrderRequest): Promise<EquityOrderResult> {
+    console.log(`[mockApi] postPaperEquityOrder (${req.isLive ? 'LIVE' : 'PAPER'}):`, req);
     if (req.isLive) {
       return delay({
         ok: false,
-        message: "Live order execution is currently in Advisory-Only mode. Order staged for review."
+        order_id: null,
+        message: "Live order execution is disabled in Advisory-Only mode. Please use paper mode.",
       }, 500);
     }
 
-    if (!paperAccountInitialized) {
-      paperAccount = { equity: 100000, cash: 100000, buying_power: 100000 };
-      paperAccountInitialized = true;
+    const symbol = (req.symbol || "").trim().toUpperCase();
+    if (!symbol) {
+      return delay({ ok: false, order_id: null, message: "Symbol is required." }, 200);
     }
+    const side: 'BUY' | 'SELL' = req.side?.toLowerCase() === 'sell' ? 'SELL' : 'BUY';
 
-    const isStock = req.asset_type === "stock";
-    let orderSymbol = req.symbol.toUpperCase();
-    let qty = req.quantity || 1;
-    let fillPrice = req.limit_price || 10.0;
-    let totalCost = 0;
-
-    if (isStock) {
-      if (req.dollar_amount && req.dollar_amount > 0 && (!req.quantity || req.quantity <= 0)) {
-        qty = Math.max(1, +(req.dollar_amount / fillPrice).toFixed(4));
-      }
-      totalCost = qty * fillPrice;
-
-      const orderSide: 'BUY' | 'SELL' = req.side?.toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
-      const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
-
-      if (orderSide === 'SELL' && (!existingPos || existingPos.qty < qty)) {
-        return delay({
-          ok: false,
-          message: `Order rejected: Insufficient funds or inventory for SELL ${qty} ${orderSymbol}.`
-        }, 500);
-      } else if (orderSide === 'BUY' && paperAccount.cash < totalCost) {
-        return delay({
-          ok: false,
-          message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
-        }, 500);
-      }
-
-      if (orderSide === 'SELL') {
-        const closingAvgCost = existingPos!.avg_cost;
-        paperAccount.cash += totalCost;
-        existingPos!.qty -= qty;
-        existingPos!.market_value = Math.max(0, (existingPos!.market_value || 0) - totalCost);
-        if (existingPos!.qty <= 0) {
-          paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
-          // Equity positions here are always long (this endpoint has no
-          // short-sale path), so the position's own opening side is "BUY".
-          pushMockClosedTrade({ symbol: orderSymbol, side: "BUY", qty, entryPrice: closingAvgCost, exitPrice: fillPrice });
-        }
-      } else {
-        paperAccount.cash -= totalCost;
-        if (existingPos) {
-          const prevTotal = existingPos.qty * existingPos.avg_cost;
-          existingPos.qty += qty;
-          existingPos.avg_cost = (prevTotal + totalCost) / existingPos.qty;
-          existingPos.market_value = (existingPos.market_value || 0) + totalCost;
-        } else {
-          paperPositions.push({
-            symbol: orderSymbol,
-            qty: qty,
-            avg_cost: fillPrice,
-            current_price: fillPrice,
-            market_value: totalCost,
-            unrealized_pl: 0,
-            unrealized_pl_pct: 0,
-            strategy_id: null,
-            pilot_id: null,
-            experiment_arm: null,
-          });
-        }
-      }
-      paperAccount.buying_power = paperAccount.cash;
-
-      const orderId = `mock_ord_${Date.now()}`;
-      paperOrders.unshift({
-        order_id: orderId,
-        symbol: orderSymbol,
-        side: orderSide,
-        qty: qty,
-        price: fillPrice,
-        status: 'filled',
-        filled_qty: qty,
-        filled_avg_price: fillPrice,
-        created_at: new Date().toISOString(),
-        strategy_id: null,
-        pilot_id: null,
-        experiment_arm: null,
-      });
-
-      return delay({
-        ok: true,
-        order_id: orderId,
-        message: `Paper stock order for ${qty} shares of ${orderSymbol} filled at $${fillPrice.toFixed(2)} (Total: $${totalCost.toFixed(2)}).`
-      }, 600);
-
-    } else if (req.legs && req.legs.length > 1) {
-      // Multi-leg option order execution
-      let netPrice = req.limit_price || 0.0;
-      if (!netPrice) {
-        netPrice = req.legs.reduce((acc, leg) => {
-          const mult = leg.action === 'Buy' ? 1 : -1;
-          const p = leg.contract.lastPrice || leg.contract.ask || 0.05;
-          return acc + (mult * p);
-        }, 0);
-      }
-      fillPrice = Math.abs(netPrice) || 0.05;
-      const isDebit = netPrice >= 0;
-      const costPerContract = fillPrice * 100;
-
-      if (req.dollar_amount && req.dollar_amount > 0 && (!req.quantity || req.quantity <= 0)) {
-        qty = Math.max(1, Math.floor(req.dollar_amount / costPerContract));
-      }
-      const commission = 0.65 * qty * req.legs.length;
-      totalCost = (qty * costPerContract) + (isDebit ? commission : -commission);
-
-      if (isDebit && paperAccount.cash < totalCost) {
-        return delay({
-          ok: false,
-          message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
-        }, 500);
-      }
-
-      paperAccount.cash += (isDebit ? -totalCost : totalCost);
-      paperAccount.buying_power = paperAccount.cash;
-
-      const orderId = `mock_ord_${Date.now()}`;
-      const strategyName = `${req.legs.length}-Leg Strategy`;
-
-      // Apply each leg position
-      req.legs.forEach(leg => {
-        const legSymbol = `${req.symbol.toUpperCase()} ${req.expiration || ''} $${leg.contract.strike} ${(leg.type || 'CALL').toUpperCase()}`.trim();
-        const legMult = leg.action === 'Buy' ? 1 : -1;
-        const legQty = qty * legMult;
-        const legPrice = (leg.contract.lastPrice || leg.contract.ask || 0.05) * 100;
-
-        const existingPos = paperPositions.find(p => p.symbol === legSymbol);
-        if (existingPos) {
-          const preCloseQty = existingPos.qty;
-          const preCloseAvgCost = existingPos.avg_cost;
-          existingPos.qty += legQty;
-          if (Math.abs(existingPos.qty) < 1e-6) {
-            paperPositions = paperPositions.filter(p => p.symbol !== legSymbol);
-            pushMockClosedTrade({
-              symbol: legSymbol,
-              side: preCloseQty > 0 ? "BUY" : "SELL",
-              qty: Math.abs(preCloseQty),
-              entryPrice: preCloseAvgCost,
-              exitPrice: legPrice,
-            });
-          }
-        } else {
-          paperPositions.push({
-            symbol: legSymbol,
-            qty: legQty,
-            avg_cost: legPrice,
-            current_price: legPrice,
-            market_value: Math.abs(legQty) * legPrice,
-            unrealized_pl: 0,
-            unrealized_pl_pct: 0,
-            strategy_id: null,
-            pilot_id: null,
-            experiment_arm: null,
-          });
-        }
-      });
-
-      paperOrders.unshift({
-        order_id: orderId,
-        symbol: `${strategyName} ${req.symbol.toUpperCase()}`,
-        side: isDebit ? 'BUY' : 'SELL',
-        qty: qty,
-        price: fillPrice,
-        status: 'filled',
-        filled_qty: qty,
-        filled_avg_price: fillPrice,
-        created_at: new Date().toISOString(),
-        strategy_id: null,
-        pilot_id: null,
-        experiment_arm: null,
-      });
-
-      return delay({
-        ok: true,
-        order_id: orderId,
-        message: `Paper ${strategyName} for ${qty} contract(s) on ${req.symbol.toUpperCase()} filled at ${isDebit ? 'Debit' : 'Credit'} $${fillPrice.toFixed(2)}/sh (Total: $${Math.abs(totalCost).toFixed(2)}).`
-      }, 600);
-
-    } else {
-      // Single leg option order
-      const leg = req.legs?.[0];
-      const legAction = leg?.action || req.side || 'Buy';
-      const isBuy = legAction.toLowerCase() === 'buy';
-
-      let legPrice = req.limit_price || (leg ? (leg.contract.lastPrice || (isBuy ? leg.contract.ask : leg.contract.bid) || 0.05) : 0.05);
-      if (legPrice <= 0) legPrice = 0.05;
-      fillPrice = legPrice;
-      const costPerContract = fillPrice * 100;
-
-      if (req.dollar_amount && req.dollar_amount > 0 && (!req.quantity || req.quantity <= 0)) {
-        qty = Math.max(1, Math.floor(req.dollar_amount / costPerContract));
-      }
-      const commission = 0.65 * qty;
-      totalCost = (qty * costPerContract) + (isBuy ? commission : -commission);
-
-      if (leg) {
-        orderSymbol = `${req.symbol.toUpperCase()} ${req.expiration || ''} $${leg.contract.strike} ${(leg.type || 'CALL').toUpperCase()}`.trim();
-      } else {
-        orderSymbol = `${req.symbol.toUpperCase()} OPTION`;
-      }
-
-      if (isBuy && paperAccount.cash < totalCost) {
-        return delay({
-          ok: false,
-          message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`
-        }, 500);
-      }
-
-      paperAccount.cash += (isBuy ? -totalCost : totalCost);
-      paperAccount.buying_power = paperAccount.cash;
-
-      const legQty = isBuy ? qty : -qty;
-      const existingPos = paperPositions.find(p => p.symbol === orderSymbol);
-      if (existingPos) {
-        const preCloseQty = existingPos.qty;
-        const preCloseAvgCost = existingPos.avg_cost;
-        existingPos.qty += legQty;
-        if (Math.abs(existingPos.qty) < 1e-6) {
-          paperPositions = paperPositions.filter(p => p.symbol !== orderSymbol);
-          pushMockClosedTrade({
-            symbol: orderSymbol,
-            side: preCloseQty > 0 ? "BUY" : "SELL",
-            qty: Math.abs(preCloseQty),
-            entryPrice: preCloseAvgCost,
-            exitPrice: fillPrice * 100,
-          });
-        }
-      } else {
-        paperPositions.push({
-          symbol: orderSymbol,
-          qty: legQty,
-          avg_cost: fillPrice * 100,
-          current_price: fillPrice * 100,
-          market_value: Math.abs(legQty) * fillPrice * 100,
-          unrealized_pl: 0,
-          unrealized_pl_pct: 0,
-          strategy_id: null,
-          pilot_id: null,
-          experiment_arm: null,
-        });
-      }
-
-      const orderId = `mock_ord_${Date.now()}`;
-      paperOrders.unshift({
-        order_id: orderId,
-        symbol: orderSymbol,
-        side: isBuy ? 'BUY' : 'SELL',
-        qty: qty,
-        price: fillPrice,
-        status: 'filled',
-        filled_qty: qty,
-        filled_avg_price: fillPrice,
-        created_at: new Date().toISOString(),
-        strategy_id: null,
-        pilot_id: null,
-        experiment_arm: null,
-      });
-
-      return delay({
-        ok: true,
-        order_id: orderId,
-        message: `Paper option order for ${qty} contract(s) of ${orderSymbol} filled at $${fillPrice.toFixed(2)} (Total: $${Math.abs(totalCost).toFixed(2)}).`
-      }, 600);
-    }
-
+    const result = applyMockStockFill({
+      symbol,
+      side,
+      quantity: req.quantity,
+      dollarAmount: req.dollar_amount,
+      limitPrice: req.limit_price,
+      orderIdPrefix: "eq_ord",
+    });
+    return delay(result, 600);
   },
 
   async getObservabilitySummary(
@@ -12513,28 +10495,6 @@ export const mockApi = {
     return delay(applyFeatureFlagsTunables(values, confirm ?? {}));
   },
 
-  async getEtfTransmissionSettings(): Promise<TunablesResponse> {
-    return delay(mockEtfTransmissionTunables());
-  },
-
-  async updateEtfTransmissionSettings(
-    values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {},
-  ): Promise<TunablesUpdateResult> {
-    return delay(applyEtfTransmissionTunables(values, confirm));
-  },
-
-  async getCacheLongShortSettings(): Promise<TunablesResponse> {
-    return delay(mockCacheLongShortTunables());
-  },
-
-  async updateCacheLongShortSettings(
-    values: Record<string, number | boolean | string>,
-    confirm: SettingsConfirmMap = {},
-  ): Promise<TunablesUpdateResult> {
-    return delay(applyCacheLongShortTunables(values, confirm));
-  },
-
   async getSettingsReference(): Promise<SettingsReferenceResponse> {
     return delay(mockSettingsReference());
   },
@@ -12700,8 +10660,8 @@ export const mockApi = {
   // #4). "V" is the fixed honesty-fixture symbol for the "unreachable"
   // branch -- it's a real, always-present member of SYMBOL_UNIVERSE (a
   // PORTFOLIO position), so MarketDataHealth's tracked-universe check always
-  // exercises it. Every OTHER symbol resolves, alternating realtime
-  // (Alpaca, fresh) vs. delayed (yfinance, `is_stale: true` by design -- see
+  // exercises it. Every OTHER symbol resolves, alternating realtime-labelled
+  // (FMP, fresh) vs. delayed (yfinance, `is_stale: true` by design -- see
   // CLAUDE.md's Market-data layer note) by a deterministic hash so at least
   // one stale row is always present too, never an all-green fixture.
   async getDataQuotes(symbols: string[]): Promise<QuotesResponse> {
@@ -12722,7 +10682,7 @@ export const mockApi = {
           Date.now() - (delayed ? 15 * 60_000 : 2_000),
         ).toISOString(),
         is_stale: delayed,
-        source: delayed ? "yfinance" : "alpaca",
+        source: delayed ? "yfinance" : "fmp",
       };
     }
     // Realistic per-call timing variance: deterministic per the first
@@ -12906,7 +10866,7 @@ export const mockApi = {
       "macd_momentum",
       "rsi2_mean_reversion",
       // Honest empty row: a module that scored 0 of the requested symbols
-      // this batch (e.g. news_catalyst with no FINNHUB_API_KEY configured) —
+      // this batch (e.g. news_catalyst with no news provider configured) —
       // never a fabricated 0, and never silently absent from the list.
       "news_catalyst",
     ];
@@ -12971,9 +10931,9 @@ export const mockApi = {
     // the real endpoint can also return source: "unavailable" with all
     // three agent-derived fields null; see SentimentDynamics.test.tsx. Real
     // possible publishers only ("Reuters"/"Bloomberg"/"MarketWatch", or the
-    // literal source strings "fmp"/"finnhub") — NEVER "SEC EDGAR" or any
+    // literal source string "fmp") — NEVER "SEC EDGAR" or any
     // EDGAR/Google-News-flavored publisher, since this data path
-    // (signals/news_catalyst.py's FMP-primary/Finnhub-fallback dispatcher)
+    // (signals/news_catalyst.py's FMP-only dispatcher)
     // structurally cannot return those.
     const sym = symbol.toUpperCase();
     return delay<SentimentDynamics>({
@@ -13096,508 +11056,8 @@ export const mockApi = {
     });
   },
 
-  async getTransformerForecast(symbol: string): Promise<TransformerForecastResponse> {
-    if (symbol.toUpperCase() === "ZZZZ") throw notFoundSymbol(symbol);
-    const sym = symbol.toUpperCase();
-    const baseVol = 0.15 + (sym.length % 5) * 0.02;
-    // Matches the live backend's HORIZONS (api/pilots_api.py) -- "1d" was
-    // dropped there because a 1-day realized-vol label computed as std()
-    // of a single return is identically zero by construction, never a
-    // meaningful training target. Keep this list in sync with the API.
-    const horizons = ["5d", "21d", "60d"];
-    const horizonDays: Record<string, number> = { "5d": 5, "21d": 21, "60d": 60 };
-    const forecast: Record<string, number> = {};
-    const quantile_forecast: Record<string, { q10: number; q50: number; q90: number }> = {};
-
-    for (const h of horizons) {
-      const med = Number((baseVol * (1 + 0.05 * Math.sin(horizonDays[h] / 10))).toFixed(4));
-      const spread = Number((0.03 + 0.015 * Math.sqrt(horizonDays[h] / 20)).toFixed(4));
-      const q10 = Number(Math.max(0.01, med - spread).toFixed(4));
-      const q50 = med;
-      const q90 = Number((med + spread * 1.25).toFixed(4));
-      forecast[h] = q50;
-      quantile_forecast[h] = { q10, q50, q90 };
-    }
-    const attention_heatmap = Array.from({ length: 8 }, () =>
-      Array.from({ length: 8 }, () => Math.random())
-    );
-
-    return delay<TransformerForecastResponse>({
-      symbol: sym,
-      forecast,
-      quantile_forecast,
-      attention_heatmap,
-      trained_samples: 120,
-      macro_conditioned: true,
-    });
-  },
-
-  async runDiffusionStressTest(req: DiffusionStressRequest): Promise<DiffusionStressResponse> {
-    const sym = req.symbol.toUpperCase();
-    const spot = req.spot_price;
-    const regime = req.regime ?? "vol_shock";
-    const guidance = req.guidance_scale ?? 2.0;
-    const baseDrift = req.drift ?? 0.0;
-    const horizon = req.horizon ?? 30;
-    const numPaths = Math.min(req.num_paths ?? 1000, 30); // sample paths for chart rendering
-
-    // Regime-specific dynamics adjusted by guidance scale
-    let volMultiplier = 1.0;
-    let regimeDrift = baseDrift;
-    let jumpProb = 0.0;
-    let jumpSize = 0.0;
-
-    switch (regime) {
-      case "vol_shock":
-        volMultiplier = 1.0 + 1.2 * (guidance / 2.0);
-        regimeDrift = baseDrift - 0.15 * guidance;
-        break;
-      case "credit_freeze":
-        volMultiplier = 1.0 + 0.8 * (guidance / 2.0);
-        regimeDrift = baseDrift - 0.28 * guidance;
-        break;
-      case "stagflation":
-        volMultiplier = 1.0 + 0.6 * (guidance / 2.0);
-        regimeDrift = baseDrift - 0.20 * guidance;
-        break;
-      case "liquidity_squeeze":
-        volMultiplier = 1.0 + 1.0 * (guidance / 2.0);
-        regimeDrift = baseDrift - 0.10 * guidance;
-        jumpProb = 0.08 * (guidance / 2.0);
-        jumpSize = -0.04 * guidance;
-        break;
-      case "unconditional":
-      default:
-        volMultiplier = 1.0;
-        regimeDrift = baseDrift;
-        break;
-    }
-
-    const effVol = req.volatility * volMultiplier;
-    const paths: number[][] = [];
-    const terminalReturns: number[] = [];
-
-    for (let p = 0; p < numPaths; p++) {
-      const path = [spot];
-      for (let i = 0; i < horizon; i++) {
-        const shock = (Math.random() - 0.5) * 2 * effVol * Math.sqrt(1 / 252);
-        const hasJump = Math.random() < jumpProb;
-        const jump = hasJump ? jumpSize : 0;
-        const ret = regimeDrift / 252 + shock + jump;
-        const next = Math.max(0.01, path[path.length - 1] * (1 + ret));
-        path.push(next);
-      }
-      paths.push(path);
-      terminalReturns.push((path[path.length - 1] - spot) / spot);
-    }
-
-    terminalReturns.sort((a, b) => a - b);
-    const n = terminalReturns.length;
-
-    const idx95 = Math.max(0, Math.floor(n * 0.05) - 1);
-    const var95Fraction = Math.abs(Math.min(0, terminalReturns[idx95] ?? terminalReturns[0]));
-    const tailLosses95 = terminalReturns.slice(0, idx95 + 1).filter((r) => r < 0).map((r) => -r);
-    const cvar95Fraction =
-      tailLosses95.length > 0
-        ? tailLosses95.reduce((a, b) => a + b, 0) / tailLosses95.length
-        : var95Fraction;
-
-    const idx99 = Math.max(0, Math.floor(n * 0.01) - 1);
-    const var99Fraction = Math.abs(Math.min(0, terminalReturns[idx99] ?? terminalReturns[0]));
-    const tailLosses99 = terminalReturns.slice(0, idx99 + 1).filter((r) => r < 0).map((r) => -r);
-    const cvar99Fraction =
-      tailLosses99.length > 0
-        ? tailLosses99.reduce((a, b) => a + b, 0) / tailLosses99.length
-        : Math.max(var99Fraction, cvar95Fraction * 1.2);
-
-    return delay<DiffusionStressResponse>(
-      {
-        symbol: sym,
-        regime,
-        guidance_scale: guidance,
-        paths,
-        VaR_95: var95Fraction * spot,
-        CVaR_95: Math.max(var95Fraction * spot, cvar95Fraction * spot),
-        VaR_99: Math.max(var95Fraction * spot, var99Fraction * spot),
-        CVaR_99: Math.max(var99Fraction * spot, cvar99Fraction * spot),
-        trained_windows: 145,
-        regime_conditioned: true,
-      },
-      400
-    );
-  },
-
-  async optimizeHrpCvar(req: HrpCvarOptimizeRequest): Promise<HrpCvarOptimizeResponse> {
-    const n = Math.max(1, req.symbols.length);
-    const defaultSectorMap: Record<string, string> = {
-      AAPL: "Tech",
-      MSFT: "Tech",
-      NVDA: "Tech",
-      JPM: "Financials",
-      V: "Financials",
-      UNH: "Healthcare",
-      JNJ: "Healthcare",
-      AMZN: "Consumer",
-      PG: "Consumer",
-      XOM: "Energy",
-      CVX: "Energy",
-    };
-    const defaultBetas: Record<string, number> = {
-      AAPL: 1.15,
-      MSFT: 1.05,
-      NVDA: 1.65,
-      JPM: 0.95,
-      V: 0.85,
-      UNH: 0.70,
-      JNJ: 0.60,
-      AMZN: 1.25,
-      PG: 0.55,
-      XOM: 0.80,
-      CVX: 0.75,
-    };
-
-    const sectorMap = req.sector_map || defaultSectorMap;
-    const assetBetas = req.asset_betas || defaultBetas;
-    const lambda = req.lambda_turnover ?? 0.05;
-
-    // Generate baseline HRP weights
-    const rawWeights = req.symbols.map((sym, idx) => {
-      const b = assetBetas[sym] || 1.0;
-      return 1.0 / (0.5 + b * 0.5) + (idx % 2 === 0 ? 0.05 : -0.05);
-    });
-    const sumRaw = rawWeights.reduce((a, b) => a + b, 0);
-    const hrpWeights = rawWeights.map((w) => w / sumRaw);
-
-    // Incumbent weights w0
-    const w0: number[] = req.symbols.map((sym) => {
-      if (req.current_weights && sym in req.current_weights) {
-        return req.current_weights[sym];
-      }
-      return 1 / n;
-    });
-
-    // Turnover regularization: blend between HRP and w0
-    const blendFactor = Math.min(0.9, lambda * 2.0); // higher lambda -> closer to incumbent
-    let proposedWeights = hrpWeights.map((hw, i) => (1 - blendFactor) * hw + blendFactor * w0[i]);
-
-    // Apply sector caps if provided
-    if (req.sector_caps) {
-      const sectorTotals: Record<string, number> = {};
-      req.symbols.forEach((sym, i) => {
-        const sec = sectorMap[sym] || "General";
-        sectorTotals[sec] = (sectorTotals[sec] || 0) + proposedWeights[i];
-      });
-
-      for (const [sec, cap] of Object.entries(req.sector_caps)) {
-        if (sectorTotals[sec] && sectorTotals[sec] > cap) {
-          const factor = cap / sectorTotals[sec];
-          req.symbols.forEach((sym, i) => {
-            if ((sectorMap[sym] || "General") === sec) {
-              proposedWeights[i] *= factor;
-            }
-          });
-        }
-      }
-    }
-
-    // Apply max_asset_weight cap if provided -- mirrors the live endpoint's
-    // sizing/hrp_cvar_optimizer.py max_weight bound (Phase 35 remediation item 13)
-    // so the mock doesn't silently ignore a request field the real backend honors.
-    // A naive cap-then-renormalize can push a capped weight back ABOVE the cap
-    // once the leftover mass is redistributed (e.g. cap=0.4 on [0.6,0.25,0.15]
-    // renormalizes to [0.5, 0.3125, 0.1875] -- still over cap), so this is a
-    // small iterative water-filling loop that genuinely converges under the cap.
-    if (req.max_asset_weight !== undefined && req.max_asset_weight !== null) {
-      const cap = req.max_asset_weight;
-      for (let iter = 0; iter < 20; iter++) {
-        const sum = proposedWeights.reduce((a, b) => a + b, 0);
-        if (sum <= 0) break;
-        proposedWeights = proposedWeights.map((w) => w / sum);
-        let excess = 0;
-        const freeIdx: number[] = [];
-        proposedWeights = proposedWeights.map((w, i) => {
-          if (w > cap + 1e-9) {
-            excess += w - cap;
-            return cap;
-          }
-          freeIdx.push(i);
-          return w;
-        });
-        if (excess <= 1e-9 || freeIdx.length === 0) break;
-        const freeSum = freeIdx.reduce((a, i) => a + proposedWeights[i], 0);
-        freeIdx.forEach((i) => {
-          proposedWeights[i] += excess * (freeSum > 0 ? proposedWeights[i] / freeSum : 1 / freeIdx.length);
-        });
-      }
-    }
-
-    // Re-normalize weights to 1.0
-    const sumProp = proposedWeights.reduce((a, b) => a + b, 0);
-    const finalWeights = proposedWeights.map((w) => (sumProp > 0 ? w / sumProp : 1 / n));
-
-    const allocations = req.symbols.map((sym, i) => ({
-      symbol: sym,
-      weight: Number(finalWeights[i].toFixed(4)),
-    }));
-
-    // Calculate turnover: 0.5 * sum |w_i - w0_i|
-    const turnover = Number(
-      (0.5 * finalWeights.reduce((acc, w, i) => acc + Math.abs(w - w0[i]), 0)).toFixed(4)
-    );
-
-    // Calculate portfolio beta
-    const portBeta = Number(
-      finalWeights
-        .reduce((acc, w, i) => acc + w * (assetBetas[req.symbols[i]] || 1.0), 0)
-        .toFixed(3)
-    );
-
-    // Calculate sector exposures
-    const sectorExposures: Record<string, number> = {};
-    req.symbols.forEach((sym, i) => {
-      const sec = sectorMap[sym] || "Other";
-      sectorExposures[sec] = Number(((sectorExposures[sec] || 0) + finalWeights[i]).toFixed(4));
-    });
-
-    const divRatio = Number((1.2 + Math.min(0.6, req.symbols.length * 0.08)).toFixed(2));
-    return delay<HrpCvarOptimizeResponse>({
-      allocations,
-      dendrogram: {
-        name: "Root Cluster",
-        distance: 0.85,
-        children: req.symbols.map((sym, i) => ({
-          name: sym,
-          distance: Number((0.15 + (i % 3) * 0.1).toFixed(2)),
-        })),
-      },
-      expected_return: 0.145,
-      cvar_95: 0.042,
-      sharpe_ratio: 1.68,
-      turnover,
-      portfolio_beta: portBeta,
-      sector_exposures: sectorExposures,
-      diversification_ratio: divRatio,
-      // The mock doesn't run a real SLSQP solve, so it can never genuinely fail to
-      // converge -- these are here for type/contract parity with the live endpoint,
-      // not to simulate non-convergence. See HrpPortfolioOptimizerView.test.tsx for
-      // the fallback-banner UI test, which supplies its own "fallback" fixture.
-      status: "optimal" as const,
-      hrp_fallback: false,
-      as_of: new Date().toISOString(),
-    }, 400);
-  },
-
-  async optimizeAlmgrenChriss(req: AlmgrenChrissOptimizeRequest): Promise<AlmgrenChrissOptimizeResponse> {
-    const t: any[] = [];
-    let rem = req.quantity;
-    let expected_price = 100.0;
-    const steps = req.horizon_steps || 10;
-    for (let i = 0; i < steps; i++) {
-      const trade_size = rem / (steps - i);
-      rem -= trade_size;
-      expected_price -= 0.01;
-      t.push({
-        step: i + 1,
-        shares_remaining: Math.max(0, rem),
-        trade_size: trade_size,
-        expected_price: expected_price,
-      });
-    }
-
-    const tempImpact = req.liquidity ? 1 / Math.max(1, req.liquidity) : 0.001;
-    const totalImpact = Math.max(0.01, (req.quantity * tempImpact + (req.risk_aversion || 1e-6) * (req.volatility || 0.20) * 100));
-    const expectedShortfall = Number((totalImpact * (1 + Math.random() * 0.1)).toFixed(2));
-    const variance = Number((Math.pow((req.volatility || 0.20), 2) * (req.horizon_steps || 10) * 0.5).toFixed(2));
-    const halfLife = Number((Math.log(2) / Math.max(1e-4, Math.sqrt((req.risk_aversion || 1e-6) / tempImpact))).toFixed(2));
-
-    return delay<AlmgrenChrissOptimizeResponse>({
-      symbol: req.symbol,
-      trajectory: t,
-      expected_trajectory: t,
-      expected_shortfall: expectedShortfall,
-      variance: variance,
-      half_life: halfLife,
-      spot_price: 100.0,
-      spot_price_reason: null,
-      as_of: new Date().toISOString(),
-    }, 400);
-  },
-
-  async routeFixOrder(req: FixRouteOrderRequest): Promise<FixRouteOrderResponse> {
-    return delay<FixRouteOrderResponse>({
-      symbol: req.symbol,
-      side: req.side,
-      quantity: req.quantity,
-      limit_price: req.limit_price,
-      routing_policy: req.routing_policy || "SMART_SWEEP",
-      status: "FILLED",
-      total_filled_qty: req.quantity,
-      leaves_qty: 0,
-      weighted_avg_price: req.limit_price - 0.01,
-      total_net_fee: 0.15,
-      total_rebates: 0.05,
-      total_cost: (req.quantity * (req.limit_price - 0.01)) + 0.15,
-      avg_latency_ms: 12.5,
-      max_latency_ms: 24.1,
-      fills: [
-        {
-          venue: "ARCA",
-          fill_qty: req.quantity * 0.6,
-          fill_price: req.limit_price - 0.01,
-          fee: 0.10,
-          rebate: 0.02,
-          latency_ms: 11.2,
-          exec_id: "EXEC-ARCA-1234",
-          ord_status: "FILLED",
-          raw_fix: "8=FIX.4.4|9=123|35=8|49=ARCA|...",
-        },
-        {
-          venue: "NSDQ",
-          fill_qty: req.quantity * 0.4,
-          fill_price: req.limit_price - 0.01,
-          fee: 0.05,
-          rebate: 0.03,
-          latency_ms: 13.8,
-          exec_id: "EXEC-NSDQ-5678",
-          ord_status: "FILLED",
-          raw_fix: "8=FIX.4.4|9=124|35=8|49=NSDQ|...",
-        }
-      ],
-      nbbo: null,
-      fix_audit_log: [
-        "8=FIX.4.4|9=123|35=8|49=ARCA|...",
-        "8=FIX.4.4|9=124|35=8|49=NSDQ|..."
-      ],
-    }, 500);
-  },
-
-  async getFixSessionStatus(): Promise<FixSessionStatusResponse> {
-    return delay<FixSessionStatusResponse>({
-      session_id: "FIX.4.4:INVESTYO_PWA->FIX_GATEWAY",
-      state: "ACTIVE",
-      in_seq_num: 1048,
-      out_seq_num: 1049,
-      sender_comp_id: "INVESTYO_PWA",
-      target_comp_id: "FIX_GATEWAY",
-      gap_queue_depth: 0,
-      last_heartbeat_at: new Date().toISOString(),
-      venues_active: ["NYSE", "NASDAQ", "BATS", "IEX", "ARCA"],
-      heartbeat_int: 30,
-      session_uptime_sec: 14820,
-      venue_stats: [
-        {
-          venue: "NYSE",
-          market_center: "New York Stock Exchange",
-          status: "ACTIVE",
-          base_latency_ms: 1.1,
-          current_latency_ms: 1.14,
-          fill_rate_pct: 99.4,
-          maker_fee: 0.0012,
-          taker_fee: 0.0030,
-          maker_rebate: 0.0020,
-          liquidity_depth: 125000,
-          share_of_flow_pct: 34.2,
-        },
-        {
-          venue: "NASDAQ",
-          market_center: "Nasdaq Stock Market",
-          status: "ACTIVE",
-          base_latency_ms: 0.9,
-          current_latency_ms: 0.95,
-          fill_rate_pct: 99.8,
-          maker_fee: 0.0015,
-          taker_fee: 0.0030,
-          maker_rebate: 0.0025,
-          liquidity_depth: 140000,
-          share_of_flow_pct: 38.5,
-        },
-        {
-          venue: "BATS",
-          market_center: "Cboe BZX Exchange",
-          status: "ACTIVE",
-          base_latency_ms: 0.7,
-          current_latency_ms: 0.72,
-          fill_rate_pct: 98.9,
-          maker_fee: -0.0020,
-          taker_fee: 0.0025,
-          maker_rebate: 0.0020,
-          liquidity_depth: 65000,
-          share_of_flow_pct: 12.1,
-        },
-        {
-          venue: "IEX",
-          market_center: "Investors Exchange (D-Limit)",
-          status: "ACTIVE",
-          base_latency_ms: 1.8,
-          current_latency_ms: 1.85,
-          fill_rate_pct: 97.5,
-          maker_fee: 0.0000,
-          taker_fee: 0.0009,
-          maker_rebate: 0.0000,
-          liquidity_depth: 45000,
-          share_of_flow_pct: 6.8,
-        },
-        {
-          venue: "ARCA",
-          market_center: "NYSE Arca Equities",
-          status: "ACTIVE",
-          base_latency_ms: 1.2,
-          current_latency_ms: 1.23,
-          fill_rate_pct: 99.1,
-          maker_fee: -0.0022,
-          taker_fee: 0.0028,
-          maker_rebate: 0.0022,
-          liquidity_depth: 85000,
-          share_of_flow_pct: 8.4,
-        },
-      ],
-      audit_log: [
-        "8=FIX.4.4|9=112|35=0|49=FIX_GATEWAY|56=INVESTYO_PWA|34=1048|52=20260817-21:45:00.120|10=092|",
-        "8=FIX.4.4|9=128|35=8|49=FIX_GATEWAY|56=INVESTYO_PWA|34=1047|52=20260817-21:44:58.330|37=ORD-99124|11=CL-3019|39=2|150=2|55=SPY|54=1|38=100|44=512.50|32=100|31=512.48|14=100|6=512.48|10=184|",
-        "8=FIX.4.4|9=108|35=1|49=INVESTYO_PWA|56=FIX_GATEWAY|34=1048|52=20260817-21:44:30.010|112=TEST-9921|10=210|",
-        "8=FIX.4.4|9=115|35=0|49=FIX_GATEWAY|56=INVESTYO_PWA|34=1046|52=20260817-21:44:30.012|112=TEST-9921|10=044|",
-        "8=FIX.4.4|9=140|35=D|49=INVESTYO_PWA|56=FIX_GATEWAY|34=1047|52=20260817-21:44:00.000|11=CL-3019|55=SPY|54=1|38=100|40=2|44=512.50|59=0|10=156|",
-      ],
-    }, 200);
-  },
-
-  async sendFixTestRequest(req?: FixTestRequestPayload): Promise<FixSessionControlResponse> {
-    const tid = req?.test_req_id || "TEST-" + Math.random().toString(36).substring(2, 8).toUpperCase();
-    return delay<FixSessionControlResponse>({
-      status: "ok",
-      message: `FIX Test Request (35=1, TestReqID=${tid}) verified. Heartbeat response received.`,
-      session_state: "ACTIVE",
-      test_req_id: tid,
-      in_seq_num: 1049,
-      out_seq_num: 1050,
-      round_trip_ms: 1.24,
-    }, 200);
-  },
-
-  async resetFixSequence(req: FixResetSeqRequest): Promise<FixSessionControlResponse> {
-    return delay<FixSessionControlResponse>({
-      status: "ok",
-      message: `Sequence reset (35=4) to seq #${req.new_seq_num} successful.`,
-      session_state: "ACTIVE",
-      new_seq_num: req.new_seq_num,
-      in_seq_num: req.new_seq_num,
-      out_seq_num: req.new_seq_num,
-    }, 200);
-  },
-
-  async reconnectFixSession(): Promise<FixSessionControlResponse> {
-    return delay<FixSessionControlResponse>({
-      status: "ok",
-      message: "FIX 4.4 Session re-established successfully.",
-      session_state: "ACTIVE",
-      in_seq_num: 1,
-      out_seq_num: 1,
-    }, 200);
-  },
-
   // ---- Agentic Trading tab ----
   async getAgenticStatus(): Promise<AgenticStatus> {
-    const activeFollows = readFollows().filter((f) => f.status === "active");
     return delay({
       mode: MOCK_EXECUTION_QUEUE.mode,
       advisory_only: false,
@@ -13609,10 +11069,6 @@ export const mockApi = {
         n_placeable: MOCK_EXECUTION_QUEUE.n_placeable,
         stale: MOCK_EXECUTION_QUEUE.stale,
         age_seconds: MOCK_EXECUTION_QUEUE.age_seconds,
-      },
-      follows: {
-        n_active: activeFollows.length,
-        total_amount: activeFollows.reduce((sum, f) => sum + f.amount, 0),
       },
       agent_loop: MOCK_AGENT_LOOP,
     });
@@ -14239,9 +11695,9 @@ export const mockApi = {
   // ---- Market Data provider status (webapp parity gap G9) ----
   async getProviderStatus(): Promise<ProviderStatus> {
     return delay<ProviderStatus>({
-      provider: "alpaca",
-      is_realtime: true,
-      mode: "real_time",
+      provider: "fmp",
+      is_realtime: false,
+      mode: "delayed",
       quote_ttl_seconds: 30,
       fundamentals_source: "yahoo_computed",
     });
@@ -14288,68 +11744,6 @@ export const mockApi = {
         { price: current_price + 0.05, size: 900, type: "ask" as const },
         { price: current_price + 0.1, size: 1500, type: "ask" as const },
         { price: current_price + 0.15, size: 600, type: "ask" as const },
-      ],
-      is_synthetic: true,
-    });
-  },
-  async getModelComparison() {
-    // Demo-only curve: "SF-GARCH-LSTM"/"Bond-BERT" are undeployed
-    // ridge-regression stand-ins (ml/models/sf_garch_lstm.py,
-    // ml/models/bond_bert.py) with no real tracked return history -- the
-    // live endpoint honestly reports no data (see api/metrics_api.py), this
-    // mock fixture exists only to populate the offline demo UI and is
-    // flagged is_synthetic so the chart shows a Demo Data badge.
-    return delay({
-      data: [
-        {
-          name: "Jan",
-          "SF-GARCH-LSTM": 2.1,
-          "Bond-BERT": 1.8,
-          "Benchmark (SPY)": 1.5,
-        },
-        {
-          name: "Feb",
-          "SF-GARCH-LSTM": 4.5,
-          "Bond-BERT": 3.2,
-          "Benchmark (SPY)": 3.0,
-        },
-        {
-          name: "Mar",
-          "SF-GARCH-LSTM": 3.8,
-          "Bond-BERT": 4.0,
-          "Benchmark (SPY)": 2.8,
-        },
-        {
-          name: "Apr",
-          "SF-GARCH-LSTM": 6.2,
-          "Bond-BERT": 5.5,
-          "Benchmark (SPY)": 4.2,
-        },
-        {
-          name: "May",
-          "SF-GARCH-LSTM": 8.0,
-          "Bond-BERT": 6.8,
-          "Benchmark (SPY)": 5.5,
-        },
-        {
-          name: "Jun",
-          "SF-GARCH-LSTM": 10.5,
-          "Bond-BERT": 8.2,
-          "Benchmark (SPY)": 6.1,
-        },
-      ],
-      is_synthetic: true,
-    });
-  },
-  async getOptionsAnalytics(symbol: string) {
-    return delay({
-      symbol: symbol.toUpperCase(),
-      net_dealer_premium: -45.2,
-      regime: "Negative Gamma (Volatile)",
-      intraday_series: [
-        { time: "9:00 AM", hour: 9, theta: 0.0, gamma: 3.68 },
-        { time: "12:00 PM", hour: 12, theta: 12.5, gamma: 10.0 },
-        { time: "4:00 PM", hour: 16, theta: 100.0, gamma: 73.89 },
       ],
       is_synthetic: true,
     });
@@ -14404,84 +11798,10 @@ export const mockApi = {
     return delay(_mockForecastBackfillJobStatus(jobId, job));
   },
 
-  // ---- Cache Long/Short ----
-  async getClsConcentratedPositions(): Promise<{
-    positions: CacheLongShortConcentratedPosition[];
-  }> {
-    return delay({
-      positions: [{ ticker: "AAPL", market_value: 12000, pct_equity: 0.25 }],
-    });
-  },
-  async getClsDashboard(): Promise<CacheLongShortDashboard> {
-    return delay({
-      status: "enabled",
-      tax_bank: 1540.23,
-      exposure: {
-        long_exposure: 45000,
-        short_exposure: 20000,
-        net_exposure: 25000,
-        gross_exposure: 65000,
-      },
-    });
-  },
-  async getClsPendingApprovals(): Promise<CacheLongShortPendingTrade[]> {
-    return delay([
-      {
-        lot_id: 101,
-        position_id: 1,
-        cost_basis: 150.5,
-        unrealized_loss_pct: -0.12,
-      },
-      {
-        lot_id: 102,
-        position_id: 2,
-        cost_basis: 300.2,
-        unrealized_loss_pct: -0.07,
-      },
-    ]);
-  },
-  async simulateCls(
-    req: CacheLongShortSimulateRequest,
-  ): Promise<CacheLongShortSimulateResult> {
-    // "ZZZ" is this codebase's established honesty-branch trigger for
-    // on-demand analyze/simulate mocks (see analyzePairs above) --
-    // exercises the "no usable proxy hedge found" path a real ticker with
-    // insufficient history would hit.
-    if (req.ticker.trim().toUpperCase() === "ZZZ") {
-      return delay({
-        found: false,
-        reason: "Insufficient price history for ticker or suitable proxy",
-        beta: null,
-        proxy_ticker: null,
-        correlation_coefficient: null,
-      });
-    }
-    return delay({
-      found: true,
-      reason: null,
-      beta: 1.2,
-      proxy_ticker: "XLK",
-      correlation_coefficient: 0.85,
-    });
-  },
-  async startCls(
-    req: CacheLongShortStartRequest,
-  ): Promise<CacheLongShortStartResult> {
-    return delay({
-      status: "started",
-      position_id: 99,
-      ticker: req.ticker,
-    });
-  },
-  async approveClsBulk(
-    lotIds: number[],
-  ): Promise<CacheLongShortApproveBulkResult> {
-    return delay({
-      status: "approved",
-      count: lotIds.length,
-    });
-  },
   async getPaperBrokerAccount() {
+    // Seed on first read too: tickets gate orders on this cash figure, so an
+    // unseeded $0 account made the very first mock order impossible.
+    ensureMockPaperAccountSeeded();
     return paperAccount;
   },
   async getPaperBrokerPositions() {
@@ -14553,2800 +11873,6 @@ export const mockApi = {
       confirm,
     );
   },
-  async getStrategyOptionsCandidates(_symbols?: string[]) {
-    return delay({
-      count: 2,
-      candidates: [
-        {
-          symbol: "AAPL",
-          strategy: "Put Credit Spread",
-          action: "Open",
-          net_premium: 1.45,
-          ivr: 62.4,
-          trend_bias: "Bullish",
-          target_dte: 30,
-          vrp: 0.031,
-          vix: 17.8,
-          short_delta: 0.28,
-          credit_to_width_ratio: 0.29,
-          legs: [
-            { Strike: 150.0, Side: "Short", Type: "PUT", Ratio: 1.0, Price: 2.20 },
-            { Strike: 145.0, Side: "Long", Type: "PUT", Ratio: 1.0, Price: 0.75 },
-          ]
-        },
-        {
-          symbol: "MSFT",
-          strategy: "Iron Condor",
-          action: "Open",
-          net_premium: 2.10,
-          ivr: 58.0,
-          trend_bias: "Neutral",
-          target_dte: 30,
-          vrp: 0.024,
-          vix: 17.8,
-          short_delta: 0.24,
-          credit_to_width_ratio: 0.42,
-          legs: [
-            { Strike: 400.0, Side: "Short", Type: "PUT", Ratio: 1.0, Price: 1.80 },
-            { Strike: 395.0, Side: "Long", Type: "PUT", Ratio: 1.0, Price: 0.70 },
-            { Strike: 430.0, Side: "Short", Type: "CALL", Ratio: 1.0, Price: 1.70 },
-            { Strike: 435.0, Side: "Long", Type: "CALL", Ratio: 1.0, Price: 0.70 },
-          ]
-        }
-      ]
-    });
-  },
-  async executeStrategyOptions(_symbols?: string[], dryRun = false, _maxNotional = 2500) {
-    if (dryRun) {
-      return delay({
-        executed_count: 2,
-        skipped_count: 0,
-        failed_count: 0,
-        executed: [
-          { symbol: "AAPL", strategy: "Put Credit Spread", contracts: 2, net_price: 1.45, net_cash_impact: 287.40 },
-          { symbol: "MSFT", strategy: "Iron Condor", contracts: 1, net_price: 2.10, net_cash_impact: 207.40 }
-        ],
-        skipped: [],
-        failed: []
-      });
-    }
-
-    const aaplReq: OptionsOrderRequest = {
-      symbol: "AAPL",
-      asset_type: "option",
-      quantity: 2,
-      limit_price: 1.45,
-      expiration: "2026-09-18",
-      legs: [
-        { action: "Sell", type: "put", contract: { strike: 150, lastPrice: 2.20 } as any },
-        { action: "Buy", type: "put", contract: { strike: 145, lastPrice: 0.75 } as any },
-      ],
-      isLive: false,
-    };
-    await this.postOptionsOrder(aaplReq);
-
-
-    return delay({
-      executed_count: 1,
-      skipped_count: 0,
-      failed_count: 0,
-      executed: [
-        { order_id: `AUTO_OPT_AAPL_${Date.now()}`, symbol: "AAPL", strategy: "Put Credit Spread", contracts: 2, net_price: 1.45, net_cash_impact: 287.40 }
-      ],
-      skipped: [],
-      failed: []
-    });
-  },
-  async getPaperBrokerGreeks() {
-    return delay({
-      total_positions: paperPositions.length,
-      stock_positions_count: paperPositions.filter(p => !p.symbol.includes("$")).length,
-      option_positions_count: paperPositions.filter(p => p.symbol.includes("$")).length,
-      net_delta_shares: 45.2,
-      net_dollar_delta: 6780.0,
-      net_gamma: 0.1245,
-      net_theta_daily: 34.50,
-      net_vega_1pct: -52.80,
-      beta_weighted_delta_spy: 13.56,
-      positions: paperPositions.map(p => {
-        const isOpt = p.symbol.includes("$");
-        return {
-          symbol: p.symbol,
-          asset_type: isOpt ? ("option" as const) : ("stock" as const),
-          base_ticker: p.symbol.split(" ")[0],
-          expiration: isOpt ? "2026-09-18" : undefined,
-          strike: isOpt ? 150 : undefined,
-          option_type: isOpt ? (p.symbol.includes("PUT") ? ("put" as const) : ("call" as const)) : undefined,
-          dte: isOpt ? 35 : undefined,
-          qty: p.qty,
-          spot_price: p.current_price ?? 150,
-          delta_per_unit: isOpt ? 0.35 : 1.0,
-          gamma_per_unit: isOpt ? 0.02 : 0.0,
-          theta_daily_per_unit: isOpt ? -0.15 : 0.0,
-          vega_1pct_per_unit: isOpt ? 0.25 : 0.0,
-          position_delta: isOpt ? p.qty * 100 * 0.35 : p.qty,
-          position_dollar_delta: (isOpt ? p.qty * 100 * 0.35 : p.qty) * (p.current_price ?? 150),
-          position_gamma: isOpt ? p.qty * 100 * 0.02 : 0,
-          position_theta_daily: isOpt ? p.qty * 100 * -0.15 : 0,
-          position_vega_1pct: isOpt ? p.qty * 100 * 0.25 : 0,
-          market_value: p.market_value ?? 0,
-        };
-      }),
-    });
-  },
-  async runOptionsBacktest(params: import("./types").OptionsBacktestParams) {
-    return delay({
-      strategy_name: params.strategy,
-      ticker: params.ticker,
-      start_date: params.start_date,
-      end_date: params.end_date,
-      initial_capital: params.initial_capital || 100000,
-      final_capital: 118450.0,
-      total_return_pct: 18.45,
-      annualized_return_pct: 8.92,
-      sharpe_ratio: 1.42,
-      sortino_ratio: 1.85,
-      max_drawdown_pct: 6.40,
-      total_trades: 48,
-      winning_trades: 39,
-      losing_trades: 9,
-      win_rate_pct: 81.3,
-      profit_factor: 2.35,
-      avg_win: 620.0,
-      avg_loss: 580.0,
-      pbo: 0.12,
-      dsr: 0.98,
-      passes_stress: true,
-      deployable: true,
-      equity_curve: [
-        { date: "2020-01-01", value: 100.0 },
-        { date: "2021-01-01", value: 106.5 },
-        { date: "2022-01-01", value: 111.2 },
-        { date: "2023-01-01", value: 115.8 },
-        { date: "2024-01-01", value: 118.45 },
-      ],
-      trades: [
-        {
-          entry_date: "2023-11-01",
-          exit_date: "2023-11-20",
-          strategy: params.strategy,
-          underlying_entry_price: 435.0,
-          underlying_exit_price: 448.0,
-          entry_net_premium: 150.0,
-          exit_net_cost: 0.0,
-          pnl_dollar: 150.0,
-          pnl_pct: 50.0,
-          exit_reason: "profit_target",
-          holding_days: 19,
-          contracts: 2,
-        },
-      ],
-    });
-  },
-  async getOptionsMetaModelStatus() {
-    return delay({
-      n_samples: 1240,
-      train_accuracy: 78.5,
-      train_roc_auc: 0.812,
-      trained_at: "2026-08-14T12:00:00Z",
-      enabled: true,
-      metrics_are_in_sample: true,
-    });
-  },
-  async retrainOptionsMetaModel() {
-    return delay({
-      status: "success",
-      trained_samples: 1240,
-      accuracy: 78.5,
-      roc_auc: 0.812,
-      trained_at: new Date().toISOString(),
-      metrics_are_in_sample: true,
-    });
-  },
-  async settleExpiredPaperOptions() {
-    return delay({
-      settled_count: 0,
-      settled: [],
-    });
-  },
-  async getVolSurface(symbol: string, expiration?: string) {
-    const sym = (symbol || "SPY").toUpperCase();
-    const spot = sym === "SPY" ? 505.20 : sym === "QQQ" ? 440.50 : 180.00;
-    const baseIv = sym === "SPY" ? 0.215 : sym === "QQQ" ? 0.245 : 0.285;
-    const strikes = [
-      Math.round(spot * 0.90),
-      Math.round(spot * 0.93),
-      Math.round(spot * 0.95),
-      Math.round(spot * 0.98),
-      Math.round(spot),
-      Math.round(spot * 1.02),
-      Math.round(spot * 1.05),
-      Math.round(spot * 1.08),
-      Math.round(spot * 1.10),
-    ];
-    const smile_points: VolSmilePoint[] = strikes.map((k) => {
-      const moneyness = k / spot;
-      // Parabolic smile with put skew
-      const skewEffect = moneyness < 1.0 ? (1.0 - moneyness) * 0.45 : (moneyness - 1.0) * 0.18;
-      const iv = Number((baseIv + skewEffect).toFixed(4));
-      return {
-        strike: k,
-        iv,
-        moneyness: Number(moneyness.toFixed(4)),
-        call_bid: Number(Math.max(0.05, (spot - k) + 3.5).toFixed(2)),
-        call_ask: Number(Math.max(0.10, (spot - k) + 3.8).toFixed(2)),
-        put_bid: Number(Math.max(0.05, (k - spot) + 3.2).toFixed(2)),
-        put_ask: Number(Math.max(0.10, (k - spot) + 3.5).toFixed(2)),
-      };
-    });
-
-    const term_structure: VolTermStructurePoint[] = [
-      { expiration: "2026-08-21", dte: 7, atm_iv: Number((baseIv - 0.030).toFixed(4)), historical_realized_vol_30d: 0.165 },
-      { expiration: "2026-08-28", dte: 14, atm_iv: Number((baseIv - 0.018).toFixed(4)), historical_realized_vol_30d: 0.165 },
-      { expiration: "2026-09-18", dte: 35, atm_iv: baseIv, historical_realized_vol_30d: 0.165 },
-      { expiration: "2026-10-16", dte: 63, atm_iv: Number((baseIv + 0.012).toFixed(4)), historical_realized_vol_30d: 0.165 },
-      { expiration: "2026-11-20", dte: 98, atm_iv: Number((baseIv + 0.020).toFixed(4)), historical_realized_vol_30d: 0.165 },
-      { expiration: "2026-12-18", dte: 126, atm_iv: Number((baseIv + 0.028).toFixed(4)), historical_realized_vol_30d: 0.165 },
-      { expiration: "2027-01-15", dte: 154, atm_iv: Number((baseIv + 0.034).toFixed(4)), historical_realized_vol_30d: 0.165 },
-    ];
-
-    const skew: SkewData = {
-      skew_25delta: 0.035,
-      put_25delta_iv: Number((baseIv + 0.037).toFixed(4)),
-      call_25delta_iv: Number((baseIv + 0.002).toFixed(4)),
-      atm_iv: baseIv,
-      vrp_spread: 0.050,
-      realized_vol_10d: 0.152,
-      realized_vol_20d: 0.160,
-      realized_vol_30d: 0.165,
-      realized_vol_60d: 0.172,
-    };
-
-    return delay<VolSurfaceResponse>({
-      symbol: sym,
-      spot_price: spot,
-      as_of: new Date().toISOString(),
-      expirations: term_structure.map((t) => t.expiration),
-      selected_expiration: expiration || term_structure[2].expiration,
-      smile_points,
-      term_structure,
-      skew,
-    });
-  },
-  async getScenarioMatrix(params?: { spot_shifts?: number[]; iv_shifts?: number[]; days_forward?: number }) {
-    const spot_shifts = params?.spot_shifts || [-0.10, -0.05, -0.03, -0.01, 0, 0.01, 0.03, 0.05, 0.10];
-    const iv_shifts = params?.iv_shifts || [-0.20, -0.10, -0.05, 0, 0.05, 0.10, 0.20];
-    const time_slices = [0, 7, 14, 21];
-    const current_portfolio_value = 100000;
-    const baseSpot = 505.20;
-
-    const matrix: ScenarioMatrixCell[] = [];
-    for (const t of time_slices) {
-      for (const iv of iv_shifts) {
-        for (const s of spot_shifts) {
-          const spot_price = baseSpot * (1 + s);
-          // Nonlinear delta/gamma/vega/theta PnL simulation
-          const deltaPnl = s * 48.5 * baseSpot;
-          const gammaPnl = 0.5 * 0.015 * Math.pow(s * baseSpot, 2);
-          const vegaPnl = (iv * 100) * 12.5;
-          const thetaPnl = t * 18.5; // positive income for net seller
-          const pnl_dollar = Number((deltaPnl + gammaPnl + vegaPnl + thetaPnl).toFixed(2));
-          const pnl_pct = Number((pnl_dollar / current_portfolio_value).toFixed(4));
-          const portfolio_value = Number((current_portfolio_value + pnl_dollar).toFixed(2));
-
-          matrix.push({
-            spot_shift_pct: s,
-            iv_shift_pct: iv,
-            days_forward: t,
-            spot_price: Number(spot_price.toFixed(2)),
-            portfolio_value,
-            pnl_dollar,
-            pnl_pct,
-            net_delta: Number((48.5 + (s * 15.0)).toFixed(2)),
-            net_gamma: Number((0.015 - (t * 0.0003)).toFixed(4)),
-            net_theta: Number((18.5 + (iv * 5.0)).toFixed(2)),
-            net_vega: Number((12.5 - (t * 0.3)).toFixed(2)),
-          });
-        }
-      }
-    }
-
-    const historical_scenarios: HistoricalScenarioPreset[] = [
-      {
-        id: "lehman-2008",
-        name: "Lehman Collapse (2008)",
-        description: "-15% Spot Plunge, +50% Vol Spike",
-        spot_shift_pct: -0.15,
-        iv_shift_pct: 0.50,
-        projected_pnl_dollar: -3820,
-        projected_pnl_pct: -0.0382,
-      },
-      {
-        id: "volmageddon-2018",
-        name: "Volmageddon (Feb 2018)",
-        description: "-4% Spot Gap, +100% Vol Explosion",
-        spot_shift_pct: -0.04,
-        iv_shift_pct: 1.00,
-        projected_pnl_dollar: -2150,
-        projected_pnl_pct: -0.0215,
-      },
-      {
-        id: "covid-2020",
-        name: "COVID Liquidity Shock (Mar 2020)",
-        description: "-12% Spot Drop, +40% Vol Spike",
-        spot_shift_pct: -0.12,
-        iv_shift_pct: 0.40,
-        projected_pnl_dollar: -3120,
-        projected_pnl_pct: -0.0312,
-      },
-      {
-        id: "yen-unwind-2024",
-        name: "Yen Carry Unwind (Aug 2024)",
-        description: "-6% Spot Gap, +30% Vol Expansion",
-        spot_shift_pct: -0.06,
-        iv_shift_pct: 0.30,
-        projected_pnl_dollar: -1480,
-        projected_pnl_pct: -0.0148,
-      },
-    ];
-
-    return delay<ScenarioMatrixResponse>({
-      spot_shifts,
-      iv_shifts,
-      time_slices,
-      matrix,
-      historical_scenarios,
-      current_portfolio_value,
-      // Mock's happy path represents a book with open positions (non-zero
-      // current_portfolio_value/P&L above) -- keep positions_count consistent
-      // with that rather than the honest 0 a truly empty account would report.
-      positions_count: 3,
-    });
-  },
-  async getDeltaHedgePreview() {
-    return delay<DeltaHedgePreview>({
-      symbol: "SPY",
-      available: true,
-      net_dollar_delta: 24502.20,
-      beta_weighted_delta_spy: 48.5,
-      target_hedge_shares: -48.5,
-      tolerance_band_shares: 25.0,
-      action: "SELL",
-      shares: 48,
-      required_action: true,
-      reason: "Delta imbalance (+48.50 SPY-equiv) exceeds tolerance band (±25.0 shares)",
-      spy_spot: 505.20,
-    });
-  },
-  async executeDeltaHedge(_params?: { target_delta?: number; confirm?: boolean }) {
-    return delay<DeltaHedgeResult>({
-      ok: true,
-      hedged: true,
-      order_id: `ord_hedge_${Date.now()}`,
-      shares: 48,
-      symbol: "SPY",
-      action: "SELL",
-      message: "Delta hedge executed: SELL 48 SPY at $505.20 (commission: $1.00).",
-    });
-  },
-  async managePaperOptionsExits(_params?: { force?: boolean }) {
-    // Mirrors execution/options_paper_executor.py::OptionsPaperExecutor
-    // .execute_auto_exits()'s real return shape (enabled/evaluated_count/
-    // executed_count/failed_count/executed/failed) -- see ManageExitsResult's
-    // own doc comment in types.ts for why this replaced a fabricated
-    // closed_count/closed_positions/message shape that never existed live.
-    return delay<ManageExitsResult>({
-      enabled: true,
-      evaluated_count: 3,
-      executed_count: 1,
-      failed_count: 0,
-      executed: [
-        {
-          order_id: `AUTO-EXIT-SPY-${Date.now()}`,
-          symbol: "SPY 2026-09-18 $500.00 PUT",
-          reason: "PROFIT_TARGET_50",
-          contracts: 2,
-          net_cash_impact: 340.0,
-          unrealized_pl: 340.0,
-          legs: ["SPY 2026-09-18 $500.00 PUT"],
-        },
-      ],
-      failed: [],
-    });
-  },
-  async rollPaperOptionPosition(request: RollOrderRequest) {
-    const closeSymbol = request.close_legs[0]?.symbol ?? request.symbol;
-    const openSymbol = request.open_legs[0]?.symbol ?? request.symbol;
-    return delay<OptionsOrderResult>({
-      ok: true,
-      order_id: `ord_roll_${Date.now()}`,
-      message: `Successfully rolled ${closeSymbol} to ${openSymbol}. Net credit/debit applied.`,
-    });
-  },
-  async getEarningsCrushCandidates(symbols?: string[]) {
-    const allCandidates: EarningsCrushCandidate[] = [
-      {
-        symbol: "NVDA",
-        company_name: "NVIDIA Corporation",
-        report_date: "2026-08-20",
-        report_timing: "AMC",
-        spot_price: 128.50,
-        atm_iv: 0.68,
-        dte: 3,
-        expected_move_dollar: 11.20,
-        expected_move_pct: 0.087,
-        median_realized_move_pct: 0.054,
-        crush_edge_ratio: 1.61,
-        suggested_strategy: "Iron Condor",
-        short_put_strike: 118,
-        put_wing_strike: 112,
-        short_call_strike: 139,
-        call_wing_strike: 145,
-        expiration: "2026-08-21",
-        estimated_credit: 2.35,
-        edge_passed: true,
-        historical_moves: [4.2, 5.8, 7.1, 3.9, 5.4, 6.2, 4.8, 5.1],
-      },
-      {
-        symbol: "TSLA",
-        company_name: "Tesla Inc.",
-        report_date: "2026-08-19",
-        report_timing: "AMC",
-        spot_price: 218.00,
-        atm_iv: 0.72,
-        dte: 2,
-        expected_move_dollar: 18.50,
-        expected_move_pct: 0.085,
-        median_realized_move_pct: 0.061,
-        crush_edge_ratio: 1.39,
-        suggested_strategy: "Iron Condor",
-        short_put_strike: 200,
-        put_wing_strike: 190,
-        short_call_strike: 235,
-        call_wing_strike: 245,
-        expiration: "2026-08-21",
-        estimated_credit: 3.80,
-        edge_passed: true,
-        historical_moves: [8.5, 5.2, 6.1, 9.4, 4.3, 6.0, 7.2, 5.8],
-      },
-      {
-        symbol: "AMD",
-        company_name: "Advanced Micro Devices",
-        report_date: "2026-08-22",
-        report_timing: "BMO",
-        spot_price: 152.30,
-        atm_iv: 0.59,
-        dte: 5,
-        expected_move_dollar: 11.80,
-        expected_move_pct: 0.077,
-        median_realized_move_pct: 0.058,
-        crush_edge_ratio: 1.33,
-        suggested_strategy: "Iron Condor",
-        short_put_strike: 140,
-        put_wing_strike: 132,
-        short_call_strike: 165,
-        call_wing_strike: 173,
-        expiration: "2026-08-28",
-        estimated_credit: 2.10,
-        edge_passed: true,
-        historical_moves: [5.5, 6.2, 4.9, 7.8, 5.8, 4.1, 6.5, 5.2],
-      },
-      {
-        symbol: "AMZN",
-        company_name: "Amazon.com Inc.",
-        report_date: "2026-08-21",
-        report_timing: "AMC",
-        spot_price: 184.20,
-        atm_iv: 0.44,
-        dte: 4,
-        expected_move_dollar: 9.20,
-        expected_move_pct: 0.050,
-        median_realized_move_pct: 0.042,
-        crush_edge_ratio: 1.19,
-        suggested_strategy: "Iron Condor",
-        short_put_strike: 175,
-        put_wing_strike: 170,
-        short_call_strike: 195,
-        call_wing_strike: 200,
-        expiration: "2026-08-28",
-        estimated_credit: 1.45,
-        edge_passed: false,
-        historical_moves: [3.8, 4.5, 4.2, 6.1, 3.9, 4.1, 5.0, 3.6],
-      },
-      {
-        symbol: "AAPL",
-        company_name: "Apple Inc.",
-        report_date: "2026-08-27",
-        report_timing: "AMC",
-        spot_price: 224.50,
-        atm_iv: 0.32,
-        dte: 10,
-        expected_move_dollar: 8.10,
-        expected_move_pct: 0.036,
-        median_realized_move_pct: 0.034,
-        crush_edge_ratio: 1.06,
-        suggested_strategy: "Iron Condor",
-        short_put_strike: 215,
-        put_wing_strike: 210,
-        short_call_strike: 235,
-        call_wing_strike: 240,
-        expiration: "2026-08-28",
-        estimated_credit: 1.15,
-        edge_passed: false,
-        historical_moves: [2.8, 3.5, 3.4, 4.1, 2.9, 3.1, 3.8, 3.2],
-      },
-    ];
-    const filtered = symbols && symbols.length > 0
-      ? allCandidates.filter(c => symbols.includes(c.symbol))
-      : allCandidates;
-    return delay<EarningsCrushCandidatesResponse>({
-      candidates: filtered,
-      count: filtered.length,
-      as_of: new Date().toISOString(),
-    });
-  },
-  async executeEarningsCrushTrade(
-    candidate: EarningsCrushCandidate | { symbol: string; strategy?: string; wing_multiplier?: number },
-    overrideDeployabilityGate?: boolean
-  ) {
-    // earnings_crush is UNGATEABLE_DATA_GAP -- blocked by default, same as the live
-    // backend (api/pilots_api.py::post_options_earnings_crush_execute).
-    if (!overrideDeployabilityGate) {
-      return delay<EarningsCrushExecutionResult>(optionsDeskGateBlockedResult("earnings_crush"));
-    }
-    const sym = candidate.symbol;
-    const strat = (candidate as EarningsCrushCandidate).suggested_strategy || "Iron Condor";
-    const credit = (candidate as EarningsCrushCandidate).estimated_credit ?? 2.75;
-    return delay<EarningsCrushExecutionResult>({
-      ok: true,
-      order_id: `ord_crush_${Date.now()}`,
-      symbol: sym,
-      strategy: strat,
-      net_credit: credit,
-      message: `Successfully executed Earnings Crush ${strat} on ${sym} for $${credit.toFixed(2)} net credit. Auto-exit scheduled at 09:35 ET post-announcement.`,
-      placed_at: new Date().toISOString(),
-      gate_status: OPTIONS_DESK_DEPLOYABILITY_GATES.earnings_crush,
-    });
-  },
-  async getUnusualOptionsFlow(params?: { symbol?: string; min_vol_oi?: number; min_notional?: number }) {
-    const allTrades: UnusualOptionTrade[] = [
-      {
-        id: "uoa_1",
-        symbol: "NVDA",
-        timestamp: "14:48:12",
-        option_type: "CALL",
-        strike: 135.0,
-        expiration: "2026-08-21",
-        dte: 7,
-        trade_type: "SWEEP",
-        sentiment: "BULLISH",
-        aggressor_side: "ASK",
-        volume: 8420,
-        open_interest: 1850,
-        vol_oi_ratio: 4.55,
-        price: 3.45,
-        spot_price: 128.50,
-        notional: 2904900,
-        iv: 0.72,
-        historical_vol_30d: 0.52,
-        iv_expansion_flag: true,
-      },
-      {
-        id: "uoa_2",
-        symbol: "TSLA",
-        timestamp: "14:45:30",
-        option_type: "PUT",
-        strike: 205.0,
-        expiration: "2026-08-21",
-        dte: 7,
-        trade_type: "SWEEP",
-        sentiment: "BEARISH",
-        aggressor_side: "BID",
-        volume: 6200,
-        open_interest: 1400,
-        vol_oi_ratio: 4.43,
-        price: 4.10,
-        spot_price: 218.00,
-        notional: 2542000,
-        iv: 0.76,
-        historical_vol_30d: 0.58,
-        iv_expansion_flag: true,
-      },
-      {
-        id: "uoa_3",
-        symbol: "SPY",
-        timestamp: "14:41:05",
-        option_type: "CALL",
-        strike: 510.0,
-        expiration: "2026-09-18",
-        dte: 35,
-        trade_type: "BLOCK",
-        sentiment: "BULLISH",
-        aggressor_side: "ASK",
-        volume: 15400,
-        open_interest: 3200,
-        vol_oi_ratio: 4.81,
-        price: 8.25,
-        spot_price: 505.20,
-        notional: 12705000,
-        iv: 0.22,
-        historical_vol_30d: 0.16,
-        iv_expansion_flag: false,
-      },
-      {
-        id: "uoa_4",
-        symbol: "AMD",
-        timestamp: "14:38:22",
-        option_type: "CALL",
-        strike: 160.0,
-        expiration: "2026-08-28",
-        dte: 14,
-        trade_type: "SWEEP",
-        sentiment: "BULLISH",
-        aggressor_side: "ASK",
-        volume: 4950,
-        open_interest: 1120,
-        vol_oi_ratio: 4.42,
-        price: 2.80,
-        spot_price: 152.30,
-        notional: 1386000,
-        iv: 0.62,
-        historical_vol_30d: 0.44,
-        iv_expansion_flag: true,
-      },
-      {
-        id: "uoa_5",
-        symbol: "AAPL",
-        timestamp: "14:32:15",
-        option_type: "PUT",
-        strike: 220.0,
-        expiration: "2026-09-18",
-        dte: 35,
-        trade_type: "BLOCK",
-        sentiment: "BEARISH",
-        aggressor_side: "BID",
-        volume: 3800,
-        open_interest: 950,
-        vol_oi_ratio: 4.00,
-        price: 3.90,
-        spot_price: 224.50,
-        notional: 1482000,
-        iv: 0.33,
-        historical_vol_30d: 0.24,
-        iv_expansion_flag: false,
-      },
-      {
-        id: "uoa_6",
-        symbol: "META",
-        timestamp: "14:28:40",
-        option_type: "CALL",
-        strike: 520.0,
-        expiration: "2026-08-28",
-        dte: 14,
-        trade_type: "SWEEP",
-        sentiment: "BULLISH",
-        aggressor_side: "ASK",
-        volume: 2900,
-        open_interest: 680,
-        vol_oi_ratio: 4.26,
-        price: 6.40,
-        spot_price: 498.80,
-        notional: 1856000,
-        iv: 0.45,
-        historical_vol_30d: 0.32,
-        iv_expansion_flag: true,
-      },
-      {
-        id: "uoa_7",
-        symbol: "QQQ",
-        timestamp: "14:20:10",
-        option_type: "PUT",
-        strike: 475.0,
-        expiration: "2026-08-21",
-        dte: 7,
-        trade_type: "SWEEP",
-        sentiment: "BEARISH",
-        aggressor_side: "BID",
-        volume: 7500,
-        open_interest: 2100,
-        vol_oi_ratio: 3.57,
-        // Exercises pilots/unusual_options_flow.py's price_is_estimated/
-        // spot_price_is_estimated honesty fields in mock mode -- see
-        // UnusualFlowFeed.tsx's "(est.)" badges.
-        price: 2.15,
-        price_is_estimated: true,
-        spot_price: 482.10,
-        spot_price_is_estimated: true,
-        notional: 1612500,
-        iv: 0.24,
-        historical_vol_30d: 0.18,
-        iv_expansion_flag: false,
-      },
-    ];
-
-    let filtered = allTrades;
-    if (params?.symbol) {
-      filtered = filtered.filter(t => t.symbol.toUpperCase() === params.symbol!.toUpperCase());
-    }
-    if (params?.min_vol_oi != null) {
-      filtered = filtered.filter(t => t.vol_oi_ratio >= params.min_vol_oi!);
-    }
-    if (params?.min_notional != null) {
-      filtered = filtered.filter(t => t.notional >= params.min_notional!);
-    }
-
-    return delay<UnusualOptionsFlowResponse>({
-      trades: filtered,
-      records: filtered,
-      count: filtered.length,
-      as_of: new Date().toISOString(),
-    });
-  },
-  async getOptionsFlowSentiment(symbol: string) {
-    const sentiments: Record<string, FlowSentimentData> = {
-      NVDA: {
-        symbol: "NVDA",
-        sentiment_score: 0.72,
-        bullish_notional: 4200000,
-        bearish_notional: 680000,
-        total_notional: 4880000,
-        call_volume: 24500,
-        put_volume: 5800,
-        put_call_ratio: 0.24,
-        top_active_strikes: [
-          { strike: 135.0, option_type: "CALL", notional: 2904900 },
-          { strike: 140.0, option_type: "CALL", notional: 1295100 },
-          { strike: 120.0, option_type: "PUT", notional: 680000 },
-        ],
-      },
-      TSLA: {
-        symbol: "TSLA",
-        sentiment_score: -0.45,
-        bullish_notional: 1100000,
-        bearish_notional: 2900000,
-        total_notional: 4000000,
-        call_volume: 8200,
-        put_volume: 16400,
-        put_call_ratio: 2.00,
-        top_active_strikes: [
-          { strike: 205.0, option_type: "PUT", notional: 2542000 },
-          { strike: 230.0, option_type: "CALL", notional: 1100000 },
-        ],
-      },
-      SPY: {
-        symbol: "SPY",
-        sentiment_score: 0.54,
-        bullish_notional: 18500000,
-        bearish_notional: 5500000,
-        total_notional: 24000000,
-        call_volume: 98000,
-        put_volume: 42000,
-        put_call_ratio: 0.43,
-        top_active_strikes: [
-          { strike: 510.0, option_type: "CALL", notional: 12705000 },
-          { strike: 500.0, option_type: "PUT", notional: 5500000 },
-        ],
-      },
-    };
-
-    const data = sentiments[symbol.toUpperCase()] || {
-      symbol: symbol.toUpperCase(),
-      sentiment_score: 0.25,
-      bullish_notional: 1200000,
-      bearish_notional: 720000,
-      total_notional: 1920000,
-      call_volume: 6400,
-      put_volume: 3800,
-      put_call_ratio: 0.59,
-      top_active_strikes: [
-        { strike: 100.0, option_type: "CALL", notional: 800000 },
-        { strike: 95.0, option_type: "PUT", notional: 400000 },
-      ],
-    };
-
-    return delay<FlowSentimentResponse>({
-      sentiment: data,
-      as_of: new Date().toISOString(),
-    });
-  },
-  async getHarRvForecast(symbol: string) {
-    const sym = (symbol || "SPY").toUpperCase();
-    const spot = sym === "SPY" ? 505.20 : sym === "QQQ" ? 440.50 : sym === "NVDA" ? 128.50 : sym === "TSLA" ? 218.00 : 180.00;
-    const baseRv = sym === "NVDA" ? 0.48 : sym === "TSLA" ? 0.54 : sym === "QQQ" ? 0.22 : 0.165;
-
-    const rv_daily = Number((baseRv * 0.96).toFixed(4));
-    const rv_weekly = Number((baseRv * 1.02).toFixed(4));
-    const rv_monthly = Number((baseRv * 1.08).toFixed(4));
-
-    const b0 = 0.015;
-    const bd = 0.38;
-    const bw = 0.34;
-    const bm = 0.22;
-
-    const forecast_vol_1d = Number((b0 + bd * rv_daily + bw * rv_weekly + bm * rv_monthly).toFixed(4));
-    const forecast_vol_5d = Number((forecast_vol_1d * 1.02).toFixed(4));
-    const forecast_vol_22d = Number((forecast_vol_1d * 1.05).toFixed(4));
-    const forecast_vol_30d = Number((forecast_vol_1d * 1.06).toFixed(4));
-    const gjr_garch_vol = Number((forecast_vol_30d * 1.03).toFixed(4));
-    const fair_iv_blend = Number(((forecast_vol_30d * 0.65) + (gjr_garch_vol * 0.35)).toFixed(4));
-
-    return delay<HarRvForecastResponse>({
-      symbol: sym,
-      spot_price: spot,
-      as_of: new Date().toISOString(),
-      rv_daily,
-      rv_weekly,
-      rv_monthly,
-      forecast_vol_1d,
-      forecast_vol_5d,
-      forecast_vol_22d,
-      forecast_vol_30d,
-      gjr_garch_vol,
-      fair_iv_blend,
-      coefficients: {
-        beta_0: b0,
-        beta_d: bd,
-        beta_w: bw,
-        beta_m: bm,
-      },
-      r_squared: 0.685,
-      annualized_rv_1d: rv_daily,
-      annualized_rv_5d: rv_weekly,
-      annualized_rv_22d: rv_monthly,
-    });
-  },
-  async getVolMispricing(symbol: string, expiration?: string) {
-    const sym = (symbol || "SPY").toUpperCase();
-    const spot = sym === "SPY" ? 505.20 : sym === "QQQ" ? 440.50 : sym === "NVDA" ? 128.50 : sym === "TSLA" ? 218.00 : 180.00;
-    const fairBase = sym === "NVDA" ? 0.52 : sym === "TSLA" ? 0.58 : sym === "QQQ" ? 0.23 : 0.175;
-    const mktAtmIv = sym === "NVDA" ? 0.68 : sym === "TSLA" ? 0.72 : sym === "QQQ" ? 0.25 : 0.215;
-    const exp = expiration || "2026-09-18";
-    const dte = 35;
-
-    const step = spot > 300 ? 5 : spot > 100 ? 2.5 : 1;
-    const atmStrike = Math.round(spot / step) * step;
-    const strikesList: number[] = [];
-    for (let i = -6; i <= 6; i++) {
-      strikesList.push(Number((atmStrike + i * step).toFixed(2)));
-    }
-
-    const strikes: VolMispricingStrike[] = strikesList.map(k => {
-      const moneyness = k / spot;
-      const skew = moneyness < 1.0 ? (1.0 - moneyness) * 0.45 : (moneyness - 1.0) * 0.20;
-      const market_iv = Number((mktAtmIv + skew + (Math.sin(k * 10) * 0.015)).toFixed(4));
-      const fair_iv = Number((fairBase + (moneyness < 1.0 ? (1.0 - moneyness) * 0.25 : (moneyness - 1.0) * 0.10)).toFixed(4));
-      const iv_spread = Number((market_iv - fair_iv).toFixed(4));
-      const spread_zscore = Number((iv_spread / 0.025).toFixed(2));
-
-      let classification: "RICH" | "CHEAP" | "NEUTRAL" | "UNKNOWN" = "NEUTRAL";
-      let suggested_action: "SELL_PREMIUM" | "BUY_GAMMA" | "HOLD" | "NEUTRAL" = "NEUTRAL";
-      let suggested_trade: string | undefined = undefined;
-
-      if (iv_spread >= 0.035 || spread_zscore >= 1.5) {
-        classification = "RICH";
-        suggested_action = "SELL_PREMIUM";
-        suggested_trade = k < spot ? "Sell Put Credit Spread" : "Sell Call Credit Spread";
-      } else if (iv_spread <= -0.015 || spread_zscore <= -1.0) {
-        classification = "CHEAP";
-        suggested_action = "BUY_GAMMA";
-        suggested_trade = "Buy Debit Spread / Long Straddle";
-      } else {
-        classification = "NEUTRAL";
-        suggested_action = "HOLD";
-      }
-
-      const delta = Number((0.50 + (spot - k) / (spot * 0.2)).toFixed(2));
-      const clampedDelta = Math.max(0.02, Math.min(0.98, delta));
-
-      return {
-        strike: k,
-        option_type: k >= spot ? "CALL" : "PUT",
-        market_iv,
-        fair_iv,
-        iv_spread,
-        spread_zscore,
-        classification,
-        suggested_action,
-        bid: Number(Math.max(0.20, Math.abs(spot - k) * 0.8 + 2.5).toFixed(2)),
-        ask: Number(Math.max(0.30, Math.abs(spot - k) * 0.8 + 2.8).toFixed(2)),
-        mid: Number(Math.max(0.25, Math.abs(spot - k) * 0.8 + 2.65).toFixed(2)),
-        delta: clampedDelta,
-        gamma: 0.025,
-        vega: 0.18,
-        theta: -0.08,
-        suggested_trade,
-      };
-    });
-
-    const richCount = strikes.filter(s => s.classification === "RICH").length;
-    const cheapCount = strikes.filter(s => s.classification === "CHEAP").length;
-
-    const trade_recommendations = [
-      {
-        strategy: "Put Credit Spread (Rich Skew Capture)",
-        direction: "SELL_VOL" as const,
-        strikes: [strikesList[2], strikesList[0]],
-        reason: `OTM Puts trade at +${((mktAtmIv - fairBase) * 100).toFixed(1)}% IV premium over HAR-RV fair value. High VRP edge.`,
-        estimated_edge_pct: 18.5,
-      },
-      {
-        strategy: "Iron Condor (Symmetric Overpricing)",
-        direction: "SELL_VOL" as const,
-        strikes: [strikesList[1], strikesList[3], strikesList[9], strikesList[11]],
-        reason: "Wings are elevated +2.1σ vs GJR-GARCH+HAR-RV forecast. Rich IV harvest.",
-        estimated_edge_pct: 22.4,
-      },
-      {
-        strategy: "Long Straddle (Cheap Convexity)",
-        direction: "BUY_VOL" as const,
-        strikes: [atmStrike],
-        reason: "ATM IV compressed relative to short-term RV clustering. Positive Gamma edge.",
-        estimated_edge_pct: 12.0,
-      },
-    ];
-
-    return delay<VolMispricingResponse>({
-      symbol: sym,
-      spot_price: spot,
-      expiration: exp,
-      expirations: ["2026-08-21", "2026-08-28", "2026-09-18", "2026-10-16", "2026-11-20"],
-      dte,
-      fair_iv_baseline: fairBase,
-      market_atm_iv: mktAtmIv,
-      rich_strikes_count: richCount,
-      cheap_strikes_count: cheapCount,
-      strikes,
-      trade_recommendations,
-      as_of: new Date().toISOString(),
-    });
-  },
-  async simulateGammaScalping(request: GammaScalpRequest) {
-    const sym = request.symbol || "SPY";
-    const spot = request.spot_price || 505.20;
-    const contracts = request.contracts || 10;
-    const deltaThresh = request.delta_threshold || 0.15;
-    const steps = request.simulation_steps || 40;
-    const realizedVol = request.realized_vol || 0.25;
-
-    let price_path: number[] = request.underlying_price_path ? [...request.underlying_price_path] : [];
-    if (price_path.length === 0) {
-      price_path = [spot];
-      let currentSpot = spot;
-      const dt = 1 / 252 / 6.5;
-      for (let i = 1; i < steps; i++) {
-        const shock = (Math.sin(i * 0.4) * 0.8 + (Math.random() - 0.48)) * realizedVol * Math.sqrt(dt) * currentSpot * 8;
-        currentSpot = Math.max(10, currentSpot + shock);
-        price_path.push(Number(currentSpot.toFixed(2)));
-      }
-    }
-
-    const initDelta = request.option_type === "PUT" ? -0.50 : request.option_type === "STRADDLE" ? 0.0 : 0.50;
-    const initGamma = 0.035 * contracts;
-    const initTheta = -18.5 * contracts;
-
-    let currentStockPosition = request.option_type === "CALL" ? -Math.round(initDelta * contracts * 100) : request.option_type === "PUT" ? Math.round(Math.abs(initDelta) * contracts * 100) : 0;
-    let currentStockCash = -currentStockPosition * spot;
-    let prevSpot = spot;
-    let cumulativeGammaRent = 0;
-    let cumulativeThetaDecay = 0;
-    let totalStockPnl = 0;
-    let transactionCosts = 0;
-
-    const trades: GammaScalpHedgeTrade[] = [];
-    const pnl_path: GammaScalpResponse["pnl_path"] = [];
-
-    for (let step = 0; step < price_path.length; step++) {
-      const currentPrice = price_path[step];
-      const dS = currentPrice - prevSpot;
-      const stepDt = 1 / 30;
-
-      const rawDelta = initDelta + (initGamma / Math.max(1, contracts)) * (currentPrice - spot);
-      const optionDeltaShares = rawDelta * contracts * 100;
-      const netPortfolioDeltaShares = optionDeltaShares + currentStockPosition;
-      const netDeltaFraction = netPortfolioDeltaShares / (contracts * 100);
-
-      const stepGammaRent = 0.5 * initGamma * 100 * Math.pow(dS, 2);
-      cumulativeGammaRent += stepGammaRent;
-
-      const stepThetaBurn = Math.abs(initTheta) * stepDt;
-      cumulativeThetaDecay += stepThetaBurn;
-
-      let side: "BUY" | "SELL" | "HOLD" = "HOLD";
-      let sharesTraded = 0;
-      let cashFlow = 0;
-
-      if (Math.abs(netDeltaFraction) >= deltaThresh) {
-        sharesTraded = Math.round(-netPortfolioDeltaShares);
-        side = sharesTraded > 0 ? "BUY" : "SELL";
-        cashFlow = -sharesTraded * currentPrice;
-        currentStockPosition += sharesTraded;
-        currentStockCash += cashFlow;
-        transactionCosts += Math.abs(sharesTraded) * 0.005;
-
-        trades.push({
-          step,
-          timestamp: `T+${step}h`,
-          spot_price: currentPrice,
-          pre_delta: Number(netDeltaFraction.toFixed(3)),
-          post_delta: Number(((optionDeltaShares + currentStockPosition) / (contracts * 100)).toFixed(3)),
-          shares_traded: Math.abs(sharesTraded),
-          side,
-          trade_price: currentPrice,
-          cash_flow: Number(cashFlow.toFixed(2)),
-          stock_position: currentStockPosition,
-          option_mtm: Number(((contracts * 100) * Math.max(0.5, 5.0 + (currentPrice - spot) * initDelta + 0.5 * initGamma * Math.pow(currentPrice - spot, 2) - cumulativeThetaDecay / (contracts * 100))).toFixed(2)),
-          total_pnl: Number((cumulativeGammaRent - cumulativeThetaDecay - transactionCosts).toFixed(2)),
-          gamma_rent_cumulative: Number(cumulativeGammaRent.toFixed(2)),
-          theta_decay_cumulative: Number(cumulativeThetaDecay.toFixed(2)),
-        });
-      }
-
-      const stockMtm = currentStockPosition * currentPrice + currentStockCash;
-      totalStockPnl = stockMtm;
-      const optionPnl = (currentPrice - spot) * (initDelta * contracts * 100) + cumulativeGammaRent - cumulativeThetaDecay;
-      const totalPnl = cumulativeGammaRent - cumulativeThetaDecay - transactionCosts;
-
-      pnl_path.push({
-        step,
-        spot: currentPrice,
-        total_pnl: Number(totalPnl.toFixed(2)),
-        gamma_rent: Number(cumulativeGammaRent.toFixed(2)),
-        theta_decay: Number(cumulativeThetaDecay.toFixed(2)),
-        option_mtm: Number(optionPnl.toFixed(2)),
-        stock_pnl: Number(stockMtm.toFixed(2)),
-      });
-
-      prevSpot = currentPrice;
-    }
-
-    const total_pnl = Number((cumulativeGammaRent - cumulativeThetaDecay - transactionCosts).toFixed(2));
-
-    return delay<GammaScalpResponse>({
-      symbol: sym,
-      spot_price: spot,
-      initial_delta: initDelta,
-      initial_gamma: initGamma,
-      initial_theta: initTheta,
-      total_trades: trades.length,
-      rebalance_count: trades.length,
-      delta_threshold: deltaThresh,
-      total_pnl,
-      gamma_rent_total: Number(cumulativeGammaRent.toFixed(2)),
-      theta_burn_total: Number(cumulativeThetaDecay.toFixed(2)),
-      stock_pnl: Number(totalStockPnl.toFixed(2)),
-      option_pnl: Number((total_pnl - totalStockPnl).toFixed(2)),
-      transaction_costs: Number(transactionCosts.toFixed(2)),
-      net_edge: Number((cumulativeGammaRent - cumulativeThetaDecay).toFixed(2)),
-      trades,
-      price_path,
-      pnl_path,
-    });
-  },
-  async testOptionsAlert(params?: { alert_type?: string; symbol?: string; dry_run?: boolean }) {
-    // Mirrors pilots/options_alerts.py::dispatch_options_alert()'s real return
-    // shape (status/alert_type/level/title/message/payload/timestamp/success/error)
-    // -- see OptionsAlertTestResult's doc comment in types.ts for why this replaced
-    // a fabricated per-channel results[] breakdown that never existed live.
-    const alertType = params?.alert_type || "UOA";
-    const symbol = params?.symbol || "NVDA";
-    const title = `🐋 Institutional UOA Whale Sweep: ${symbol} $500.00 CALL`;
-    return delay<OptionsAlertTestResult>({
-      status: "ok",
-      alert_type: alertType,
-      level: "WARNING",
-      title,
-      message: `**${title}**\n• Test dispatch triggered from the Volatility Forecast Scanner.`,
-      payload: { symbol },
-      timestamp: new Date().toISOString(),
-      success: true,
-      error: null,
-    });
-  },
-  async getDispersionOpportunities(index_symbol?: string) {
-    const qqqConstituents: DispersionConstituent[] = [
-      {
-        symbol: "AAPL",
-        weight: 0.18,
-        spot_price: 224.50,
-        atm_iv: 0.28,
-        realized_vol_30d: 0.20,
-        straddle_strike: 225.0,
-        straddle_bid: 10.20,
-        straddle_ask: 10.60,
-        straddle_mid: 10.40,
-        vega_per_straddle: 0.32,
-        contracts_allocated: 18,
-        leg_action: "BUY",
-        implied_rv_spread: 0.08,
-      },
-      {
-        symbol: "MSFT",
-        weight: 0.16,
-        spot_price: 445.00,
-        atm_iv: 0.26,
-        realized_vol_30d: 0.19,
-        straddle_strike: 445.0,
-        straddle_bid: 21.00,
-        straddle_ask: 21.80,
-        straddle_mid: 21.40,
-        vega_per_straddle: 0.48,
-        contracts_allocated: 12,
-        leg_action: "BUY",
-        implied_rv_spread: 0.07,
-      },
-      {
-        symbol: "NVDA",
-        weight: 0.15,
-        spot_price: 128.50,
-        atm_iv: 0.48,
-        realized_vol_30d: 0.36,
-        straddle_strike: 130.0,
-        straddle_bid: 11.80,
-        straddle_ask: 12.20,
-        straddle_mid: 12.00,
-        vega_per_straddle: 0.22,
-        contracts_allocated: 24,
-        leg_action: "BUY",
-        implied_rv_spread: 0.12,
-      },
-      {
-        symbol: "AMZN",
-        weight: 0.12,
-        spot_price: 185.00,
-        atm_iv: 0.31,
-        realized_vol_30d: 0.22,
-        straddle_strike: 185.0,
-        straddle_bid: 9.40,
-        straddle_ask: 9.80,
-        straddle_mid: 9.60,
-        vega_per_straddle: 0.28,
-        contracts_allocated: 14,
-        leg_action: "BUY",
-        implied_rv_spread: 0.09,
-      },
-      {
-        symbol: "GOOGL",
-        weight: 0.11,
-        spot_price: 172.00,
-        atm_iv: 0.29,
-        realized_vol_30d: 0.21,
-        straddle_strike: 172.5,
-        straddle_bid: 8.60,
-        straddle_ask: 9.00,
-        straddle_mid: 8.80,
-        vega_per_straddle: 0.25,
-        contracts_allocated: 15,
-        leg_action: "BUY",
-        implied_rv_spread: 0.08,
-      },
-      {
-        symbol: "META",
-        weight: 0.10,
-        spot_price: 520.00,
-        atm_iv: 0.38,
-        realized_vol_30d: 0.28,
-        straddle_strike: 520.0,
-        straddle_bid: 28.50,
-        straddle_ask: 29.50,
-        straddle_mid: 29.00,
-        vega_per_straddle: 0.62,
-        contracts_allocated: 6,
-        leg_action: "BUY",
-        implied_rv_spread: 0.10,
-      },
-      {
-        symbol: "TSLA",
-        weight: 0.10,
-        spot_price: 215.00,
-        atm_iv: 0.55,
-        realized_vol_30d: 0.42,
-        straddle_strike: 215.0,
-        straddle_bid: 19.20,
-        straddle_ask: 20.00,
-        straddle_mid: 19.60,
-        vega_per_straddle: 0.35,
-        contracts_allocated: 10,
-        leg_action: "BUY",
-        implied_rv_spread: 0.13,
-      },
-      {
-        symbol: "AVGO",
-        weight: 0.08,
-        spot_price: 155.00,
-        atm_iv: 0.36,
-        realized_vol_30d: 0.27,
-        straddle_strike: 155.0,
-        straddle_bid: 10.50,
-        straddle_ask: 11.10,
-        straddle_mid: 10.80,
-        vega_per_straddle: 0.26,
-        contracts_allocated: 11,
-        leg_action: "BUY",
-        implied_rv_spread: 0.09,
-      },
-    ];
-
-    const spyConstituents: DispersionConstituent[] = [
-      {
-        symbol: "MSFT",
-        weight: 0.14,
-        spot_price: 445.00,
-        atm_iv: 0.26,
-        realized_vol_30d: 0.19,
-        straddle_strike: 445.0,
-        straddle_bid: 21.00,
-        straddle_ask: 21.80,
-        straddle_mid: 21.40,
-        vega_per_straddle: 0.48,
-        contracts_allocated: 10,
-        leg_action: "BUY",
-        implied_rv_spread: 0.07,
-      },
-      {
-        symbol: "AAPL",
-        weight: 0.13,
-        spot_price: 224.50,
-        atm_iv: 0.28,
-        realized_vol_30d: 0.20,
-        straddle_strike: 225.0,
-        straddle_bid: 10.20,
-        straddle_ask: 10.60,
-        straddle_mid: 10.40,
-        vega_per_straddle: 0.32,
-        contracts_allocated: 14,
-        leg_action: "BUY",
-        implied_rv_spread: 0.08,
-      },
-      {
-        symbol: "NVDA",
-        weight: 0.12,
-        spot_price: 128.50,
-        atm_iv: 0.48,
-        realized_vol_30d: 0.36,
-        straddle_strike: 130.0,
-        straddle_bid: 11.80,
-        straddle_ask: 12.20,
-        straddle_mid: 12.00,
-        vega_per_straddle: 0.22,
-        contracts_allocated: 18,
-        leg_action: "BUY",
-        implied_rv_spread: 0.12,
-      },
-      {
-        symbol: "AMZN",
-        weight: 0.09,
-        spot_price: 185.00,
-        atm_iv: 0.31,
-        realized_vol_30d: 0.22,
-        straddle_strike: 185.0,
-        straddle_bid: 9.40,
-        straddle_ask: 9.80,
-        straddle_mid: 9.60,
-        vega_per_straddle: 0.28,
-        contracts_allocated: 11,
-        leg_action: "BUY",
-        implied_rv_spread: 0.09,
-      },
-      {
-        symbol: "META",
-        weight: 0.08,
-        spot_price: 520.00,
-        atm_iv: 0.38,
-        realized_vol_30d: 0.28,
-        straddle_strike: 520.0,
-        straddle_bid: 28.50,
-        straddle_ask: 29.50,
-        straddle_mid: 29.00,
-        vega_per_straddle: 0.62,
-        contracts_allocated: 5,
-        leg_action: "BUY",
-        implied_rv_spread: 0.10,
-      },
-      {
-        symbol: "GOOGL",
-        weight: 0.07,
-        spot_price: 172.00,
-        atm_iv: 0.29,
-        realized_vol_30d: 0.21,
-        straddle_strike: 172.5,
-        straddle_bid: 8.60,
-        straddle_ask: 9.00,
-        straddle_mid: 8.80,
-        vega_per_straddle: 0.25,
-        contracts_allocated: 10,
-        leg_action: "BUY",
-        implied_rv_spread: 0.08,
-      },
-      {
-        symbol: "BRK.B",
-        weight: 0.05,
-        spot_price: 450.00,
-        atm_iv: 0.16,
-        realized_vol_30d: 0.13,
-        straddle_strike: 450.0,
-        straddle_bid: 12.00,
-        straddle_ask: 12.80,
-        straddle_mid: 12.40,
-        vega_per_straddle: 0.40,
-        contracts_allocated: 4,
-        leg_action: "BUY",
-        implied_rv_spread: 0.03,
-      },
-      {
-        symbol: "JPM",
-        weight: 0.05,
-        spot_price: 215.00,
-        atm_iv: 0.22,
-        realized_vol_30d: 0.17,
-        straddle_strike: 215.0,
-        straddle_bid: 7.80,
-        straddle_ask: 8.40,
-        straddle_mid: 8.10,
-        vega_per_straddle: 0.29,
-        contracts_allocated: 6,
-        leg_action: "BUY",
-        implied_rv_spread: 0.05,
-      },
-    ];
-
-    const opportunities: DispersionOpportunity[] = [
-      {
-        id: "disp_qqq_1",
-        index_symbol: "QQQ",
-        index_name: "Invesco QQQ Trust",
-        index_spot: 480.20,
-        index_iv: 0.215,
-        index_rv_30d: 0.152,
-        index_straddle_strike: 480.0,
-        index_straddle_price: 18.50,
-        index_straddle_contracts: 10,
-        index_action: "SELL",
-        implied_correlation: 0.68,
-        realized_correlation: 0.44,
-        correlation_spread: 0.24,
-        regime: "LONG_DISPERSION",
-        trade_recommendation: "Rich Implied Correlation (+24.0% spread). Sell 10x QQQ Straddles, Buy Vega-Neutral Constituent Straddles.",
-        index_vega_total: 340.0,
-        constituents_vega_total: 343.4,
-        net_vega: 3.4,
-        vega_neutrality_ratio: 1.01,
-        net_premium_estimate: 1420.50,
-        expiration: "2026-09-18",
-        dte: 35,
-        constituents: qqqConstituents,
-        as_of: new Date().toISOString(),
-      },
-      {
-        id: "disp_spy_1",
-        index_symbol: "SPY",
-        index_name: "SPDR S&P 500 ETF Trust",
-        index_spot: 545.80,
-        index_iv: 0.148,
-        index_rv_30d: 0.112,
-        index_straddle_strike: 545.0,
-        index_straddle_price: 14.20,
-        index_straddle_contracts: 10,
-        index_action: "SELL",
-        implied_correlation: 0.62,
-        realized_correlation: 0.48,
-        correlation_spread: 0.14,
-        regime: "NEUTRAL",
-        trade_recommendation: "Moderate Implied Correlation (+14.0% spread). Below entry threshold (≥15.0%). Hold / Monitor.",
-        index_vega_total: 420.0,
-        constituents_vega_total: 418.0,
-        net_vega: -2.0,
-        vega_neutrality_ratio: 0.995,
-        net_premium_estimate: 880.00,
-        expiration: "2026-09-18",
-        dte: 35,
-        constituents: spyConstituents,
-        as_of: new Date().toISOString(),
-      },
-    ];
-
-    const filtered = index_symbol
-      ? opportunities.filter((o) => o.index_symbol.toUpperCase() === index_symbol.toUpperCase())
-      : opportunities;
-
-    return delay<DispersionBasketResponse>({
-      opportunities: filtered.length > 0 ? filtered : opportunities,
-      count: filtered.length > 0 ? filtered.length : opportunities.length,
-      as_of: new Date().toISOString(),
-    });
-  },
-  async executeDispersionBasket(
-    request: DispersionBasketOrderRequest | { opportunity_id?: string; index_symbol: string; regime?: string; basket_size_usd?: number },
-    overrideDeployabilityGate?: boolean
-  ) {
-    // dispersion_trading is UNGATEABLE_DATA_GAP -- blocked by default, same as the
-    // live backend (api/pilots_api.py::post_options_dispersion_execute).
-    if (!overrideDeployabilityGate) {
-      return delay<DispersionExecutionResult>(optionsDeskGateBlockedResult("dispersion_trading"));
-    }
-    const sym = request.index_symbol || "QQQ";
-    return delay<DispersionExecutionResult>({
-      ok: true,
-      basket_id: `bsk_disp_${Date.now()}`,
-      index_symbol: sym,
-      index_order_id: `ord_idx_${Date.now()}`,
-      constituent_order_ids: [
-        `ord_leg_aapl_${Date.now()}`,
-        `ord_leg_msft_${Date.now()}`,
-        `ord_leg_nvda_${Date.now()}`,
-        `ord_leg_amzn_${Date.now()}`,
-        `ord_leg_googl_${Date.now()}`,
-        `ord_leg_meta_${Date.now()}`,
-        `ord_leg_tsla_${Date.now()}`,
-        `ord_leg_avgo_${Date.now()}`,
-      ],
-      strategy: "Dispersion Arbitrage",
-      net_credit_debit: 1420.50,
-      legs_count: 18,
-      message: `Successfully executed vega-neutral Dispersion Arbitrage basket on ${sym}. Placed short index straddle + 8 long constituent straddles (Net Vega: +3.4 $/vol).`,
-      placed_at: new Date().toISOString(),
-      gate_status: OPTIONS_DESK_DEPLOYABILITY_GATES.dispersion_trading,
-    });
-  },
-  async getZeroDteSignals(symbol?: string) {
-    const allSignals: ZeroDteSignal[] = [
-      {
-        symbol: "SPY",
-        spot_price: 546.50,
-        timestamp: "10:14:32",
-        opening_range_high: 545.80,
-        opening_range_low: 544.10,
-        opening_range_width_pct: 0.0031,
-        ttm_squeeze_active: false,
-        ttm_squeeze_bars: 8,
-        momentum_direction: "BULLISH_BREAKOUT",
-        momentum_score: 0.86,
-        relative_volume_15m: 2.15,
-        suggested_action: "BUY_CALL",
-        recommended_contract: {
-          option_type: "CALL",
-          strike: 547.0,
-          expiration: "2026-08-14",
-          dte: 0,
-          delta: 0.51,
-          gamma: 0.082,
-          theta: -1.45,
-          vega: 0.12,
-          bid: 1.85,
-          ask: 1.90,
-          mid: 1.88,
-          implied_vol: 0.18,
-          target_price: 3.29,
-          stop_loss_price: 1.32,
-          hard_exit_time: "15:45 ET",
-        },
-        trigger_reason: "15-min ORB breakout above $545.80 on 2.15x volume acceleration with TTM Squeeze release.",
-      },
-      {
-        symbol: "QQQ",
-        spot_price: 481.10,
-        timestamp: "10:14:15",
-        opening_range_high: 482.40,
-        opening_range_low: 479.80,
-        opening_range_width_pct: 0.0054,
-        ttm_squeeze_active: true,
-        ttm_squeeze_bars: 6,
-        momentum_direction: "IN_RANGE",
-        momentum_score: 0.14,
-        relative_volume_15m: 0.92,
-        suggested_action: "WAIT",
-        recommended_contract: {
-          option_type: "CALL",
-          strike: 482.0,
-          expiration: "2026-08-14",
-          dte: 0,
-          delta: 0.49,
-          gamma: 0.065,
-          theta: -1.82,
-          vega: 0.15,
-          bid: 2.10,
-          ask: 2.20,
-          mid: 2.15,
-          implied_vol: 0.24,
-          target_price: 3.76,
-          stop_loss_price: 1.50,
-          hard_exit_time: "15:45 ET",
-        },
-        trigger_reason: "Inside 15-min range [479.80 - 482.40]. Volatility compression active (TTM Squeeze Red).",
-      },
-      {
-        symbol: "TSLA",
-        spot_price: 214.30,
-        timestamp: "10:13:50",
-        opening_range_high: 221.50,
-        opening_range_low: 216.00,
-        opening_range_width_pct: 0.025,
-        ttm_squeeze_active: false,
-        ttm_squeeze_bars: 5,
-        momentum_direction: "BEARISH_BREAKDOWN",
-        momentum_score: -0.82,
-        relative_volume_15m: 2.40,
-        suggested_action: "BUY_PUT",
-        recommended_contract: {
-          option_type: "PUT",
-          strike: 215.0,
-          expiration: "2026-08-14",
-          dte: 0,
-          delta: -0.48,
-          gamma: 0.058,
-          theta: -2.10,
-          vega: 0.18,
-          bid: 2.40,
-          ask: 2.48,
-          mid: 2.44,
-          implied_vol: 0.62,
-          target_price: 4.27,
-          stop_loss_price: 1.71,
-          hard_exit_time: "15:45 ET",
-        },
-        trigger_reason: "15-min ORB breakdown below $216.00 with heavy 2.40x selling momentum and expanding volatility.",
-      },
-      {
-        symbol: "NVDA",
-        spot_price: 128.50,
-        timestamp: "10:14:02",
-        opening_range_high: 127.80,
-        opening_range_low: 125.60,
-        opening_range_width_pct: 0.017,
-        ttm_squeeze_active: false,
-        ttm_squeeze_bars: 7,
-        momentum_direction: "BULLISH_BREAKOUT",
-        momentum_score: 0.79,
-        relative_volume_15m: 1.95,
-        suggested_action: "BUY_CALL",
-        recommended_contract: {
-          option_type: "CALL",
-          strike: 129.0,
-          expiration: "2026-08-14",
-          dte: 0,
-          delta: 0.47,
-          gamma: 0.092,
-          theta: -1.25,
-          vega: 0.11,
-          bid: 1.45,
-          ask: 1.50,
-          mid: 1.48,
-          implied_vol: 0.52,
-          target_price: 2.59,
-          stop_loss_price: 1.04,
-          hard_exit_time: "15:45 ET",
-        },
-        trigger_reason: "High-gamma breakout above $127.80 with 1.95x volume thrust.",
-      },
-    ];
-
-    const filtered = symbol
-      ? allSignals.filter((s) => s.symbol.toUpperCase() === symbol.toUpperCase())
-      : allSignals;
-
-    return delay<ZeroDteSignalResponse>({
-      signals: filtered.length > 0 ? filtered : allSignals,
-      symbol: symbol || undefined,
-      as_of: new Date().toISOString(),
-    });
-  },
-  async executeZeroDteTrade(
-    request: ZeroDteTradeRequest | { symbol: string; option_type: "CALL" | "PUT"; strike: number; contracts: number; entry_price?: number },
-    overrideDeployabilityGate?: boolean
-  ) {
-    // zero_dte_engine is UNGATEABLE_DATA_GAP -- blocked by default, same as the live
-    // backend (api/pilots_api.py::post_options_zero_dte_execute).
-    if (!overrideDeployabilityGate) {
-      return delay<ZeroDteExecutionResult>(optionsDeskGateBlockedResult("zero_dte_engine"));
-    }
-    const sym = request.symbol;
-    const type = request.option_type || "CALL";
-    const strike = request.strike || 547;
-    const contracts = request.contracts || 5;
-    const entry = (request as ZeroDteTradeRequest).entry_price || 1.88;
-    const target = Number((entry * 1.75).toFixed(2));
-    const stop = Number((entry * 0.70).toFixed(2));
-
-    return delay<ZeroDteExecutionResult>({
-      ok: true,
-      order_id: `ord_0dte_${Date.now()}`,
-      symbol: sym,
-      option_type: type,
-      strike,
-      contracts,
-      fill_price: entry,
-      profit_target_price: target,
-      stop_loss_price: stop,
-      hard_exit_time: "15:45 ET",
-      strategy: "0DTE Intraday Momentum Breakout",
-      message: `Executed ${contracts}x ${sym} ${strike} ${type} @ $${entry.toFixed(2)}. Profit target set at $${target.toFixed(2)} (+75%), Stop loss at $${stop.toFixed(2)} (-30%), Hard Time Stop at 15:45 ET.`,
-      placed_at: new Date().toISOString(),
-      gate_status: OPTIONS_DESK_DEPLOYABILITY_GATES.zero_dte_engine,
-    });
-  },
-  async getVpinMetrics(symbol: string) {
-    const sym = symbol.toUpperCase();
-    const vpinMap: Record<string, { vpin: number; regime: "LOW" | "MODERATE" | "HIGH_TOXICITY"; concession: number; pct: number }> = {
-      SPY: { vpin: 0.184, regime: "LOW", concession: 0.00, pct: 28 },
-      QQQ: { vpin: 0.282, regime: "MODERATE", concession: 0.02, pct: 64 },
-      TSLA: { vpin: 0.428, regime: "HIGH_TOXICITY", concession: 0.08, pct: 94 },
-      NVDA: { vpin: 0.385, regime: "HIGH_TOXICITY", concession: 0.05, pct: 88 },
-      AAPL: { vpin: 0.195, regime: "LOW", concession: 0.00, pct: 32 },
-      MSFT: { vpin: 0.210, regime: "MODERATE", concession: 0.01, pct: 45 },
-    };
-    const info = vpinMap[sym] || { vpin: 0.265, regime: "MODERATE" as const, concession: 0.02, pct: 58 };
-    
-    const numBuckets = 50;
-    const bucketSize = 10000;
-    const basePrice = sym === "SPY" ? 546.50 : sym === "QQQ" ? 481.10 : sym === "TSLA" ? 214.30 : sym === "NVDA" ? 128.50 : 200.0;
-    const buckets: VpinBucket[] = [];
-    let currentP = basePrice;
-    
-    for (let i = 1; i <= numBuckets; i++) {
-      const priceDelta = (Math.sin(i * 0.4) * 0.35) + ((i % 3 === 0 ? 0.2 : -0.15));
-      const nextP = Number((currentP + priceDelta).toFixed(2));
-      const buyPct = Math.max(0.1, Math.min(0.9, 0.5 + (priceDelta / 1.5)));
-      const buyVol = Math.round(bucketSize * buyPct);
-      const sellVol = bucketSize - buyVol;
-      const imbalance = Math.abs(buyVol - sellVol);
-      
-      buckets.push({
-        bucket_index: i,
-        buy_volume: buyVol,
-        sell_volume: sellVol,
-        total_volume: bucketSize,
-        price_start: currentP,
-        price_end: nextP,
-        price_change: Number((nextP - currentP).toFixed(2)),
-        imbalance,
-        timestamp: new Date(Date.now() - (numBuckets - i) * 120_000).toISOString(),
-      });
-      currentP = nextP;
-    }
-
-    return delay<VpinMetricsResponse>({
-      symbol: sym,
-      vpin: info.vpin,
-      regime: info.regime,
-      toxicity_percentile: info.pct,
-      bucket_size: bucketSize,
-      num_buckets: numBuckets,
-      buckets,
-      defensive_spread_concession: info.concession,
-      warning_message: info.regime === "HIGH_TOXICITY"
-        ? `High Microstructure Toxicity (VPIN ${(info.vpin * 100).toFixed(1)}% > 35.0%). Institutional informed flow detected. Defensive concession applied: +$${info.concession.toFixed(2)}/contract.`
-        : null,
-      as_of: new Date().toISOString(),
-      // Mock always represents the happy path -- matches the live endpoint's shape when
-      // `data_available: true` (a real bar-level BVC approximation, see pilots/options_vpin.py).
-      data_available: true,
-      data_source: "bar_level_bvc_approximation",
-      reason: null,
-    });
-  },
-  async analyzeOptionsRouting(request: SorAnalysisRequest) {
-    const sym = request.symbol.toUpperCase();
-    const legs = request.legs && request.legs.length > 0 ? request.legs : [
-      { strike: 540, option_type: "PUT" as const, action: "SELL" as const, bid: 3.10, ask: 3.25, mid: 3.175 },
-      { strike: 535, option_type: "PUT" as const, action: "BUY" as const, bid: 1.80, ask: 1.95, mid: 1.875 },
-    ];
-    const latency = request.latency_ms || 250;
-    
-    let cobNetMid = 0;
-    let cobNatural = 0;
-    let syntheticNet = 0;
-    
-    const breakdown: SorLegBreakdown[] = legs.map((leg) => {
-      const b = leg.bid ?? 2.0;
-      const a = leg.ask ?? 2.2;
-      const m = leg.mid ?? (b + a) / 2;
-      const isSell = leg.action === "SELL";
-      
-      if (isSell) {
-        cobNetMid += m;
-        cobNatural += b;
-        syntheticNet += m + (a - b) * 0.35;
-      } else {
-        cobNetMid -= m;
-        cobNatural -= a;
-        syntheticNet -= (m - (a - b) * 0.35);
-      }
-      
-      return {
-        strike: leg.strike,
-        option_type: leg.option_type,
-        action: leg.action,
-        bid: b,
-        ask: a,
-        mid: m,
-        fill_priority: isSell ? 1 : 2,
-        fill_style: isSell ? ("PASSIVE" as const) : ("ACTIVE" as const),
-      };
-    });
-
-    const absNetMid = Math.abs(cobNetMid);
-    const absNatural = Math.abs(cobNatural);
-    const absSynthetic = Math.abs(syntheticNet);
-    
-    const savings = Math.max(12.50, Number(((absSynthetic - absNatural) * 100).toFixed(2)));
-    const hungProb = Math.min(0.25, Number((0.02 + (latency / 1000) * 0.045).toFixed(4)));
-    const adverseCost = Number((hungProb * 48.0).toFixed(2));
-    
-    let recommended: "COB_NET_PACKAGE" | "LEG_PASSIVE_FIRST" | "SPLIT_DIRECT" = "LEG_PASSIVE_FIRST";
-    let rationale = `Synthetic legging captures $${savings.toFixed(2)} edge with low hung leg hazard (${(hungProb * 100).toFixed(1)}% @ ${latency}ms).`;
-    
-    if (latency > 1500 || hungProb > 0.15) {
-      recommended = "COB_NET_PACKAGE";
-      rationale = `High execution latency (${latency}ms) creates unacceptable hung leg hazard (${(hungProb * 100).toFixed(1)}%). Direct atomic COB package route recommended.`;
-    }
-
-    return delay<SorAnalysisResponse>({
-      symbol: sym,
-      recommended_route: recommended,
-      cob_net_price: Number(absNetMid.toFixed(2)),
-      cob_natural_price: Number(absNatural.toFixed(2)),
-      synthetic_net_price: Number(absSynthetic.toFixed(2)),
-      expected_savings: savings,
-      hung_leg_probability: hungProb,
-      adverse_selection_cost: adverseCost,
-      latency_ms: latency,
-      legs_breakdown: breakdown,
-      rationale,
-      as_of: new Date().toISOString(),
-    });
-  },
-  async simulateOptionsLegging(request: LeggingSimulationRequest) {
-    const sym = request.symbol.toUpperCase();
-    const numSims = request.num_simulations || 1000;
-    const latencySec = request.latency_seconds || 0.25;
-    
-    const latencies = [50, 100, 250, 500, 1000, 2000, 5000];
-    const latencyCurve = latencies.map((ms) => {
-      const rate = Number((0.015 + (ms / 1000) * 0.052).toFixed(4));
-      const edge = Number(Math.max(-20, 28.50 - (ms / 1000) * 8.40).toFixed(2));
-      return {
-        latency_ms: ms,
-        hung_leg_rate: rate,
-        expected_edge: edge,
-      };
-    });
-
-    const bins = [
-      { bin_edge: -40, count: 18, probability: 0.018 },
-      { bin_edge: -30, count: 32, probability: 0.032 },
-      { bin_edge: -20, count: 54, probability: 0.054 },
-      { bin_edge: -10, count: 86, probability: 0.086 },
-      { bin_edge: 0, count: 120, probability: 0.120 },
-      { bin_edge: 10, count: 185, probability: 0.185 },
-      { bin_edge: 20, count: 245, probability: 0.245 },
-      { bin_edge: 30, count: 155, probability: 0.155 },
-      { bin_edge: 40, count: 80, probability: 0.080 },
-      { bin_edge: 50, count: 25, probability: 0.025 },
-    ];
-
-    const hungRate = Number((0.02 + latencySec * 0.048).toFixed(4));
-    const expEdge = Number((24.80 - latencySec * 6.50).toFixed(2));
-
-    return delay<LeggingSimulationResponse>({
-      symbol: sym,
-      num_simulations: numSims,
-      latency_seconds: latencySec,
-      hung_leg_rate: hungRate,
-      expected_edge_dollars: expEdge,
-      edge_std_dollars: 14.20,
-      worst_case_loss_dollars: -58.00,
-      p95_adverse_selection: -26.50,
-      pnl_distribution: bins,
-      latency_curve: latencyCurve,
-      as_of: new Date().toISOString(),
-    });
-  },
-
-  async getOptionsGexProfile(symbol: string) {
-    const sym = symbol.toUpperCase();
-    const spot = sym === "SPY" ? 546.50 : sym === "QQQ" ? 481.10 : sym === "TSLA" ? 214.30 : sym === "NVDA" ? 128.50 : sym === "AAPL" ? 224.20 : 500.0;
-
-    const step = sym === "NVDA" ? 2.5 : sym === "TSLA" ? 5.0 : sym === "SPY" ? 2.0 : sym === "QQQ" ? 2.0 : 5.0;
-    const baseStrike = Math.round(spot / step) * step;
-    // Real StrikeGex.call_gex/.put_gex/.net_gex are raw DOLLAR figures (not
-    // pre-scaled to millions) -- generate a "millions" magnitude internally
-    // (matches the shape of the real GEX formula's typical size) then scale
-    // by 1e6 before placing on the response, so the component's own /1e6
-    // display formatting is exercised against realistic magnitudes.
-    const rawStrikes: { strike: number; callGexM: number; putGexM: number; callOi: number; putOi: number }[] = [];
-
-    let callWallStrike = baseStrike + step * 3;
-    let putWallStrike = baseStrike - step * 3;
-    let maxCallGexM = -Infinity;
-    let minPutGexM = Infinity;
-    let totalNetGexM = 0;
-    let totalAbsGexM = 0;
-
-    for (let i = -12; i <= 12; i++) {
-      const strike = Number((baseStrike + i * step).toFixed(2));
-
-      const callWeight = Math.max(0.05, Math.exp(-Math.pow((strike - (spot * 1.02)) / (spot * 0.04), 2)));
-      const putWeight = Math.max(0.05, Math.exp(-Math.pow((strike - (spot * 0.97)) / (spot * 0.04), 2)));
-
-      const callGexM = Number((callWeight * (sym === "SPY" ? 420 : 180) * (1 + Math.sin(i * 0.5) * 0.15)).toFixed(2));
-      const putGexM = Number((-putWeight * (sym === "SPY" ? 380 : 160) * (1 + Math.cos(i * 0.5) * 0.15)).toFixed(2));
-      totalNetGexM += callGexM + putGexM;
-      totalAbsGexM += callGexM + Math.abs(putGexM);
-
-      if (callGexM > maxCallGexM) {
-        maxCallGexM = callGexM;
-        callWallStrike = strike;
-      }
-      if (putGexM < minPutGexM) {
-        minPutGexM = putGexM;
-        putWallStrike = strike;
-      }
-
-      rawStrikes.push({
-        strike,
-        callGexM,
-        putGexM,
-        callOi: Math.round(callWeight * 15000 + 500),
-        putOi: Math.round(putWeight * 14000 + 400),
-      });
-    }
-
-    const zeroGammaFlip = Number((spot * (sym === "TSLA" ? 1.015 : 0.985)).toFixed(2));
-    const strikes: GexStrikePoint[] = rawStrikes.map((s) => {
-      const callGex = Number((s.callGexM * 1e6).toFixed(2));
-      const putGex = Number((s.putGexM * 1e6).toFixed(2));
-      const netGex = Number((callGex + putGex).toFixed(2));
-      const absGex = callGex + Math.abs(putGex);
-      const gammaConcentrationPct = totalAbsGexM > 0 ? Number(((s.callGexM + Math.abs(s.putGexM)) / totalAbsGexM * 100).toFixed(2)) : 0;
-      return {
-        strike: s.strike,
-        call_gex: callGex,
-        put_gex: putGex,
-        net_gex: netGex,
-        total_oi: s.callOi + s.putOi,
-        call_oi: s.callOi,
-        put_oi: s.putOi,
-        call_volume: Math.round(s.callOi * 0.2),
-        put_volume: Math.round(s.putOi * 0.2),
-        abs_gex: Number(absGex.toFixed(2)),
-        gamma_concentration_pct: gammaConcentrationPct,
-      };
-    });
-
-    const totalNetGex = Number((totalNetGexM * 1e6).toFixed(2));
-    const isPositiveGamma = totalNetGexM >= 0;
-    const gammaRegime: "POSITIVE_GAMMA" | "NEGATIVE_GAMMA" = isPositiveGamma ? "POSITIVE_GAMMA" : "NEGATIVE_GAMMA";
-    const regimeDescription = isPositiveGamma
-      ? `Positive Gamma Regime ($${totalNetGexM.toFixed(1)}M Net GEX). Market makers long gamma; intraday mean-reversion dampens realized volatility (buy dips, sell rips).`
-      : `Negative Gamma Regime ($${totalNetGexM.toFixed(1)}M Net GEX). Market makers short gamma; hedging flow accelerates trend momentum and downside volatility cascades.`;
-    const dealerHedgingFlow = Number((totalNetGex * 0.01).toFixed(2));
-
-    return delay<GexProfileResponse>({
-      symbol: sym,
-      spot_price: spot,
-      net_gex: totalNetGex,
-      total_call_gex: Number((rawStrikes.reduce((acc, s) => acc + s.callGexM, 0) * 1e6).toFixed(2)),
-      total_put_gex: Number((rawStrikes.reduce((acc, s) => acc + s.putGexM, 0) * 1e6).toFixed(2)),
-      zero_gamma_flip: zeroGammaFlip,
-      call_wall_strike: callWallStrike,
-      put_wall_strike: putWallStrike,
-      gamma_regime: gammaRegime,
-      regime_description: regimeDescription,
-      dealer_hedging_flow: dealerHedgingFlow,
-      dealer_hedging_per_1pct_move_dollars: dealerHedgingFlow,
-      dealer_hedging_shares_per_1pct_move: spot > 0 ? Number((dealerHedgingFlow / spot).toFixed(2)) : 0,
-      strikes,
-      as_of: new Date().toISOString(),
-      spot_price_source: "mock",
-      chain_source: "mock",
-    });
-  },
-
-  async simulateLobQueue(request: LobQueueSimulationRequest) {
-    const sym = (request.symbol || "SPY").toUpperCase();
-    const priceLevel = request.price_level ?? 100.0;
-    const orderSize = request.order_size ?? 1.0;
-    const depthAhead = request.depth_ahead ?? 0.0;
-    const timeHorizonSec = request.time_horizon_sec ?? 60.0;
-    const numSimulations = request.num_simulations ?? 500;
-    const lambdaLimit = request.lambda_limit ?? 4.0;
-    const muCancel = request.mu_cancel ?? 0.05;
-    const thetaMarket = request.theta_market ?? 5.0;
-
-    // Deterministic-pseudo-random derivation from the request inputs (no
-    // literal order-book ladder in the real response -- CST(2010) queue-fill
-    // dynamics only): more depth ahead + a slower cancel/faster-limit-order
-    // mix => lower fill probability & longer expected wait.
-    const netFillRate = muCancel + thetaMarket / Math.max(1, lambdaLimit * 10);
-    const depletionVelocity = Number(Math.max(0.01, netFillRate * 2.0).toFixed(4));
-    const fillProbability = Number(
-      Math.max(0.02, Math.min(0.97, 1 - Math.exp(-depletionVelocity * timeHorizonSec / Math.max(1, depthAhead + orderSize)))).toFixed(4)
-    );
-    const expectedWaitTimeSec = Number(
-      Math.min(timeHorizonSec * 3, (depthAhead + orderSize) / depletionVelocity).toFixed(2)
-    );
-    const medianFillTimeSec = Number((expectedWaitTimeSec * 0.85).toFixed(2));
-    const unconditionalFillTimeSec = Number(Math.min(timeHorizonSec, expectedWaitTimeSec * fillProbability).toFixed(2));
-
-    const percentiles: LobQueuePercentiles = {
-      p10: Number((expectedWaitTimeSec * 0.35).toFixed(2)),
-      p25: Number((expectedWaitTimeSec * 0.6).toFixed(2)),
-      p50: medianFillTimeSec,
-      p75: Number((expectedWaitTimeSec * 1.2).toFixed(2)),
-      p90: Number((expectedWaitTimeSec * 1.6).toFixed(2)),
-      p95: Number((expectedWaitTimeSec * 1.9).toFixed(2)),
-    };
-
-    const probAdverseMove = Number(Math.max(0.01, Math.min(0.9, 1 - fillProbability * 0.7)).toFixed(4));
-    const expectedFillRatio = Number(Math.max(0.05, Math.min(1, fillProbability * 1.05)).toFixed(4));
-
-    return delay<LobQueueSimulationResponse>({
-      valid: true,
-      symbol: sym,
-      price_level: priceLevel,
-      order_size: orderSize,
-      depth_ahead: depthAhead,
-      time_horizon_sec: timeHorizonSec,
-      num_simulations: numSimulations,
-      fill_probability: fillProbability,
-      expected_fill_time_sec: expectedWaitTimeSec,
-      expected_wait_time_sec: expectedWaitTimeSec,
-      unconditional_fill_time_sec: unconditionalFillTimeSec,
-      median_fill_time_sec: medianFillTimeSec,
-      prob_adverse_move_before_fill: probAdverseMove,
-      expected_fill_ratio: expectedFillRatio,
-      queue_depletion_velocity: depletionVelocity,
-      queue_progression_percentiles: percentiles,
-      cst_closed_form_fill_prob: fillProbability,
-      reason: null,
-      timestamp: new Date().toISOString(),
-      as_of: new Date().toISOString(),
-    });
-  },
-
-  async getCopulaPairsAnalysis(pair?: string) {
-    const p = (pair || "SPY/QQQ").toUpperCase();
-    const parts = p.includes("/") ? p.split("/") : [p, "QQQ"];
-    const assetX = parts[0] || "SPY";
-    const assetY = parts[1] || "QQQ";
-
-    let family: "Clayton" | "Gumbel" | "Frank" = "Clayton";
-    let theta = 2.15;
-    let lambdaL = 0.725;
-    let lambdaU = 0.0;
-    let tau = 0.518;
-    let ouHalfLife = 14.2;
-    let kalmanBeta = 1.23;
-    let kalmanAlpha = -12.4;
-    let spreadZ = 2.18;
-    let currentSpread = 8.45;
-    let action: "LONG_SPREAD" | "SHORT_SPREAD" | "HOLD" | "EXIT" = "SHORT_SPREAD";
-
-    if (p.includes("AMD") || p.includes("NVDA")) {
-      family = "Gumbel";
-      theta = 1.92;
-      lambdaL = 0.0;
-      lambdaU = 0.564;
-      tau = 0.479;
-      ouHalfLife = 8.6;
-      kalmanBeta = 1.45;
-      kalmanAlpha = 4.2;
-      spreadZ = -2.31;
-      currentSpread = -14.2;
-      action = "LONG_SPREAD";
-    } else if (p.includes("GOOGL") || p.includes("META") || p.includes("MSFT") || p.includes("AAPL")) {
-      family = "Frank";
-      theta = 4.65;
-      lambdaL = 0.0;
-      lambdaU = 0.0;
-      tau = 0.442;
-      ouHalfLife = 18.5;
-      kalmanBeta = 0.92;
-      kalmanAlpha = 3.1;
-      spreadZ = 0.42;
-      currentSpread = 1.85;
-      action = "HOLD";
-    }
-
-    const tailData: CopulaTailData = {
-      lower_tail_dependence: Number(lambdaL.toFixed(3)),
-      upper_tail_dependence: Number(lambdaU.toFixed(3)),
-      copula_family: family,
-      theta: Number(theta.toFixed(2)),
-      log_likelihood: 178.4,
-      aic: -352.8,
-      kendall_tau: Number(tau.toFixed(3)),
-    };
-
-    const historical_series: CopulaSeriesPoint[] = [];
-    const baseDate = new Date("2026-06-01");
-    let basePx = 540;
-    let basePy = basePx * kalmanBeta + kalmanAlpha;
-    let curSpread = 0;
-
-    for (let i = 0; i < 60; i++) {
-      const d = new Date(baseDate);
-      d.setDate(d.getDate() + i);
-      const dateStr = d.toISOString().split("T")[0];
-
-      const retX = Math.sin(i * 0.2) * 1.5 + (i % 3 === 0 ? 2 : -1.5) * 0.8;
-      const retY = retX * kalmanBeta + Math.cos(i * 0.3) * 2.2;
-      basePx += retX;
-      basePy += retY;
-
-      const dynamicBeta = Number((kalmanBeta + Math.sin(i * 0.1) * 0.08).toFixed(3));
-      curSpread = Number((basePy - dynamicBeta * basePx - kalmanAlpha).toFixed(2));
-      const zScore = Number((curSpread / 4.2).toFixed(2));
-
-      historical_series.push({
-        date: dateStr,
-        asset_x_price: Number(basePx.toFixed(2)),
-        asset_y_price: Number(basePy.toFixed(2)),
-        kalman_beta: dynamicBeta,
-        spread: curSpread,
-        spread_z_score: zScore,
-        upper_band_2sigma: 2.0,
-        lower_band_2sigma: -2.0,
-      });
-    }
-
-    // Ensure last point aligns with summary
-    const last = historical_series[historical_series.length - 1];
-    last.spread_z_score = spreadZ;
-    last.spread = currentSpread;
-    last.kalman_beta = kalmanBeta;
-
-    return delay<CopulaPairsResponse>({
-      pair: `${assetX}/${assetY}`,
-      asset_x: assetX,
-      asset_y: assetY,
-      copula_family: family,
-      tail_dependence: tailData,
-      kalman_beta: kalmanBeta,
-      kalman_alpha: kalmanAlpha,
-      ou_half_life_days: ouHalfLife,
-      spread_z_score: spreadZ,
-      current_spread: currentSpread,
-      signal_action: action,
-      historical_series,
-      as_of: new Date().toISOString(),
-      status_note: `Fitted ${family} Copula on ${assetX}/${assetY} with dynamic Kalman beta $\\beta_t = ${kalmanBeta}$. Spread Z-Score is ${spreadZ > 0 ? "+" : ""}${spreadZ}σ (OU $\\tau_{1/2} = ${ouHalfLife}d$).`,
-    });
-  },
-
-  async simulateMarketMakerAgent(request: MarketMakerSimRequest) {
-    const sym = (request.symbol || "SPY").toUpperCase();
-    const spot = request.spot_price || 546.50;
-    const gamma = request.risk_aversion_gamma ?? 0.1;
-    const kappa = request.order_flow_intensity_kappa ?? 1.5;
-    const sigma = request.volatility_sigma ?? 0.20;
-    const horizonT = request.time_horizon_t ?? 1.0;
-    const totalSteps = request.time_steps ?? 100;
-    const maxInv = request.max_inventory ?? 10;
-    const orderSize = request.order_size ?? 1;
-
-    const dt = horizonT / totalSteps;
-    const steps: MarketMakerStepPoint[] = [];
-
-    let currentMid = spot;
-    let inventory = 0;
-    let cash = 0;
-    let totalTrades = 0;
-    let buyFills = 0;
-    let sellFills = 0;
-    let sumSpread = 0;
-
-    let pnlHigh = 0;
-    let maxDdDollars = 0;
-
-    for (let step = 0; step < totalSteps; step++) {
-      const timeSec = Math.round(step * (390 * 60 / totalSteps));
-      const tau = Math.max(0.01, horizonT - step * dt);
-
-      // Price drift + shock
-      const shock = (Math.sin(step * 0.35) * 0.15 + (step % 4 === 0 ? 0.25 : -0.2)) * Math.sqrt(dt) * sigma * spot * 0.4;
-      currentMid = Number((currentMid + shock).toFixed(2));
-
-      // Avellaneda-Stoikov Reservation Price: R(s, q, t) = s - q * gamma * sigma^2 * tau
-      const reservation = Number((currentMid - inventory * gamma * (sigma ** 2) * tau * 10).toFixed(2));
-
-      // Optimal half-spreads
-      const halfSpreadBase = Math.max(0.02, (1 / (gamma || 0.01)) * Math.log(1 + (gamma / kappa)) + 0.5 * gamma * (sigma ** 2) * tau * 5);
-      const bidPrice = Number((reservation - halfSpreadBase).toFixed(2));
-      const askPrice = Number((reservation + halfSpreadBase).toFixed(2));
-      const bidSpread = Number((currentMid - bidPrice).toFixed(2));
-      const askSpread = Number((askPrice - currentMid).toFixed(2));
-      sumSpread += (askPrice - bidPrice);
-
-      // Probabilities of fill
-      const probBuy = inventory < maxInv ? Math.min(0.85, 0.45 * Math.exp(-kappa * Math.max(0.01, bidSpread) * 2)) : 0;
-      const probSell = inventory > -maxInv ? Math.min(0.85, 0.45 * Math.exp(-kappa * Math.max(0.01, askSpread) * 2)) : 0;
-
-      let event: "BUY" | "SELL" | null = null;
-      // Deterministic pseudo-random fill based on step pattern for smooth visualization
-      if ((step % 7 === 1 || step % 11 === 0) && probBuy > 0.15 && inventory < maxInv) {
-        event = "BUY";
-        inventory += orderSize;
-        cash -= bidPrice * orderSize;
-        totalTrades++;
-        buyFills++;
-      } else if ((step % 6 === 2 || step % 9 === 0) && probSell > 0.15 && inventory > -maxInv) {
-        event = "SELL";
-        inventory -= orderSize;
-        cash += askPrice * orderSize;
-        totalTrades++;
-        sellFills++;
-      }
-
-      const pnl = Number((cash + inventory * currentMid).toFixed(2));
-      if (pnl > pnlHigh) pnlHigh = pnl;
-      const dd = pnlHigh - pnl;
-      if (dd > maxDdDollars) maxDdDollars = dd;
-
-      steps.push({
-        step,
-        time_sec: timeSec,
-        mid_price: currentMid,
-        reservation_price: reservation,
-        bid_price: bidPrice,
-        ask_price: askPrice,
-        bid_spread: bidSpread,
-        ask_spread: askSpread,
-        inventory,
-        cash: Number(cash.toFixed(2)),
-        pnl,
-        trade_event: event,
-      });
-    }
-
-    const finalPnl = steps[steps.length - 1].pnl;
-    const pnlDeltas = steps.slice(1).map((s, i) => s.pnl - steps[i].pnl);
-    const meanDelta = pnlDeltas.reduce((a, b) => a + b, 0) / (pnlDeltas.length || 1);
-    const stdDelta = Math.sqrt(pnlDeltas.map(d => (d - meanDelta) ** 2).reduce((a, b) => a + b, 0) / (pnlDeltas.length || 1)) || 0.01;
-    const annualizedSharpe = Number(((meanDelta / stdDelta) * Math.sqrt(252 * 390)).toFixed(2));
-    const avgSpread = Number((sumSpread / totalSteps).toFixed(3));
-    // fill_rate is a 0-1 fraction (matching ml/drl_market_maker.py's
-    // `total_trades / max(1, 2 * n_steps)`), NOT a 0-100 percentage — the
-    // component multiplies by 100 at render time.
-    const fillRate = Number((totalTrades / (totalSteps * 2)).toFixed(4));
-
-    return delay<MarketMakerSimResponse>({
-      symbol: sym,
-      risk_aversion_gamma: gamma,
-      order_flow_intensity_kappa: kappa,
-      volatility_sigma: sigma,
-      max_inventory: maxInv,
-      final_pnl: finalPnl,
-      sharpe_ratio: annualizedSharpe,
-      max_drawdown: Number(maxDdDollars.toFixed(2)),
-      total_trades: totalTrades,
-      fill_rate: fillRate,
-      final_inventory: inventory,
-      avg_spread: avgSpread,
-      steps,
-      as_of: new Date().toISOString(),
-    });
-  },
-
-  // ---- Tier D: AI Research Copilot & Autonomous Backtest ----
-
-  async synthesizeQuantResearch(request: ResearchSynthesizeRequest): Promise<ResearchSynthesizeResponse> {
-    const p = (request.prompt || "").toLowerCase();
-    const isUnsafe = p.includes("os.system") || p.includes("eval(") || p.includes("import os") || p.includes("subprocess");
-    const mode = request.strategy_type || "hypothesis";
-
-    if (isUnsafe) {
-      return delay<ResearchSynthesizeResponse>({
-        success: false,
-        code: `# Rejected by AST Security Validator\n# Violations detected:\n# - Forbidden import: 'os' is explicitly blacklisted.\n# - Forbidden function call: 'eval()' is prohibited.`,
-        metadata: {},
-        validation_passed: false,
-        validation_errors: [
-          "Forbidden import: module 'os' is explicitly blacklisted.",
-          "Forbidden function call: 'eval()' is prohibited in candidate strategy sandbox.",
-        ],
-        source_prompt: request.prompt,
-        synthesis_mode: mode,
-        explanation: "Candidate code violates AST security sandbox rules. Forbidden imports or builtins detected.",
-        target_asset_class: request.target_asset_class ?? null,
-        strategy_type: request.strategy_type ?? null,
-      }, 100);
-    }
-
-    const code = `import numpy as np
-import pandas as pd
-import scipy.stats as stats
-
-def generate_signals(df: pd.DataFrame) -> pd.Series:
-    """
-    Synthesized Alpha: Volatility-Adjusted Momentum & Mean Reversion Filter
-    Synthesis Mode: ${mode}
-    """
-    close = df["close"]
-    ma_fast = close.rolling(window=10, min_periods=5).mean()
-    ma_slow = close.rolling(window=20, min_periods=10).mean()
-    vol = close.pct_change().rolling(window=20).std()
-
-    # Normalized Z-Score Spread
-    z_spread = (close - ma_slow) / (vol * close + 1e-6)
-
-    # Vectorized Alpha Signal (+1.0 Long, -1.0 Short)
-    signals = pd.Series(0.0, index=df.index)
-    signals[z_spread < -1.8] = 1.0
-    signals[z_spread > 1.8] = -1.0
-
-    # Volatility targeting weight adjustment
-    target_vol = 0.15
-    scaling = np.clip(target_vol / (vol * np.sqrt(252) + 1e-4), 0.2, 2.0)
-    return signals * scaling
-`;
-
-    return delay<ResearchSynthesizeResponse>({
-      success: true,
-      code,
-      metadata: {
-        lookback_fast: 10,
-        lookback_slow: 20,
-        z_threshold: 1.8,
-        target_annual_vol: 0.15,
-        rebalance_cadence: "1D",
-      },
-      validation_passed: true,
-      validation_errors: [],
-      source_prompt: request.prompt,
-      synthesis_mode: mode,
-      explanation: "Synthesized institutional-grade signal generating engine using AST-safe vectorized pandas/numpy computations. Incorporates dynamic volatility-targeting scaling and rolling Z-score mean reversion thresholds.",
-      target_asset_class: request.target_asset_class ?? null,
-      strategy_type: request.strategy_type ?? null,
-    }, 150);
-  },
-
-  async runAutonomousBacktest(request: AutonomousBacktestRequest): Promise<AutonomousBacktestResponse> {
-    const code = request.strategy_code || "";
-    const isUnsafe = code.includes("os.system") || code.includes("import os") || code.includes("eval(");
-
-    if (isUnsafe) {
-      return delay<AutonomousBacktestResponse>({
-        strategy_id: request.strategy_id || "candidate_alpha_01",
-        is_deployable: false,
-        data_source: "real_historical_bars",
-        is_synthetic_data: false,
-        sharpe_ratio: 0,
-        sortino_ratio: 0,
-        max_drawdown: 1.0,
-        pbo: 1.0,
-        dsr: 0.0,
-        turnover: 0,
-        annualized_return: 0,
-        cumulative_return: 0,
-        win_rate: 0,
-        calmar_ratio: 0,
-        volatility: 0,
-        gate_evaluations: {
-          "pbo_gate (< 0.50)": false,
-          "dsr_gate (> 0.95)": false,
-          "sharpe_gate (> 0.50)": false,
-          "max_drawdown_gate (< 0.30)": false,
-        },
-        failure_reasons: ["AST Security Error: Prohibited operation detected in candidate strategy."],
-        n_paths: 0,
-        n_observations: 0,
-        execution_time_seconds: 0.04,
-        error: "AST Security Validation Failed: Prohibited operation.",
-        as_of: new Date().toISOString(),
-      }, 100);
-    }
-
-    const nObs = 252 * 4;
-    const curve: Array<{ date: string; equity: number; drawdown: number }> = [];
-    let currentEquity = request.initial_capital || 100000;
-    let peakEquity = currentEquity;
-    const baseDate = new Date(2022, 0, 3);
-
-    for (let i = 0; i < 80; i++) {
-      const d = new Date(baseDate.getTime() + i * (5 * 86400000));
-      const dailyRet = (Math.sin(i * 0.22) * 0.007 + 0.0022 + (i % 6 === 0 ? 0.005 : -0.002));
-      currentEquity *= (1 + dailyRet);
-      if (currentEquity > peakEquity) peakEquity = currentEquity;
-      const dd = (peakEquity - currentEquity) / peakEquity;
-      curve.push({
-        date: d.toISOString().slice(0, 10),
-        equity: Number(currentEquity.toFixed(2)),
-        drawdown: Number((dd * 100).toFixed(2)),
-      });
-    }
-
-    return delay<AutonomousBacktestResponse>({
-      strategy_id: request.strategy_id || `alpha_${Math.random().toString(36).substring(2, 8)}`,
-      is_deployable: true,
-      data_source: "real_historical_bars",
-      is_synthetic_data: false,
-      sharpe_ratio: 1.84,
-      sortino_ratio: 2.52,
-      max_drawdown: 0.118,
-      pbo: 0.142,
-      dsr: 0.982,
-      turnover: 0.32,
-      annualized_return: 0.246,
-      cumulative_return: Number(((currentEquity - (request.initial_capital || 100000)) / (request.initial_capital || 100000)).toFixed(4)),
-      win_rate: 0.584,
-      calmar_ratio: 2.08,
-      volatility: 0.134,
-      gate_evaluations: {
-        "pbo_gate (< 0.50)": true,
-        "dsr_gate (> 0.95)": true,
-        "sharpe_gate (> 0.50)": true,
-        "max_drawdown_gate (< 0.30)": true,
-      },
-      failure_reasons: [],
-      n_paths: 16,
-      n_observations: nObs,
-      execution_time_seconds: 1.482,
-      cpcv_mean_oos_sharpe: 1.62,
-      cpcv_mean_oos_max_dd: 0.135,
-      cpcv_mean_oos_sortino: 2.18,
-      regime_breakdown: {
-        "LOW_VOL_BULL": {
-          sharpe: 2.14,
-          sortino: 2.85,
-          max_drawdown: 0.082,
-          cumulative_return: 0.162,
-          win_rate: 0.62,
-          pnl_share: 0.658,
-          n_bars: 380,
-        },
-        "MID_VOL_SIDEWAYS": {
-          sharpe: 1.48,
-          sortino: 1.95,
-          max_drawdown: 0.098,
-          cumulative_return: 0.074,
-          win_rate: 0.54,
-          pnl_share: 0.301,
-          n_bars: 410,
-        },
-        "HIGH_VOL_BEAR": {
-          sharpe: 0.82,
-          sortino: 1.12,
-          max_drawdown: 0.118,
-          cumulative_return: 0.010,
-          win_rate: 0.49,
-          pnl_share: 0.041,
-          n_bars: 218,
-        },
-      },
-      regime_stability_score: 0.82,
-      passes_regime_stability: true,
-      equity_curve: curve,
-      error: null,
-      as_of: new Date().toISOString(),
-    }, 150);
-  },
-
-  // ---- Tier D: 3D Volatility Surface ----
-
-  async getVolSurface3DMesh(symbol?: string): Promise<VolSurface3DMeshResponse> {
-    const sym = (symbol || "SPY").toUpperCase();
-    const spot = sym === "QQQ" ? 445.0 : sym === "NVDA" ? 128.5 : 505.2;
-    const strikes: number[] = [];
-    const minK = Math.round(spot * 0.8);
-    const maxK = Math.round(spot * 1.2);
-    const nStrikes = 15;
-    const step = (maxK - minK) / (nStrikes - 1);
-    for (let i = 0; i < nStrikes; i++) {
-      strikes.push(Number((minK + i * step).toFixed(1)));
-    }
-
-    const dtes = [7, 14, 30, 45, 60, 90, 180, 365];
-    const grid: number[][] = [];
-    const points: VolSurface3DPoint[] = [];
-    let minIv = Infinity;
-    let maxIv = -Infinity;
-
-    for (let j = 0; j < dtes.length; j++) {
-      const dte = dtes[j];
-      const T = dte / 365.0;
-      const row: number[] = [];
-      const baseAtmIv = 0.18 + 0.04 * Math.log(1 + T);
-
-      for (let i = 0; i < strikes.length; i++) {
-        const strike = strikes[i];
-        const m = Math.log(strike / spot);
-        const skewSlope = -0.15 / Math.sqrt(Math.max(0.04, T));
-        const smileCurvature = 0.22 / Math.max(0.1, Math.pow(T, 0.4));
-        const iv = Number(Math.max(0.08, baseAtmIv + skewSlope * m + smileCurvature * m * m).toFixed(4));
-
-        minIv = Math.min(minIv, iv);
-        maxIv = Math.max(maxIv, iv);
-        row.push(iv);
-        points.push({
-          strike,
-          dte,
-          iv,
-          moneyness: Number((strike / spot).toFixed(3)),
-          call_iv: Number((iv * 0.98).toFixed(4)),
-          put_iv: Number((iv * 1.02).toFixed(4)),
-        });
-      }
-      grid.push(row);
-    }
-
-    return delay<VolSurface3DMeshResponse>({
-      symbol: sym,
-      spot_price: spot,
-      strikes,
-      dtes,
-      grid,
-      min_iv: minIv,
-      max_iv: maxIv,
-      min_strike: strikes[0],
-      max_strike: strikes[strikes.length - 1],
-      min_dte: dtes[0],
-      max_dte: dtes[dtes.length - 1],
-      points,
-      as_of: new Date().toISOString(),
-    });
-  },
-
-  // ---- Tier D: Multi-Broker Gateway & Circuit Breakers ----
-
-  async getMultiBrokerStatus(): Promise<MultiBrokerStatusResponse> {
-    const brokers: Record<string, BrokerHealthStatusDto> = {
-      alpaca: {
-        broker_id: "alpaca",
-        broker_type: "alpaca",
-        connection_state: "connected",
-        circuit_state: "closed",
-        is_healthy: true,
-        is_routable: true,
-        latency_ms: 24.5,
-        avg_latency_ms: 26.2,
-        p95_latency_ms: 42.0,
-        error_rate: 0.002,
-        consecutive_failures: 0,
-        last_heartbeat: new Date().toISOString(),
-        last_error: null,
-        status_message: "Alpaca REST/WS healthy, primary routing operational.",
-      },
-      interactive_brokers: {
-        broker_id: "interactive_brokers",
-        broker_type: "interactive_brokers",
-        connection_state: "connected",
-        circuit_state: "closed",
-        is_healthy: true,
-        is_routable: true,
-        latency_ms: 38.1,
-        avg_latency_ms: 40.5,
-        p95_latency_ms: 68.4,
-        error_rate: 0.005,
-        consecutive_failures: 0,
-        last_heartbeat: new Date().toISOString(),
-        last_error: null,
-        status_message: "TWS Gateway v10.19 connected, options & equities ready.",
-      },
-      tradier: {
-        broker_id: "tradier",
-        broker_type: "tradier",
-        connection_state: "connected",
-        circuit_state: "closed",
-        is_healthy: true,
-        is_routable: true,
-        latency_ms: 45.2,
-        avg_latency_ms: 48.0,
-        p95_latency_ms: 78.0,
-        error_rate: 0.008,
-        consecutive_failures: 0,
-        last_heartbeat: new Date().toISOString(),
-        last_error: null,
-        status_message: "Tradier Production Sandbox connected.",
-      },
-      robinhood: {
-        broker_id: "robinhood",
-        broker_type: "robinhood",
-        connection_state: "degraded",
-        circuit_state: "half_open",
-        is_healthy: false,
-        is_routable: false,
-        latency_ms: 182.4,
-        avg_latency_ms: 165.0,
-        p95_latency_ms: 340.0,
-        error_rate: 0.12,
-        consecutive_failures: 2,
-        last_heartbeat: new Date(Date.now() - 45000).toISOString(),
-        last_error: "RateLimitExceeded: 429 Too Many Requests",
-        status_message: "Degraded latency probe. Canary half-open recovery active.",
-      },
-      fmp_paper: {
-        broker_id: "fmp_paper",
-        broker_type: "fmp_paper",
-        connection_state: "connected",
-        circuit_state: "closed",
-        is_healthy: true,
-        is_routable: true,
-        latency_ms: 1.8,
-        avg_latency_ms: 2.1,
-        p95_latency_ms: 3.5,
-        error_rate: 0.0,
-        consecutive_failures: 0,
-        last_heartbeat: new Date().toISOString(),
-        last_error: null,
-        status_message: "In-memory paper simulated broker ledger active.",
-      },
-    };
-
-    const audits: RoutingAuditDto[] = [
-      {
-        client_order_id: "ord_d89f2a01",
-        symbol: "SPY",
-        side: "BUY",
-        qty: 100,
-        primary_broker_id: "alpaca",
-        executed_broker_id: "alpaca",
-        was_failover: false,
-        total_latency_ms: 23.4,
-        final_status: "FILLED",
-        failover_reason: null,
-        timestamp: new Date(Date.now() - 120000).toISOString(),
-      },
-      {
-        client_order_id: "ord_c44b9102",
-        symbol: "QQQ",
-        side: "SELL",
-        qty: 50,
-        primary_broker_id: "robinhood",
-        executed_broker_id: "alpaca",
-        was_failover: true,
-        total_latency_ms: 88.2,
-        final_status: "FILLED",
-        failover_reason: "high_latency (>150ms)",
-        timestamp: new Date(Date.now() - 480000).toISOString(),
-      },
-      {
-        client_order_id: "ord_e7710a99",
-        symbol: "NVDA",
-        side: "BUY",
-        qty: 200,
-        primary_broker_id: "alpaca",
-        executed_broker_id: "alpaca",
-        was_failover: false,
-        total_latency_ms: 28.1,
-        final_status: "FILLED",
-        failover_reason: null,
-        timestamp: new Date(Date.now() - 920000).toISOString(),
-      },
-    ];
-
-    return delay<MultiBrokerStatusResponse>({
-      active_broker_id: "alpaca",
-      manual_override_broker_id: null,
-      priority_hierarchy: ["alpaca", "interactive_brokers", "tradier", "fmp_paper"],
-      brokers,
-      total_orders_routed: 14250,
-      total_failovers: 2,
-      last_failover_time: new Date(Date.now() - 480000).toISOString(),
-      last_failover_reason: "High latency detected on primary adapter; automated failover to Alpaca.",
-      recent_routing_audits: audits,
-    });
-  },
-
-  async triggerBrokerFailover(request: BrokerFailoverRequest): Promise<BrokerFailoverResponse> {
-    return delay<BrokerFailoverResponse>({
-      status: "ok",
-      active_broker: request.target_broker,
-      manual_override: request.target_broker,
-      reason: request.reason || "manual_operator_failover",
-      timestamp: new Date().toISOString(),
-    });
-  },
-
-  // ---- Tier D: SEC Rule 606 Execution Quality Reporter ----
-
-  async getSecRule606Report(params?: { year?: number; quarter?: number; is_option?: boolean }): Promise<SecRule606ReportResponse> {
-    const yr = params?.year ?? 2026;
-    const qtr = params?.quarter ?? 1;
-    const isOpt = params?.is_option ?? null;
-
-    const venuesOverall: SecRule606VenueRow[] = [
-      {
-        venue: "CITADEL SECURITIES LLC",
-        order_count: 5420,
-        pct_of_total_orders: 38.04,
-        executed_shares: 1120000,
-        pct_of_total_shares: 39.30,
-        net_fee_rebate_dollars: 1456.20,
-        rebate_per_hundred_shares_dollars: 0.13,
-        rebate_per_hundred_shares_cents: 13.0,
-        price_improved_orders_count: 4820,
-        price_improvement_rate: 88.93,
-        price_improved_shares_count: 994000,
-        total_price_improvement_dollars: 8420.50,
-        avg_price_improvement_per_order_dollars: 1.55,
-        avg_price_improvement_per_share_cents: 0.75,
-        avg_price_improvement_per_improved_share_cents: 0.85,
-      },
-      {
-        venue: "VIRTU FINANCIAL BD LLC",
-        order_count: 3560,
-        pct_of_total_orders: 24.98,
-        executed_shares: 720000,
-        pct_of_total_shares: 25.26,
-        net_fee_rebate_dollars: 936.00,
-        rebate_per_hundred_shares_dollars: 0.13,
-        rebate_per_hundred_shares_cents: 13.0,
-        price_improved_orders_count: 3100,
-        price_improvement_rate: 87.08,
-        price_improved_shares_count: 628000,
-        total_price_improvement_dollars: 5120.30,
-        avg_price_improvement_per_order_dollars: 1.44,
-        avg_price_improvement_per_share_cents: 0.71,
-        avg_price_improvement_per_improved_share_cents: 0.82,
-      },
-      {
-        venue: "JANE STREET CAPITAL LLC",
-        order_count: 2480,
-        pct_of_total_orders: 17.40,
-        executed_shares: 510000,
-        pct_of_total_shares: 17.89,
-        net_fee_rebate_dollars: 612.00,
-        rebate_per_hundred_shares_dollars: 0.12,
-        rebate_per_hundred_shares_cents: 12.0,
-        price_improved_orders_count: 2090,
-        price_improvement_rate: 84.27,
-        price_improved_shares_count: 428000,
-        total_price_improvement_dollars: 3240.10,
-        avg_price_improvement_per_order_dollars: 1.31,
-        avg_price_improvement_per_share_cents: 0.64,
-        avg_price_improvement_per_improved_share_cents: 0.76,
-      },
-      {
-        venue: "TWO SIGMA SECURITIES LLC",
-        order_count: 1840,
-        pct_of_total_orders: 12.91,
-        executed_shares: 340000,
-        pct_of_total_shares: 11.93,
-        net_fee_rebate_dollars: 374.00,
-        rebate_per_hundred_shares_dollars: 0.11,
-        rebate_per_hundred_shares_cents: 11.0,
-        price_improved_orders_count: 1480,
-        price_improvement_rate: 80.43,
-        price_improved_shares_count: 275000,
-        total_price_improvement_dollars: 1820.40,
-        avg_price_improvement_per_order_dollars: 0.99,
-        avg_price_improvement_per_share_cents: 0.54,
-        avg_price_improvement_per_improved_share_cents: 0.66,
-      },
-      {
-        venue: "NEW YORK STOCK EXCHANGE (ARCA)",
-        order_count: 950,
-        pct_of_total_orders: 6.67,
-        executed_shares: 160000,
-        pct_of_total_shares: 5.61,
-        net_fee_rebate_dollars: 42.30,
-        rebate_per_hundred_shares_dollars: 0.026,
-        rebate_per_hundred_shares_cents: 2.6,
-        price_improved_orders_count: 510,
-        price_improvement_rate: 53.68,
-        price_improved_shares_count: 86000,
-        total_price_improvement_dollars: 348.95,
-        avg_price_improvement_per_order_dollars: 0.37,
-        avg_price_improvement_per_share_cents: 0.22,
-        avg_price_improvement_per_improved_share_cents: 0.41,
-      },
-    ];
-
-    const categoryBreakdown: Record<string, SecRule606CategoryBreakdown> = {
-      market: {
-        category: "market",
-        order_count: 6200,
-        pct_of_total_orders: 43.51,
-        executed_shares: 1250000,
-        pct_of_total_shares: 43.86,
-        net_fee_rebate_dollars: 1625.00,
-        rebate_per_hundred_shares_dollars: 0.13,
-        rebate_per_hundred_shares_cents: 13.0,
-        price_improved_orders_count: 5760,
-        price_improvement_rate: 92.90,
-        price_improved_shares_count: 1160000,
-        price_improved_shares_rate: 92.80,
-        total_price_improvement_dollars: 11450.25,
-        avg_price_improvement_per_order_dollars: 1.85,
-        avg_price_improvement_per_improved_order_dollars: 1.99,
-        avg_price_improvement_per_share_cents: 0.92,
-        avg_price_improvement_per_improved_share_cents: 0.99,
-      },
-      marketable_limit: {
-        category: "marketable_limit",
-        order_count: 5150,
-        pct_of_total_orders: 36.14,
-        executed_shares: 1020000,
-        pct_of_total_shares: 35.79,
-        net_fee_rebate_dollars: 1326.00,
-        rebate_per_hundred_shares_dollars: 0.13,
-        rebate_per_hundred_shares_cents: 13.0,
-        price_improved_orders_count: 4580,
-        price_improvement_rate: 88.93,
-        price_improved_shares_count: 910000,
-        price_improved_shares_rate: 89.22,
-        total_price_improvement_dollars: 6320.00,
-        avg_price_improvement_per_order_dollars: 1.23,
-        avg_price_improvement_per_improved_order_dollars: 1.38,
-        avg_price_improvement_per_share_cents: 0.62,
-        avg_price_improvement_per_improved_share_cents: 0.69,
-      },
-      non_marketable_limit: {
-        category: "non_marketable_limit",
-        order_count: 2450,
-        pct_of_total_orders: 17.19,
-        executed_shares: 490000,
-        pct_of_total_shares: 17.19,
-        net_fee_rebate_dollars: 441.00,
-        rebate_per_hundred_shares_dollars: 0.09,
-        rebate_per_hundred_shares_cents: 9.0,
-        price_improved_orders_count: 1540,
-        price_improvement_rate: 62.86,
-        price_improved_shares_count: 310000,
-        price_improved_shares_rate: 63.27,
-        total_price_improvement_dollars: 1120.00,
-        avg_price_improvement_per_order_dollars: 0.46,
-        avg_price_improvement_per_improved_order_dollars: 0.73,
-        avg_price_improvement_per_share_cents: 0.23,
-        avg_price_improvement_per_improved_share_cents: 0.36,
-      },
-      other: {
-        category: "other",
-        order_count: 450,
-        pct_of_total_orders: 3.16,
-        executed_shares: 90000,
-        pct_of_total_shares: 3.16,
-        net_fee_rebate_dollars: 28.50,
-        rebate_per_hundred_shares_dollars: 0.032,
-        rebate_per_hundred_shares_cents: 3.2,
-        price_improved_orders_count: 120,
-        price_improvement_rate: 26.67,
-        price_improved_shares_count: 31000,
-        price_improved_shares_rate: 34.44,
-        total_price_improvement_dollars: 60.00,
-        avg_price_improvement_per_order_dollars: 0.13,
-        avg_price_improvement_per_improved_order_dollars: 0.50,
-        avg_price_improvement_per_share_cents: 0.07,
-        avg_price_improvement_per_improved_share_cents: 0.19,
-      },
-    };
-
-    return delay<SecRule606ReportResponse>({
-      header: {
-        report_type: "SEC Rule 606(a)(1) Order Routing & Execution Quality Report",
-        period: `${yr}-Q${qtr}`,
-        year: yr,
-        quarter: qtr,
-        start_date: `${yr}-01-01T00:00:00Z`,
-        end_date: `${yr}-03-31T23:59:59Z`,
-        is_option: isOpt,
-        created_at: new Date().toISOString(),
-      },
-      summary: {
-        total_orders: 14250,
-        total_shares: 2850000,
-        total_notional: 412500000,
-        total_net_rebate_dollars: 3420.50,
-        total_price_improvement_dollars: 18950.25,
-        overall_price_improvement_rate: 84.21,
-        overall_share_price_improvement_rate: 84.59,
-        overall_rebate_per_hundred_shares_dollars: 0.12,
-        overall_rebate_per_hundred_shares_cents: 12.0,
-        overall_avg_price_improvement_per_order_dollars: 1.33,
-        price_improved_orders_count: 12000,
-      },
-      order_category_breakdown: categoryBreakdown,
-      venue_breakdown: {
-        by_category: {
-          market: venuesOverall.slice(0, 3),
-          marketable_limit: venuesOverall.slice(0, 4),
-          non_marketable_limit: venuesOverall.slice(1, 5),
-          other: venuesOverall.slice(3, 5),
-        },
-        venues_overall: venuesOverall,
-      },
-    });
-  },
 
   // ---- Live Trade Approvals ----
 
@@ -17377,91 +11903,6 @@ def generate_signals(df: pd.DataFrame) -> pd.Series:
     proposal.approved_at = new Date().toISOString();
     proposal.approved_by = "operator";
     return delay({ ...proposal });
-  },
-
-  // ---- Dynamic Circuit Breaker ----
-  async getCircuitBreakerStatus(): Promise<CircuitBreakerStatusResponse> {
-    return delay(getMockCircuitBreakerStatus());
-  },
-
-  // ---- Trends Stitching Demo ----
-  //
-  // Genuinely demonstrates the overlapping-window stitching algorithm
-  // (webapp/src/utils/trendsStitch.ts, ported from
-  // data/trends_stitcher.py::GoogleTrendsStitcher) rather than faking it:
-  // two raw "Google Trends" windows are generated on DIFFERENT absolute
-  // scales (mirroring Google Trends' own per-query 0-100 window-relative
-  // renormalization -- the exact problem the algorithm exists to solve),
-  // spanning DIFFERENT but PARTIALLY OVERLAPPING date ranges, and the
-  // "stitched" curve is the real output of `stitchIntervals` run against
-  // those two raw curves -- not a third independent random walk.
-  async getTrendsStitchDemo(): Promise<TrendsStitchDemoResponse> {
-    const now = Date.now();
-    const DAY_MS = 86400000;
-
-    // Deterministic pseudo-random walk generator (mulberry32) so the demo
-    // is reproducible across calls/renders rather than reseeding chaos on
-    // every fetch, while still looking like a genuine noisy SVI series.
-    const mulberry32 = (seed: number) => {
-      let a = seed;
-      return () => {
-        a |= 0;
-        a = (a + 0x6d2b79f5) | 0;
-        let x = Math.imul(a ^ (a >>> 15), 1 | a);
-        x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
-        return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
-      };
-    };
-
-    const generateWindow = (
-      startDay: number,
-      endDay: number,
-      baseline: number,
-      amplitude: number,
-      seed: number,
-    ): TrendsPoint[] => {
-      const rand = mulberry32(seed);
-      const data: TrendsPoint[] = [];
-      // `startDay`/`endDay` are both "days ago" (startDay > endDay, since
-      // startDay is further in the past); iterate from the older day down
-      // to the more recent one.
-      for (let day = startDay; day >= endDay; day--) {
-        const time = now - day * DAY_MS;
-        // A gently mean-reverting walk around `baseline`, always >= 0 (SVI
-        // is a non-negative index).
-        const drift = (rand() - 0.5) * amplitude;
-        const seasonal = Math.sin(day / 9) * amplitude * 0.3;
-        const value = Math.max(0, baseline + drift + seasonal);
-        data.push([time, Math.round(value * 10) / 10]);
-      }
-      return data; // already ascending by time (oldest -> newest)
-    };
-
-    // Three overlapping windows, each on a DIFFERENT absolute scale (as if
-    // Google Trends renormalized each query window independently against
-    // its own peak) -- this is the whole reason stitching is needed:
-    //   Window A: days -100..-40, baseline ~50  (small scale)
-    //   Window B: days  -60..-15, baseline ~100 (hot scale) -- overlaps A
-    //             on days -60..-40 (~20 days)
-    //   Window C: days  -25..0,   baseline ~30  (cool scale) -- overlaps B
-    //             on days -25..-15 (~10 days)
-    const windowA = generateWindow(100, 40, 50, 12, 1);
-    const windowB = generateWindow(60, 15, 100, 15, 2);
-    const windowC = generateWindow(25, 0, 30, 8, 3);
-
-    const stitched = stitchMultipleIntervals([windowA, windowB, windowC]);
-
-    return delay({
-      raw_curves: [
-        { name: "Window A (Raw, days -100..-40)", data: windowA },
-        { name: "Window B (Raw, days -60..-15)", data: windowB },
-        { name: "Window C (Raw, days -25..0)", data: windowC },
-      ],
-      stitched_curve: {
-        name: "Stitched Output",
-        data: stitched,
-      },
-    });
   },
 };
 
@@ -17600,7 +12041,7 @@ const MOCK_REPORT_CONTENT: Record<string, ReportContent> = {
     name: "notebooklm_source.md",
     kind: "notebooklm_export",
     content_type: "markdown",
-    text: "# Stockpy System Export\n**Generated At (UTC):** 2026-08-31T14:34:15+00:00\n\n## Macro Context\n- **VIX**: 15.5\n\n## Current Portfolio\n- **Total Equity**: $43,086.18\n\n## Active Pilot Follows\n- **Pilot ID**: trend-following | **Amount**: $500.00 | **Status**: active\n",
+    text: "# Stockpy System Export\n**Generated At (UTC):** 2026-08-31T14:34:15+00:00\n\n## Macro Context\n- **VIX**: 15.5\n\n## Current Portfolio\n- **Total Equity**: $43,086.18\n",
     json: null,
     size: 3084,
     mtime: "2026-08-31T14:34:15+00:00",
@@ -17856,11 +12297,11 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
     // reporting. timeseries_momentum/rsi2_mean_reversion mirror their
     // trained metrics rows above (a real backend never sets trained: true
     // without a corresponding metrics row); sector_quality_rank/
-    // vrp_premium_selling illustrate the genuinely-blocked case this mock
-    // doesn't carry metrics rows for. cross_sectional_momentum and
-    // options_flow_sentiment are deliberately omitted from BOTH dicts here
-    // -- this fixture is illustrative, not an exhaustive mirror of every
-    // eligible signal's live state.
+    // cross_sectional_momentum illustrate the genuinely-blocked case this
+    // mock doesn't carry metrics rows for -- this fixture is illustrative,
+    // not an exhaustive mirror of every eligible signal's live state.
+    // (vrp_premium_selling / options_flow_sentiment are no longer eligible:
+    // retired from live scoring in 2026-09, step 3d'.)
     eligibility: {
       timeseries_momentum: { declares_meta_label_features: true, trained: true, reason: null },
       rsi2_mean_reversion: { declares_meta_label_features: true, trained: true, reason: null },
@@ -17869,7 +12310,7 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
         trained: false,
         reason: "insufficient_samples:0_for_90d",
       },
-      vrp_premium_selling: {
+      cross_sectional_momentum: {
         declares_meta_label_features: true,
         trained: false,
         reason: "insufficient_samples:0_for_90d",
@@ -17883,8 +12324,6 @@ export function mockForecastBackfill(): ForecastBackfillSummary {
 
 export const MOCK_META = {
   mode: MOCK_MODE,
-  notionalCap: NOTIONAL_CAP,
-  minAmount: MIN_AMOUNT,
   sectors: SECTORS,
 };
 
@@ -17892,11 +12331,8 @@ export const MOCK_META = {
 // names, types, and defaults) -- this fixture previously invented fields
 // (PAPER_BROKER_ENABLED, PAPER_BROKER_INITIAL_CASH, PAPER_BROKER_SLIPPAGE_BPS)
 // that don't exist in settings.py at all, and gave BROKER_BACKEND a fake
-// "PAPER"/"ALPACA"/"ROBINHOOD" enum with a "ROBINHOOD" option that doesn't
-// actually work (BROKER_BACKEND recognizes only "alpaca"/"fmp_paper" today;
-// "robinhood" is a documented-but-not-yet-implemented reserved value that
-// falls through to "alpaca" -- see docs/architecture/execution.md's "Future
-// extension point" section). A mock-mode operator exercising this screen was
+// "PAPER"/"ROBINHOOD" enum with a "ROBINHOOD" option that doesn't
+// actually work (BROKER_BACKEND recognizes only "fmp_paper" today; real money moves only through the Robinhood execution queue). A mock-mode operator exercising this screen was
 // seeing a fictional, unsafe-looking control surface that bore no relation
 // to what a real write would do.
 const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
@@ -17907,7 +12343,7 @@ const PAPER_BROKER_TUNABLE_DEFS: MockTunableDef[] = [
     value: "fmp_paper",
     default: "fmp_paper",
     description:
-      "Selects the active broker backend ('alpaca' or 'fmp_paper'). Defaults to 'fmp_paper'. A runtime guard forces 'alpaca' if 'fmp_paper' is used while genuinely going live. 'robinhood' is reserved for a future automated broker; any unrecognized value falls through to 'alpaca'.",
+      "The automated pipeline's broker is the local FMP paper ledger ('fmp_paper', SQLite-backed). Alpaca was removed; real money moves only through the Robinhood execution queue.",
   },
   {
     group: "Paper Broker Configuration",
@@ -17937,6 +12373,13 @@ let paperAccount: PaperBrokerAccount = { equity: 0, cash: 0, buying_power: 0 };
 // trading" -- the account's cash/equity values alone can't tell those apart,
 // since both are genuinely 0 in the drained case.
 let paperAccountInitialized = false;
+
+function ensureMockPaperAccountSeeded(): void {
+  if (!paperAccountInitialized) {
+    paperAccount = { equity: 100000, cash: 100000, buying_power: 100000 };
+    paperAccountInitialized = true;
+  }
+}
 let paperPositions: PaperBrokerPosition[] = [];
 let paperOrders: PaperBrokerOrder[] = [];
 let paperClosedTrades: PaperBrokerClosedTrade[] = MOCK_RETROSPECTIVE_TRADES.map(t => ({
@@ -17956,6 +12399,7 @@ let paperClosedTrades: PaperBrokerClosedTrade[] = MOCK_RETROSPECTIVE_TRADES.map(
   realized_pnl_pct: t.realized_pnl_pct,
   holding_period_days: t.holding_period_days,
   close_reason: t.close_reason,
+  exit_context_json: t.exit_context ? JSON.stringify(t.exit_context) : null,
   leg_group_id: null,
 }));
 let paperClosedTradeIdSeq = 105;
@@ -18004,8 +12448,155 @@ function pushMockClosedTrade(params: {
     realized_pnl_pct: realizedPnlPct,
     holding_period_days: 0,
     close_reason: closeReason,
+    exit_context_json: null, // manual Quick Trade close: no exit context (live parity)
     leg_group_id: null,
   });
+}
+
+/**
+ * Deterministic per-symbol mock spot price -- same seed formula as
+ * `getDataQuotes` below, so a market-order fill (no `limit_price` supplied)
+ * uses a price consistent with what the rest of the mock surface would quote
+ * for that symbol, instead of a flat fallback unrelated to the symbol.
+ */
+function mockStockQuotePrice(symbol: string): number {
+  const sym = symbol.trim().toUpperCase();
+  const rng = seeded(sym.charCodeAt(0) * 31 + sym.length * 7);
+  const base = 40 + (sym.charCodeAt(sym.length - 1) % 40) * 5;
+  return +(base + rng() * 20).toFixed(2);
+}
+
+/**
+ * Shared equity paper-fill mutation, used by BOTH `postOptionsOrder`'s
+ * `asset_type === "stock"` branch (the options desk's Quick Trade path,
+ * pre-dating the equity/options split) and `postPaperEquityOrder` (the new,
+ * options-free equity ticket) -- factored out so the two mock paths can't
+ * drift apart. Mirrors `pilots/paper_equity_order.py::execute_equity_order`'s
+ * fill math exactly: an explicit positive `limitPrice` prices the fill,
+ * otherwise a live(-looking) quote; a missing/non-positive resolved price or
+ * a SELL with insufficient inventory rejects the order rather than fabricating
+ * a fill (CONSTRAINT #4); commission is $0.005/share, $1.00 minimum.
+ */
+function applyMockStockFill(params: {
+  symbol: string;
+  side: "BUY" | "SELL";
+  quantity?: number;
+  dollarAmount?: number;
+  limitPrice?: number;
+  orderIdPrefix: string;
+}): { ok: boolean; order_id: string | null; message: string } {
+  ensureMockPaperAccountSeeded();
+
+  const orderSymbol = params.symbol.trim().toUpperCase();
+  const fillPrice =
+    params.limitPrice && params.limitPrice > 0
+      ? params.limitPrice
+      : mockStockQuotePrice(orderSymbol);
+
+  if (!fillPrice || fillPrice <= 0) {
+    return {
+      ok: false,
+      order_id: null,
+      message: `No live quote available for ${orderSymbol}; order rejected rather than filled at a fabricated price.`,
+    };
+  }
+
+  let qty: number;
+  if (params.dollarAmount && params.dollarAmount > 0 && (!params.quantity || params.quantity <= 0)) {
+    qty = +(params.dollarAmount / fillPrice).toFixed(4);
+  } else {
+    qty = params.quantity && params.quantity > 0 ? params.quantity : 1;
+  }
+
+  if (qty <= 0) {
+    return { ok: false, order_id: null, message: "Calculated share quantity must be greater than zero." };
+  }
+
+  const orderSide = params.side;
+  const existingPos = paperPositions.find((p) => p.symbol === orderSymbol);
+
+  if (orderSide === "SELL" && (!existingPos || existingPos.qty < qty)) {
+    return {
+      ok: false,
+      order_id: null,
+      message: `Order rejected: Insufficient funds or inventory for SELL ${qty} ${orderSymbol}.`,
+    };
+  }
+
+  const commission = Math.max(1.0, +(qty * 0.005).toFixed(2));
+  const totalCost = orderSide === "SELL" ? qty * fillPrice - commission : qty * fillPrice + commission;
+
+  if (orderSide === "BUY" && paperAccount.cash < totalCost) {
+    return {
+      ok: false,
+      order_id: null,
+      message: `Insufficient paper funds. Required: $${totalCost.toFixed(2)}, Available: $${paperAccount.cash.toFixed(2)}`,
+    };
+  }
+
+  if (orderSide === "SELL") {
+    const closingAvgCost = existingPos!.avg_cost;
+    paperAccount.cash += totalCost;
+    existingPos!.qty -= qty;
+    existingPos!.market_value = Math.max(0, (existingPos!.market_value || 0) - qty * fillPrice);
+    if (existingPos!.qty <= 0) {
+      paperPositions = paperPositions.filter((p) => p.symbol !== orderSymbol);
+      // Equity positions here are always long (no short-sale path), so the
+      // position's own opening side is "BUY".
+      pushMockClosedTrade({
+        symbol: orderSymbol,
+        side: "BUY",
+        qty,
+        entryPrice: closingAvgCost,
+        exitPrice: fillPrice,
+        commission,
+      });
+    }
+  } else {
+    paperAccount.cash -= totalCost;
+    if (existingPos) {
+      const prevTotal = existingPos.qty * existingPos.avg_cost;
+      existingPos.qty += qty;
+      existingPos.avg_cost = (prevTotal + qty * fillPrice) / existingPos.qty;
+      existingPos.market_value = (existingPos.market_value || 0) + qty * fillPrice;
+    } else {
+      paperPositions.push({
+        symbol: orderSymbol,
+        qty,
+        avg_cost: fillPrice,
+        current_price: fillPrice,
+        market_value: qty * fillPrice,
+        unrealized_pl: 0,
+        unrealized_pl_pct: 0,
+        strategy_id: null,
+        pilot_id: null,
+        experiment_arm: null,
+      });
+    }
+  }
+  paperAccount.buying_power = paperAccount.cash;
+
+  const orderId = `${params.orderIdPrefix}_${Date.now()}`;
+  paperOrders.unshift({
+    order_id: orderId,
+    symbol: orderSymbol,
+    side: orderSide,
+    qty,
+    price: fillPrice,
+    status: "filled",
+    filled_qty: qty,
+    filled_avg_price: fillPrice,
+    created_at: new Date().toISOString(),
+    strategy_id: null,
+    pilot_id: null,
+    experiment_arm: null,
+  });
+
+  return {
+    ok: true,
+    order_id: orderId,
+    message: `Paper stock order filled: ${orderSide} ${qty.toFixed(2)} shares of ${orderSymbol} at $${fillPrice.toFixed(2)} (Total: $${totalCost.toFixed(2)}).`,
+  };
 }
 
 /**
@@ -18114,111 +12705,4 @@ let mockLiveTradeProposals: LiveTradeProposal[] = [
 export function __setMockLiveTradeProposals(proposals: LiveTradeProposal[]) {
   mockLiveTradeProposals = proposals;
 }
-
-/**
- * Returns a realistic sub-second portfolio risk and Greek streaming event for mock mode.
- */
-export function getMockPortfolioRiskStreamEvent(): PortfolioRiskStreamEvent {
-  return {
-    timestamp: new Date().toISOString(),
-    spy_price: 502.45,
-    net_delta: 142.5,
-    net_dollar_delta: 25650.0,
-    net_gamma: 12.45,
-    net_dollar_gamma_1pct: 128.3,
-    net_theta: -45.2,
-    net_vega: 84.1,
-    beta_weighted_delta_spy: 51.05,
-    total_positions_count: 2,
-    resolved_positions_count: 2,
-    missing_data_count: 0,
-    positions: [
-      {
-        symbol: "AAPL",
-        underlying: "AAPL",
-        position_type: "equity",
-        qty: 100,
-        spot_price: 182.5,
-        delta: 100,
-        dollar_delta: 18250,
-        gamma: 0,
-        dollar_gamma_1pct: 0,
-        theta_daily: 0,
-        vega_1pct: 0,
-        beta_spy: 1.2,
-        beta_weighted_delta_spy: 43.58,
-      },
-      {
-        symbol: "AAPL 2026-09-18 $185.00 CALL",
-        underlying: "AAPL",
-        position_type: "option",
-        qty: 1,
-        spot_price: 182.5,
-        strike: 185.0,
-        dte: 32,
-        option_type: "call",
-        iv: 0.24,
-        delta: 42.5,
-        dollar_delta: 7400,
-        gamma: 12.45,
-        dollar_gamma_1pct: 128.3,
-        theta_daily: -45.2,
-        vega_1pct: 84.1,
-        beta_spy: 1.2,
-        beta_weighted_delta_spy: 7.47,
-      },
-    ],
-    missing_positions: [],
-  };
-}
-
-/**
- * Realistic mock dynamic circuit breaker status fixture.
- */
-export function getMockCircuitBreakerStatus(stateOverride?: CircuitBreakerState): CircuitBreakerStatusResponse {
-  const state = stateOverride ?? "NORMAL";
-  if (state === "CAUTION") {
-    return {
-      state: "CAUTION",
-      volatility_zscore: 2.35,
-      vpin: 0.32,
-      ofi: -450.2,
-      loss_velocity_per_min: -85.5,
-      reason: "Elevated market volatility detected across monitored universe",
-      updated_at: new Date().toISOString(),
-    };
-  }
-  if (state === "SOFT_HALT") {
-    return {
-      state: "SOFT_HALT",
-      volatility_zscore: 3.82,
-      vpin: 0.46,
-      ofi: -1250.0,
-      loss_velocity_per_min: -210.0,
-      reason: "VOLATILITY_BURST_HALT: 5m EWMA realized vol Z-score 3.82 > threshold 3.50",
-      updated_at: new Date().toISOString(),
-    };
-  }
-  if (state === "HARD_HALT") {
-    return {
-      state: "HARD_HALT",
-      volatility_zscore: 4.15,
-      vpin: 0.58,
-      ofi: -2400.0,
-      loss_velocity_per_min: -750.0,
-      reason: "LOSS_VELOCITY_BREACH: Intraday loss rate $750.00/min exceeds allowable rate $666.67/min",
-      updated_at: new Date().toISOString(),
-    };
-  }
-  return {
-    state: "NORMAL",
-    volatility_zscore: 0.85,
-    vpin: 0.18,
-    ofi: 120.5,
-    loss_velocity_per_min: -15.4,
-    reason: null,
-    updated_at: new Date().toISOString(),
-  };
-}
-
 

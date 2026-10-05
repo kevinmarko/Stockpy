@@ -128,14 +128,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "HMM_RISK_OFF_BLOCK_THRESHOLD",
     "RISK_GATE_ENFORCE_MARKET_HOURS",
     "MACRO_REGIME_GATE_ENABLED",
-    # Dynamic Circuit Breaker & Flash Guard (execution/dynamic_circuit_breaker.py)
-    "CIRCUIT_BREAKER_VOLATILITY_Z_THRESHOLD",
-    "CIRCUIT_BREAKER_VPIN_THRESHOLD",
-    "CIRCUIT_BREAKER_OFI_THRESHOLD",
-    "CIRCUIT_BREAKER_LOSS_VELOCITY_WINDOW_MINS",
-    "CIRCUIT_BREAKER_ENABLED",
-    "CIRCUIT_BREAKER_REFERENCE_SYMBOL",
-    "OFI_SHIELD_ENABLED",
     # Meta-labeling
     "META_LABEL_MIN_CONFIDENCE",
     # Input-feature (PSI) drift detection (validation/covariate_drift.py,
@@ -160,10 +152,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # gross_profitability/sector) inside step 2 -- no credential, no
     # dangerous write; a GUI bug here can only make a training run slower.
     "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED",
-    # Opt-in gate for the quarantined vrp_premium_selling_proxy backfill-only
-    # signal -- OHLCV-derived, no credential, no live-inference reach
-    # (structurally excluded from BACKFILL_ELIGIBLE_SIGNAL_IDS).
-    "FORECAST_BACKFILL_VRP_PROXY_ENABLED",
     # Wall-clock deadline for the async forecast-backfill job's worker
     # subprocess (ml/forecast_backfill_job.py) -- a timeout tunable, same
     # treatment as RH_LOGIN_DEADLINE_SECONDS below.
@@ -261,20 +249,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # (SECRET_KEYS above). MCP_OAUTH_ENABLED itself stays out of ALLOWED_KEYS
     # -- see EXCLUDED_FROM_GUI below.
     "MCP_OAUTH_ISSUER_URL",
-    # Persisted Pilots-PWA analytics artifacts (options premium matrix + pairs
-    # radar). When on, the pipeline writes output/options_matrix.json /
-    # output/pairs.json for the AST-guarded Pilots API to read. Non-secret.
-    "OPTIONS_MATRIX_ENABLED",
-    "PAIRS_SNAPSHOT_ENABLED",
-    "PAIRS_SNAPSHOT_MAX_PAIRS",
-    # Execution mode toggle — paper sandbox vs. live endpoint. Writeable from
-    # the Strategy Matrix tab's global Simulation/Paper/Live selector. Never a
-    # secret: the broker keys themselves are SECRET_KEYS.
-    "ALPACA_PAPER",
-    # Per-request HTTP timeout for alpaca-py REST calls (execution/alpaca_broker.py,
-    # data/market_data.py's AlpacaProvider). Non-secret; a GUI bug here can
-    # only change how soon a stalled Alpaca call is given up on.
-    "ALPACA_REQUEST_TIMEOUT_SECONDS",
+    # Execution mode toggle — pipeline paper trading (FMP paper ledger) vs.
+    # going live (no automated orders; Robinhood queue only). Writeable from
+    # the execution-mode selector. Never a secret.
+    "PAPER_TRADING",
     "MARKET_DATA_PROVIDER",
     "MARKET_DATA_QUOTE_TTL_SECONDS",
     "MARKET_DATA_BARS_TTL_SECONDS",
@@ -284,13 +262,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "MARKET_DATA_LATENCY_TRACKING_ENABLED",
     "BROWSER_DIAGNOSTICS_ENABLED",  # non-secret opt-in dependency flags, no credential material
     "BROWSER_DIAGNOSTICS_TIMEOUT_SECONDS",
-    # Opt-in real-time WS quote ingestion (data/market_data_ws.py). Non-secret
-    # tunables only; Alpaca credentials stay in SECRET_KEYS.
-    "MARKET_DATA_WS_ENABLED",
-    "MARKET_DATA_WS_STALE_SECONDS",
-    "MARKET_DATA_WS_SYMBOLS",
     # Forecasting / fundamentals tunables (non-secret; see forecasting_engine.py
-    # + data/market_data.py). FINNHUB_API_KEY stays in SECRET_KEYS below.
+    # + data/market_data.py).
     "FORECAST_USE_GARCH_SIGMA",   # bool — GJR-GARCH sigma into Monte Carlo (rollback lever)
     "FORECAST_PROPHET_WEIGHT",    # float [0,1] — Prophet ensemble overlay weight
     # Math-calibration audit additions (docs/known_issues/forecast_ito_double_
@@ -298,6 +271,11 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # credential material.
     "FORECAST_MC_RANDOM_SEED",    # Optional[int] — run_monte_carlo RNG seed; None = non-deterministic
     "FORECAST_DRIFT_SHRINKAGE",   # float [0,1] — shrinks MC drift mu toward zero (0.0 = unshrunk, today's behavior)
+    "FORECAST_CLAMP_SIGMA_K",     # float — F2 clamp: drop a model whose |log-return| > k*sigma_GARCH*sqrt(h); <=0 disables
+    "FORECAST_INPUT_PRICE_TOLERANCE",  # float — F2: drop a model whose anchor price is > this fraction off the last close; <=0 disables
+    "FORECAST_NAIVE_GATE_ENABLED",  # bool — F3: publish the naive-gated forecast (default False = shadow-record only)
+    "FORECAST_NAIVE_GATE_MIN_IMPROVEMENT",  # float — F3: required relative median |log error| improvement over naive (0.005 = 0.5%)
+    "FORECAST_NAIVE_GATE_MIN_OBS",  # int — F3: min scored daily observations per symbol x horizon before a model can be admitted
     "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED",  # bool — ForecastTracker looks up each row's own due-date close instead of today's price
     "FORECAST_SKILL_WEIGHTING_ENABLED",  # bool — opt-in inverse-RMSE skill-weighted blend
     "FORECAST_SKILL_WINDOW_DAYS", # int — rolling RMSE window (days) for skill weighting
@@ -394,34 +372,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "RAG_INDEX_MAX_DOCUMENTS",            # int — FAISS index FIFO eviction cap
     "RAG_RETRIEVAL_TOP_K",                # int — nearest-neighbor count per query
     "RAG_INDEX_LOOKBACK_DAYS",            # int — indexing scan window (days)
-    # ETF volatility-transmission risk overlay (Ben-David, Franzoni & Moussawi
-    # 2018, Journal of Finance 73(6)) — holdings ingestion (data/etf_holdings.py),
-    # market-residualized measurement columns + portfolio covariance inflation
-    # (risk/etf_transmission.py), and the per-name sizing derate
-    # (sizing/position_sizer.py). All 19 keys below are non-secret: SEC N-PORT
-    # and the optional iShares CSV endpoint are both unauthenticated, so there
-    # is no credential material anywhere in this family. Every default
-    # reproduces today's exact no-op behavior (master switches default False;
-    # numeric knobs are only ever consulted once their master switch is True).
-    "ETF_HOLDINGS_ENABLED",
-    "ETF_HOLDINGS_TICKERS",
-    "ETF_HOLDINGS_REFRESH_DAYS",
-    "ETF_HOLDINGS_ISSUER_CSV_ENABLED",
-    "ETF_HOLDINGS_MAX_SECONDS_PER_CYCLE",
-    "ETF_HOLDINGS_CIRCUIT_BREAKER_THRESHOLD",
-    "ETF_TRANSMISSION_ENABLED",
-    "ETF_HOLDINGS_MARKET_PROXY",
-    "ETF_TRANSMISSION_WRAPPERS",
-    "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
-    "ETF_TRANSMISSION_WINDOW_DAYS",
-    "ETF_TRANSMISSION_MIN_OBS",
-    "ETF_TRANSMISSION_SIZING_ENABLED",
-    "ETF_TRANSMISSION_MAX_DERATE",
-    "ETF_TRANSMISSION_OWNERSHIP_REFERENCE",
-    "ETF_TRANSMISSION_MIN_MULTIPLIER",
-    "ETF_TRANSMISSION_PORTFOLIO_ENABLED",
-    "ETF_TRANSMISSION_COV_INFLATION",
-    "ETF_TRANSMISSION_COV_WINDOW_DAYS",
     # FRED (data_engine.py). Non-secret timeout tunable -- FRED_API_KEY itself
     # is in SECRET_KEYS. fredapi has no timeout of its own; this is scoped via
     # socket.setdefaulttimeout() around each call (see _bounded_fred_timeout).
@@ -451,13 +401,11 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FMP_ECON_CALENDAR_ENABLED",           # bool — economics calendar diagnostic feed
     "FMP_INSIDER_ENABLED",                # bool — per-symbol insider statistics
     "FMP_SECTOR_SNAPSHOT_ENABLED",        # bool — 2 dated sector snapshots per cycle
-    "FMP_OPTIONS_HEALTH_ENABLED",         # bool — Altman Z/Piotroski F/ratios/realized-vol for options matrix
-    "FMP_OPTIONS_CONTEXT_ENABLED",        # bool — news headlines + peer tickers on the options matrix
     "FMP_PEERS_ENABLED",                  # bool — on-demand GET /data/peers/{symbol} lookup
     "FMP_UNIVERSE_ENABLED",               # bool — S&P 500 historical constituent-changes primary source (universe_engine.py)
     "FMP_SCREENER_ENABLED",               # bool — symbol search + sector/industry screener (GET /data/symbol-search, /data/screener, /data/screener/filters)
     "FMP_PROFILE_ENABLED",                # bool — master switch for FMP company profile wrapper (/profile)
-    "FMP_FALLBACK_ENABLED",               # bool — fall through to Alpaca/yfinance/Yahoo
+    "FMP_FALLBACK_ENABLED",               # bool — fall through to yfinance/Yahoo
     "FMP_QUOTES_REALTIME",                # bool — label FMP quotes real-time (unverified on Starter)
     "FMP_BARS_ADJUSTMENT",                # str  — EOD variant; 'dividend-adjusted' matches yfinance
     "FMP_ANALYST_REFRESH_HOURS",          # int  — analyst cadence gate
@@ -476,9 +424,15 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "JULES_DISPATCH_COOLDOWN_SECONDS",    # float — min seconds between dispatch_session() calls
     # Robinhood execution bridge & portfolio controls
     "ROBINHOOD_EXECUTION_MODE",
+    # off | shadow | primary -- which process writes the Robinhood queue
+    # (step 5.2). Non-secret; a DANGEROUS_KEYS member (settings_keysets.py).
+    "DAEMON_AGENTIC_QUEUE_MODE",
     "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
     "ROBINHOOD_LIMIT_BUFFER_BPS",
     "ROBINHOOD_AUTO_REFRESH_ENABLED",
+    "ROBINHOOD_SCHEDULED_LOGIN_ENABLED",  # bool — daemon's daily login prompt; DANGEROUS_KEYS member (settings_keysets.py)
+    "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET",  # str  — "HH:MM" US/Eastern for the scheduled login
+    "ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET",  # str  — "HH:MM" US/Eastern evening cut-off (no login started after it)
     # GUI-writable by operator decision (previously excluded as a "hand-set
     # only" master switch -- see settings.py's own BROKERAGE_CONNECT_ENABLED
     # field docstring). The brokerage-credential connect/disconnect endpoints
@@ -542,7 +496,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "SENTIMENT_LLM_VERIFICATION_BORDERLINE_LOW",
     "SENTIMENT_LLM_VERIFICATION_BORDERLINE_HIGH",
     "STOCKTWITS_ENABLED",
-    "REDDIT_BACKFILL_MAX_PAGES",
     "EDGAR_MAX_CONCURRENCY",
     "EDGAR_COOLDOWN_THRESHOLD",
     "EDGAR_COOLDOWN_SECONDS",
@@ -555,7 +508,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "FINBERT_ENABLED",
     "FINBERT_BATCH_SIZE",
     "FINBERT_SCORE_CACHE_ENABLED",
-    "FINNHUB_RATE_LIMIT_PER_MIN",
     "NEWS_EARNINGS_SUPPRESS_HOURS",
     "NEWS_EARNINGS_DAMPEN_DAYS",
     "GOOGLE_NEWS_LOOKBACK_WINDOW",
@@ -623,13 +575,11 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "ALERT_CHANNELS",
     "ALERT_SMTP_PORT",
     "ALERT_EMAIL_SMTP_PORT",
-    "ALPACA_KEY_ROTATED_DATE",
     "FRED_KEY_ROTATED_DATE",
     "PAPER_TRADING_START_DATE",
     "CORRELATION_CLUSTER_LOOKBACK_DAYS",
     "CORRELATION_CLUSTER_THRESHOLD",
     "DATA_FRESHNESS_TTL_SECONDS",
-    "FOLLOW_MIN_AMOUNT",
     "FORECAST_SKILL_MIN_OBS",
     "FUNDAMENTALS_CACHE_TTL_SECONDS",
     "FUNDAMENTALS_NEG_CACHE_TTL_SECONDS",
@@ -647,14 +597,10 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "HMM_N_INITS",
     "KILLSWITCH_VIX_THRESHOLD_AGREED",
     "KILLSWITCH_SAHM_THRESHOLD_AGREED",
-    "OPTIONS_VRP_THRESHOLD",
     "LLM_COMMENTARY_TIMEOUT_SECONDS",
-    "MARKET_DATA_WS_RECONNECT_BASE_SECONDS",
-    "MARKET_DATA_WS_RECONNECT_MAX_SECONDS",
     "META_LABELING_ENABLED",
     "MULTIFACTOR_MICROCAP_THRESHOLD",
     "OPAL_RESEARCH_TIMEOUT_SECONDS",
-    "OPTIONS_TRUE_IVR_ENABLED",
     "ORCHESTRATOR_API_PORT",
     "PILOTS_TOP_N",
     "PROMPT_CACHE_KEEP_VERSIONS",
@@ -679,21 +625,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED",
     "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED",
     "BROKER_BACKEND",
-    "MULTI_BROKER_GATEWAY_ENABLED",
     "LIVE_TRADE_EXECUTION_ENABLED",
     "LIVE_TRADE_APPROVAL_ENABLED",
-    "CACHE_LONG_SHORT_ENABLED",
-    "CACHE_LONG_SHORT_MIN_CORRELATION",
-    "CACHE_LONG_SHORT_PROXY_CANDIDATES",
-    "CACHE_LONG_SHORT_SCAN_INTERVAL_SECONDS",
-    "CACHE_LONG_SHORT_TLH_THRESHOLD_PCT",
-    # CACHE_LONG_SHORT_WRITES_ENABLED: reclassified into ALLOWED_KEYS
-    # 2026-08-08 -- see the "Fail-closed command/write flags" block near the
-    # end of this tuple for the policy change and the full list of siblings
-    # reclassified alongside it. It carries no secret material; the
-    # POST /pilots/cache-long-short/{start,approve-bulk} endpoints it guards
-    # remain independently gated by their own command token regardless.
-    "CACHE_LONG_SHORT_WRITES_ENABLED",
     "PAPER_BROKER_WRITES_ENABLED",
     "FMP_PAPER_STARTING_CASH",
     # Fields flagged by scripts/auditor/stockpy_codebase_auditor.py's
@@ -704,7 +637,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # --- Fail-closed command/write flags -- reclassified 2026-08-08 --------
     # Per explicit operator decision (PR #630 audit): "not secret information"
     # is the sole bar for GUI-writability going forward. These 11 flags
-    # (CACHE_LONG_SHORT_WRITES_ENABLED above makes 12) previously lived in
+    # previously lived in
     # EXCLUDED_FROM_GUI specifically because each is a dedicated,
     # own-risk-class fail-closed master switch (see each's own
     # `require_*_enabled` docstring in api/pilots_api.py / api/data_api.py /
@@ -739,56 +672,16 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "PROMPT_REGISTRY_WRITES_ENABLED",
     "RAG_QUERY_API_ENABLED",
     "STRATEGY_WRITES_ENABLED",
-    # --- Options Desk (PR #744) -- all non-secret thresholds/toggles for the -----
-    # multi-leg options paper-trading engine and its diagnostic desks (auto-exit,
-    # delta hedging, earnings crush, 0DTE, VPIN toxicity, SOR legging, GEX, LOB
-    # queue simulator, copula stat-arb, DRL market maker). None holds credential
-    # material; OPTIONS_ALERT_WEBHOOK_URL is the one exception and lives in
-    # SECRET_KEYS below (it's a webhook URL, treated like DISCORD_WEBHOOK_URL/
-    # SLACK_WEBHOOK_URL/ALERT_WEBHOOK_URL).
-    "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED",
+    # --- Paper broker (data/paper_account_store.py) -- non-secret tunables. ---
+    # The options-desk keys that used to sit here were retired with the desk
+    # (2026-09, step 4f); OPTIONS_RISK_FREE_RATE and PAPER_OPTION_MARK_CACHE_SECONDS
+    # stay because paper option marking still reads them.
     "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED",
-    "MAX_OPTION_NOTIONAL_PER_TRADE",
-    "MAX_CONCURRENT_OPTION_POSITIONS",
-    "OPTIONS_META_LABELER_ENABLED",
+    "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",
+    "PAPER_PIPELINE_PROBE_WEIGHT",
+    "PAPER_FILL_MAX_QUOTE_AGE_SECONDS",
+    "PAPER_OPTION_MARK_CACHE_SECONDS",
     "OPTIONS_RISK_FREE_RATE",
-    "OPTIONS_AUTO_EXIT_ENABLED",
-    "OPTIONS_PROFIT_TARGET_PCT",
-    "OPTIONS_STOP_LOSS_MULTIPLE",
-    "OPTIONS_MANAGE_DTE_THRESHOLD",
-    "OPTIONS_DELTA_HEDGE_ENABLED",
-    "OPTIONS_DELTA_HEDGE_BAND_SPY_SHARES",
-    "OPTIONS_EARNINGS_CRUSH_ENABLED",
-    "OPTIONS_EARNINGS_MIN_EDGE",
-    "OPTIONS_EARNINGS_WING_MULTIPLIER",
-    "OPTIONS_0DTE_ENABLED",
-    "OPTIONS_0DTE_PROFIT_TARGET_PCT",
-    "OPTIONS_0DTE_STOP_LOSS_PCT",
-    "OPTIONS_0DTE_HARD_EXIT_TIME",
-    "OPTIONS_DRL_RISK_AVERSION_GAMMA",
-    "OPTIONS_VPIN_TOXICITY_THRESHOLD",
-    "OPTIONS_SOR_LEGGING_LATENCY_SECONDS",
-    "OPTIONS_GEX_SEARCH_RANGE_PCT",
-    "OPTIONS_LOB_DEFAULT_MARKET_ORDER_RATE",
-    "OPTIONS_COPULA_ZSCORE_ENTRY_THRESHOLD",
-    # FIX 4.4 Gateway (execution/fix_gateway.py) + WS risk stream (api/ws_api.py).
-    # All three are non-secret tunables — no credential material. The FIX
-    # gateway is fully simulated (never touches real capital or a real venue
-    # connection), so a GUI bug here can only make the simulated route/session
-    # endpoints reachable/unreachable or change a heartbeat cadence, not enable
-    # anything dangerous.
-    "FIX_GATEWAY_ENABLED",
-    "FIX_HEARTBEAT_INTERVAL_SECONDS",
-    "FIX_MOCK_VENUES_ENABLED",
-    "FIX_VENUES_CONFIG_PATH",
-    "WS_RISK_STREAM_INTERVAL_SECONDS",
-    # --- Sentry error-tracking instrumentation (observability/sentry_integration.py) ---
-    # Non-secret tunables only -- SENTRY_DSN is the one credential-shaped field
-    # here and lives in SECRET_KEYS below (masked, never GUI-writable), same
-    # treatment as ALERT_WEBHOOK_URL/DISCORD_WEBHOOK_URL/SLACK_WEBHOOK_URL.
-    "SENTRY_ENABLED",
-    "SENTRY_ENVIRONMENT",
-    "SENTRY_TRACES_SAMPLE_RATE",
     # --- Weekly Digest (pilots/weekly_digest.py, desktop/daemon_runtime.py::
     # maybe_dispatch_weekly_digest) --- Both non-secret tunables; no
     # credential material. WEEKLY_DIGEST_ENABLED only takes effect while the
@@ -803,9 +696,12 @@ ALLOWED_KEYS: tuple[str, ...] = (
 # .env outside the app (CONSTRAINT #3).
 SECRET_KEYS: tuple[str, ...] = (
     "FRED_API_KEY",
+    # Retired Alpaca broker credentials. The Settings fields were removed when
+    # Alpaca was (2026-09-30), but they stay here so a key still set in an
+    # operator's .env keeps being masked by read_settings() (same treatment as
+    # OPTIONS_ALERT_WEBHOOK_URL below) instead of being shown in cleartext.
     "ALPACA_API_KEY",
     "ALPACA_SECRET_KEY",
-    "FINNHUB_API_KEY",
     "ROBINHOOD_USERNAME",
     "ROBINHOOD_PASSWORD",
     "RH_USERNAME",
@@ -818,7 +714,6 @@ SECRET_KEYS: tuple[str, ...] = (
     # DATABASE_URL — may embed credentials, never logged, never GUI-writable.
     "MCP_DATABASE_URL_RO",
     "ALERT_WEBHOOK_URL",
-    "SENTRY_DSN",
     # Bearer token for the read-only State API (api/state_api.py). Treated like a
     # webhook/token secret — masked, never GUI-writable (CONSTRAINT #3).
     "STATE_API_TOKEN",
@@ -843,9 +738,9 @@ SECRET_KEYS: tuple[str, ...] = (
     "MCP_OAUTH_PASSWORD",
     "DISCORD_WEBHOOK_URL",
     "SLACK_WEBHOOK_URL",
-    # Dedicated webhook URL for real-time options alerts (UOA whale sweeps,
-    # earnings crush, delta hedging -- pilots/options_alerts.py). Same secret
-    # treatment as DISCORD_WEBHOOK_URL/SLACK_WEBHOOK_URL/ALERT_WEBHOOK_URL.
+    # Webhook URL for the archived options alerts (legacy/pilots/options_alerts.py).
+    # The Settings field was retired in 2026-09 (step 4f), but it stays here so
+    # a value still set in an operator's .env keeps being masked by read_settings().
     "OPTIONS_ALERT_WEBHOOK_URL",
     # ntfy.sh push topic (alerting.notify(), also used by the Tier 8 Robinhood
     # execution-queue notifier in execution/queue_builder.py). Functions like a
@@ -882,10 +777,6 @@ SECRET_KEYS: tuple[str, ...] = (
     "OPENAI_API_KEY",
     # Optional API key for local or self-hosted OpenAI-compatible server (OpenRouter, vLLM).
     "LOCAL_LLM_API_KEY",
-    # data/sentiment_sources.py's RedditSource OAuth2 script-app credentials
-    # (Sentiment Pipeline Phase 3). CONSTRAINT #3 — never GUI-writable.
-    "REDDIT_CLIENT_ID",
-    "REDDIT_CLIENT_SECRET",
     # SEC EDGAR requires this to identify the requester per its fair-access
     # policy — not a credential in the auth sense, but a per-operator value
     # that shouldn't be GUI-editable any more than the other source configs
@@ -911,11 +802,6 @@ SECRET_KEYS: tuple[str, ...] = (
     "ALERT_NTFY_TOPIC",
     "ALERT_SLACK_WEBHOOK_URL",  # description literally says "Secret"
     "OPTIONS_ALERT_WEBHOOK_URL",
-    # Reddit API User-Agent header. Not a credential in the auth sense (REDDIT_
-    # CLIENT_ID/SECRET already cover that), but a per-operator identifying value
-    # for a third-party API — classified here for the exact same reason
-    # EDGAR_USER_AGENT is (see that key's own comment above), not ALLOWED_KEYS.
-    "REDDIT_USER_AGENT",
 )
 
 # ---------------------------------------------------------------------------
@@ -965,13 +851,10 @@ _JSON_KEYS: frozenset[str] = frozenset(
         "DEFAULT_TICKERS",
         "SIGNAL_WEIGHTS",
         "DISABLED_SIGNAL_MODULES",
+        "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",  # list[str] of strategy_ids
         "SECTOR_FORECAST_CONFIGS",  # dict[str, dict] per-sector forecast overrides
         "CORS_ALLOWED_ORIGINS",  # list[str] of allowed browser origins
         "PROMPT_REGISTRY_PINS",  # dict[str, str] {"prompt_id": "version"}
-        # ETF volatility-transmission overlay: three ticker/symbol lists.
-        "ETF_HOLDINGS_TICKERS",
-        "ETF_TRANSMISSION_WRAPPERS",
-        "ETF_TRANSMISSION_EXCLUDED_SYMBOLS",
         # Multi-horizon forecast backfill list
         "FORECAST_BACKFILL_HORIZONS",
         "DUAL_MOMENTUM_RISKY_ASSETS",

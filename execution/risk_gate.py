@@ -19,7 +19,7 @@ Design
 
 Checks (execution order)
 ------------------------
-0.  dynamic_circuit_breaker — SOFT_HALT (blocks BUY) / HARD_HALT (blocks all)
+0.  kill_switch_halt        — soft halt (blocks BUY) / hard halt (blocks all)
 1.  max_position_size       — notional > MAX_POSITION_WEIGHT * account equity
 2.  portfolio_heat          — adverse open drawdown > MAX_PORTFOLIO_HEAT (6%)
 3.  max_correlation         — |r| > MAX_CORRELATION (0.85) with any existing holding
@@ -39,18 +39,14 @@ import logging
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from execution.broker_base import AccountSnapshot, OrderIntent, OrderSide, PositionSnapshot
-from execution.dynamic_circuit_breaker import (
-    CircuitBreakerMetrics,
-    CircuitBreakerState,
-    DynamicCircuitBreaker,
-)
 from execution.kill_switch import GlobalKillSwitch
 from settings import settings
 
@@ -63,6 +59,13 @@ logger = logging.getLogger(__name__)
 _ET = ZoneInfo("America/New_York")
 _RTH_OPEN = (9, 30)    # 09:30 ET
 _RTH_CLOSE = (16, 0)   # 16:00 ET
+
+
+class HaltState(str, Enum):
+    """Trading halt level read from the ``GlobalKillSwitch`` sentinel files."""
+    NORMAL = "NORMAL"
+    SOFT_HALT = "SOFT_HALT"
+    HARD_HALT = "HARD_HALT"
 
 
 @dataclass
@@ -99,14 +102,11 @@ class RiskContext:
         When True, stress_scenario_check (VIX > 30) applies.
     current_prices : dict[str, float]
         Symbol → last price for position-size check.
-    circuit_breaker_state : CircuitBreakerState | str | None
-        Explicit circuit breaker state override.
-    circuit_breaker_reason : str | None
-        Reason string for circuit breaker state.
-    circuit_breaker_metrics : CircuitBreakerMetrics | None
-        Full circuit breaker metrics snapshot.
-    circuit_breaker : DynamicCircuitBreaker | None
-        DynamicCircuitBreaker instance for order intent evaluation.
+    halt_state : HaltState | str | None
+        Explicit halt-state override (tests / callers that already read the
+        kill switch). ``None`` reads the ``GlobalKillSwitch`` sentinel files.
+    halt_reason : str | None
+        Reason string for an explicit ``halt_state``.
     timestamp : datetime | None
         Override wall-clock time (UTC or naïve-UTC) for deterministic tests of
         market_hours_check and max_order_rate_check.
@@ -119,16 +119,14 @@ class RiskContext:
     validation_reports: dict[str, bool] = field(default_factory=dict)
     is_premium_sell_strategy: bool = False
     current_prices: dict[str, float] = field(default_factory=dict)
-    circuit_breaker_state: Optional[Union[CircuitBreakerState, str]] = None
-    circuit_breaker_reason: Optional[str] = None
-    circuit_breaker_metrics: Optional[CircuitBreakerMetrics] = None
-    circuit_breaker: Optional[DynamicCircuitBreaker] = None
+    halt_state: Optional[HaltState | str] = None
+    halt_reason: Optional[str] = None
     timestamp: Optional[datetime] = None
 
 
 class PreTradeRiskGate:
     """
-    Eleven-check pre-trade risk pipeline (Check #0 dynamic circuit breaker + Checks #1-10).
+    Eleven-check pre-trade risk pipeline (Check #0 kill-switch halt + Checks #1-10).
 
     Thresholds default to ``settings.*`` counterparts and can be overridden
     per-instance for unit tests without monkey-patching global settings.
@@ -145,7 +143,7 @@ class PreTradeRiskGate:
         hmm_risk_off_block_threshold: Optional[float] = None,
         enforce_market_hours: Optional[bool] = None,
         require_validation_report: bool = False,
-        circuit_breaker: Optional[DynamicCircuitBreaker] = None,
+        side_effects: bool = True,
     ) -> None:
         self.max_position_size_pct = (
             max_position_size_pct
@@ -181,7 +179,13 @@ class PreTradeRiskGate:
         # When True, block a strategy that has no entry in validation_reports.
         # Default False: unknown strategy passes conservatively.
         self.require_validation_report = require_validation_report
-        self.circuit_breaker = circuit_breaker
+        # False = a read-only "what would the gate say" run (the daemon's
+        # shadow execution queue, step 5.2): the verdicts are identical, but
+        # no alert is sent and nothing is appended to risk_gate_blocks.jsonl,
+        # so a comparison run can't page the operator or inflate the block
+        # count the dashboard shows. Default True keeps every existing
+        # caller's behaviour.
+        self.side_effects = bool(side_effects)
 
         # Rolling deque of UTC timestamps for rate-limit tracking.
         # Only populated when ALL prior checks pass — blocked orders never burn budget.
@@ -191,121 +195,78 @@ class PreTradeRiskGate:
     # Individual checks
     # ------------------------------------------------------------------
 
-    def dynamic_circuit_breaker_check(
+    def kill_switch_halt_check(
         self, intent: OrderIntent, context: RiskContext
     ) -> RiskCheckResult:
-        """Check #0: Dynamic Circuit Breaker & Flash Guard.
+        """Check #0: kill-switch halt.
 
-        Blocks risk-increasing BUY orders under SOFT_HALT (permits risk-reducing SELL / exit orders).
-        Blocks all orders under HARD_HALT.
+        Blocks risk-increasing BUY orders under SOFT_HALT (risk-reducing SELL /
+        exit orders still pass) and blocks all orders under HARD_HALT.
+
+        The state comes from ``context.halt_state`` when a caller supplies one,
+        otherwise from the ``GlobalKillSwitch`` sentinel files. If reading the
+        sentinels fails, the check fails SAFE to SOFT_HALT rather than letting
+        the order through as if nothing were set.
         """
-        name = "dynamic_circuit_breaker"
-        cb = context.circuit_breaker or self.circuit_breaker
-        state: Optional[CircuitBreakerState] = None
+        name = "kill_switch_halt"
+        state: Optional[HaltState] = None
         reason = ""
 
-        if context.circuit_breaker_state is not None:
-            raw_state = context.circuit_breaker_state
-            if isinstance(raw_state, CircuitBreakerState):
-                state = raw_state
-            else:
-                try:
-                    state = CircuitBreakerState(str(raw_state))
-                except ValueError:
-                    state = None
-            reason = context.circuit_breaker_reason or ""
-            if not reason and context.circuit_breaker_metrics:
-                reason = context.circuit_breaker_metrics.reason or ""
-
-        elif context.circuit_breaker_metrics is not None:
-            state = context.circuit_breaker_metrics.state
-            reason = context.circuit_breaker_metrics.reason or ""
-
-        elif cb is not None:
-            allowed, eval_reason = cb.evaluate_order_intent(intent)
-            if not allowed:
-                self._alert_circuit_breaker(cb.current_state.value, eval_reason or "", intent.symbol)
-                return RiskCheckResult(name, False, eval_reason or "circuit breaker blocked order")
-            state = cb.current_state
-            reason = cb.current_metrics.reason or ""
-
+        if context.halt_state is not None:
+            try:
+                state = HaltState(context.halt_state)
+            except ValueError:
+                state = None
+            reason = context.halt_reason or ""
         else:
-            # File-based sentinel fallback — no DynamicCircuitBreaker instance
-            # was injected via context/self.circuit_breaker, so evaluate
-            # against (a) the GlobalKillSwitch sentinel files (both HARD and
-            # SOFT halt — a prior version of this branch only ever checked
-            # soft-halt) and (b) whatever a live updater (or a previous
-            # process) persisted to output/circuit_breaker_state.json via
-            # DynamicCircuitBreaker.load_metrics(). The two signals are
-            # independent (either can be set without the other), so take the
-            # MORE SEVERE of the two rather than letting one silently shadow
-            # the other. Any failure while evaluating this fallback must
-            # fail SAFE — set SOFT_HALT with a clear reason — never silently
-            # fall through as if everything were NORMAL.
             try:
                 ks = GlobalKillSwitch()
-                fallback_state: Optional[CircuitBreakerState] = None
-                fallback_reason = ""
-
                 if ks.is_active():
-                    fallback_state = CircuitBreakerState.HARD_HALT
-                    fallback_reason = ks.reason()
+                    state = HaltState.HARD_HALT
+                    reason = ks.reason()
                 elif ks.is_soft_halt_active():
-                    fallback_state = CircuitBreakerState.SOFT_HALT
-                    fallback_reason = ks.soft_halt_reason()
-
-                persisted = DynamicCircuitBreaker().load_metrics()
-                if persisted is not None:
-                    severity = {
-                        CircuitBreakerState.SOFT_HALT: 1,
-                        CircuitBreakerState.HARD_HALT: 2,
-                    }
-                    current_severity = severity.get(fallback_state, 0)
-                    persisted_severity = severity.get(persisted.state, 0)
-                    if persisted_severity > current_severity:
-                        fallback_state = persisted.state
-                        fallback_reason = persisted.reason or ""
-
-                state = fallback_state
-                reason = fallback_reason
+                    state = HaltState.SOFT_HALT
+                    reason = ks.soft_halt_reason()
             except Exception as exc:
                 logger.error(
-                    "risk_gate: dynamic_circuit_breaker_check file-sentinel fallback "
-                    "evaluation failed (%s) — failing SAFE to SOFT_HALT rather than "
+                    "risk_gate: kill_switch_halt_check could not read the kill-switch "
+                    "sentinels (%s) — failing SAFE to SOFT_HALT rather than "
                     "silently passing the order through.",
                     exc, exc_info=True,
                 )
-                state = CircuitBreakerState.SOFT_HALT
-                reason = f"circuit breaker fallback evaluation failed: {exc}"
+                state = HaltState.SOFT_HALT
+                reason = f"kill-switch halt evaluation failed: {exc}"
 
-        if state == CircuitBreakerState.HARD_HALT:
-            msg = f"HARD_HALT active: {reason or 'Dynamic circuit breaker tripped'} — all order submissions blocked"
-            self._alert_circuit_breaker("HARD_HALT", reason, intent.symbol)
+        if state == HaltState.HARD_HALT:
+            msg = f"HARD_HALT active: {reason or 'kill switch engaged'} — all order submissions blocked"
+            self._alert_halt("HARD_HALT", reason, intent.symbol)
             return RiskCheckResult(name, False, msg)
 
-        if state == CircuitBreakerState.SOFT_HALT:
+        if state == HaltState.SOFT_HALT:
             if intent.side == OrderSide.BUY:
-                msg = f"SOFT_HALT active: {reason or 'Dynamic circuit breaker tripped'} — risk-increasing BUY orders blocked"
-                self._alert_circuit_breaker("SOFT_HALT", reason, intent.symbol)
+                msg = f"SOFT_HALT active: {reason or 'soft halt engaged'} — risk-increasing BUY orders blocked"
+                self._alert_halt("SOFT_HALT", reason, intent.symbol)
                 return RiskCheckResult(name, False, msg)
             return RiskCheckResult(
                 name, True, f"SOFT_HALT active — risk-reducing SELL allowed ({reason or 'soft halt'})"
             )
 
-        return RiskCheckResult(name, True, "circuit breaker state: NORMAL/CAUTION")
+        return RiskCheckResult(name, True, "halt state: NORMAL")
 
-    def _alert_circuit_breaker(self, state_str: str, reason: str, symbol: str) -> None:
-        """Dispatch an alert when dynamic circuit breaker blocks an order."""
+    def _alert_halt(self, state_str: str, reason: str, symbol: str) -> None:
+        """Dispatch an alert when a kill-switch halt blocks an order."""
+        if not getattr(self, "side_effects", True):
+            return
         try:
             from observability.alerts import send_alert
             send_alert(
                 "WARNING" if state_str == "SOFT_HALT" else "CRITICAL",
-                f"Dynamic circuit breaker {state_str} blocked order for {symbol}. Reason: {reason}",
-                extra={"type": "circuit_breaker", "state": state_str, "reason": reason, "symbol": symbol},
-                dedup_key="dynamic_circuit_breaker",
+                f"Kill-switch {state_str} blocked order for {symbol}. Reason: {reason}",
+                extra={"type": "kill_switch_halt", "state": state_str, "reason": reason, "symbol": symbol},
+                dedup_key="kill_switch_halt",
             )
         except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("risk_gate: send_alert on dynamic_circuit_breaker failed (%s)", exc)
+            logger.debug("risk_gate: send_alert on kill_switch_halt failed (%s)", exc)
 
     def max_position_size_check(
         self, intent: OrderIntent, context: RiskContext
@@ -367,6 +328,8 @@ class PreTradeRiskGate:
         (CONSTRAINT #6) — a broken alert channel must never affect the
         already-computed risk-gate verdict.
         """
+        if not getattr(self, "side_effects", True):
+            return
         try:
             from observability.alerts import send_alert
             send_alert(
@@ -442,6 +405,8 @@ class PreTradeRiskGate:
         a broken alert channel must never affect the already-computed
         risk-gate verdict.
         """
+        if not getattr(self, "side_effects", True):
+            return
         try:
             from observability.alerts import send_alert
             send_alert(
@@ -650,7 +615,7 @@ class PreTradeRiskGate:
             ``results`` contains checks evaluated up to and including the first failure.
         """
         checks = [
-            self.dynamic_circuit_breaker_check,  # Check #0: Dynamic Circuit Breaker & Flash Guard
+            self.kill_switch_halt_check,  # Check #0: kill-switch soft/hard halt
             self.max_position_size_check,
             self.portfolio_heat_check,
             self.max_correlation_check,
@@ -695,6 +660,8 @@ class PreTradeRiskGate:
         for performance).  The dashboard reads the tail of this file for display.
         Errors are swallowed so a logging failure never impacts order flow.
         """
+        if not getattr(self, "side_effects", True):
+            return
         try:
             log_path: Path = settings.OUTPUT_DIR / "risk_gate_blocks.jsonl"
             entry = {

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
+import toast from "react-hot-toast";
 import { api } from "../api/client";
-import type { AutomationStatus } from "../api/types";
+import type { AutomationStatus, ExecutionModeUpdateResult } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { Button, Input, Loading, ErrorState, Notice } from "../components/ui";
@@ -23,6 +24,10 @@ export function SettingsGeneral() {
     status: statusHttpStatus,
     reload: reloadStatus,
   } = useApi<AutomationStatus>(() => api.getAutomationStatus(), []);
+  // Held HERE, above the loading early-return, so a store-conflict warning
+  // from the last mode change survives the status reload that follows it
+  // (the reload unmounts ExecutionModeSection while it is in flight).
+  const [lastModeResult, setLastModeResult] = useState<ExecutionModeUpdateResult | null>(null);
 
   if (statusLoading) return <Loading />;
   if (statusError) return <ErrorState message={statusError} status={statusHttpStatus} onRetry={reloadStatus} />;
@@ -49,8 +54,10 @@ export function SettingsGeneral() {
       <ExecutionModeSection
         advisoryOnly={status.advisory_only}
         dryRun={status.dry_run}
-        alpacaPaper={status.alpaca_paper}
+        paperTrading={status.paper_trading}
         onChanged={reloadStatus}
+        lastResult={lastModeResult}
+        onResult={setLastModeResult}
       />
 
       <PwaStatusSection />
@@ -102,10 +109,9 @@ function SignalGenerationSection({
  * Every mode change writes ADVISORY_ONLY -- "the single highest-consequence
  * write in the whole settings surface" (settings_keysets.py) -- and any mode
  * other than "advisory" also writes DRY_RUN. Both are
- * `settings_keysets.DANGEROUS_KEYS` fields (ALPACA_PAPER, also written for
- * non-advisory modes, is NOT -- it's Alpaca's own paper/live account
- * selector, not a broker-agnostic quarantine, and deliberately left
- * unhardened here), and the backend now rejects this write (422, nothing
+ * `settings_keysets.DANGEROUS_KEYS` fields (PAPER_TRADING, also written for
+ * non-advisory modes, is NOT -- it's the platform-wide paper/live posture
+ * flag, not a quarantine, and deliberately left unhardened here), and the backend now rejects this write (422, nothing
  * written) unless every one of them is echoed back in `confirm` -- the SAME
  * contract `PUT /settings/tunables` enforces for ADVISORY_ONLY/DRY_RUN via
  * its own `DangerousConfirmDialog` (GenericSettingsEditor.tsx). This helper
@@ -120,13 +126,18 @@ function dangerousKeysFor(mode: "advisory" | "simulation" | "paper" | "live"): s
 function ExecutionModeSection({
   advisoryOnly,
   dryRun,
-  alpacaPaper,
+  paperTrading,
   onChanged,
+  lastResult = null,
+  onResult,
 }: {
   advisoryOnly: boolean;
   dryRun: boolean;
-  alpacaPaper: boolean;
+  paperTrading: boolean;
   onChanged: () => void;
+  /** The last mode change's result, owned by the parent so it survives a reload. */
+  lastResult?: ExecutionModeUpdateResult | null;
+  onResult?: (r: ExecutionModeUpdateResult) => void;
 }) {
   const [selectedMode, setSelectedMode] = useState<"advisory" | "simulation" | "paper" | "live" | null>(null);
   const [typed, setTyped] = useState<Record<string, string>>({});
@@ -135,7 +146,7 @@ function ExecutionModeSection({
     ? "advisory"
     : dryRun
     ? "simulation"
-    : alpacaPaper
+    : paperTrading
     ? "paper"
     : "live";
 
@@ -146,7 +157,9 @@ function ExecutionModeSection({
         advisory_only: mode === "advisory",
         confirm: buildConfirmMap(dangerousKeysFor(mode)),
       }),
-    { successMessage: (result) => `Execution mode changed to ${result.mode}` }
+    // No blanket successMessage: a 200 can still carry a store_conflict (the
+    // .env write landed but the mode is NOT in force), so the toast is chosen
+    // from the result in confirmChange below, never a fixed "changed".
   );
 
   const pendingDangerous = selectedMode ? dangerousKeysFor(selectedMode) : [];
@@ -177,6 +190,16 @@ function ExecutionModeSection({
     // must leave the dialog open with its error visible, not silently
     // vanish as if it had applied.
     if (res) {
+      if (res.ok) {
+        toast.success(`Execution mode changed to ${res.mode}`);
+      } else {
+        toast.error(
+          res.advisory_only && res.quarantine_engaged !== true
+            ? "Saved, but the ADVISORY_ONLY quarantine is NOT engaged"
+            : "Saved, but the new execution mode is NOT fully in force",
+        );
+      }
+      onResult?.(res);
       closeConfirm();
       onChanged();
     }
@@ -187,6 +210,26 @@ function ExecutionModeSection({
       <div style={{ marginBottom: "var(--s-3)", color: "var(--text-muted)" }}>
         Controls whether the orchestrator is permitted to place live trades or is quarantined.
       </div>
+      {lastResult?.store_conflict && (
+        <Notice
+          variant="warn"
+          style={{ marginBottom: "var(--s-3)" }}
+          data-testid="execution-mode-store-conflict"
+        >
+          <span>⚠️</span>
+          <span>
+            <strong>
+              {lastResult.advisory_only && lastResult.quarantine_engaged !== true
+                ? "Quarantine NOT engaged. "
+                : "Mode change not fully in force. "}
+            </strong>
+            {lastResult.store_conflict.message}{" "}
+            {lastResult.store_conflict.keys
+              .map((k) => `${k}: ${lastResult.store_conflict?.reasons[k] ?? "unknown"}`)
+              .join("; ")}
+          </span>
+        </Notice>
+      )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--s-2-5)" }}>
         <Button
           variant={currentMode === "advisory" ? "primary" : "neutral"}
@@ -284,7 +327,7 @@ function ResetOnboardingSection() {
     <SectionCard title="Reset onboarding">
       <p style={{ color: theme.textSecondary, fontSize: "var(--t-body)", marginTop: 0, marginBottom: "var(--s-3)" }}>
         Clears the local "onboarding complete" marker and returns to the
-        Choose Pilot step. Does not touch any account, follow, or backend
+        Choose Pilot step. Does not touch any account or backend
         state — this is a local device setting only.
       </p>
       <Button variant="neutral" onClick={() => setConfirming(true)}>

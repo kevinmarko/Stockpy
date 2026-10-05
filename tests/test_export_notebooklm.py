@@ -1,9 +1,9 @@
 """Tests for scripts/export_notebooklm.py.
 
 ``build_export()`` writes a consolidated ``notebooklm_source.md`` (Macro
-Context, Current Portfolio, Active Pilot Follows -- unchanged from the
-original single-file export) PLUS 5 modular per-domain files under
-``notebooklm/`` (macro & regime, portfolio & Greeks, signals & picks, trade
+Context and Current Portfolio; the Active Pilot Follows section went with
+Follow-a-Pilot, 2026-09, step 4c) PLUS 5 modular per-domain files under
+``notebooklm/`` (macro & regime, portfolio holdings, signals & picks, trade
 journal, options matrix). Part 1 of this suite (below) covers the original
 consolidated-only behavior:
 
@@ -11,14 +11,13 @@ consolidated-only behavior:
    renders as an honest zero (CONSTRAINT #4: missing data and a real zero
    balance must never be conflated).
 2. ``build_export()`` happy path — real-shaped ``AccountSnapshot`` /
-   ``PortfolioPosition`` DTOs and follow dicts produce the expected Markdown.
+   ``PortfolioPosition`` DTOs produce the expected Markdown.
 3. Each section degrades independently to its own honest "unavailable" text
    on failure, without crashing the whole export and without dragging the
    other two sections down with it.
 4. ``HistoricalStore(readonly=True)`` construction failing degrades BOTH
-   store-dependent sections (macro, portfolio) while the Follows section
-   (independent of ``store``) still works.
-5. A later item in a multi-position/multi-follow list that fails to format
+   store-dependent sections (macro, portfolio) honestly.
+5. A later item in a multi-position list that fails to format
    must never leave earlier real lines in the document alongside the
    section's "unavailable" fallback (each section commits its buffered
    output atomically, all-or-nothing).
@@ -112,15 +111,6 @@ class _FakeHistoricalStore:
         return self._latest_account_snapshot()
 
 
-class _FakeFollowsStore:
-    def __init__(self, rows=None, raise_exc=None):
-        self._rows = rows or []
-        self._raise_exc = raise_exc
-
-    def list_active(self):
-        if self._raise_exc is not None:
-            raise self._raise_exc
-        return self._rows
 
 
 def _read_export(tmp_path: Path) -> str:
@@ -191,13 +181,6 @@ class TestBuildExportHappyPath:
         )
         monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
 
-        follow_rows = [
-            {"pilot_id": "pilot-alpha", "amount": 2500.0, "status": "active"},
-            {"pilot_id": "pilot-beta", "amount": 1000.0, "status": "active"},
-        ]
-        monkeypatch.setattr(
-            notebooklm, "FollowsStore", lambda: _FakeFollowsStore(rows=follow_rows)
-        )
 
         notebooklm.build_export()
 
@@ -220,10 +203,9 @@ class TestBuildExportHappyPath:
         assert "### Positions" in text
         assert "**AAPL** (Apple Inc.): 10.0 shares @ $150.00 (Market Value: $1,750.00)" in text
 
-        # Follows section.
-        assert "## Active Pilot Follows" in text
-        assert "**Pilot ID**: pilot-alpha | **Amount**: $2,500.00 | **Status**: active" in text
-        assert "**Pilot ID**: pilot-beta | **Amount**: $1,000.00 | **Status**: active" in text
+        # Follow-a-Pilot was archived (2026-09, step 4c): no follows section.
+        assert "Pilot Follows" not in text
+        assert "pilot follows" not in text
 
     def test_respects_output_dir(self, tmp_path: Path, monkeypatch):
         custom_dir = tmp_path / "custom_output"
@@ -231,7 +213,6 @@ class TestBuildExportHappyPath:
         monkeypatch.setattr(
             notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
         )
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
 
         assert not custom_dir.exists()
         notebooklm.build_export()
@@ -243,7 +224,6 @@ class TestBuildExportHappyPath:
         _patch_output_dir(monkeypatch, tmp_path)
         fake_store = _FakeHistoricalStore(latest_account_snapshot=_zero_balance_snapshot)
         monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
 
         notebooklm.build_export()
         text = _read_export(tmp_path)
@@ -266,22 +246,10 @@ class TestBuildExportHappyPath:
         )
         fake_store = _FakeHistoricalStore(latest_account_snapshot=lambda: snap)
         monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
 
         notebooklm.build_export()
         text = _read_export(tmp_path)
         assert "No open positions." in text
-
-    def test_no_active_follows_renders_honest_message(self, tmp_path: Path, monkeypatch):
-        _patch_output_dir(monkeypatch, tmp_path)
-        monkeypatch.setattr(
-            notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
-        )
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore(rows=[]))
-
-        notebooklm.build_export()
-        text = _read_export(tmp_path)
-        assert "No active pilot follows." in text
 
 
 # ---------------------------------------------------------------------------
@@ -299,10 +267,6 @@ class TestBuildExportDegradedSections:
             get_macro=_boom_get_macro, latest_account_snapshot=_real_snapshot
         )
         monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
-        follow_rows = [{"pilot_id": "pilot-alpha", "amount": 500.0, "status": "active"}]
-        monkeypatch.setattr(
-            notebooklm, "FollowsStore", lambda: _FakeFollowsStore(rows=follow_rows)
-        )
 
         notebooklm.build_export()
         text = _read_export(tmp_path)
@@ -310,7 +274,6 @@ class TestBuildExportDegradedSections:
         assert "Macro data is currently unavailable." in text
         # Other sections must still render correctly.
         assert "**Total Equity**: $6,750.00" in text
-        assert "**Pilot ID**: pilot-alpha" in text
 
     def test_macro_section_empty_series_degrades_honestly(self, tmp_path: Path, monkeypatch):
         """All three macro series empty (not an exception) -> honest unavailable text."""
@@ -320,7 +283,6 @@ class TestBuildExportDegradedSections:
             latest_account_snapshot=_real_snapshot,
         )
         monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
 
         notebooklm.build_export()
         text = _read_export(tmp_path)
@@ -339,10 +301,6 @@ class TestBuildExportDegradedSections:
             latest_account_snapshot=_boom_snapshot,
         )
         monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
-        follow_rows = [{"pilot_id": "pilot-gamma", "amount": 750.0, "status": "active"}]
-        monkeypatch.setattr(
-            notebooklm, "FollowsStore", lambda: _FakeFollowsStore(rows=follow_rows)
-        )
 
         notebooklm.build_export()
         text = _read_export(tmp_path)
@@ -350,43 +308,20 @@ class TestBuildExportDegradedSections:
         assert "Portfolio snapshot is unavailable." in text
         # Other sections must still render correctly.
         assert "**VIX**: 20.0" in text
-        assert "**Pilot ID**: pilot-gamma" in text
 
     def test_portfolio_none_snapshot_degrades_honestly(self, tmp_path: Path, monkeypatch):
         """latest_account_snapshot() returning None (no exception) -> honest text."""
         _patch_output_dir(monkeypatch, tmp_path)
         fake_store = _FakeHistoricalStore(latest_account_snapshot=lambda: None)
         monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
 
         notebooklm.build_export()
         text = _read_export(tmp_path)
         assert "Portfolio snapshot is unavailable." in text
 
-    def test_follows_section_degrades_others_unaffected(self, tmp_path: Path, monkeypatch):
-        _patch_output_dir(monkeypatch, tmp_path)
-        fake_store = _FakeHistoricalStore(
-            get_macro=lambda series_id: _macro_series(15.0),
-            latest_account_snapshot=_real_snapshot,
-        )
-        monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
-        monkeypatch.setattr(
-            notebooklm,
-            "FollowsStore",
-            lambda: _FakeFollowsStore(raise_exc=RuntimeError("follows.json corrupt")),
-        )
-
-        notebooklm.build_export()
-        text = _read_export(tmp_path)
-
-        assert "Active pilot follows are unavailable." in text
-        # Other sections must still render correctly.
-        assert "**VIX**: 15.0" in text
-        assert "**Total Equity**: $6,750.00" in text
-
-    def test_all_three_sections_fail_independently(self, tmp_path: Path, monkeypatch):
+    def test_all_sections_fail_independently(self, tmp_path: Path, monkeypatch):
         """Every section fails at once -> build_export still completes and writes
-        three honest, independent "unavailable" messages, never crashing."""
+        honest, independent "unavailable" messages, never crashing."""
         _patch_output_dir(monkeypatch, tmp_path)
 
         def _boom(*_a, **_k):
@@ -394,16 +329,12 @@ class TestBuildExportDegradedSections:
 
         fake_store = _FakeHistoricalStore(get_macro=_boom, latest_account_snapshot=_boom)
         monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
-        monkeypatch.setattr(
-            notebooklm, "FollowsStore", lambda: _FakeFollowsStore(raise_exc=RuntimeError("x"))
-        )
 
         notebooklm.build_export()  # must not raise
         text = _read_export(tmp_path)
 
         assert "Macro data is currently unavailable." in text
         assert "Portfolio snapshot is unavailable." in text
-        assert "Active pilot follows are unavailable." in text
 
 
 # ---------------------------------------------------------------------------
@@ -421,19 +352,13 @@ class TestHistoricalStoreConstructionFailure:
 
         monkeypatch.setattr(notebooklm, "HistoricalStore", _boom_construct)
 
-        follow_rows = [{"pilot_id": "pilot-delta", "amount": 300.0, "status": "active"}]
-        monkeypatch.setattr(
-            notebooklm, "FollowsStore", lambda: _FakeFollowsStore(rows=follow_rows)
-        )
 
         notebooklm.build_export()  # must not raise
         text = _read_export(tmp_path)
 
         assert "Macro data is currently unavailable." in text
         assert "Portfolio snapshot is unavailable." in text
-        # Follows is independent of `store` and must still succeed.
-        assert "**Pilot ID**: pilot-delta | **Amount**: $300.00 | **Status**: active" in text
-        assert "Active pilot follows are unavailable." not in text
+
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +373,6 @@ class TestNeverFabricates:
             latest_account_snapshot=lambda: None,
         )
         monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
 
         notebooklm.build_export()
         text = _read_export(tmp_path)
@@ -483,7 +407,6 @@ class TestNeverFabricates:
         )
         fake_store = _FakeHistoricalStore(latest_account_snapshot=lambda: snap)
         monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
 
         notebooklm.build_export()
         text = _read_export(tmp_path)
@@ -539,7 +462,6 @@ class TestPartialAppendProtection:
         )
         fake_store = _FakeHistoricalStore(latest_account_snapshot=lambda: snap)
         monkeypatch.setattr(notebooklm, "HistoricalStore", lambda readonly=True: fake_store)
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
 
         notebooklm.build_export()
         text = _read_export(tmp_path)
@@ -547,30 +469,6 @@ class TestPartialAppendProtection:
         assert "Portfolio snapshot is unavailable." in text
         assert "Total Equity" not in text
         assert "AAPL" not in text
-
-    def test_follows_later_row_failure_leaves_no_partial_data(
-        self, tmp_path: Path, monkeypatch
-    ):
-        """A second follow row with a non-numeric amount must not leave the
-        first follow's line in the document alongside 'Active pilot follows
-        are unavailable.'."""
-        _patch_output_dir(monkeypatch, tmp_path)
-        monkeypatch.setattr(
-            notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
-        )
-        follow_rows = [
-            {"pilot_id": "pilot-alpha", "amount": 500.0, "status": "active"},
-            {"pilot_id": "pilot-beta", "amount": "corrupted", "status": "active"},
-        ]
-        monkeypatch.setattr(
-            notebooklm, "FollowsStore", lambda: _FakeFollowsStore(rows=follow_rows)
-        )
-
-        notebooklm.build_export()
-        text = _read_export(tmp_path)
-
-        assert "Active pilot follows are unavailable." in text
-        assert "pilot-alpha" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -585,7 +483,6 @@ class TestAtomicWrite:
         monkeypatch.setattr(
             notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
         )
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
 
         def _boom_write_text(self, *args, **kwargs):
             raise OSError("disk full")
@@ -618,7 +515,6 @@ class TestAtomicWrite:
         monkeypatch.setattr(
             notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
         )
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
 
         seen_tmp_names = []
         original_write_text = Path.write_text
@@ -791,54 +687,6 @@ def _real_state_snapshot_payload(signals: list) -> dict:
     }
 
 
-def _real_greeks_dict() -> dict:
-    """A REALISTIC, non-empty/non-zero portfolio Greeks dict matching
-    ``pilots/options_risk.py::calculate_portfolio_greeks``'s real populated
-    return shape -- every key that function actually returns, with genuine
-    non-zero values so a test can prove the generator surfaced the REAL
-    numbers rather than silently substituting a flat/empty result.
-    """
-    return {
-        "total_positions": 3,
-        "stock_positions_count": 1,
-        "option_positions_count": 2,
-        "net_delta_shares": 42.5,
-        "net_dollar_delta": 8500.25,
-        "net_gamma": 0.0231,
-        "net_theta_daily": -12.75,
-        "net_vega_1pct": 3.4,
-        "beta_weighted_delta_spy": 15.2,
-        "positions_with_missing_data": [],
-        "beta_excluded_symbols": [],
-        "symbols_with_estimated_beta": ["AAPL"],
-        "spy_spot": 550.10,
-        "spy_spot_resolved": True,
-        "positions": [{"symbol": "AAPL", "position_delta": 42.5}],
-    }
-
-
-def _empty_book_greeks_dict() -> dict:
-    """The REAL all-zero (genuinely zero, not missing) shape
-    ``calculate_portfolio_greeks`` returns for an empty book."""
-    return {
-        "total_positions": 0,
-        "stock_positions_count": 0,
-        "option_positions_count": 0,
-        "net_delta_shares": 0.0,
-        "net_dollar_delta": 0.0,
-        "net_gamma": 0.0,
-        "net_theta_daily": 0.0,
-        "net_vega_1pct": 0.0,
-        "beta_weighted_delta_spy": 0.0,
-        "positions_with_missing_data": [],
-        "beta_excluded_symbols": [],
-        "symbols_with_estimated_beta": [],
-        "spy_spot": None,
-        "spy_spot_resolved": True,
-        "positions": [],
-    }
-
-
 def _real_trade_history_unavailable_view() -> dict:
     """The real ``available: False`` cold-start/failure shape from
     ``pilots/trade_history.py::_empty_view`` -- distinct from a genuine "0
@@ -948,9 +796,6 @@ def _mock_all_modular_upstreams(monkeypatch, tmp_path: Path) -> None:
     _patch_output_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(
         notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
-    )
-    monkeypatch.setattr(
-        "pilots.paper_broker.get_portfolio_greeks", lambda: _empty_book_greeks_dict()
     )
     monkeypatch.setattr(
         "pilots.trade_history.trade_history_view",
@@ -1115,90 +960,28 @@ class TestNaNFormattingAcrossHelpers:
 
 
 # ---------------------------------------------------------------------------
-# BUG CLASS #1: Portfolio Greeks correct delegation
+# Portfolio section: the options-Greeks half was removed (2026-09, step 4a)
 # ---------------------------------------------------------------------------
 
-class TestPortfolioGreeksDelegation:
-    def test_delegates_to_paper_broker_get_portfolio_greeks_exactly_once(
+class TestPortfolioSectionHasNoGreeks:
+    def test_portfolio_source_has_no_greeks_section_and_no_options_import(
         self, tmp_path: Path, monkeypatch
     ):
-        """REGRESSION (CRITICAL fabrication bug): the prior generator
-        reinvented Greeks wiring instead of delegating to
-        ``pilots.paper_broker.get_portfolio_greeks()`` (which itself
-        resolves a real SPY spot and never fabricates a default price).
-        Proves the generator calls THAT function specifically -- not
-        ``pilots.options_risk.calculate_portfolio_greeks`` directly -- with
-        realistic non-zero output surviving into the rendered text."""
-        call_log = []
+        """The portfolio document no longer renders a Greeks section and never
+        imports an options module -- proven by blocking pilots.options_risk
+        in sys.modules."""
+        import sys
 
-        def _fake_get_portfolio_greeks():
-            call_log.append(1)
-            return _real_greeks_dict()
-
-        monkeypatch.setattr(
-            "pilots.paper_broker.get_portfolio_greeks", _fake_get_portfolio_greeks
-        )
-
+        monkeypatch.setitem(sys.modules, "pilots.options_risk", None)
         text = notebooklm.generate_portfolio_greeks_source(store=None, output_dir=tmp_path)
+        assert "Greeks" not in text
+        assert "## Account Liquidity & Capital Summary" in text
+        assert "## Open Positions & Basis" in text
 
-        assert len(call_log) == 1, (
-            "generate_portfolio_greeks_source must call "
-            "pilots.paper_broker.get_portfolio_greeks() exactly once"
-        )
-        assert "42.5" in text  # net_delta_shares
-        assert notebooklm._fmt_money(8500.25) in text  # net_dollar_delta
-        assert "15.2" in text  # beta_weighted_delta_spy
-        assert notebooklm._fmt_money(550.10) in text  # spy_spot
-
-    def test_never_calls_calculate_portfolio_greeks_directly(self, tmp_path: Path, monkeypatch):
-        """The generator must not bypass pilots.paper_broker and call
-        pilots.options_risk.calculate_portfolio_greeks itself."""
-        direct_call_log = []
-
-        def _boom_if_called_directly(*args, **kwargs):
-            direct_call_log.append(1)
-            return _real_greeks_dict()
-
-        monkeypatch.setattr(
-            "pilots.options_risk.calculate_portfolio_greeks", _boom_if_called_directly
-        )
-        monkeypatch.setattr(
-            "pilots.paper_broker.get_portfolio_greeks", lambda: _real_greeks_dict()
-        )
-
-        notebooklm.generate_portfolio_greeks_source(store=None, output_dir=tmp_path)
-
-        assert direct_call_log == [], (
-            "generate_portfolio_greeks_source must delegate to "
-            "pilots.paper_broker.get_portfolio_greeks(), never call "
-            "pilots.options_risk.calculate_portfolio_greeks() itself"
-        )
-
-    def test_empty_book_renders_honest_zeros_not_na(self, tmp_path: Path, monkeypatch):
-        """A genuinely empty paper book must render as honest zeros, not
-        N/A -- CONSTRAINT #4 applies symmetrically to a real 0 as much as
-        it does to a fabricated one. `store=None` here is deliberate (the
-        Greeks section has no dependency on `store` at all) and legitimately
-        makes the SEPARATE portfolio-snapshot section report "unavailable"
-        (already covered by its own tests) -- this test scopes its
-        assertion to the Greeks section specifically, not the whole
-        document."""
-        monkeypatch.setattr(
-            "pilots.paper_broker.get_portfolio_greeks", lambda: _empty_book_greeks_dict()
-        )
+    def test_missing_store_degrades_honestly(self, tmp_path: Path):
         text = notebooklm.generate_portfolio_greeks_source(store=None, output_dir=tmp_path)
-        greeks_section = text.split("## Net Portfolio Greeks", 1)[1]
-        greeks_section = greeks_section.split("## Open Positions", 1)[0]
-        assert "0" in greeks_section
-        assert "unavailable" not in greeks_section.lower()
-
-    def test_upstream_failure_degrades_honestly(self, tmp_path: Path, monkeypatch):
-        def _boom():
-            raise RuntimeError("PaperAccountStore DB unavailable")
-
-        monkeypatch.setattr("pilots.paper_broker.get_portfolio_greeks", _boom)
-        text = notebooklm.generate_portfolio_greeks_source(store=None, output_dir=tmp_path)
-        assert "unavailable" in text.lower()
+        assert "Portfolio snapshot is unavailable." in text
+        assert "Position details unavailable." in text
 
 
 # ---------------------------------------------------------------------------
@@ -1374,9 +1157,6 @@ class TestPerGeneratorCrashIsolation:
         _patch_output_dir(monkeypatch, tmp_path)
         monkeypatch.setattr(
             notebooklm, "HistoricalStore", lambda readonly=True: _FakeHistoricalStore()
-        )
-        monkeypatch.setattr(
-            "pilots.paper_broker.get_portfolio_greeks", lambda: _real_greeks_dict()
         )
         monkeypatch.setattr(
             "pilots.trade_history.trade_history_view",
@@ -1560,7 +1340,6 @@ class TestGenerateConsolidatedSourceModularNote:
             get_macro=lambda series_id: pd.Series([18.5], index=pd.to_datetime(["2026-07-31"])),
             latest_account_snapshot=_real_snapshot,
         )
-        monkeypatch.setattr(notebooklm, "FollowsStore", lambda: _FakeFollowsStore())
 
         text = notebooklm.generate_consolidated_source(fake_store, tmp_path)
 

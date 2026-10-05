@@ -58,11 +58,12 @@ describe("SymbolDetail screen (real mock API)", () => {
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
   });
 
-  it("renders the Forecast skill and Options premium sections", async () => {
+  it("renders the Forecast skill section and no options-desk surface (the options desk is archived)", async () => {
     renderSymbol("AAPL");
     await screen.findByRole("heading", { name: "AAPL" });
     expect(await screen.findByRole("heading", { name: "Forecast skill" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Options premium" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Options premium" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Trade Options" })).not.toBeInTheDocument();
   });
 
   it("renders the per-model forecast error chart with spelled-out labels, never the bare 'MAE' acronym", async () => {
@@ -72,9 +73,9 @@ describe("SymbolDetail screen (real mock API)", () => {
     await screen.findByRole("heading", { name: "AAPL" });
     const chart = await screen.findByTestId("forecast-error-chart");
     expect(chart).toBeInTheDocument();
-    // "MAE" already means something else on this exact screen (the options
-    // Realizable-theta / trade-quality "MAE" StatRow) -- this chart must
-    // never emit the bare acronym anywhere in its own subtree.
+    // "MAE" is ambiguous (trade-quality maximum adverse excursion vs. mean
+    // absolute error) -- this chart must never emit the bare acronym
+    // anywhere in its own subtree.
     expect(within(chart).queryByText(/^MAE$/)).not.toBeInTheDocument();
     expect(within(chart).queryByText(/\bMAE\b/)).not.toBeInTheDocument();
   });
@@ -111,19 +112,6 @@ describe("SymbolDetail screen (real mock API)", () => {
     await user.click(screen.getByRole("tab", { name: "90d" }));
     await screen.findByTestId("forecast-error-chart");
     expect(spy).toHaveBeenLastCalledWith("AAPL", 90);
-  });
-
-  it("a debit-spread symbol's options directive shows '—' for Realizable Daily Theta, never a fabricated $0.00", async () => {
-    // NVDA's mock directive is a Call Debit Spread carrying a raw
-    // Realizable_Daily_Theta of 0.0 (the pre-fix engine default) specifically
-    // to prove the shared optionsHonesty gate — not the raw field — drives
-    // this row.
-    renderSymbol("NVDA");
-    await screen.findByRole("heading", { name: "NVDA" });
-    await screen.findByText("Call Debit Spread");
-    const row = screen.getByText("Realizable θ/day").closest(".row") as HTMLElement;
-    const value = row.querySelector(".num") as HTMLElement;
-    expect(value.textContent).toBe("—");
   });
 
   describe("Rolling beta vs SPY section", () => {
@@ -282,7 +270,7 @@ describe("SymbolDetail screen (real mock API)", () => {
       expect(within(section).getByText("Catalysts")).toBeInTheDocument();
       expect(within(section).getByText("Risk factors")).toBeInTheDocument();
       expect(within(section).getByText("Recent developments")).toBeInTheDocument();
-      expect(within(section).getByText(/Finnhub headlines/)).toBeInTheDocument();
+      expect(within(section).getByText(/FMP headlines/)).toBeInTheDocument();
     });
 
     it("Opal research brief: an honest disabled reason renders the specific operator-facing message, never a generic error", async () => {

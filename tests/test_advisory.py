@@ -191,7 +191,7 @@ def _patch_heavy_engines(
     patches = [
         mock.patch("engine.advisory.ProcessingEngine", return_value=pe_mock),
         mock.patch("engine.advisory.ForecastingEngine", return_value=fe_mock),
-        mock.patch("engine.advisory.TechnicalOptionsEngine", return_value=toe_mock),
+        mock.patch("engine.advisory.GarchVolatilityEstimator", return_value=toe_mock),
         mock.patch("engine.advisory.StrategyEngine", return_value=se_mock),
     ]
     return patches
@@ -459,7 +459,7 @@ class TestAcceptanceCriteria:
         import unittest.mock as mock
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             pe_instance = MagicMock()
@@ -536,7 +536,7 @@ class TestAcceptanceCriteria:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             pe_instance = MagicMock()
@@ -614,7 +614,7 @@ class TestAcceptanceCriteria:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             pe_instance = MagicMock()
@@ -666,7 +666,7 @@ class TestAcceptanceCriteria:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE, \
              mock.patch("engine.advisory.estimate_win_rate_and_payoff") as mock_kelly_est, \
              mock.patch("engine.advisory.fractional_kelly") as mock_frac_kelly:
@@ -726,7 +726,7 @@ class TestDataQuality:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             for M in (MockPE, MockFE, MockTOE):
@@ -790,7 +790,7 @@ class TestDataQuality:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -828,7 +828,7 @@ class TestDataQuality:
             )
             with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
                  mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-                 mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+                 mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
                  mock.patch("engine.advisory.StrategyEngine") as MockSE:
                 MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
                 MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 100.5}
@@ -881,7 +881,7 @@ class TestContextExtrasThreading:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -918,7 +918,7 @@ class TestContextExtrasThreading:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -962,7 +962,7 @@ class TestContextExtrasThreading:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -1001,7 +1001,7 @@ class TestContextExtrasThreading:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -1057,7 +1057,7 @@ class TestContextExtrasThreading:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -1098,7 +1098,7 @@ class TestContextExtrasThreading:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -1136,7 +1136,7 @@ class TestCurrentRatioKeyIndicator:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -1166,7 +1166,7 @@ class TestCurrentRatioKeyIndicator:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -1202,7 +1202,7 @@ class TestPositionSizing:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -1233,7 +1233,7 @@ class TestPositionSizing:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE, \
              mock.patch("engine.advisory.fractional_kelly") as mock_fk, \
              mock.patch("engine.advisory.estimate_win_rate_and_payoff") as mock_est:
@@ -1272,7 +1272,7 @@ class TestPositionSizing:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE, \
              mock.patch("engine.advisory.fractional_kelly") as mock_fk, \
              mock.patch("engine.advisory.estimate_win_rate_and_payoff") as mock_est:
@@ -1330,7 +1330,7 @@ class TestDividendHoldBiasRule:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -1383,7 +1383,7 @@ class TestDividendHoldBiasRule:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
 
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
@@ -1427,7 +1427,7 @@ class TestSyntheticInputs:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
             # Even though the (mocked) engines return canned technicals, the
             # advisory layer must treat them as untrustworthy because the bar was
@@ -1459,7 +1459,7 @@ class TestSyntheticInputs:
         market = _make_market_provider(price=100.0, bars=_make_bars(252, 100.0))
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": 101.0}
@@ -1497,7 +1497,7 @@ class TestForecastSymmetry:
         ts = TransactionsStore(db_url="sqlite:///:memory:")
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": forecast_30}
@@ -1545,7 +1545,7 @@ class TestTacticalRangesAndExitSizing:
 
         with mock.patch("engine.advisory.ProcessingEngine") as MockPE, \
              mock.patch("engine.advisory.ForecastingEngine") as MockFE, \
-             mock.patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             mock.patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              mock.patch("engine.advisory.StrategyEngine") as MockSE:
             MockPE.return_value.calculate_technical_metrics.return_value = {"TEST": _MOCK_TECH}
             MockFE.return_value.generate_forecast.return_value = {"Forecast_30": forecast_30}
@@ -1652,7 +1652,7 @@ class TestPrecomputedGarchAndForecast:
 
         with patch("engine.advisory.ProcessingEngine") as MockPE, \
              patch("engine.advisory.ForecastingEngine") as MockFE, \
-             patch("engine.advisory.TechnicalOptionsEngine") as MockTOE, \
+             patch("engine.advisory.GarchVolatilityEstimator") as MockTOE, \
              patch("engine.advisory.StrategyEngine") as MockSE:
 
             pe_instance = MagicMock()

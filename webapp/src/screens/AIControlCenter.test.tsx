@@ -135,7 +135,7 @@ describe("AIControlCenter screen", () => {
     renderScreen();
     // The "AI Control Center" heading renders before the async getLlmStatus()
     // fetch resolves (the same shared-component-family race documented in
-    // FmpSettings.test.tsx / EtfTransmissionSettings.test.tsx), so findByRole
+    // FmpSettings.test.tsx), so findByRole
     // on the heading alone does not wait for the switches to mount --
     // findAllByRole (not getAllByRole) is required here.
     await screen.findByRole("heading", { name: "AI Control Center" });

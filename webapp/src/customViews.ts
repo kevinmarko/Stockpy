@@ -38,7 +38,6 @@ export interface CustomViewWidgets {
   pilotsTable: boolean;
   sentimentMini: boolean;
   portfolioHeat: boolean;
-  optionsDirective: boolean;
   signalBreakdown: boolean;
   macroRegime: boolean;
 }
@@ -66,11 +65,11 @@ const STORAGE_KEY = "stockpy.custom-views:v1";
  * conventions warn against. */
 const ALL_WIDGET_KEYS: (keyof CustomViewWidgets)[] = [
   "edgeByStrategy", "symbolOverlay", "aiChat", "pilotsTable", "sentimentMini",
-  "portfolioHeat", "optionsDirective", "signalBreakdown", "macroRegime",
+  "portfolioHeat", "signalBreakdown", "macroRegime",
 ];
 
 /** Coerces an arbitrary (possibly foreign, possibly hand-edited) value into
- * a well-formed `CustomViewWidgets` -- exactly the known 9 keys, each a real
+ * a well-formed `CustomViewWidgets` -- exactly the known 8 keys, each a real
  * boolean. Unknown keys are dropped; a missing/malformed key defaults to
  * `false` rather than crashing the whole import (CONSTRAINT #6-style
  * degrade, applied to client-side schema drift). */

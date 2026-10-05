@@ -6,7 +6,7 @@
 # Double-click from Finder (or the Dock) to install the launchd agent
 # com.investyo.stack, which starts (at login, and restarts on crash) the
 # always-on backend stack for the Pilots PWA:
-#   • orchestrator daemon — 5-min warm refresh + Control API :8601 + Pilots :8602
+#   • orchestrator daemon — warm refresh every ORCHESTRATOR_INTERVAL_SECONDS + Control API :8601 + Pilots :8602
 #   • data_api    :8603
 #   • metrics_api :8604
 #

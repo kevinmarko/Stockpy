@@ -9,8 +9,8 @@
  * via getAttribute rather than the `.inert` DOM property.
  *
  * Also covers the optional `contextText` prop (fed by webapp/src/chat/
- * ChatContext.tsx's `openChat(contextText)` — see e.g. the Options Matrix
- * screen's "Ask Gemini" button) being threaded through to the outgoing
+ * ChatContext.tsx's `openChat(contextText)` — see e.g. the custom Data App
+ * view's "Ask AI" button) being threaded through to the outgoing
  * `/api/chat` request body as the new `context` field (see
  * api/data_api.py::ChatMessageRequest.context), byte-for-byte absent when
  * no context was supplied.

@@ -13,7 +13,6 @@ import { Observability } from "./Observability";
 import { api } from "../api/client";
 import {
   mockEmptyLogAggregation,
-  mockEtfTransmissionDisabled,
   mockForecastSkillBySymbolEmpty,
   mockHeartbeatNoData,
   mockLatencyHeatmapDisabled,
@@ -95,7 +94,6 @@ const COLD_START: ObservabilitySummary = {
   // *NoData helper is the canonical mirror of its corresponding
   // pilots/observability.py _empty_* shape.
   sizing_cap_audit: mockSizingCapAuditDisabled(),
-  etf_transmission: mockEtfTransmissionDisabled(),
   heartbeat: mockHeartbeatNoData(),
   strategy_pnl: mockStrategyPnlEmpty(),
 };
@@ -124,7 +122,7 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     renderScreen();
     // The progressive-disclosure hierarchy means everything else (forecast
     // skill, circuit breakers, risk gate log, telemetry, data latency,
-    // sizing audit, ETF transmission, heartbeat, strategy P&L, logs, macro
+    // sizing audit, heartbeat, strategy P&L, logs, macro
     // sentiment) is a single collapsed <details> in normal document flow,
     // closed unless the operator opens it.
     const details = await screen.findByTestId("background-telemetry");
@@ -457,7 +455,7 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     expect(await screen.findByText(/network unreachable/)).toBeInTheDocument();
   });
 
-  // ---- G7: Sizing cap-event audit trail, ETF transmission, heartbeat, strategy P&L ----
+  // ---- G7: Sizing cap-event audit trail, heartbeat, strategy P&L ----
 
   it("renders the sizing cap-event audit trail rows and escalation state from the mock", async () => {
     renderScreen();
@@ -482,28 +480,12 @@ describe("Observability (Mission Control) screen (real mock API)", () => {
     expect(screen.queryByTestId("sizing-cap-event-row")).not.toBeInTheDocument();
   });
 
-  it("renders ETF transmission rows and the three master-switch tiles from the mock", async () => {
+  it("no longer renders the archived ETF volatility-transmission section (step 4d)", async () => {
     renderScreen();
-    expect(await screen.findByText("ETF volatility transmission")).toBeInTheDocument();
-    const rows = await screen.findAllByTestId("etf-transmission-row");
-    expect(rows.length).toBe(3);
-    // SPY's row shows "SPY" twice (symbol column + primary-wrapper column,
-    // since SPY IS its own wrapper) -- use getAllByText to avoid ambiguity.
-    expect(within(rows[0]).getAllByText("SPY").length).toBe(2);
-    expect(within(rows[0]).getByText("100.0%")).toBeInTheDocument();
-    // SPY's own multiplier is null (it IS the wrapper) and sizing is ON, so
-    // this renders the honest "—", not a fabricated 1.00x.
-    expect(within(rows[0]).getByText("—")).toBeInTheDocument();
-    expect(await screen.findByText("Portfolio covariance")).toBeInTheDocument();
-  });
-
-  it("a disabled ETF transmission measurement gate renders the honest reason, never a fabricated table", async () => {
-    vi.spyOn(api, "getObservabilitySummary").mockResolvedValueOnce(COLD_START);
-    renderScreen();
-    expect(
-      await screen.findByText(/ETF_TRANSMISSION_ENABLED is False/)
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Sizing cap-event audit trail")).toBeInTheDocument();
+    expect(screen.queryByText("ETF volatility transmission")).not.toBeInTheDocument();
     expect(screen.queryByTestId("etf-transmission-row")).not.toBeInTheDocument();
+    expect(screen.queryByText("Portfolio covariance")).not.toBeInTheDocument();
   });
 
   it("renders the current heartbeat age and status from the mock, with the no-history honesty note", async () => {

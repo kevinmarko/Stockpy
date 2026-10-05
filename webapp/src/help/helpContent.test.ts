@@ -17,7 +17,6 @@ const LIVE: Thresholds = {
   kelly_fraction: 0.5,
   kelly_cap: 0.2,
   robinhood_max_notional_per_order: 2500,
-  follow_min_amount: 100,
   agentic_max_candidates: 25,
   retrain_window_days: 30,
 };
@@ -78,14 +77,16 @@ describe("glossaryDef", () => {
     expect(def).not.toContain("$0.00");
   });
 
-  it("renders live values for follow minimum and opportunity scan", () => {
-    expect(glossaryDef("follow minimum", LIVE)).toContain("$100.00");
+  it("renders live values for opportunity scan", () => {
     expect(glossaryDef("opportunity scan", LIVE)).toContain("25 candidates");
   });
 
-  it("degrades follow minimum and opportunity scan to '—' when thresholds are null", () => {
-    expect(glossaryDef("follow minimum", null)).toContain("—");
+  it("degrades opportunity scan to '—' when thresholds are null", () => {
     expect(glossaryDef("opportunity scan", null)).toContain("— candidates");
+  });
+
+  it("no longer carries a 'follow minimum' glossary entry (Follow-a-Pilot was removed)", () => {
+    expect(glossaryDef("follow minimum", LIVE)).toBeUndefined();
   });
 });
 

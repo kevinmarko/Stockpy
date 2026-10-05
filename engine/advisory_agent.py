@@ -325,6 +325,64 @@ def is_us_market_open(now_utc: datetime) -> bool:
     return open_t <= now_et <= close_t
 
 
+_MARKET_OPEN_CACHE: Dict[str, Any] = {"at": None, "value": None}
+_MARKET_OPEN_CACHE_SECONDS = 60.0
+
+
+def _fmp_market_is_open() -> Optional[bool]:
+    """FMP's live ``isMarketOpen`` for NASDAQ, or None when unavailable."""
+    try:
+        from data import fmp_client
+
+        payload = fmp_client.exchange_market_hours("NASDAQ")
+        row = payload[0] if isinstance(payload, list) and payload else payload
+        value = row.get("isMarketOpen") if isinstance(row, dict) else None
+        return value if isinstance(value, bool) else None
+    except Exception as exc:  # noqa: BLE001 -- fall back to the local calendar
+        logger.debug("FMP market-hours lookup failed: %s", exc)
+        return None
+
+
+def is_us_market_open_now(now_utc: datetime) -> bool:
+    """Holiday- and early-close-aware "is the US market open right now".
+
+    Primary source: FMP ``exchange-market-hours`` ``isMarketOpen`` (covers
+    holidays and early closes), cached for 60 s. Fallback when FMP is
+    unavailable: :func:`is_us_market_open` (weekday 09:30-16:00 ET) AND today
+    is not an NYSE holiday (``holidays.NYSE``). Disclosed gap: the fallback
+    has no early-close data, so on a half day it reports open until 16:00.
+    Use this for anything that SUBMITS orders; the plain clock check remains
+    for display/cadence callers.
+    """
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    cached_at = _MARKET_OPEN_CACHE.get("at")
+    if cached_at is not None and abs((now_utc - cached_at).total_seconds()) < _MARKET_OPEN_CACHE_SECONDS:
+        return bool(_MARKET_OPEN_CACHE["value"])
+
+    value = _fmp_market_is_open()
+    if value is None:
+        value = is_us_market_open(now_utc)
+        if value:
+            try:
+                import holidays
+
+                if now_utc.astimezone(_ET).date() in holidays.NYSE():
+                    value = False
+            except Exception as exc:  # noqa: BLE001 -- no calendar: fail closed
+                logger.warning("NYSE holiday calendar unavailable (%s); treating market as closed.", exc)
+                value = False
+    _MARKET_OPEN_CACHE["at"] = now_utc
+    _MARKET_OPEN_CACHE["value"] = value
+    return value
+
+
+def reset_market_open_cache() -> None:
+    """Clear the 60 s market-open cache (tests)."""
+    _MARKET_OPEN_CACHE["at"] = None
+    _MARKET_OPEN_CACHE["value"] = None
+
+
 def is_extended_hours(now_utc: datetime) -> bool:
     """Return True iff `now_utc` is inside the 4 AM – 8 PM ET weekday window.
 

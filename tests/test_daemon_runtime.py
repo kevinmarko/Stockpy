@@ -34,29 +34,6 @@ from settings import settings
 from tests._db_isolation import redirect_class_to_memory_db
 
 
-def _make_fake_paper_account_store(equities):
-    """Build a fake ``data.paper_account_store.PaperAccountStore`` class
-    whose ``get_account().equity`` yields successive values from
-    ``equities`` (one per construction+call), for
-    ``maybe_update_circuit_breaker``'s loss-velocity sub-step. Keeps these
-    tests fully offline -- never touches the real, git-committed
-    ``quant_platform.db`` or issues a real quote-API call."""
-    it = iter(equities)
-
-    class _FakeAccountSnapshot:
-        def __init__(self, equity: float) -> None:
-            self.equity = equity
-
-    class _FakePaperAccountStore:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        def get_account(self) -> "_FakeAccountSnapshot":
-            return _FakeAccountSnapshot(next(it))
-
-    return _FakePaperAccountStore
-
-
 def _poll_until(predicate, *, timeout: float = 3.0, interval: float = 0.02) -> bool:
     """Poll ``predicate`` until it returns truthy or ``timeout`` elapses.
 
@@ -74,30 +51,11 @@ def _poll_until(predicate, *, timeout: float = 3.0, interval: float = 0.02) -> b
 
 @pytest.fixture(autouse=True)
 def _patch_data_engine_construction(monkeypatch):
-    """Force the credentials-ABSENT branch so start() always builds a
+    """Force the no-live-data branch so start() always builds a
     MockDataEngine and never touches FRED / real DataEngine construction.
-
-    Scoped to the literal "credentials.json" path daemon_runtime.py:255
-    actually checks (``os.path.exists("credentials.json")``) -- NOT a blanket
-    ``lambda p: False``. ``daemon_runtime.os`` is the real, process-wide
-    ``os`` module (not a copy), so an unscoped patch here replaces
-    ``os.path.exists`` for the whole process, not just this one call site.
-    Under Python 3.13+ (this repo is pinned to 3.12 via .venv, but a stray
-    unscoped patch would silently be wrong on any newer interpreter),
-    ``pathlib.Path.exists()`` was rewritten to delegate straight to
-    ``os.path.exists`` -- so a blanket ``False`` also makes every
-    ``Path(...).exists()`` check in the SAME process report "missing" during
-    these tests, including ``runtime_flags.load_store()``'s real
-    ``resolved.exists()`` check against a genuinely-written test fixture
-    file. That silently emptied ApplyReport in
-    TestMaybeRefreshSettingsAppliesChanges/IntervalHook/NeverRaises.
-    """
-    real_exists = daemon_runtime.os.path.exists
-    monkeypatch.setattr(
-        daemon_runtime.os.path,
-        "exists",
-        lambda p: False if p == "credentials.json" else real_exists(p),
-    )
+    (conftest's autouse ``_force_mock_data_engine_in_tests`` does the same;
+    explicit here because every test in this file depends on it.)"""
+    monkeypatch.setattr(daemon_runtime.data_engine, "live_data_configured", lambda: False)
 
 
 @pytest.fixture(autouse=True)
@@ -1298,368 +1256,6 @@ class TestMaybeRefreshSettingsNeverRaises:
             d.shutdown(timeout=2.0)
 
 
-class TestMaybeUpdateCircuitBreaker:
-    """desktop/daemon_runtime.py::OrchestratorDaemon.maybe_update_circuit_breaker
-    -- the live volatility-jump circuit-breaker updater (Phase 32, item 8).
-    Called directly (no d.start()/d.shutdown() needed -- this method has no
-    dependency on the daemon's run-lifecycle state)."""
-
-    def test_noop_when_disabled(self, monkeypatch):
-        """settings.CIRCUIT_BREAKER_ENABLED defaults False -- the method
-        must return immediately without even importing the data provider."""
-        from settings import settings
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", False)
-
-        def _fail_if_called():
-            raise AssertionError("get_provider() must not be called when disabled")
-
-        monkeypatch.setattr("data.market_data.get_provider", _fail_if_called)
-
-        d = OrchestratorDaemon()
-        d.maybe_update_circuit_breaker()  # must not raise / must not call get_provider
-
-    def test_never_raises_when_provider_fails(self, monkeypatch):
-        """CONSTRAINT #6: a data-fetch failure must degrade to a logged
-        WARNING, never propagate into the timer loop."""
-        from settings import settings
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
-
-        class _ExplodingProvider:
-            def get_intraday_bars(self, *a, **k):
-                raise RuntimeError("simulated network failure")
-
-        monkeypatch.setattr("data.market_data.get_provider", lambda: _ExplodingProvider())
-
-        d = OrchestratorDaemon()
-        d.maybe_update_circuit_breaker()  # must not raise
-
-    def test_never_raises_when_bars_are_empty(self, monkeypatch):
-        """Degenerate-but-non-exceptional provider response (empty frame)
-        must also degrade cleanly rather than raising downstream (e.g. on
-        .rolling()/.std() over too little data)."""
-        import pandas as pd
-        from settings import settings
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
-
-        class _EmptyProvider:
-            def get_intraday_bars(self, *a, **k):
-                return pd.DataFrame()
-
-        monkeypatch.setattr("data.market_data.get_provider", lambda: _EmptyProvider())
-
-        d = OrchestratorDaemon()
-        d.maybe_update_circuit_breaker()  # must not raise
-
-    def test_happy_path_computes_and_persists_volatility_zscore(self, monkeypatch):
-        """When enabled with a well-formed provider, the daily-bar baseline
-        and hourly-bar reactive window are both fetched and handed to
-        check_volatility_jump()/update_metrics(persist=True)."""
-        import numpy as np
-        import pandas as pd
-        from settings import settings
-
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
-
-        rng = np.random.default_rng(42)
-        daily_prices = 400.0 + np.cumsum(rng.normal(0, 1, 90))
-        daily_df = pd.DataFrame(
-            {"Close": daily_prices},
-            index=pd.date_range("2026-01-01", periods=90, freq="D"),
-        )
-        hourly_prices = daily_prices[-1] + np.cumsum(rng.normal(0, 0.5, 40))
-        hourly_df = pd.DataFrame(
-            {"Close": hourly_prices},
-            index=pd.date_range("2026-04-01", periods=40, freq="h"),
-        )
-
-        calls: list[tuple] = []
-
-        class _FakeProvider:
-            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
-                calls.append((symbol, lookback_days, interval))
-                return daily_df if interval == "1d" else hourly_df
-
-        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
-
-        update_calls: list[tuple] = []
-
-        class _FakeState:
-            value = "NORMAL"
-
-        class _FakeCB:
-            def __init__(self, *a, **k):
-                pass
-
-            def check_volatility_jump(self, **kwargs):
-                assert "intraday_returns_or_prices" in kwargs
-                assert kwargs["is_prices"] is True
-                return (False, 1.23, None)
-
-            def update_metrics(
-                self, *, volatility_zscore=None, vpin=None,
-                loss_velocity_per_min=None, account_equity=None, persist=True,
-            ):
-                update_calls.append(
-                    (volatility_zscore, vpin, loss_velocity_per_min, account_equity, persist)
-                )
-
-            @property
-            def current_state(self):
-                return _FakeState()
-
-        monkeypatch.setattr(
-            "execution.dynamic_circuit_breaker.DynamicCircuitBreaker", _FakeCB
-        )
-        # This fixture's hourly_df carries only "Close" (no "Volume"), so the
-        # VPIN sub-step degrades to None on its own -- consistent with the
-        # partial-failure-isolation contract exercised more directly below.
-        # PaperAccountStore is faked so this test never touches the real,
-        # git-committed quant_platform.db or makes a real quote-API call.
-        monkeypatch.setattr(
-            "data.paper_account_store.PaperAccountStore",
-            _make_fake_paper_account_store([100_000.0]),
-        )
-
-        d = OrchestratorDaemon()
-        d.maybe_update_circuit_breaker()
-
-        assert ("SPY", 90, "1d") in calls
-        assert ("SPY", 2, "1h") in calls
-        # Single sample -> loss_velocity_per_min/account_equity stay None
-        # (needs >= 2 samples spanning >= 60s); vpin is None (no Volume col).
-        assert update_calls == [(1.23, None, None, None, True)]
-
-    @staticmethod
-    def _install_fake_cb(monkeypatch, update_calls: list[dict]):
-        """Shared _FakeCB installer for the tests below -- records every
-        update_metrics() call as a kwargs dict (rather than a positional
-        tuple) so assertions can check individual keys without depending on
-        argument order."""
-
-        class _FakeState:
-            value = "NORMAL"
-
-        class _FakeCB:
-            def __init__(self, *a, **k):
-                pass
-
-            def check_volatility_jump(self, **kwargs):
-                return (False, 1.23, None)
-
-            def update_metrics(self, **kwargs):
-                update_calls.append(kwargs)
-
-            @property
-            def current_state(self):
-                return _FakeState()
-
-        monkeypatch.setattr(
-            "execution.dynamic_circuit_breaker.DynamicCircuitBreaker", _FakeCB
-        )
-
-    @staticmethod
-    def _make_daily_and_hourly_bars(*, with_volume: bool, n_hourly: int = 14):
-        """Well-formed daily (90d) + hourly (n_hourly-row) bar fixtures,
-        mirroring test_happy_path_computes_and_persists_volatility_zscore's
-        shape. ``with_volume=True`` adds a real "Volume" column to the
-        hourly frame so VPIN's bar-level BVC computation has something to
-        chew on."""
-        import numpy as np
-        import pandas as pd
-
-        rng = np.random.default_rng(7)
-        daily_prices = 400.0 + np.cumsum(rng.normal(0, 1, 90))
-        daily_df = pd.DataFrame(
-            {"Close": daily_prices},
-            index=pd.date_range("2026-01-01", periods=90, freq="D"),
-        )
-        hourly_prices = daily_prices[-1] + np.cumsum(rng.normal(0, 0.5, n_hourly))
-        hourly_data = {"Close": hourly_prices}
-        if with_volume:
-            hourly_data["Volume"] = rng.integers(1_000, 50_000, n_hourly).astype(float)
-        hourly_df = pd.DataFrame(
-            hourly_data,
-            index=pd.date_range("2026-04-01", periods=n_hourly, freq="h"),
-        )
-        return daily_df, hourly_df
-
-    def test_vpin_genuinely_passed_when_hourly_bars_have_volume(self, monkeypatch):
-        """(a) With real Close+Volume hourly bars, maybe_update_circuit_breaker
-        must pass a real float (not None) as vpin= into update_metrics()."""
-        from settings import settings
-
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
-
-        daily_df, hourly_df = self._make_daily_and_hourly_bars(with_volume=True)
-
-        class _FakeProvider:
-            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
-                return daily_df if interval == "1d" else hourly_df
-
-        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
-        monkeypatch.setattr(
-            "data.paper_account_store.PaperAccountStore",
-            _make_fake_paper_account_store([100_000.0]),
-        )
-
-        update_calls: list[dict] = []
-        self._install_fake_cb(monkeypatch, update_calls)
-
-        d = OrchestratorDaemon()
-        d.maybe_update_circuit_breaker()
-
-        assert len(update_calls) == 1
-        vpin_value = update_calls[0]["vpin"]
-        assert vpin_value is not None
-        assert isinstance(vpin_value, float)
-        assert 0.0 <= vpin_value <= 1.0
-
-    def test_ofi_is_never_passed(self, monkeypatch):
-        """(b) OFI is deliberately unwired: the update_metrics() call must
-        never carry a real (non-None) ofi= value -- either the kwarg is
-        absent entirely, or it is explicitly None."""
-        from settings import settings
-
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
-
-        daily_df, hourly_df = self._make_daily_and_hourly_bars(with_volume=True)
-
-        class _FakeProvider:
-            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
-                return daily_df if interval == "1d" else hourly_df
-
-        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
-        monkeypatch.setattr(
-            "data.paper_account_store.PaperAccountStore",
-            _make_fake_paper_account_store([100_000.0]),
-        )
-
-        update_calls: list[dict] = []
-        self._install_fake_cb(monkeypatch, update_calls)
-
-        d = OrchestratorDaemon()
-        d.maybe_update_circuit_breaker()
-
-        assert len(update_calls) == 1
-        assert update_calls[0].get("ofi") is None
-
-    def test_loss_velocity_computed_from_two_samples(self, monkeypatch):
-        """(c) With >= 2 buffered equity samples spanning a known elapsed
-        time, loss_velocity_per_min/account_equity must reflect the EXACT
-        rate computed against the OLDEST buffered sample."""
-        from settings import settings
-
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
-
-        daily_df, hourly_df = self._make_daily_and_hourly_bars(with_volume=False)
-
-        class _FakeProvider:
-            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
-                return daily_df if interval == "1d" else hourly_df
-
-        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
-        monkeypatch.setattr(
-            "data.paper_account_store.PaperAccountStore",
-            _make_fake_paper_account_store([94_000.0]),
-        )
-
-        update_calls: list[dict] = []
-        self._install_fake_cb(monkeypatch, update_calls)
-
-        d = OrchestratorDaemon()
-        # Seed the buffer directly with a fabricated "earliest" sample from
-        # ~300s ago rather than monkeypatching the global stdlib `time`
-        # module -- `time.time` is shared process-wide, and the logging
-        # module's own LogRecord construction (triggered by this method's
-        # own logger.warning/debug calls) also calls time.time() internally,
-        # so patching it globally silently perturbs unrelated call counts.
-        # A tiny amount of real wall-clock jitter (milliseconds) between the
-        # seed below and the method's own time.time() call is negligible
-        # against a 300s window, hence the tolerance on the rate assertion.
-        seeded_ts = time.time() - 300.0  # 5 minutes ago
-        d._circuit_breaker_equity_history.append((seeded_ts, 100_000.0))
-
-        d.maybe_update_circuit_breaker()  # 2nd sample: equity=94_000.0, now
-
-        assert len(update_calls) == 1
-        assert len(d._circuit_breaker_equity_history) == 2
-        # (94_000 - 100_000) / (300s / 60) = -6_000 / 5 = -1_200/min
-        assert update_calls[0]["loss_velocity_per_min"] == pytest.approx(-1_200.0, rel=0.02)
-        assert update_calls[0]["account_equity"] == pytest.approx(94_000.0)
-
-    def test_noop_when_disabled_computes_nothing(self, monkeypatch):
-        """(d) CIRCUIT_BREAKER_ENABLED=False must still be a true no-op for
-        the new VPIN/loss-velocity sub-steps too -- no exception, and
-        neither PaperAccountStore nor the VPIN module should even be
-        imported/touched."""
-        from settings import settings
-
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", False)
-
-        def _fail_if_called(*a, **k):
-            raise AssertionError("must not be constructed when disabled")
-
-        monkeypatch.setattr(
-            "data.paper_account_store.PaperAccountStore", _fail_if_called
-        )
-
-        d = OrchestratorDaemon()
-        d.maybe_update_circuit_breaker()  # must not raise, must not touch either sub-step
-        assert len(d._circuit_breaker_equity_history) == 0
-
-    def test_vpin_failure_does_not_prevent_vol_jump_or_loss_velocity(self, monkeypatch):
-        """(e) Partial-failure isolation: a VPIN computation failure must not
-        prevent the vol-jump z-score or loss-velocity from still being
-        computed and passed into update_metrics() in the SAME call."""
-        from settings import settings
-
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_REFERENCE_SYMBOL", "SPY")
-
-        daily_df, hourly_df = self._make_daily_and_hourly_bars(with_volume=True)
-
-        class _FakeProvider:
-            def get_intraday_bars(self, symbol, lookback_days=252, interval="1d"):
-                return daily_df if interval == "1d" else hourly_df
-
-        monkeypatch.setattr("data.market_data.get_provider", lambda: _FakeProvider())
-        monkeypatch.setattr(
-            "data.paper_account_store.PaperAccountStore",
-            _make_fake_paper_account_store([99_500.0]),
-        )
-
-        def _boom(*a, **k):
-            raise RuntimeError("simulated VPIN failure")
-
-        monkeypatch.setattr("pilots.options_vpin.calculate_vpin", _boom)
-
-        update_calls: list[dict] = []
-        self._install_fake_cb(monkeypatch, update_calls)
-
-        d = OrchestratorDaemon()
-        # See test_loss_velocity_computed_from_two_samples above for why this
-        # seeds the buffer directly rather than monkeypatching time.time().
-        seeded_ts = time.time() - 90.0  # 90s ago
-        d._circuit_breaker_equity_history.append((seeded_ts, 100_000.0))
-
-        d.maybe_update_circuit_breaker()
-
-        assert len(update_calls) == 1
-        # vpin is None (computation always fails)...
-        assert update_calls[0]["vpin"] is None
-        # ...but the vol-jump z-score (from the FakeCB's fixed 1.23) and the
-        # loss-velocity computation are both still present in the SAME call.
-        assert update_calls[0]["volatility_zscore"] == 1.23
-        assert update_calls[0]["loss_velocity_per_min"] == pytest.approx(
-            (99_500.0 - 100_000.0) / (90.0 / 60.0), rel=0.02
-        )
-        assert update_calls[0]["account_equity"] == pytest.approx(99_500.0)
-
-
 def _fake_progress(*, state: str, age_seconds: float, run_id: str = "run-1", stage: str = "data") -> ProgressState:
     """Build a ProgressState whose age_seconds() reports the given value,
     regardless of wall-clock skew -- computed from `datetime.now()` at
@@ -1774,92 +1370,29 @@ class TestMaybeAlertOnPipelineStall:
         assert fake_console.call_count == 1
 
 
-class TestDaemonOptionsLifecycleIntegration:
-    """Verifies that OrchestratorDaemon._run_one_cycle invokes the shared
-    options lifecycle on successful full cycles and passes through macro_dto."""
+class TestDaemonNoOptionsLifecycle:
+    """The options paper-trading lifecycle (auto-exits, strategy
+    auto-execution, delta hedging, 0DTE exits) left the daemon with the
+    options desk (2026-09, step 3d). A successful full cycle must not reach
+    it at all.
 
-    def test_daemon_runs_options_lifecycle_on_successful_full_cycle(self, monkeypatch):
-        mock_macro = mock.sentinel.macro_dto
+    (Step 4b, options desk archive: ``execution/options_lifecycle.py`` itself
+    moved to ``legacy/`` -- the class used to also carry
+    ``test_full_cycle_never_calls_the_options_lifecycle``, which
+    ``mock.patch("execution.options_lifecycle.run_automated_options_lifecycle")``ed
+    and asserted the patch was never called. That patch target no longer
+    resolves (the module doesn't exist at that dotted path any more), and the
+    property it proved is now structurally guaranteed rather than merely
+    tested -- the daemon cannot call a module that isn't importable. The
+    source-scan test below remains a real, live-running regression guard.)"""
 
-        async def _fake_main_body(*_a, **_k):
-            return mock_macro
+    def test_daemon_source_no_longer_references_options_lifecycle_or_0dte(self):
+        import inspect
+        import desktop.daemon_runtime as dr
 
-        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
-
-        with mock.patch(
-            "execution.options_lifecycle.run_automated_options_lifecycle"
-        ) as mock_lifecycle:
-            d = OrchestratorDaemon()
-            d._run_one_cycle(run_id="test-run-1", reason="interval", mode="full")
-
-            mock_lifecycle.assert_called_once_with(macro_dto=mock_macro, run_0dte=False)
-
-    def test_daemon_skips_options_lifecycle_on_freshness_skip(self, monkeypatch):
-        """When _main_body returns CYCLE_SKIPPED (the data-freshness gate
-        skipped the cycle outright -- no real pipeline run, no real
-        macro_dto), the options lifecycle must NOT run: doing so would
-        silently bypass the VIX/CREDIT-EVENT premium-selling gate with a
-        stale/absent macro context on the majority of interval wakes in a
-        short-interval deployment."""
-        async def _fake_main_body(*_a, **_k):
-            return main_orchestrator.CYCLE_SKIPPED
-
-        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
-
-        with mock.patch(
-            "execution.options_lifecycle.run_automated_options_lifecycle"
-        ) as mock_lifecycle:
-            d = OrchestratorDaemon()
-            d._run_one_cycle(run_id="test-run-5", reason="interval", mode="full")
-
-            mock_lifecycle.assert_not_called()
-
-    def test_daemon_skips_options_lifecycle_on_non_full_mode(self, monkeypatch):
-        async def _fake_main_body(*_a, **_k):
-            return mock.sentinel.macro_dto
-
-        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
-
-        with mock.patch(
-            "execution.options_lifecycle.run_automated_options_lifecycle"
-        ) as mock_lifecycle:
-            d = OrchestratorDaemon()
-            d._run_one_cycle(run_id="test-run-2", reason="manual", mode="data")
-
-            mock_lifecycle.assert_not_called()
-
-    def test_daemon_skips_options_lifecycle_on_dry_run(self, monkeypatch):
-        async def _fake_main_body(*_a, **_k):
-            return mock.sentinel.macro_dto
-
-        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
-
-        with mock.patch(
-            "execution.options_lifecycle.run_automated_options_lifecycle"
-        ) as mock_lifecycle:
-            d = OrchestratorDaemon(dry_run=True)
-            d._run_one_cycle(run_id="test-run-3", reason="manual", mode="full")
-
-            mock_lifecycle.assert_not_called()
-
-    def test_daemon_swallows_options_lifecycle_exception_and_cycle_still_succeeds(self, monkeypatch, caplog):
-        async def _fake_main_body(*_a, **_k):
-            return mock.sentinel.macro_dto
-
-        monkeypatch.setattr(main_orchestrator, "_main_body", _fake_main_body)
-
-        with mock.patch(
-            "execution.options_lifecycle.run_automated_options_lifecycle",
-            side_effect=RuntimeError("options engine exploded"),
-        ):
-            d = OrchestratorDaemon()
-            d._run_one_cycle(run_id="test-run-4", reason="interval", mode="full")
-
-        # Run must still be recorded as SUCCEEDED
-        run = d.get_run("test-run-4")
-        assert run is not None
-        assert run.state == RunState.SUCCEEDED
-        assert any("Daemon options lifecycle execution failed" in rec.message for rec in caplog.records)
+        src = inspect.getsource(dr)
+        assert "options_lifecycle" not in src
+        assert "zero_dte_engine" not in src
 
 
 class TestWeeklyDigest:
@@ -2418,34 +1951,10 @@ class TestWeeklyDigestSchedulingUnderOnDemandOnly:
             finally:
                 d.shutdown(timeout=2.0)
 
-    def test_start_creates_thread_at_interval_zero_when_circuit_breaker_enabled_alone(self, monkeypatch):
-        """Regression for the generalized fix: CIRCUIT_BREAKER_ENABLED=True
-        alone (WEEKLY_DIGEST_ENABLED left at its default False) must also
-        start a timer thread at interval_seconds<=0 -- before this
-        generalization, an operator who enabled ONLY the circuit breaker
-        (a real risk-management gate, per its own docstring meant to run
-        "on every wake") got no automatic periodic checks at all under the
-        documented on-demand-only default, exactly the same class of gap
-        WEEKLY_DIGEST_ENABLED's own narrower fix closed only for itself."""
-        _fast_ok_main_body(monkeypatch)
-        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", False)
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", True)
-        d = OrchestratorDaemon()  # interval_seconds=0 by default
-        d.start()
-        try:
-            assert d._timer_thread is not None, (
-                "CIRCUIT_BREAKER_ENABLED=True must start a timer thread "
-                "even at interval_seconds<=0, on its own, independent of "
-                "WEEKLY_DIGEST_ENABLED"
-            )
-        finally:
-            d.shutdown(timeout=2.0)
-
     def test_start_creates_thread_at_interval_zero_when_google_trends_enabled_alone(self, monkeypatch):
         """Same regression, for GOOGLE_TRENDS_ENABLED."""
         _fast_ok_main_body(monkeypatch)
         monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", False)
-        monkeypatch.setattr(settings, "CIRCUIT_BREAKER_ENABLED", False)
         monkeypatch.setattr(settings, "GOOGLE_TRENDS_ENABLED", True)
         d = OrchestratorDaemon()  # interval_seconds=0 by default
         d.start()
@@ -2513,5 +2022,511 @@ class TestWeeklyDigestSchedulingUnderOnDemandOnly:
             f"{spy.call_count} time(s) while parked at interval<=0 -- it "
             f"must get repeated periodic chances, not at most one ever"
         )
+
+
+# ---------------------------------------------------------------------------
+# Scheduled daily Robinhood device-approval login (shrink step 5, decision 6)
+# ---------------------------------------------------------------------------
+
+# 2026-09-28 is a Monday. 08:40 EDT == 12:40 UTC.
+_MON_0839_ET = datetime(2026, 9, 28, 12, 39, tzinfo=timezone.utc)
+_MON_0840_ET = datetime(2026, 9, 28, 12, 40, tzinfo=timezone.utc)
+_MON_1500_ET = datetime(2026, 9, 28, 19, 0, tzinfo=timezone.utc)
+_TUE_0845_ET = datetime(2026, 9, 29, 12, 45, tzinfo=timezone.utc)
+# Evening cut-off (default 18:00 ET == 22:00 UTC in EDT).
+_MON_1759_ET = datetime(2026, 9, 28, 21, 59, tzinfo=timezone.utc)
+_MON_1800_ET = datetime(2026, 9, 28, 22, 0, tzinfo=timezone.utc)
+_MON_1801_ET = datetime(2026, 9, 28, 22, 1, tzinfo=timezone.utc)
+_MON_1900_ET = datetime(2026, 9, 28, 23, 0, tzinfo=timezone.utc)
+_TUE_0839_ET = datetime(2026, 9, 29, 12, 39, tzinfo=timezone.utc)
+_TUE_0840_ET = datetime(2026, 9, 29, 12, 40, tzinfo=timezone.utc)
+_FRI_1830_ET = datetime(2026, 10, 2, 22, 30, tzinfo=timezone.utc)
+# Winter (EST): 17:59 EST == 22:59 UTC, 18:00 EST == 23:00 UTC.
+_WINTER_MON_1759_ET = datetime(2026, 12, 7, 22, 59, tzinfo=timezone.utc)
+_WINTER_MON_1800_ET = datetime(2026, 12, 7, 23, 0, tzinfo=timezone.utc)
+_FRI_0900_ET = datetime(2026, 10, 2, 13, 0, tzinfo=timezone.utc)
+_SAT_0900_ET = datetime(2026, 10, 3, 13, 0, tzinfo=timezone.utc)
+_SUN_0900_ET = datetime(2026, 10, 4, 13, 0, tzinfo=timezone.utc)
+_NEXT_MON_0840_ET = datetime(2026, 10, 5, 12, 40, tzinfo=timezone.utc)
+# Winter (EST, UTC-5): 2026-12-07 is a Monday; 08:40 EST == 13:40 UTC.
+_WINTER_MON_0839_ET = datetime(2026, 12, 7, 13, 39, tzinfo=timezone.utc)
+_WINTER_MON_0840_ET = datetime(2026, 12, 7, 13, 40, tzinfo=timezone.utc)
+
+
+class TestScheduledRobinhoodLogin:
+    """desktop/daemon_runtime.py::maybe_run_scheduled_robinhood_login and its
+    timer-loop wiring. Time is always passed in explicitly (frozen); no real
+    Robinhood login, worker process or network call ever happens here --
+    data.robinhood_login.start_login is replaced by a recorder."""
+
+    @pytest.fixture(autouse=True)
+    def _env(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_ENABLED", True)
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET", "08:40")
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET", "18:00")
+        monkeypatch.setattr(
+            "data.brokerage_credentials.rh_credentials_present", lambda: True
+        )
+        monkeypatch.setattr(daemon_runtime, "_latest_account_snapshot_fetched_at", lambda: None)
+        self.alerts = mock.MagicMock()
+        monkeypatch.setattr("observability.alerts.send_alert", self.alerts)
+        # The outcome watcher thread must not sit on a fake job.
+        monkeypatch.setattr(daemon_runtime, "_SCHEDULED_LOGIN_WATCH_POLL_SECONDS", 0.02)
+
+        from data.robinhood_login import LoginJobState
+
+        self.calls: list = []
+        self.jobs: dict = {}
+
+        def fake_start_login(mode, **kwargs):
+            self.calls.append(mode)
+            job = LoginJobState(job_id=f"rhlogin-fake{len(self.calls)}", mode=mode)
+            self.jobs[job.job_id] = job
+            return job
+
+        monkeypatch.setattr("data.robinhood_login.start_login", fake_start_login)
+        monkeypatch.setattr("data.robinhood_login.get_login_state", lambda jid: self.jobs.get(jid))
+        self.tmp_path = tmp_path
+        yield
+        # Let any watcher thread see a terminal state and exit.
+        for job in self.jobs.values():
+            with job._lock:
+                if job.state == "running":
+                    job.state = "cancelled"
+        # ...and wait for it to finish writing BEFORE monkeypatch restores
+        # OUTPUT_DIR: a still-running watcher would otherwise write its
+        # outcome into the next test's tmp dir (flaking
+        # test_watcher_records_and_alerts_the_outcome under load) or into
+        # the real OUTPUT_DIR.
+        for thread in threading.enumerate():
+            if thread.name == "ScheduledRobinhoodLoginWatcher":
+                thread.join(timeout=5.0)
+
+    def _state(self) -> dict:
+        path = self.tmp_path / daemon_runtime._SCHEDULED_LOGIN_STATE_FILENAME
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    # -- gating -------------------------------------------------------------
+
+    def test_disabled_does_nothing_and_writes_nothing(self, monkeypatch):
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_ENABLED", False)
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+        assert self.calls == []
+        assert not (self.tmp_path / daemon_runtime._SCHEDULED_LOGIN_STATE_FILENAME).exists()
+        assert d.seconds_until_scheduled_login(now_utc=_MON_1500_ET) is None
+
+    def test_disabled_by_default(self):
+        from settings import Settings
+
+        assert Settings.model_fields["ROBINHOOD_SCHEDULED_LOGIN_ENABLED"].default is False
+        assert Settings.model_fields["ROBINHOOD_SCHEDULED_LOGIN_TIME_ET"].default == "08:40"
+
+    def test_not_before_the_scheduled_time(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0839_ET) is None
+        assert self.calls == []
+
+    def test_fires_at_the_scheduled_time_on_a_weekday(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+        assert self.calls == ["refresh"]
+        state = self._state()
+        assert state["last_attempted_et_date"] == "2026-09-28"
+        assert state["job_id"] == "rhlogin-fake1"
+
+    def test_fires_later_the_same_day_if_the_time_was_missed(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) == "started"
+        assert self.calls == ["refresh"]
+
+    @pytest.mark.parametrize("now", [_SAT_0900_ET, _SUN_0900_ET])
+    def test_not_on_weekends(self, now):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=now) is None
+        assert self.calls == []
+
+    def test_uses_eastern_time_across_dst(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_WINTER_MON_0839_ET) is None
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_WINTER_MON_0840_ET) == "started"
+
+    # -- evening cut-off (ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET, default 18:00) -
+
+    def test_fires_one_minute_before_the_cutoff(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1759_ET) == "started"
+        assert self.calls == ["refresh"]
+
+    @pytest.mark.parametrize("now", [_MON_1800_ET, _MON_1801_ET, _MON_1900_ET])
+    def test_never_starts_at_or_after_the_cutoff_and_does_not_claim_the_day(self, now):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=now) is None
+        assert self.calls == []
+        assert not (self.tmp_path / daemon_runtime._SCHEDULED_LOGIN_STATE_FILENAME).exists()
+        assert d._scheduled_login_claimed_date is None
+
+    def test_daemon_started_at_1900_waits_for_tomorrows_target_then_fires(self):
+        d = OrchestratorDaemon()  # a fresh daemon first waking at 19:00 ET
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1900_ET) is None
+        # Next due: Tuesday 08:40 ET -- not "now", so no repeated evening wakes.
+        assert d.seconds_until_scheduled_login(now_utc=_MON_1900_ET) == pytest.approx(
+            (_TUE_0840_ET - _MON_1900_ET).total_seconds()
+        )
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_TUE_0839_ET) is None
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_TUE_0840_ET) == "started"
+        assert self.calls == ["refresh"]
+        assert self._state()["last_attempted_et_date"] == "2026-09-29"
+
+    def test_seconds_until_rolls_to_tomorrow_at_the_cutoff(self):
+        d = OrchestratorDaemon()
+        assert d.seconds_until_scheduled_login(now_utc=_MON_1759_ET) == 0.0
+        assert d.seconds_until_scheduled_login(now_utc=_MON_1800_ET) == pytest.approx(
+            (_TUE_0840_ET - _MON_1800_ET).total_seconds()
+        )
+
+    def test_friday_after_cutoff_next_target_is_monday(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_FRI_1830_ET) is None
+        assert d.seconds_until_scheduled_login(now_utc=_FRI_1830_ET) == pytest.approx(
+            (_NEXT_MON_0840_ET - _FRI_1830_ET).total_seconds()
+        )
+
+    def test_bounded_wait_after_cutoff_is_not_shortened(self, monkeypatch):
+        d = OrchestratorDaemon()
+        real = d.seconds_until_scheduled_login
+        monkeypatch.setattr(
+            d, "seconds_until_scheduled_login", lambda now_utc=None: real(now_utc=_MON_1801_ET),
+        )
+        # ~14.6h to Tuesday's target: a 1h wait stays a 1h wait.
+        assert d._bounded_wait_timeout(3600.0) == 3600.0
+
+    def test_cutoff_uses_eastern_time_across_dst(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_WINTER_MON_1800_ET) is None
+        assert self.calls == []
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_WINTER_MON_1759_ET) == "started"
+
+    def test_first_weekday_after_dst_ends_uses_est_window(self):
+        # DST ends Sun 2026-11-01; Mon 2026-11-02 is EST (UTC-5).
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(
+            now_utc=datetime(2026, 11, 2, 22, 59, tzinfo=timezone.utc)  # 17:59 EST
+        ) == "started"
+        d2 = OrchestratorDaemon()
+        (self.tmp_path / daemon_runtime._SCHEDULED_LOGIN_STATE_FILENAME).unlink()
+        assert d2.maybe_run_scheduled_robinhood_login(
+            now_utc=datetime(2026, 11, 2, 23, 0, tzinfo=timezone.utc)  # 18:00 EST
+        ) is None
+
+    def test_custom_cutoff(self, monkeypatch):
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET", "12:00")
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+
+    @pytest.mark.parametrize("cutoff", ["08:40", "08:00", "25:00", "evening"])
+    def test_invalid_or_non_increasing_cutoff_disables_with_one_warning(
+        self, monkeypatch, caplog, cutoff
+    ):
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET", cutoff)
+        d = OrchestratorDaemon()
+        with caplog.at_level("WARNING", logger="OrchestratorDaemon"):
+            assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) is None
+            assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+            assert d.seconds_until_scheduled_login(now_utc=_MON_0839_ET) is None
+        assert self.calls == []
+        assert sum(
+            "ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET" in r.getMessage() for r in caplog.records
+        ) == 1
+
+    def test_cutoff_default_and_normalization(self):
+        from settings import Settings
+
+        assert Settings.model_fields["ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET"].default == "18:00"
+        assert Settings(ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET="9:05").ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET == "09:05"
+        assert Settings(ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET="nope").ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET == "nope"
+
+    def test_login_running_in_another_process_is_left_alone(self, monkeypatch):
+        from data.robinhood_login import RobinhoodLoginInProgress
+
+        owner = {"pid": 999, "job_id": "rhlogin-otherproc", "mode": "refresh"}
+
+        def refuse(mode, **kwargs):
+            raise RobinhoodLoginInProgress(None, mode, owner=owner)
+
+        monkeypatch.setattr("data.robinhood_login.start_login", refuse)
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "skipped_login_in_progress"
+        assert self._state()["job_id"] == "rhlogin-otherproc"
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+
+    # -- once per ET day ----------------------------------------------------
+
+    def test_once_per_day_then_again_next_weekday(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+        assert self.calls == ["refresh"]
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_TUE_0845_ET) == "started"
+        assert self.calls == ["refresh", "refresh"]
+
+    def test_restart_same_day_does_not_prompt_again(self):
+        first = OrchestratorDaemon()
+        assert first.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+        restarted = OrchestratorDaemon()  # fresh process state, same OUTPUT_DIR
+        assert restarted.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+        assert self.calls == ["refresh"]
+
+    def test_in_process_claim_holds_even_if_the_state_write_fails(self, monkeypatch):
+        monkeypatch.setattr(
+            daemon_runtime, "atomic_write_json",
+            mock.MagicMock(side_effect=OSError("disk full")),
+        )
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+        assert self.calls == ["refresh"]
+
+    # -- freshness / credentials / single-flight ---------------------------
+
+    def test_skips_when_snapshot_is_newer_than_todays_scheduled_time(self, monkeypatch):
+        monkeypatch.setattr(
+            daemon_runtime, "_latest_account_snapshot_fetched_at",
+            lambda: _MON_0840_ET + timedelta(minutes=5),
+        )
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) == "skipped_fresh"
+        assert self.calls == []
+        assert self._state()["last_outcome"] == "skipped_fresh"
+        # Claimed for the day: not re-checked on later wakes.
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+
+    def test_prompts_when_snapshot_is_older_than_todays_scheduled_time(self, monkeypatch):
+        monkeypatch.setattr(
+            daemon_runtime, "_latest_account_snapshot_fetched_at",
+            lambda: _MON_0840_ET - timedelta(hours=1),
+        )
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+
+    def test_prompts_when_there_is_no_snapshot_at_all(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+
+    def test_skips_without_credentials(self, monkeypatch):
+        monkeypatch.setattr("data.brokerage_credentials.rh_credentials_present", lambda: False)
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "skipped_no_credentials"
+        assert self.calls == []
+
+    def test_running_connect_login_is_left_alone(self, monkeypatch):
+        from data.robinhood_login import LoginJobState, RobinhoodLoginInProgress
+
+        running = LoginJobState(job_id="rhlogin-connect", mode="connect")
+
+        def refuse(mode, **kwargs):
+            raise RobinhoodLoginInProgress(running, mode)
+
+        monkeypatch.setattr("data.robinhood_login.start_login", refuse)
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "skipped_login_in_progress"
+        assert self._state()["job_id"] == "rhlogin-connect"
+
+    # -- never raises -------------------------------------------------------
+
+    def test_start_failure_is_contained_alerted_and_not_retried_today(self, monkeypatch):
+        def boom(mode, **kwargs):
+            raise OSError("fork failed")
+
+        monkeypatch.setattr("data.robinhood_login.start_login", boom)
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "start_failed"
+        assert self._state()["last_outcome"] == "start_failed"
+        assert any(c.args[0] == "WARNING" for c in self.alerts.call_args_list)
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+
+    def test_unexpected_exception_never_propagates(self, monkeypatch):
+        def explode():
+            raise RuntimeError("unexpected")
+
+        monkeypatch.setattr("data.brokerage_credentials.rh_credentials_present", explode)
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) is None
+        assert self.calls == []
+
+    def test_corrupt_state_file_is_treated_as_not_attempted(self):
+        (self.tmp_path / daemon_runtime._SCHEDULED_LOGIN_STATE_FILENAME).write_text("{not json")
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+
+    def test_invalid_time_disables_with_one_warning(self, monkeypatch, caplog):
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET", "8:40pm")
+        d = OrchestratorDaemon()
+        with caplog.at_level("WARNING", logger="OrchestratorDaemon"):
+            assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+            assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_1500_ET) is None
+            assert d.seconds_until_scheduled_login(now_utc=_MON_1500_ET) is None
+        assert self.calls == []
+        assert sum("ROBINHOOD_SCHEDULED_LOGIN_TIME_ET" in r.getMessage() for r in caplog.records) == 1
+
+    # -- outcome watcher ----------------------------------------------------
+
+    def test_watcher_records_and_alerts_the_outcome(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_MON_0840_ET) == "started"
+        job = self.jobs["rhlogin-fake1"]
+        with job._lock:
+            job.state = "timeout"
+            job.error_code = "timeout"
+        assert _poll_until(lambda: self._state().get("last_outcome") == "timeout", timeout=3.0)
+        assert self._state()["last_error_code"] == "timeout"
+        assert _poll_until(
+            lambda: any(c.args[0] == "WARNING" for c in self.alerts.call_args_list), timeout=3.0
+        )
+
+    # -- wake scheduling ----------------------------------------------------
+
+    def test_seconds_until_before_the_time_today(self):
+        d = OrchestratorDaemon()
+        assert d.seconds_until_scheduled_login(now_utc=_MON_0839_ET) == pytest.approx(60.0)
+
+    def test_seconds_until_is_zero_when_due_and_not_attempted(self):
+        d = OrchestratorDaemon()
+        assert d.seconds_until_scheduled_login(now_utc=_MON_1500_ET) == 0.0
+
+    def test_seconds_until_skips_the_weekend_after_fridays_attempt(self):
+        d = OrchestratorDaemon()
+        assert d.maybe_run_scheduled_robinhood_login(now_utc=_FRI_0900_ET) == "started"
+        assert d.seconds_until_scheduled_login(now_utc=_FRI_0900_ET) == pytest.approx(
+            (_NEXT_MON_0840_ET - _FRI_0900_ET).total_seconds()
+        )
+        assert d.seconds_until_scheduled_login(now_utc=_SAT_0900_ET) == pytest.approx(
+            (_NEXT_MON_0840_ET - _SAT_0900_ET).total_seconds()
+        )
+
+    def test_bounded_wait_timeout_is_unchanged_when_disabled(self, monkeypatch):
+        monkeypatch.setattr(settings, "ROBINHOOD_SCHEDULED_LOGIN_ENABLED", False)
+        d = OrchestratorDaemon()
+        assert d._bounded_wait_timeout(3600.0) == 3600.0
+
+    def test_bounded_wait_timeout_wakes_just_after_the_target(self, monkeypatch):
+        d = OrchestratorDaemon()
+        monkeypatch.setattr(d, "seconds_until_scheduled_login", lambda now_utc=None: 120.0)
+        assert d._bounded_wait_timeout(3600.0) == pytest.approx(
+            120.0 + daemon_runtime._SCHEDULED_LOGIN_WAKE_SLACK_SECONDS
+        )
+        monkeypatch.setattr(d, "seconds_until_scheduled_login", lambda now_utc=None: 0.0)
+        assert d._bounded_wait_timeout(3600.0) == daemon_runtime._SCHEDULED_LOGIN_MIN_WAIT_SECONDS
+        monkeypatch.setattr(d, "seconds_until_scheduled_login", lambda now_utc=None: 10_000.0)
+        assert d._bounded_wait_timeout(3600.0) == 3600.0
+
+    def test_start_creates_timer_thread_when_only_this_flag_is_on(self, monkeypatch):
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(settings, "WEEKLY_DIGEST_ENABLED", False)
+        monkeypatch.setattr(settings, "GOOGLE_TRENDS_ENABLED", False)
+        d = OrchestratorDaemon()  # interval 0
+        monkeypatch.setattr(d, "maybe_run_scheduled_robinhood_login", lambda now_utc=None: None)
+        d.start()
+        try:
+            assert d._timer_thread is not None
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_long_interval_wait_is_cut_short_for_the_scheduled_login(self, monkeypatch):
+        """ORCHESTRATOR_INTERVAL_SECONDS=3600 live: the loop must not park the
+        whole hour past 08:40. Its interval wait is shortened to just after
+        the target."""
+        _fast_ok_main_body(monkeypatch)
+        monkeypatch.setattr(
+            "desktop.daemon_runtime.is_automatic_run_gated",
+            lambda now_utc, extended_hours_only: True,
+        )
+        d = OrchestratorDaemon(interval_seconds=3600)
+        monkeypatch.setattr(d, "seconds_until_scheduled_login", lambda now_utc=None: 120.0)
+        monkeypatch.setattr(d, "maybe_run_scheduled_robinhood_login", lambda now_utc=None: None)
+        timeouts: list = []
+        original_wait = d._wake_event.wait
+
+        def _wait(timeout=None):
+            timeouts.append(timeout)
+            return original_wait(0.01)
+
+        monkeypatch.setattr(d._wake_event, "wait", _wait)
+        d.start()
+        try:
+            assert _poll_until(lambda: len(timeouts) >= 1, timeout=2.0)
+            assert timeouts[0] == pytest.approx(121.0)
+        finally:
+            d.shutdown(timeout=2.0)
+
+    def test_wait_out_interval_runs_the_hook_and_keeps_the_same_deadline(self, monkeypatch):
+        d = OrchestratorDaemon()
+        monkeypatch.setattr(d, "_bounded_wait_timeout", lambda base: min(base, 0.05))
+        hook = mock.MagicMock(return_value=None)
+        monkeypatch.setattr(d, "maybe_run_scheduled_robinhood_login", hook)
+        t0 = time.monotonic()
+        woke = d._wait_out_interval(0.3)
+        elapsed = time.monotonic() - t0
+        assert woke is False
+        assert hook.call_count >= 2
+        assert 0.28 <= elapsed < 1.5
+
+    def test_wait_out_interval_returns_true_on_wake_event(self):
+        d = OrchestratorDaemon()
+        d._wake_event.set()
+        assert d._wait_out_interval(100.0) is True
+
+
+class TestLatestAccountSnapshotFetchedAt:
+    """The read-only freshness probe behind the scheduled login: newest
+    fetched_at across the DB and JSON-cache tiers; never logs in, never
+    raises."""
+
+    def _fake_store(self, snap):
+        class _Store:
+            def __init__(self, *a, **k):
+                pass
+
+            def latest_account_snapshot(self):
+                if isinstance(snap, Exception):
+                    raise snap
+                return snap
+
+        return _Store
+
+    def test_returns_the_newer_of_the_two_tiers(self, monkeypatch):
+        older = datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc)
+        newer = datetime(2026, 9, 28, 13, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(
+            "data.historical_store.HistoricalStore",
+            self._fake_store(mock.Mock(fetched_at=older)),
+        )
+        monkeypatch.setattr(
+            "data.robinhood_portfolio._read_cache", lambda: mock.Mock(fetched_at=newer)
+        )
+        assert daemon_runtime._latest_account_snapshot_fetched_at() == newer
+
+    def test_naive_timestamp_is_treated_as_utc(self, monkeypatch):
+        naive = datetime(2026, 9, 28, 13, 0)
+        monkeypatch.setattr("data.historical_store.HistoricalStore", self._fake_store(None))
+        monkeypatch.setattr(
+            "data.robinhood_portfolio._read_cache", lambda: mock.Mock(fetched_at=naive)
+        )
+        assert daemon_runtime._latest_account_snapshot_fetched_at() == naive.replace(
+            tzinfo=timezone.utc
+        )
+
+    def test_none_when_both_tiers_fail_or_are_empty(self, monkeypatch):
+        monkeypatch.setattr(
+            "data.historical_store.HistoricalStore", self._fake_store(RuntimeError("db"))
+        )
+
+        def boom():
+            raise OSError("cache")
+
+        monkeypatch.setattr("data.robinhood_portfolio._read_cache", boom)
+        assert daemon_runtime._latest_account_snapshot_fetched_at() is None
 
 

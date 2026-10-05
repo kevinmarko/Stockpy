@@ -1,7 +1,7 @@
 """tests/test_fmp_paper_broker.py
 
 Sync test functions driving the broker's async methods via asyncio.run() --
-matches this repo's established pattern (tests/test_alpaca_broker.py); this
+matches this repo's established pattern for broker tests; this
 codebase has no pytest-asyncio/anyio plugin registered, and pytest.ini's
 --strict-markers makes an unregistered @pytest.mark.anyio fail collection
 outright rather than silently no-op.
@@ -15,6 +15,13 @@ from execution.fmp_paper_broker import FMPPaperBroker
 from execution.broker_base import OrderIntent, OrderSide, OrderType, OrderStatus
 from execution.order_manager import OrderManager
 from execution.kill_switch import GlobalKillSwitch
+
+
+@pytest.fixture(autouse=True)
+def _no_quote_age_check_by_default(monkeypatch):
+    """Most fixtures here carry no quote timestamp; the stale-quote rule has
+    its own tests below that re-enable it explicitly."""
+    monkeypatch.setattr("settings.settings.PAPER_FILL_MAX_QUOTE_AGE_SECONDS", 0.0, raising=False)
 
 
 def _intent(**overrides):
@@ -74,7 +81,7 @@ def test_submit_order_invalid_price_is_rejected():
 
 def test_submit_order_dry_run_never_touches_quote_or_store():
     """dry_run=True must short-circuit before any quote fetch or store write
-    -- mirrors AlpacaBroker.submit_order's exact pattern (Finding 10)."""
+    -- the dry-run pattern every broker adapter shares (Finding 10)."""
     broker = FMPPaperBroker(db_url="sqlite:///:memory:")
     intent = _intent(client_order_id="dry_run_order")
     intent.dry_run = True
@@ -240,7 +247,7 @@ def test_get_account_and_positions_reflect_a_real_fill(tmp_path):
     with patch("data.fmp_client.quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
         asyncio.run(broker.submit_order(_intent()))
 
-    with patch("data.fmp_client.batch_quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+    with patch("data.paper_account_store._fetch_stock_prices", return_value={'AAPL': 150.0}):
         positions = asyncio.run(broker.get_open_positions())
         account = asyncio.run(broker.get_account())
 
@@ -264,7 +271,7 @@ def test_get_orders_returns_recorded_fill(tmp_path):
 # ---------------------------------------------------------------------------
 # Integration: dropping into OrderManager gets kill-switch/dry-run gating
 # for free, with no separate wiring -- confirms the "drop-in broker" design
-# goal actually holds for FMPPaperBroker, not just AlpacaBroker.
+# goal actually holds for FMPPaperBroker.
 # ---------------------------------------------------------------------------
 
 
@@ -309,3 +316,41 @@ def test_order_manager_live_submission_reaches_the_paper_broker(tmp_path):
 
     assert result.status == OrderStatus.FILLED
     assert result.filled_avg_price == 150.0
+
+
+# ---------------------------------------------------------------------------
+# Stale-quote rejection (holiday / early close / halt)
+# ---------------------------------------------------------------------------
+
+def _with_max_age(monkeypatch, seconds=900.0):
+    monkeypatch.setattr("settings.settings.PAPER_FILL_MAX_QUOTE_AGE_SECONDS", seconds, raising=False)
+
+
+def test_stale_quote_is_rejected(monkeypatch):
+    import time as _time
+    _with_max_age(monkeypatch)
+    broker = FMPPaperBroker(db_url="sqlite:///:memory:")
+    old = _time.time() - 3 * 3600
+    with patch("data.fmp_client.quote", return_value=[{"symbol": "AAPL", "price": 150.0, "timestamp": old}]):
+        result = asyncio.run(broker.submit_order(_intent(client_order_id="stale_1")))
+    assert result.status == OrderStatus.REJECTED
+    assert "stale quote" in result.error_message.lower()
+    assert broker.store.get_open_positions() == []
+
+
+def test_quote_without_timestamp_is_rejected(monkeypatch):
+    _with_max_age(monkeypatch)
+    broker = FMPPaperBroker(db_url="sqlite:///:memory:")
+    with patch("data.fmp_client.quote", return_value=[{"symbol": "AAPL", "price": 150.0}]):
+        result = asyncio.run(broker.submit_order(_intent(client_order_id="stale_2")))
+    assert result.status == OrderStatus.REJECTED
+    assert "no timestamp" in result.error_message.lower()
+
+
+def test_fresh_quote_fills(monkeypatch):
+    import time as _time
+    _with_max_age(monkeypatch)
+    broker = FMPPaperBroker(db_url="sqlite:///:memory:")
+    with patch("data.fmp_client.quote", return_value=[{"symbol": "AAPL", "price": 150.0, "timestamp": _time.time() - 30}]):
+        result = asyncio.run(broker.submit_order(_intent(client_order_id="fresh_1")))
+    assert result.status == OrderStatus.FILLED

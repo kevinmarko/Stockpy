@@ -2,16 +2,16 @@
 data/market_data.py — Swappable Market-Data Layer
 ==================================================
 Provides live quotes, intraday/daily bars, and fundamentals via a provider
-abstraction that hides the concrete source (Alpaca vs yfinance) from all
+abstraction that hides the concrete source (FMP vs yfinance) from all
 signal, indicator, and forecasting code.
 
 Provider selection (evaluated at ``CompositeProvider`` construction time):
   1. ``MARKET_DATA_PROVIDER`` env-var set to "fmp" → ``FMPProvider`` (never
      auto-elected by ``FMP_API_KEY`` alone — see ``FMPProvider``'s docstring)
-  2. ``MARKET_DATA_PROVIDER`` env-var set to "alpaca" → ``AlpacaProvider``
-  3. ``MARKET_DATA_PROVIDER`` env-var set to "yfinance" → ``YFinanceProvider``
-  4. Env-var absent, ``ALPACA_API_KEY`` + ``ALPACA_SECRET_KEY`` present → Alpaca
-  5. Otherwise → ``YFinanceProvider`` (zero config, ~15-min delayed, free)
+  2. Otherwise → ``YFinanceProvider`` (zero config, ~15-min delayed, free)
+
+The FMP chain falls back to yfinance. (Alpaca was removed 2026-09-30; its
+provider and WebSocket streamers live in ``legacy/``.)
 
 Fundamentals are Yahoo statement-derived (``YahooFundamentalsProvider``,
 primary) with a raw yfinance ``.info`` fallback, or FMP-sourced when
@@ -44,15 +44,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from settings import settings
-
-# WebSocketStreamer integration — imported with a guard so the module
-# degrades gracefully when websockets is not installed.
-try:
-    from data.websocket_streamer import _STREAMER as _WS_STREAMER
-    _WS_AVAILABLE = True
-except Exception:
-    _WS_STREAMER = None  # type: ignore[assignment]
-    _WS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +84,7 @@ class Quote:
         True when the quote is delayed (yfinance always), market is closed, or
         the timestamp is older than the configured TTL threshold.
     source:
-        Provider name string for dashboard/Sheet attribution ("alpaca",
+        Provider name string for dashboard/Sheet attribution ("fmp",
         "yfinance").
     """
 
@@ -122,7 +113,7 @@ class MarketDataProvider(ABC):
     ``SOURCE``:
         Short provenance string surfaced to the dashboard / Google Sheet and
         stamped on every ``Quote.source`` this provider emits (e.g.
-        ``"alpaca"``, ``"yfinance"``). ``CompositeProvider.quote_source`` reads
+        ``"fmp"``, ``"yfinance"``). ``CompositeProvider.quote_source`` reads
         it off the *selected* provider rather than hardcoding a name, so adding
         a backend can never silently mislabel its quotes as another provider's.
     ``IS_REALTIME``:
@@ -195,7 +186,7 @@ class MarketDataProvider(ABC):
         let a batching-capable provider override. Concrete providers with a
         real batch endpoint (see ``FMPProvider.get_quotes_batch``) SHOULD
         override this for a genuine efficiency win; every other provider
-        (Alpaca, yfinance) inherits this default and is unaffected --
+        (yfinance) inherits this default and is unaffected --
         deliberately NOT abstract, so no existing provider subclass breaks
         by not implementing it.
         """
@@ -206,204 +197,6 @@ class MarketDataProvider(ABC):
             except Exception:  # noqa: BLE001 -- dead-letter per symbol, CONSTRAINT #6
                 continue
         return out
-
-
-# ---------------------------------------------------------------------------
-# Alpaca provider
-# ---------------------------------------------------------------------------
-
-class AlpacaProvider(MarketDataProvider):
-    """Real-time quote/bar provider backed by the free Alpaca IEX feed.
-
-    Requires ``ALPACA_API_KEY`` and ``ALPACA_SECRET_KEY`` in the environment.
-    Stale detection: quotes older than ``stale_threshold_seconds`` during
-    market hours are marked ``is_stale=True``.
-
-    Parameters
-    ----------
-    api_key:
-        Alpaca API key (read from settings.settings by CompositeProvider).
-    secret_key:
-        Alpaca secret key.
-    stale_threshold_seconds:
-        Age (seconds) beyond which a quote is considered stale.  Default 60.
-    """
-
-    SOURCE = "alpaca"
-    IS_REALTIME = True
-
-    def __init__(
-        self,
-        api_key: str,
-        secret_key: str,
-        stale_threshold_seconds: int = 60,
-    ) -> None:
-        self._api_key = api_key
-        self._secret_key = secret_key
-        self._stale_threshold = stale_threshold_seconds
-        self._client = self._build_client()
-
-    def _build_client(self):  # type: ignore[return]
-        """Lazily import alpaca-py and construct the data client."""
-        try:
-            from alpaca.data.historical import StockHistoricalDataClient  # type: ignore
-            client = StockHistoricalDataClient(
-                api_key=self._api_key,
-                secret_key=self._secret_key,
-            )
-            # 2026-08 fix: StockHistoricalDataClient subclasses the same
-            # alpaca-py RESTClient as execution/alpaca_broker.py's
-            # TradingClient, which exposes no timeout of its own (confirmed
-            # against the installed source) -- get_latest_quote/
-            # get_intraday_bars below used to be able to block forever on a
-            # stalled connection. See data/alpaca_http.py's module docstring.
-            from data.alpaca_http import mount_timeout_adapter
-            mount_timeout_adapter(client._session, settings.ALPACA_REQUEST_TIMEOUT_SECONDS)
-            return client
-        except ImportError as exc:
-            raise ImportError(
-                "alpaca-py is required for AlpacaProvider.  "
-                "Install it with: pip install alpaca-py"
-            ) from exc
-
-    def get_latest_quote(self, symbol: str) -> Quote:
-        """Fetch the best bid/ask via Alpaca's IEX real-time feed.
-
-        WS-first: checks the in-process ``WebSocketStreamer`` cache (TTL 2 s)
-        before making a REST round-trip. Falls back transparently to REST on
-        cache miss, keeping latency low for actively-streamed symbols without
-        any code changes in callers.
-        """
-        sym_upper = symbol.upper()
-
-        # --- WS fast path ---------------------------------------------------
-        if _WS_AVAILABLE and _WS_STREAMER is not None:
-            # Subscribe the symbol on first access so the stream picks it up
-            if sym_upper not in _WS_STREAMER._subscribed:
-                _WS_STREAMER.subscribe([sym_upper])
-
-            ws_tick = _WS_STREAMER.get_quote(sym_upper)
-            if ws_tick is not None:
-                bid = float(ws_tick.get("bp", float("nan")) or float("nan"))
-                ask = float(ws_tick.get("ap", float("nan")) or float("nan"))
-                price = (
-                    (bid + ask) / 2
-                    if (not _isnan(bid) and not _isnan(ask))
-                    else (bid if not _isnan(bid) else ask)
-                )
-                ts = datetime.now(timezone.utc)
-                return Quote(
-                    symbol=sym_upper,
-                    price=price,
-                    bid=bid,
-                    ask=ask,
-                    timestamp=ts,
-                    is_stale=False,
-                    source="alpaca-ws",
-                )
-        # --- REST fallback --------------------------------------------------
-        try:
-            from alpaca.data.requests import StockLatestQuoteRequest  # type: ignore
-
-            req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed="iex")
-            resp = self._client.get_stock_latest_quote(req)
-            q = resp[symbol]
-
-            ts_utc: datetime = (
-                q.timestamp.astimezone(timezone.utc)
-                if q.timestamp.tzinfo is not None
-                else q.timestamp.replace(tzinfo=timezone.utc)
-            )
-            age_seconds = (datetime.now(timezone.utc) - ts_utc).total_seconds()
-            is_stale = age_seconds > self._stale_threshold
-
-            bid = float(q.bid_price) if q.bid_price else float("nan")
-            ask = float(q.ask_price) if q.ask_price else float("nan")
-            price = (bid + ask) / 2 if (not _isnan(bid) and not _isnan(ask)) else (bid if not _isnan(bid) else ask)
-
-            return Quote(
-                symbol=sym_upper,
-                price=price,
-                bid=bid,
-                ask=ask,
-                timestamp=ts_utc,
-                is_stale=is_stale,
-                source="alpaca",
-            )
-        except Exception as exc:
-            logger.error("AlpacaProvider.get_latest_quote(%s) failed: %s", symbol, exc)
-            raise MarketDataError(f"Alpaca quote fetch failed for {symbol}: {exc}") from exc
-
-    def get_intraday_bars(
-        self, symbol: str, lookback_days: int = 252, interval: str = "1d"
-    ) -> pd.DataFrame:
-        """Fetch OHLCV bars via Alpaca IEX for the last ``lookback_days`` days.
-
-        ``interval="1d"`` (default) is unchanged daily-bar behavior.
-        ``interval="1h"`` fetches hourly bars instead — the index stays a
-        full timestamp (not normalized to midnight) so intraday resolution
-        is preserved; any other value raises ``MarketDataError``.
-        """
-        try:
-            from alpaca.data.requests import StockBarsRequest  # type: ignore
-            from alpaca.data.timeframe import TimeFrame  # type: ignore
-
-            if interval == "1d":
-                timeframe = TimeFrame.Day
-            elif interval == "1h":
-                timeframe = TimeFrame.Hour
-            else:
-                raise MarketDataError(
-                    f"AlpacaProvider.get_intraday_bars: unsupported interval {interval!r} "
-                    "(supported: '1d', '1h')"
-                )
-
-            start = datetime.now(timezone.utc) - timedelta(days=lookback_days + 10)
-            req = StockBarsRequest(
-                symbol_or_symbols=symbol,
-                timeframe=timeframe,
-                start=start,
-                feed="iex",
-            )
-            resp = self._client.get_stock_bars(req)
-            bars_df = resp.df
-
-            if bars_df.empty:
-                raise MarketDataError(f"Alpaca returned empty bars for {symbol}")
-
-            # resp.df has a MultiIndex (symbol, timestamp) when multiple symbols
-            # are requested; flatten if needed.
-            if isinstance(bars_df.index, pd.MultiIndex):
-                bars_df = bars_df.xs(symbol, level="symbol")
-
-            # Alpaca column names: open, high, low, close, volume → capitalise
-            bars_df = bars_df.rename(columns={
-                "open": "Open", "high": "High", "low": "Low",
-                "close": "Close", "volume": "Volume",
-            })
-            bars_df = bars_df[["Open", "High", "Low", "Close", "Volume"]].copy()
-
-            # Strip tz → timezone-naive index to match existing pipeline. Daily
-            # bars normalize to midnight (unchanged); hourly bars keep their
-            # real intraday timestamp so same-day excursion is resolvable.
-            if bars_df.index.tz is not None:
-                bars_df.index = bars_df.index.tz_localize(None)
-            bars_df.index = pd.to_datetime(bars_df.index)
-            if interval == "1d":
-                bars_df.index = bars_df.index.normalize()
-            bars_df.sort_index(inplace=True)
-
-            return bars_df.tail(lookback_days) if interval == "1d" else bars_df
-
-        except MarketDataError:
-            raise
-        except Exception as exc:
-            logger.error("AlpacaProvider.get_intraday_bars(%s) failed: %s", symbol, exc)
-            raise MarketDataError(f"Alpaca bars fetch failed for {symbol}: {exc}") from exc
-
-    def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
-        """Alpaca does not provide fundamentals; return empty (Finnhub handles this)."""
-        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -529,9 +322,9 @@ class YFinanceProvider(MarketDataProvider):
             raise MarketDataError(f"yfinance bars fetch failed for {symbol}: {exc}") from exc
 
     def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
-        """Fall back to yfinance .info for fundamentals when Finnhub is unavailable.
+        """Fall back to yfinance .info for fundamentals when the primary source is unavailable.
 
-        This is the secondary fundamentals path; ``FinnhubProvider`` is preferred.
+        This is the secondary fundamentals path.
         Returns an empty dict on failure rather than raising.
         """
         try:
@@ -540,7 +333,7 @@ class YFinanceProvider(MarketDataProvider):
 
             info = yf.Ticker(symbol).info or {}
             # yfinance returns dividendYield as a PERCENT; normalise to the
-            # fraction the platform (and the Finnhub path) use. See the helper.
+            # fraction the platform uses. See the helper.
             return normalize_yfinance_dividend_yield(dict(info))
         except Exception as exc:
             logger.warning(
@@ -560,7 +353,7 @@ class YahooFundamentalsProvider:
     Fetches yfinance financial-statement frames + a cached SPY daily-return
     series (for beta) and delegates ALL math to
     ``data.yahoo_fundamentals.compute_fundamentals`` (pure, offline-testable).
-    Replaces FinnhubProvider as the primary fundamentals source. Degrades to an
+    The primary fundamentals source (Finnhub was removed 2026-09). Degrades to an
     empty dict (never raises) on any failure — CONSTRAINT #6 dead-letter.
 
     The math module is kept strictly pure: this class is an I/O shell only. It
@@ -822,8 +615,7 @@ def _fmp_quote_timestamp_to_datetime(ts_raw: Any) -> datetime:
     """Convert FMP's ``/quote`` ``timestamp`` field (Unix epoch seconds) to a
     UTC-AWARE ``datetime`` — matching the ``Quote`` dataclass's own
     documented contract ("timestamp: UTC-aware datetime of the quote") and
-    both existing providers' convention (``AlpacaProvider`` converts its
-    real quote timestamp to tz-aware UTC; ``YFinanceProvider`` uses
+    the yfinance provider's convention (``YFinanceProvider`` uses
     ``datetime.now(timezone.utc)``, tz-aware since ``fast_info`` exposes no
     usable timestamp). Falls back to "now" (UTC-aware) when the field is
     missing or unparsable — an approximate-but-honestly-aware timestamp beats
@@ -976,7 +768,7 @@ class FMPProvider(MarketDataProvider):
     Ultimate-only one on the Starter plan — never blanks the rest) and
     delegates ALL math/scale conversion to
     ``data.fmp_fundamentals.map_fundamentals`` (pure, offline-testable). This
-    class is an I/O shell only, matching ``AlpacaProvider`` /
+    class is an I/O shell only, matching
     ``YahooFundamentalsProvider``'s division of labor.
 
     Parameters
@@ -991,7 +783,7 @@ class FMPProvider(MarketDataProvider):
     """
 
     SOURCE = "fmp"
-    # IS_REALTIME is NOT a fixed class constant like Alpaca/yfinance's — FMP's
+    # IS_REALTIME is NOT a fixed class constant like yfinance's — FMP's
     # real-time-ness on the Starter plan could not be verified live (see the
     # plan's Risks section), so it is operator-controlled via
     # settings.FMP_QUOTES_REALTIME and read PER INSTANCE at construction
@@ -1062,6 +854,35 @@ class FMPProvider(MarketDataProvider):
             logger.error("FMPProvider.get_latest_quote(%s) failed: %s", symbol, exc)
             raise MarketDataError(f"FMP quote fetch failed for {symbol}: {exc}") from exc
 
+    _ONE_BY_ONE_BUDGET_SECONDS = 20.0
+
+    def _quotes_one_by_one(self, symbols: List[str]) -> Dict[str, Quote]:
+        """Per-symbol ``/quote`` fallback for plans without ``/batch-quote``,
+        bounded in wall-clock time. FMP issuance is serial (shared throttle),
+        so a large batch would otherwise block for N x the request interval.
+        Symbols not reached within the budget are simply absent (never
+        fabricated); ``CompositeProvider`` resolves them via yfinance.
+        """
+        budget = min(
+            self._ONE_BY_ONE_BUDGET_SECONDS,
+            float(getattr(settings, "FMP_MAX_SECONDS_PER_CYCLE", self._ONE_BY_ONE_BUDGET_SECONDS) or self._ONE_BY_ONE_BUDGET_SECONDS),
+        )
+        deadline = time.monotonic() + budget
+        out: Dict[str, Quote] = {}
+        for i, sym in enumerate(symbols):
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "FMPProvider: per-symbol quote fallback hit its %.0fs budget; "
+                    "%d of %d symbol(s) left for the next provider.",
+                    budget, len(symbols) - i, len(symbols),
+                )
+                break
+            try:
+                out[sym.upper()] = self.get_latest_quote(sym)
+            except Exception:  # noqa: BLE001 -- dead-letter per symbol, CONSTRAINT #6
+                continue
+        return out
+
     def get_quotes_batch(self, symbols: List[str]) -> Dict[str, Quote]:
         """Override of the ABC's per-symbol-loop default (F6, docs/
         module_efficiency_redundancy_audit.md): resolves ALL symbols via ONE
@@ -1087,10 +908,16 @@ class FMPProvider(MarketDataProvider):
         """
         if not symbols:
             return {}
+        from data import fmp_client
+
+        # Plan fallback: some FMP plans (Starter) refuse /batch-quote with
+        # HTTP 402 while serving /quote. That is an entitlement, not an outage,
+        # so the "don't retry N single calls against a down host" rule below
+        # does not apply -- resolve per symbol via /quote instead.
+        if fmp_client.is_endpoint_out_of_plan("batch-quote"):
+            return self._quotes_one_by_one(symbols)
         out: Dict[str, Quote] = {}
         try:
-            from data import fmp_client
-
             payload = fmp_client.batch_quote(list(symbols))
             rows = payload if isinstance(payload, list) else []
             for row in rows:
@@ -1115,6 +942,8 @@ class FMPProvider(MarketDataProvider):
                     source=self.SOURCE,
                 )
         except Exception as exc:  # noqa: BLE001 -- dead-letter the whole batch, CONSTRAINT #6
+            if fmp_client.is_endpoint_out_of_plan("batch-quote"):
+                return self._quotes_one_by_one(symbols)
             logger.error("FMPProvider.get_quotes_batch(%s) failed: %s", symbols, exc)
             return {}
         return out
@@ -1347,61 +1176,6 @@ class FMPProvider(MarketDataProvider):
 
 
 # ---------------------------------------------------------------------------
-# Finnhub provider (fundamentals only)
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Sliding-window rate limiter (used by FinnhubProvider)
-# ---------------------------------------------------------------------------
-
-class _SlidingWindowRateLimiter:
-    """Crude sliding-window rate limiter: at most ``max_calls`` per ``window_seconds``.
-
-    ``acquire()`` is a synchronous, blocking call: if the budget is exhausted it
-    sleeps until the oldest call in the window expires, then records the new
-    call.  Thread-unsafe by design (the orchestrator's per-symbol loop is
-    serial); tests can monkeypatch ``time.sleep`` to avoid real waits.
-
-    Why this exists: the Finnhub free tier is 60 calls/minute and we make up
-    to 3 calls per symbol (`company_basic_financials`, `quote`, `company_profile2`).
-    On a 100-symbol watchlist sync we'd otherwise issue ~300 calls in seconds
-    and be rate-limited for the bulk of the run.
-
-    Parameters
-    ----------
-    max_calls:
-        Maximum calls permitted within ``window_seconds``.
-    window_seconds:
-        Sliding-window length in seconds.  Free-tier Finnhub uses 60 s.
-    """
-
-    def __init__(self, max_calls: int, window_seconds: float) -> None:
-        self._max_calls = max(1, int(max_calls))
-        self._window = float(window_seconds)
-        self._timestamps: list[float] = []
-
-    def acquire(self) -> None:
-        """Block until at least one call can be issued under the budget."""
-        now = time.monotonic()
-        cutoff = now - self._window
-        # Drop expired timestamps in-place; the list is bounded by max_calls.
-        self._timestamps = [t for t in self._timestamps if t > cutoff]
-        if len(self._timestamps) >= self._max_calls:
-            wait = self._window - (now - self._timestamps[0])
-            if wait > 0:
-                logger.info(
-                    "FinnhubRateLimiter: budget exhausted (%d/%d in %.0fs window); "
-                    "sleeping %.2fs",
-                    len(self._timestamps), self._max_calls, self._window, wait,
-                )
-                time.sleep(wait)
-            now = time.monotonic()
-            cutoff = now - self._window
-            self._timestamps = [t for t in self._timestamps if t > cutoff]
-        self._timestamps.append(now)
-
-
-# ---------------------------------------------------------------------------
 # In-process TTL fundamentals cache
 # ---------------------------------------------------------------------------
 
@@ -1410,7 +1184,7 @@ class _FundamentalsCache:
 
     Fundamentals are quarterly/slow-moving; caching for hours is safe.  We also
     cache "empty" responses so a symbol that returned 429 / unknown does not
-    cause another Finnhub round-trip on every cycle within the TTL — this is
+    cause another vendor round-trip on every cycle within the TTL — this is
     the key behaviour that protects the free tier across back-to-back runs.
 
     Positive and negative responses use DIFFERENT TTLs. A provider that was
@@ -1460,263 +1234,6 @@ class _FundamentalsCache:
 
     def clear(self) -> None:
         self._store.clear()
-
-
-class FinnhubProvider:
-    """Fundamentals-only provider backed by the Finnhub free tier.
-
-    DEPRECATED as a fundamentals source (2026-07): no longer wired into
-    CompositeProvider; retained for reference/manual use. news_catalyst uses its
-    own Finnhub client.
-
-    Uses ``company_basic_financials`` for balance-sheet metrics, shaped to
-    match the yfinance ``.info`` dict keys consumed by
-    ``FundamentalDataDTO.from_raw_dict()``.
-
-    Degrades gracefully (returns an empty dict + logged warning) when
-    ``FINNHUB_API_KEY`` is absent.
-
-    Rate limiting + caching (2026-06)
-    ---------------------------------
-    The free Finnhub tier is 60 calls/minute and each ``get_fundamentals``
-    invocation issues up to 3 API calls, so a 50+ symbol watchlist sync would
-    otherwise exhaust the quota in seconds and produce a flood of 429s.  This
-    class now:
-
-    * Caches every fundamentals response (positive AND empty) in a per-process
-      TTL cache (default 6 hours).  Repeat lookups within the TTL never touch
-      the network, so back-to-back runs don't re-rate-limit themselves.
-    * Throttles outbound calls via a sliding-window rate limiter (default 50
-      calls / 60 s — under the 60/min ceiling to leave headroom for the two
-      auxiliary endpoints).
-    * On a 429 response, sleeps with exponential backoff (1 retry) and falls
-      back to an empty dict on persistent failure.
-
-    Parameters
-    ----------
-    api_key:
-        Finnhub API key.  None → degrade-mode (empty dict responses).
-    cache_ttl_seconds:
-        TTL for the fundamentals cache.  Defaults to
-        ``FUNDAMENTALS_CACHE_TTL_SECONDS`` env-var (int) or 21600 (6 h).
-    rate_limit_per_min:
-        Sliding-window call budget per 60 s.  Defaults to
-        ``FINNHUB_RATE_LIMIT_PER_MIN`` env-var (int) or 50.
-    """
-
-    # Provenance attributes for completeness — this class is deprecated and
-    # unwired (nothing constructs it inside CompositeProvider), so neither is
-    # read in production today. Declared so a future re-wiring inherits the
-    # same attribute contract every other provider follows.
-    SOURCE = "finnhub"
-    IS_REALTIME = False
-
-    # Mapping from Finnhub metric names to yfinance .info key names so that
-    # FundamentalDataDTO.from_raw_dict() doesn't need to know the source.
-    _METRIC_MAP: Dict[str, str] = {
-        "peBasicExclExtraTTM": "trailingPE",
-        "pbQuarterly": "priceToBook",
-        "bookValuePerShareQuarterly": "bookValue",
-        "epsBasicExclExtraItemsTTM": "trailingEps",
-        "dividendYieldIndicatedAnnual": "dividendYield",
-        "payoutRatioTTM": "payoutRatio",
-        "marketCapitalization": "marketCap",
-        "betaWeekly": "beta",
-        "roe5Y": "returnOnEquity",
-        "roeTTM": "returnOnEquity",
-        "debtToEquityQuarterly": "debtToEquity",
-        "grossMarginTTM": "grossMargins",
-        "operatingMarginTTM": "operatingMargins",
-        "heldPercentInstitutions": "heldPercentInstitutions",
-        "currentRatioQuarterly": "currentRatio",
-    }
-
-    def __init__(
-        self,
-        api_key: Optional[str],
-        cache_ttl_seconds: Optional[int] = None,
-        rate_limit_per_min: Optional[int] = None,
-        neg_cache_ttl_seconds: Optional[int] = None,
-    ) -> None:
-        self._api_key = api_key
-        self._client: Optional[Any] = None
-        if api_key:
-            self._client = self._build_client(api_key)
-
-        # Per-process fundamentals cache (positive + negative responses).
-        # Defaults can be overridden via env vars to make ad-hoc tuning trivial
-        # without touching code (e.g. raise to 24h on a stale-tolerant machine).
-        # Negative (empty-dict) responses use a much shorter TTL so a symbol
-        # that was rate-limited or briefly down recovers quickly instead of
-        # staying "no data" for the full positive TTL.
-        ttl = cache_ttl_seconds if cache_ttl_seconds is not None else settings.FUNDAMENTALS_CACHE_TTL_SECONDS
-        neg_ttl = neg_cache_ttl_seconds if neg_cache_ttl_seconds is not None else settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS
-        rpm = rate_limit_per_min if rate_limit_per_min is not None else settings.FINNHUB_RATE_LIMIT_PER_MIN
-        self._cache = _FundamentalsCache(ttl_seconds=ttl, neg_ttl_seconds=neg_ttl)
-        self._rate_limiter = _SlidingWindowRateLimiter(
-            max_calls=rpm, window_seconds=60.0
-        )
-
-    def _build_client(self, api_key: str) -> Optional[Any]:
-        """Lazily import finnhub-python and return a client instance."""
-        try:
-            import finnhub  # type: ignore
-            return finnhub.Client(api_key=api_key)
-        except ImportError:
-            logger.warning(
-                "FinnhubProvider: finnhub-python not installed — "
-                "pip install finnhub-python.  Fundamentals will be empty."
-            )
-            return None
-
-    def _ensure_init(self) -> None:
-        """Lazily initialise cache + rate limiter if the instance was built via
-        ``__new__`` (as in some test fixtures) and ``__init__`` was skipped.
-
-        Defensive: tests that construct ``FinnhubProvider.__new__(...)`` and
-        only assign ``_api_key`` + ``_client`` must continue to work without
-        every test needing to know about the cache/limiter internals.
-        """
-        if not hasattr(self, "_cache"):
-            self._cache = _FundamentalsCache(
-                ttl_seconds=settings.FUNDAMENTALS_CACHE_TTL_SECONDS,
-                neg_ttl_seconds=settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS,
-            )
-        if not hasattr(self, "_rate_limiter"):
-            self._rate_limiter = _SlidingWindowRateLimiter(
-                max_calls=settings.FINNHUB_RATE_LIMIT_PER_MIN,
-                window_seconds=60.0,
-            )
-
-    def _is_rate_limit_exc(self, exc: BaseException) -> bool:
-        """Return True if ``exc`` represents a Finnhub 429 (rate-limit) response.
-
-        Detection is duck-typed against ``FinnhubAPIException.status_code`` so
-        this module never has to import ``finnhub`` eagerly (which would break
-        the optional-dependency contract).
-        """
-        return getattr(exc, "status_code", None) == 429
-
-    def _call_with_rate_limit(self, fn, *args, **kwargs):
-        """Invoke a Finnhub client method under the sliding-window budget.
-
-        On a 429 response, sleep with one-shot exponential backoff and retry
-        once.  Persistent failure raises so the caller can decide whether to
-        return empty / log / cache the failure.
-        """
-        self._rate_limiter.acquire()
-        try:
-            return fn(*args, **kwargs)
-        except Exception as exc:  # noqa: BLE001 — re-raised after one backoff retry
-            if self._is_rate_limit_exc(exc):
-                backoff = 2.0
-                logger.warning(
-                    "FinnhubProvider: 429 from %s — backing off %.1fs and retrying once",
-                    getattr(fn, "__name__", "<call>"), backoff,
-                )
-                time.sleep(backoff)
-                self._rate_limiter.acquire()
-                return fn(*args, **kwargs)
-            raise
-
-    def get_fundamentals(self, symbol: str) -> Dict[str, Any]:
-        """Return fundamentals shaped as a yfinance .info dict.
-
-        Returns an empty dict when the key is absent or the call fails.
-
-        Caching: every response — positive OR empty — is cached for
-        ``FUNDAMENTALS_CACHE_TTL_SECONDS`` (default 6 h).  Negative caching is
-        deliberate: a symbol that returned 429 or "unknown ticker" should not
-        cause another network call in the same hour, because that is exactly
-        what blows the free-tier budget on repeated orchestrator passes.
-        """
-        self._ensure_init()
-        sym = symbol.upper()
-
-        cached = self._cache.get(sym)
-        if cached is not None:
-            return cached
-
-        if self._client is None:
-            logger.warning(
-                "FinnhubProvider: FINNHUB_API_KEY not configured — "
-                "returning empty fundamentals for %s.  "
-                "Set FINNHUB_API_KEY in .env for fundamental data.",
-                symbol,
-            )
-            # Negative cache so we don't repeat the warning every loop.
-            self._cache.put(sym, {})
-            return {}
-
-        try:
-            resp = self._call_with_rate_limit(
-                self._client.company_basic_financials, symbol, "all"
-            )
-            metrics: Dict[str, Any] = resp.get("metric", {}) or {}
-
-            # Shape Finnhub metrics to match yfinance .info key names
-            info: Dict[str, Any] = {}
-            for fh_key, yf_key in self._METRIC_MAP.items():
-                val = metrics.get(fh_key)
-                if val is not None:
-                    # Finnhub returns dividendYield as percent (e.g. 0.52 = 0.52%);
-                    # normalise to the fraction the platform expects. (yfinance ALSO
-                    # returns percent now and is normalised at its own ingestion
-                    # path via dto_models.normalize_yfinance_dividend_yield.)
-                    if yf_key == "dividendYield" and isinstance(val, (int, float)):
-                        val = val / 100.0
-                    info[yf_key] = val
-
-            # Fetch quote for currentPrice if not already present
-            if "currentPrice" not in info:
-                try:
-                    q_resp = self._call_with_rate_limit(self._client.quote, symbol)
-                    if q_resp and q_resp.get("c"):
-                        info["currentPrice"] = float(q_resp["c"])
-                except Exception as exc:  # noqa: BLE001 — auxiliary call, optional
-                    logger.debug(
-                        "FinnhubProvider: quote(%s) failed: %s — skipping currentPrice",
-                        symbol, exc,
-                    )
-
-            # Pull company profile for name/sector
-            try:
-                profile = self._call_with_rate_limit(
-                    self._client.company_profile2, symbol=symbol
-                ) or {}
-                if profile.get("name"):
-                    info["shortName"] = profile["name"]
-                if profile.get("finnhubIndustry"):
-                    info["sector"] = profile["finnhubIndustry"]
-                if profile.get("shareOutstanding"):
-                    shares = float(profile["shareOutstanding"]) * 1e6
-                    if "marketCap" not in info and "currentPrice" in info:
-                        info["marketCap"] = shares * info["currentPrice"]
-            except Exception as exc:  # noqa: BLE001 — auxiliary call, optional
-                logger.debug(
-                    "FinnhubProvider: company_profile2(%s) failed: %s — skipping",
-                    symbol, exc,
-                )
-
-            self._cache.put(sym, info)
-            return info
-
-        except Exception as exc:
-            # Downgrade 429 to INFO (expected, recoverable next cycle); keep
-            # other failures at WARNING so unexpected errors stay visible.
-            if self._is_rate_limit_exc(exc):
-                logger.info(
-                    "FinnhubProvider.get_fundamentals(%s) rate-limited after retry — "
-                    "caching empty dict for TTL window",
-                    symbol,
-                )
-            else:
-                logger.warning(
-                    "FinnhubProvider.get_fundamentals(%s) failed: %s — returning empty dict",
-                    symbol, exc,
-                )
-            self._cache.put(sym, {})
-            return {}
 
 
 # ---------------------------------------------------------------------------
@@ -1830,10 +1347,7 @@ class CompositeProvider(MarketDataProvider):
        ``FMP_API_KEY`` alone; quotes/bars then run through an ordered
        fallback chain — see ``_get_quote_via_fmp_chain`` /
        ``_get_bars_via_fmp_chain`` — gated by ``FMP_FALLBACK_ENABLED``)
-    2. ``MARKET_DATA_PROVIDER=alpaca`` → ``AlpacaProvider``
-    3. ``MARKET_DATA_PROVIDER=yfinance`` → ``YFinanceProvider``
-    4. Env-var absent, ``ALPACA_API_KEY`` + ``ALPACA_SECRET_KEY`` set → Alpaca
-    5. Otherwise → ``YFinanceProvider``
+    2. ``MARKET_DATA_PROVIDER=yfinance`` (or unset) → ``YFinanceProvider``
 
     Fundamentals come from the Yahoo-derived statement-computed engine
     (``YahooFundamentalsProvider``) as the primary source, with a raw yfinance
@@ -1841,7 +1355,6 @@ class CompositeProvider(MarketDataProvider):
     returns nothing. ``FUNDAMENTALS_SOURCE=yfinance_info`` forces the raw
     ``.info`` provider as primary; ``FUNDAMENTALS_SOURCE=fmp`` routes through
     its own ordered fallback chain (``_get_fundamentals_via_fmp_chain``).
-    Finnhub is no longer wired in.
 
     Parameters
     ----------
@@ -1857,11 +1370,9 @@ class CompositeProvider(MarketDataProvider):
         # a small default safely de-duplicates the back-to-back fetches a
         # single refresh cycle issues per symbol.
         self._bars_cache = _BarsCache(ttl_seconds=int(settings.MARKET_DATA_BARS_TTL_SECONDS))
-        # Composite-level fundamentals cache wraps Finnhub-then-yfinance so
-        # neither backend is re-hammered within the TTL window, regardless of
-        # which source produced the final dict.  Defense in depth: the
-        # FinnhubProvider has its own cache for direct callers; this one
-        # protects the yfinance fallback path too.
+        # Composite-level fundamentals cache wraps the primary-then-yfinance
+        # chain so neither backend is re-hammered within the TTL window,
+        # regardless of which source produced the final dict.
         self._fundamentals_cache = _FundamentalsCache(
             ttl_seconds=int(settings.FUNDAMENTALS_CACHE_TTL_SECONDS),
             neg_ttl_seconds=int(settings.FUNDAMENTALS_NEG_CACHE_TTL_SECONDS),
@@ -1873,7 +1384,7 @@ class CompositeProvider(MarketDataProvider):
         # quotes vs. bars (they are separate settings on purpose -- an
         # operator may want FMP fundamentals live while quotes/bars stay on
         # the incumbent path). Pre-resolve once what serves a call whose gate
-        # is off -- the exact same Alpaca-if-keyed-else-yfinance default the
+        # is off -- the exact same yfinance default the
         # non-FMP branch below would have produced -- so
         # _effective_quote_provider / _effective_bars_provider don't
         # reconstruct a provider on every call. None when MARKET_DATA_PROVIDER
@@ -1922,8 +1433,7 @@ class CompositeProvider(MarketDataProvider):
         explicit = (settings.MARKET_DATA_PROVIDER or "").strip().lower()
 
         # FMP is selected ONLY by an explicit MARKET_DATA_PROVIDER=fmp — never
-        # by FMP_API_KEY's mere presence (unlike the Alpaca ladder just below,
-        # which DOES auto-elect on key presence alone). This is deliberate:
+        # by FMP_API_KEY's mere presence. This is deliberate:
         # an operator adding FMP_API_KEY to light up the analyst/earnings
         # diagnostic feeds must never silently have their quote/bars source
         # change underneath them.
@@ -1933,7 +1443,7 @@ class CompositeProvider(MarketDataProvider):
                 logger.warning(
                     "MarketData: MARKET_DATA_PROVIDER=fmp but FMP_API_KEY is not "
                     "set -- falling back to the default quote/bars provider "
-                    "(Alpaca if keyed, else yfinance) for this entire process. "
+                    "(yfinance) for this entire process. "
                     "Add FMP_API_KEY to .env to restore FMP as primary."
                 )
                 return self._select_default_quote_provider()
@@ -1961,36 +1471,22 @@ class CompositeProvider(MarketDataProvider):
         return self._select_default_quote_provider(explicit)
 
     def _select_default_quote_provider(self, explicit: str = "") -> MarketDataProvider:
-        """The Alpaca-or-yfinance ladder, with no ``'fmp'`` branch.
+        """The non-FMP ladder: yfinance, with no ``'fmp'`` branch.
 
         Two call sites: (1) :meth:`_select_quote_provider`, which passes the
         REAL ``MARKET_DATA_PROVIDER`` value through once it has already ruled
-        out ``'fmp'`` — preserves byte-identical behavior (including the
-        "unknown value" error) for every non-FMP config. (2) ``__init__``,
+        out ``'fmp'`` (so an unknown value still raises). (2) ``__init__``,
         with the default empty-string argument, to pre-resolve what should
         serve a call when ``MARKET_DATA_PROVIDER=fmp`` but the specific
         capability gate (``FMP_QUOTES_ENABLED`` / ``FMP_BARS_ENABLED``) is
-        off — the same auto-select (Alpaca if keyed, else yfinance) an unset
-        ``MARKET_DATA_PROVIDER`` would produce, since ``'fmp'`` itself is not
-        a meaningful value here.
+        off. ``'alpaca'`` was removed 2026-09-30 and is now an unknown value.
         """
-        alpaca_key = (settings.ALPACA_API_KEY or "").strip()
-        alpaca_secret = (settings.ALPACA_SECRET_KEY or "").strip()
-
-        if explicit == "alpaca" or (not explicit and alpaca_key and alpaca_secret):
-            if not alpaca_key or not alpaca_secret:
-                raise RuntimeError(
-                    "MARKET_DATA_PROVIDER=alpaca but ALPACA_API_KEY / "
-                    "ALPACA_SECRET_KEY are not set. Add them to .env."
-                )
-            return AlpacaProvider(api_key=alpaca_key, secret_key=alpaca_secret)
-
         if explicit == "yfinance" or not explicit:
             return YFinanceProvider()
 
         raise RuntimeError(
             f"Unknown MARKET_DATA_PROVIDER value: {explicit!r}.  "
-            "Valid values: 'fmp', 'alpaca', 'yfinance'."
+            "Valid values: 'fmp', 'yfinance' ('alpaca' was removed 2026-09-30)."
         )
 
     def _select_default_fundamentals_provider(self, src: str = "") -> MarketDataProvider:
@@ -2107,36 +1603,11 @@ class CompositeProvider(MarketDataProvider):
     def get_latest_quote(self, symbol: str) -> Quote:
         """Return a cached or freshly-fetched Quote for ``symbol``.
 
-        When ``settings.MARKET_DATA_WS_ENABLED`` and a fresh WebSocket-
-        delivered quote exists (see ``data/market_data_ws.py``), it is
-        returned directly, bypassing both the REST call and its own TTL
-        cache. Any lookup miss/stale-quote/import-failure falls straight
-        through to the pre-existing REST+TTL-cache path below, completely
-        unchanged -- this is a purely additive, best-effort supplement.
-
         The in-process TTL cache (default 30 s) prevents redundant network
         calls within a single refresh cycle.  Raises ``MarketDataError`` on
         provider failure.
         """
         sym = symbol.upper()
-
-        try:
-            from settings import settings as _settings
-            if bool(getattr(_settings, "MARKET_DATA_WS_ENABLED", False)):
-                from data.market_data_ws import get_ws_quote
-                ws_quote = get_ws_quote(sym)
-                if ws_quote is not None:
-                    return Quote(
-                        symbol=ws_quote.symbol,
-                        price=ws_quote.price,
-                        bid=ws_quote.bid,
-                        ask=ws_quote.ask,
-                        timestamp=ws_quote.timestamp,
-                        is_stale=False,
-                        source="alpaca_ws",
-                    )
-        except Exception as exc:  # noqa: BLE001 - WS lookup must never block a REST fallback
-            logger.debug("CompositeProvider: WS quote lookup failed for %s (%s) -- using REST.", sym, exc)
 
         cached = self._cache.get(sym)
         if cached is not None:
@@ -2153,7 +1624,7 @@ class CompositeProvider(MarketDataProvider):
             # but FMP_QUOTES_ENABLED is off, in which case `provider` is the
             # pre-resolved default (self._default_quote_provider), not
             # self._quote_provider -- so this still correctly serves from
-            # Alpaca/yfinance rather than ever calling into FMP.
+            # yfinance rather than ever calling into FMP.
             quote = provider.get_latest_quote(sym)
         self._cache.put(quote)
 
@@ -2181,13 +1652,11 @@ class CompositeProvider(MarketDataProvider):
         ``self._effective_quote_provider.get_quotes_batch(...)`` — which
         resolves to ``FMPProvider``'s real ``/batch-quote`` override when FMP
         is the active provider, or the ABC's per-symbol-loop default
-        otherwise (Alpaca/yfinance — no worse than today's manual loop, but
+        otherwise (yfinance — no worse than today's manual loop, but
         centralized instead of re-implemented at every call site).
 
         Disclosed scope boundary, not a silent gap: unlike
-        ``get_latest_quote``, this method does NOT consult the
-        WebSocket-delivered-quote fast path (``data/market_data_ws.py``) and
-        does NOT record per-symbol latency samples. Both are tied to
+        ``get_latest_quote``, this method does NOT record per-symbol latency samples. Both are tied to
         single-symbol *display-freshness* semantics (a live single-quote
         view wanting the freshest possible tick); this method's callers
         (portfolio-wide risk/scenario calculations resolving spot prices for
@@ -2205,13 +1674,15 @@ class CompositeProvider(MarketDataProvider):
         ``/batch-quote`` response simply omits one row for a symbol its
         ``/quote`` endpoint (or a fallback provider) can still resolve --
         e.g. a thinly-covered small-cap/BDC ticker. ``get_latest_quote``
-        already has an Alpaca/yfinance fallback chain for exactly this
+        already has an yfinance fallback chain for exactly this
         (``_get_quote_via_fmp_chain``); a symbol still missing after the
         batch call is retried through that SAME chain, one symbol at a
         time (bounded by how many symbols this call ever passes -- this
         method's real callers are position-count/quick-trade sized, never
-        a full-universe fan-out), so the batch endpoint's own retry
-        avoidance still holds. Dead-lettered per symbol (CONSTRAINT #6): a
+        a full-universe fan-out). When the WHOLE batch came back empty the
+        retry skips FMP and starts at the yfinance tail, so a total
+        FMP failure never turns into N extra single-symbol FMP requests;
+        FMP's /quote is only retried for rows a successful batch omitted. Dead-lettered per symbol (CONSTRAINT #6): a
         fallback failure for one symbol never blanks the rest of a
         genuinely mixed-result batch.
         """
@@ -2236,9 +1707,15 @@ class CompositeProvider(MarketDataProvider):
 
             if isinstance(provider, FMPProvider):
                 still_missing = [s for s in missing if s.upper() not in out]
+                # A partial batch (FMP answered but omitted a row) may still
+                # resolve via FMP's single-symbol /quote, so keep FMP in the
+                # chain. A WHOLE-batch failure (nothing fetched) means FMP is
+                # down or rate-limiting: go straight to yfinance
+                # instead of issuing N more FMP requests.
+                include_fmp = bool(fetched)
                 for sym in still_missing:
                     try:
-                        quote = self._get_quote_via_fmp_chain(sym)
+                        quote = self._get_quote_via_fmp_chain(sym, include_primary=include_fmp)
                     except MarketDataError as exc:
                         logger.warning(
                             "CompositeProvider: batch fallback chain also "
@@ -2307,44 +1784,25 @@ class CompositeProvider(MarketDataProvider):
         return bars
 
     def _build_fmp_fallback_tail(self) -> List[MarketDataProvider]:
-        """Build the [AlpacaProvider?, YFinanceProvider] tail shared by the
-        quote and bars FMP fallback chains, honoring ``FMP_FALLBACK_ENABLED``.
+        """Build the [YFinanceProvider] tail shared by the quote and bars FMP
+        fallback chains, honoring ``FMP_FALLBACK_ENABLED``.
 
         Returns an empty list when ``settings.FMP_FALLBACK_ENABLED`` is
         ``False`` — the caller's chain then collapses to ``[FMPProvider]``
         only, and a primary failure propagates as ``MarketDataError`` with no
-        fallback attempted. Alpaca is only appended when BOTH
-        ``ALPACA_API_KEY`` and ``ALPACA_SECRET_KEY`` are set; its
-        construction is defensively wrapped (unlike
-        ``YahooFundamentalsProvider``/``YFinanceProvider`` in the
-        fundamentals chain, ``AlpacaProvider.__init__`` does real I/O-free
-        but import-dependent work via ``alpaca-py`` and can raise
-        ``ImportError``) so a broken/missing Alpaca install degrades to
-        "skip Alpaca, keep yfinance" rather than crashing chain construction
-        itself.
+        fallback attempted.
         """
         tail: List[MarketDataProvider] = []
         if not bool(getattr(settings, "FMP_FALLBACK_ENABLED", True)):
             return tail
-        alpaca_key = (settings.ALPACA_API_KEY or "").strip()
-        alpaca_secret = (settings.ALPACA_SECRET_KEY or "").strip()
-        if alpaca_key and alpaca_secret:
-            try:
-                tail.append(AlpacaProvider(api_key=alpaca_key, secret_key=alpaca_secret))
-            except Exception as exc:  # noqa: BLE001 — defensive: keep the chain alive
-                logger.warning(
-                    "CompositeProvider: AlpacaProvider unavailable for the FMP "
-                    "quote/bars fallback chain (%s); skipping it.", exc,
-                )
         tail.append(YFinanceProvider())
         return tail
 
-    def _get_quote_via_fmp_chain(self, sym: str) -> Quote:
+    def _get_quote_via_fmp_chain(self, sym: str, *, include_primary: bool = True) -> Quote:
         """Ordered-chain quote fetch used ONLY when ``self._quote_provider``
         is an ``FMPProvider`` (i.e. ``MARKET_DATA_PROVIDER=fmp``).
 
-        Chain: ``[FMPProvider, AlpacaProvider (only if both Alpaca keys are
-        set), YFinanceProvider]``, unless ``settings.FMP_FALLBACK_ENABLED`` is
+        Chain: ``[FMPProvider, YFinanceProvider]``, unless ``settings.FMP_FALLBACK_ENABLED`` is
         ``False``, in which case the chain is ``[FMPProvider]`` only and a
         primary failure propagates as ``MarketDataError`` with no fallback
         attempted — the sibling of
@@ -2358,7 +1816,11 @@ class CompositeProvider(MarketDataProvider):
         provider, the symbol, and the exception — never DEBUG/INFO — so a
         silent fallback can never masquerade as success.
         """
-        chain: List[MarketDataProvider] = [self._quote_provider]
+        # include_primary=False skips FMP itself and goes straight to the
+        # fallback tail -- used by get_quotes_batch after a WHOLE-batch FMP
+        # failure, where re-hitting FMP's /quote once per symbol would add N
+        # requests to an already failing/rate-limited host.
+        chain: List[MarketDataProvider] = [self._quote_provider] if include_primary else []
         chain.extend(self._build_fmp_fallback_tail())
 
         last_exc: Optional[BaseException] = None
@@ -2556,10 +2018,7 @@ class CompositeProvider(MarketDataProvider):
         """True when the active quote provider delivers real-time data.
 
         Reads the provider's own ``IS_REALTIME`` class attribute rather than
-        isinstance-ing against ``AlpacaProvider``. The old ternary defaulted
-        every non-Alpaca backend to "delayed", which happened to be right, but
-        the mirror-image accessor (``quote_source``) defaulted every non-Alpaca
-        backend to the literal string ``"yfinance"`` — see below.
+        isinstance-ing against a concrete provider class.
 
         Reads through :attr:`_effective_quote_provider` (not
         ``self._quote_provider`` directly) so this never claims FMP's
@@ -2573,14 +2032,11 @@ class CompositeProvider(MarketDataProvider):
 
     @property
     def quote_source(self) -> str:
-        """Provider name string, e.g. "alpaca" or "yfinance".
+        """Provider name string, e.g. "fmp" or "yfinance".
 
         This string is dashboard / Google Sheet attribution, so it has to be
         the provider's own name and not a two-way guess. The previous
-        implementation was a hardcoded ternary that reported ``"yfinance"``
-        for anything that wasn't ``AlpacaProvider`` — correct only for as long
-        as exactly two backends existed. Byte-identical for both of those:
-        Alpaca → ``"alpaca"``, yfinance → ``"yfinance"``. Reads through
+        implementation was a hardcoded two-way ternary. Reads through
         :attr:`_effective_quote_provider` for the same reason as
         :attr:`is_realtime` above.
         """
@@ -2610,8 +2066,8 @@ class CompositeProvider(MarketDataProvider):
             self._fundamentals_cache.clear()
         # Also reset the inner provider's caches so a forced refresh actually
         # re-issues the network calls. Both are guarded — harmless when the
-        # active provider doesn't expose them (e.g. the legacy Finnhub
-        # ``_cache`` or the Yahoo provider's SPY market-return cache).
+        # active provider doesn't expose them (e.g. the Yahoo provider's
+        # SPY market-return cache).
         provider = getattr(self, "_fundamentals_provider", None)
         inner_cache = getattr(provider, "_cache", None)
         if inner_cache is not None:
@@ -2680,7 +2136,7 @@ _default_provider: Optional[CompositeProvider] = None
 def get_provider() -> CompositeProvider:
     """Return the module-level ``CompositeProvider`` singleton.
 
-    Auto-selects Alpaca vs yfinance based on environment variables.
+    Selects FMP or yfinance from ``MARKET_DATA_PROVIDER``.
     Constructing on first call so import-time side effects are avoided
     (tests can set env vars before calling this).
     """
@@ -2726,7 +2182,7 @@ class YFinanceOptionsProvider(OptionsDataProvider):
 class CompositeOptionsProvider(OptionsDataProvider):
     """Top-level options provider that routes to the configured backend.
     Currently uses YFinanceOptionsProvider, but structured to support swapping
-    in other providers (e.g., Alpaca or FMP) in the future.
+    in other providers (e.g., FMP) in the future.
     """
     def __init__(self):
         # In the future, read env vars (e.g., OPTIONS_DATA_PROVIDER) to select provider

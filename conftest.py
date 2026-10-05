@@ -152,6 +152,25 @@ except Exception:
 
 
 @pytest.fixture(autouse=True)
+def _reset_sync_report_cache_in_tests() -> Any:
+    """Clear the GET /data/sync-report response cache (``api.data_api``) and
+    the observability forecast-section cache (``pilots.observability``)
+    around every test, so one test's cached result never answers another's.
+    Only touches the module when a test already imported it (it is heavy)."""
+    def _reset() -> None:
+        mod = sys.modules.get("api.data_api")
+        if mod is not None:
+            mod._SYNC_REPORT_CACHE = None
+        obs = sys.modules.get("pilots.observability")
+        if obs is not None:
+            obs.reset_forecast_section_cache()
+
+    _reset()
+    yield
+    _reset()
+
+
+@pytest.fixture(autouse=True)
 def _no_gdelt_throttle_in_tests(monkeypatch: pytest.MonkeyPatch) -> Any:
     """Disable the shared GDELT request throttle and reset its limiter state
     for every test.
@@ -274,31 +293,11 @@ def _isolate_validation_runs_db_in_tests(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(_vhs, "resolve_database_url", lambda: "sqlite:///:memory:")
 
 
-@pytest.fixture(autouse=True)
-def _isolate_execution_audit_db_in_tests(monkeypatch):
-    """Point the default execution-audit-records DB resolver at an in-memory
-    db for every test, unless the test passes its own explicit ``db_url``/
-    ``sqlite_path`` to ``ExecutionAuditStore``.
-
-    ``execution/order_manager.py::OrderManager._record_execution_audit`` now
-    lazily constructs ``ExecutionAuditStore()`` (no explicit URL) the first
-    time a real fill reaches it -- an IMPLICIT write, exactly like the
-    ``ValidationHistoryStore`` case just above, deep inside a widely-used
-    function (~15+ pre-existing test files construct ``OrderManager(broker,
-    ...)`` directly with no ``audit_store=`` of their own, and at least one --
-    ``tests/test_fmp_paper_broker.py``'s
-    ``test_order_manager_live_submission_reaches_the_paper_broker`` -- already
-    drives a real FILLED result through it). Left unguarded, running this
-    suite would silently write real order-audit rows into a real operator's
-    shared ``~/.stockpy_local/quant_platform.db`` on every test run. Same
-    fixture shape as ``_isolate_validation_runs_db_in_tests`` above; a test
-    that passes ``sqlite_path=``/``db_url=`` explicitly (e.g.
-    ``tests/test_sec_rule_606_reporter.py``'s fixtures) bypasses
-    ``resolve_database_url()`` entirely and is unaffected by this patch.
-    """
-    import data.execution_audit_store as _eas
-
-    monkeypatch.setattr(_eas, "resolve_database_url", lambda: "sqlite:///:memory:")
+# _isolate_execution_audit_db_in_tests removed (step 4b, options desk
+# archive): data/execution_audit_store.py moved to
+# legacy/data/execution_audit_store.py -- no test under tests/ constructs it
+# any more, and its own dedicated test file moved to
+# legacy/tests/test_sec_rule_606_reporter.py alongside it.
 
 
 @pytest.fixture(autouse=True)
@@ -327,6 +326,51 @@ def _isolate_broker_fills_db_in_tests(monkeypatch):
     import data.broker_fills_store as _bfs
 
     monkeypatch.setattr(_bfs, "resolve_database_url", lambda: "sqlite:///:memory:")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_flags_store_in_tests(monkeypatch, tmp_path_factory):
+    """Point the runtime-flags store (and its sibling audit log) at a per-test
+    temp file for every test.
+
+    ``runtime_flags_writer.write_override`` with no ``path=`` resolves
+    ``runtime_flags.store_path()``, which is the machine-global
+    ``~/.stockpy_local/output/runtime_flags.json`` that the live daemon reads
+    and every worktree shares. It is reachable implicitly from every
+    ``/settings/*`` PUT in ``api/pilots_api.py`` (``_apply_live_overrides``),
+    so a test that drives one of those endpoints with only the ``.env`` write
+    mocked writes the operator's live store. That happened: from 2026-09-07
+    ``tests/test_settings_reference.py`` wrote ``SECTOR_HEAT_ENABLED=true`` on
+    every suite run, and from 2026-09-27 (when ``ADVISORY_ONLY`` became
+    ``live_safe``) ``ADVISORY_ONLY=false`` too, all under the real API's actor
+    name — see
+    ``docs/known_issues/runtime_flags_store_test_contamination_2026_10.md``.
+
+    ``INVESTYO_RUNTIME_FLAGS_PATH`` is the override both the writer and the
+    read path (``runtime_flags.load_store``/``apply_overrides``) honour. A
+    test that needs a specific store still sets it (or passes ``path=``)
+    itself; its later ``setenv`` wins. ``runtime_flags_writer`` additionally
+    refuses the live default store whenever pytest is loaded, as a backstop.
+    """
+    import runtime_flags as _rf
+
+    store_dir = tmp_path_factory.mktemp("runtime_flags")
+    monkeypatch.setenv(_rf.PATH_OVERRIDE_ENV_VAR, str(store_dir / _rf.STORE_FILENAME))
+
+
+@pytest.fixture(autouse=True)
+def _isolate_robinhood_login_lock_in_tests(monkeypatch, tmp_path_factory):
+    """Point data.robinhood_login's cross-process login lock (+ its owner
+    sidecar) at a per-test temp dir. Without this, every xdist worker's
+    stub-worker login tests would flock the SAME ``OUTPUT_DIR`` lock file
+    and refuse each other (``RobinhoodLoginInProgress``), and the suite
+    could contend with a live daemon's real lock. ``mktemp`` is lazy per
+    test and cheap; tests that need two processes on one lock set
+    ``_lock_dir_override`` themselves."""
+    import data.robinhood_login as _rhl
+
+    monkeypatch.setattr(_rhl, "_lock_dir_override", tmp_path_factory.mktemp("rh_login_lock"))
+    monkeypatch.setattr(_rhl, "_xlock_holder", None)
 
 
 @pytest.fixture(autouse=True)
@@ -530,6 +574,55 @@ def _isolate_symbol_view_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     monkeypatch.setattr(_svs, "resolve_database_url", lambda: f"sqlite:///{fake_db}")
 
 
+# Set to "1" ONLY in the dedicated child process that
+# tests/test_rag_index.py::test_real_faiss_in_subprocess spawns to run the
+# real-faiss tests. See _block_real_faiss_in_pytest_process below.
+REAL_FAISS_SUBPROCESS_ENV = "STOCKPY_REAL_FAISS_SUBPROCESS"
+
+
+@pytest.fixture(autouse=True)
+def _block_real_faiss_in_pytest_process() -> Any:
+    """Never let real ``faiss`` load into a pytest worker process.
+
+    faiss wheels bundle their own libomp.dylib. Once that copy is loaded, a
+    later real lightgbm train in the SAME process segfaults (macOS arm64,
+    three independent libomp copies -- see
+    docs/known_issues/lightgbm_faiss_libomp_collision_segfault.md, Round 3).
+    Under ``pytest -n auto`` that only happened when xdist put a real-faiss
+    test and a lightgbm test on the same worker, so it surfaced as a random
+    "node down" whenever test distribution shifted.
+
+    The real-faiss tests now run in their own fresh subprocess (see
+    tests/test_rag_index.py). Here every other test sees ``faiss`` as
+    not installed (a ``None`` entry in ``sys.modules`` makes ``import faiss``
+    raise ImportError), so no test can load faiss in-process, directly or
+    through production code such as ``data.rag_index``. The one exception
+    is that child process, which sets ``REAL_FAISS_SUBPROCESS_ENV=1`` and
+    runs nothing but the real-faiss tests.
+
+    If faiss is somehow already loaded (for example a module-level
+    ``import faiss`` during collection), fail loudly rather than hide it:
+    the dylib is already in the process and the crash risk is back.
+    """
+    if os.environ.get(REAL_FAISS_SUBPROCESS_ENV) == "1":
+        yield
+        return
+    if sys.modules.get("faiss") is not None:
+        pytest.fail(
+            "real faiss is loaded in this pytest worker process; it must only "
+            "load in the isolated subprocess (tests/test_rag_index.py). See "
+            "docs/known_issues/lightgbm_faiss_libomp_collision_segfault.md."
+        )
+    # Set and cleared by hand, not via the ``monkeypatch`` fixture: requesting
+    # monkeypatch here would instantiate it before the other autouse fixtures
+    # below, which changes teardown order and breaks fixtures that expect a
+    # test's own monkeypatch to be undone after they tear down.
+    sys.modules["faiss"] = None
+    yield
+    if "faiss" in sys.modules and sys.modules["faiss"] is None:
+        del sys.modules["faiss"]
+
+
 @pytest.fixture(autouse=True)
 def _clean_meta_registry_between_tests() -> Any:
     """Reset global_meta_registry state so tests that register temporary
@@ -619,10 +712,10 @@ def _clean_signal_registry_between_tests() -> Any:
         "aroon_trend", "forecast_alignment", "relative_strength", "rsi_extremes",
         "sortino_drawdown", "edge_garch", "timeseries_momentum", "cross_sectional_momentum",
         "rsi2_mean_reversion", "multifactor", "regime_multiplier", "lgbm_ranker",
-        "news_catalyst", "sector_quality_rank", "vrp_premium_selling", "options_flow_sentiment",
+        "news_catalyst", "sector_quality_rank",
     }
     try:
-        import signals  # noqa: F401 -- ensures all 20 standard modules are registered
+        import signals  # noqa: F401 -- ensures all 18 standard modules are registered
         from signals.registry import global_registry
         for k in list(global_registry._modules.keys()):
             if k not in standard_names:
@@ -727,3 +820,90 @@ def _isolate_paper_and_transactions_db_in_tests(monkeypatch: pytest.MonkeyPatch,
 
     monkeypatch.setattr(_pas, "resolve_database_url", lambda: isolated_url)
     monkeypatch.setattr(_ts, "resolve_database_url", lambda: isolated_url)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_historical_store_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Redirect every bare ``HistoricalStore()`` (no explicit ``db_path``)
+    to a private per-test temp file instead of the operator's real
+    ``~/.stockpy_local/quant_platform.db``.
+
+    Same risk class as ``_isolate_paper_and_transactions_db_in_tests`` above.
+    ``HistoricalStore`` is constructed implicitly deep inside production
+    code (``processing_engine``, ``macro_engine``, ``pilots/*``, the MCP
+    server, the production pipeline steps, ...), so tests reach it without
+    ever naming it. A 2026-10-02 probe of the offline suite found 172 tests
+    in ~30 files doing so, each running ``_ensure_tables()`` (DDL plus a
+    ``schema_version`` write) and whatever bar/news/fundamentals upserts the
+    test drove, all against the live DB. The live DB's stray
+    ``schema_version=2`` stamp (2026-08-23) came from the same gap, by way
+    of an uncommitted ``PaperAccountStore`` version stamp sharing the table.
+    See ``docs/known_issues/historical_store_schema_version_stamp_drift.md``.
+
+    A per-test temp FILE, not ``:memory:``, for the reason the fixture above
+    gives: separate constructions within one test must see each other's
+    writes. A test that passes an explicit ``db_path`` is unaffected, and so
+    is one that points ``settings.DATABASE_URL`` at its own seeded DB
+    (``tests/test_macro_snapshot.py``, ``tests/test_flatten_proposal.py``):
+    only the baseline resolution, the one that would reach the real DB, is
+    redirected.
+    """
+    import data.historical_store as _hs
+    import db_config as _dbc
+
+    isolated_url = f"sqlite:///{tmp_path / 'pytest_isolated_historical_store.db'}"
+    baseline_url = _dbc.resolve_database_url()
+
+    def _resolve() -> str:
+        current = _dbc.resolve_database_url()
+        return isolated_url if current == baseline_url else current
+
+    monkeypatch.setattr(_hs, "resolve_database_url", _resolve)
+
+
+@pytest.fixture(autouse=True)
+def _force_mock_data_engine_in_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pipeline tests use ``MockDataEngine`` unless they opt in.
+
+    ``data_engine.live_data_configured()`` (true when a FRED key is set) picks
+    the real ``DataEngine`` in ``AsyncDataFetchStep`` and the daemon. A
+    developer shell or ``.env`` with ``FRED_API_KEY`` set would otherwise
+    send unpatched pipeline tests to live FRED/market data. Before 2026-09
+    the switch was ``credentials.json`` in the CWD, which tests got as
+    "absent" for free. Opt out with ``@pytest.mark.live_data_engine``.
+    """
+    if request.node.get_closest_marker("live_data_engine") is not None:
+        return
+    try:
+        import data_engine as _de
+    except Exception:
+        return
+    monkeypatch.setattr(_de, "live_data_configured", lambda: False)
+
+
+@pytest.fixture(autouse=True)
+def _stub_paper_marking_network_in_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep ``PaperAccountStore`` position marking network-free in tests.
+
+    ``get_account()``/``get_open_positions()`` mark positions through two
+    live seams -- ``_fetch_stock_prices`` (CompositeProvider batch quotes,
+    with an FMP/yfinance fallback chain) and ``_fetch_option_chain``
+    (a yfinance option chain). Dozens of pre-existing tests open paper
+    positions without mocking either, so without this stub they would make
+    real outbound requests. Default stub: no live data at all, so every
+    position is marked at cost basis and flagged unpriced -- a test that
+    needs real marks patches the seam itself (a ``patch(...)`` inside the
+    test overrides this monkeypatch for its duration). Tests of the real
+    seams opt out with ``@pytest.mark.real_paper_marking``. The module-level
+    option-chain cache is cleared either way so cached chains never leak
+    between tests.
+    """
+    try:
+        import data.paper_account_store as _pas
+    except Exception:
+        return
+    _pas._OPTION_CHAIN_CACHE.clear()
+    if request.node.get_closest_marker("real_paper_marking") is not None:
+        return
+    monkeypatch.setattr(_pas, "_fetch_stock_prices", lambda symbols: {})
+    monkeypatch.setattr(_pas, "_fetch_option_chain", lambda underlying, expiration: None)

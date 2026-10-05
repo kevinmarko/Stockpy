@@ -56,7 +56,7 @@ _investyo_complete() {
     main_orchestrator.py) kind='opts'; cands=(--dry-run --strict) ;;
     universe_engine.py) kind='opts'; cands=(--date --report) ;;
     execution.kill_switch) kind='opts'; cands=(--activate --deactivate --activate-soft-halt --deactivate-soft-halt --status --reason) ;;
-    validation.harness) kind='opts'; cands=(--strategy --strategies --start --end --ticker --workers -w --json) ;;
+    validation.harness) kind='opts'; cands=(--strategy --start --end) ;;
     prompt_registry) kind='subs'; cands=(list get sync pin rollback diff verify publish) ;;
     prompt_registry/list) kind='opts'; cands=() ;;
     prompt_registry/get) kind='opts'; cands=(--version -v --raw) ;;

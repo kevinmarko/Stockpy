@@ -67,7 +67,7 @@ describe("PromptRegistry screen", () => {
     expect(await screen.findByRole("heading", { name: "Prompt Registry" })).toBeInTheDocument();
     // The static screen title above renders before the async getPrompts()
     // fetch resolves (the same shared race documented in
-    // FmpSettings.test.tsx / EtfTransmissionSettings.test.tsx), so the FIRST
+    // FmpSettings.test.tsx), so the FIRST
     // post-load element must be awaited via findBy; everything queried
     // afterward is safe once React has settled.
     expect(await screen.findByTestId("prompt-row-gravity.system")).toBeInTheDocument();

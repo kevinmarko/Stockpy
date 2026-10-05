@@ -188,8 +188,7 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
         self._sigmask_patcher.start()
         self.addCleanup(self._sigmask_patcher.stop)
 
-    @patch("observability.sentry_integration.init_sentry")
-    def test_daemon_start_called_before_watcher_thread_runs(self, mock_init_sentry):
+    def test_daemon_start_called_before_watcher_thread_runs(self):
         daemon_cls, instance = self._make_mock_daemon_class()
         call_order = []
         instance.start.side_effect = lambda: call_order.append("start")
@@ -200,7 +199,6 @@ class TestRunForeverHappyPath(BaseDaemonEntrypointTest):
             rc = self.mod.run_forever(60)
 
         self.assertEqual(rc, 0)
-        mock_init_sentry.assert_called_once_with(service_name="orchestrator_daemon")
         instance.start.assert_called_once()
         self.assertEqual(call_order, ["start"])
         # _write_daemon_file is now called TWICE per run_forever() call: once
@@ -1414,12 +1412,14 @@ class TestMainBodyStepSelection(unittest.TestCase):
             ["AsyncDataFetchStep", "RunPipelineStep"],
         )
 
-    def test_full_mode_all_four_steps(self):
+    def test_full_mode_all_steps(self):
         self.assertEqual(
             self._capture_steps_for_mode("full"),
             [
                 "AsyncDataFetchStep",
                 "RunPipelineStep",
+                "AdvisoryOverlayStep",
+                "AgenticQueueStep",
                 "BrokerExecutionStep",
                 "StateSnapshotStep",
             ],

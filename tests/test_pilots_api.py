@@ -2,21 +2,20 @@
 tests/test_pilots_api.py
 =========================
 Tests for the standalone ``api/pilots_api.py`` FastAPI service (port 8602) —
-the read/follow API backing the Autopilot "Pilots" marketplace PWA.
+the read/command API backing the Autopilot "Pilots" marketplace PWA.
 
 All read tests point the snapshot loader at the checked-in fixture snapshot
 (``tests/fixtures/state_snapshot.json``) by monkeypatching
 ``settings.OUTPUT_DIR`` (mirroring ``tests/test_state_api.py``), and the
 performance loader at ``tests/fixtures`` by monkeypatching
-``pilots_api._reports_dir``. Follow-write tests use a ``tmp_path`` OUTPUT_DIR so
-``FollowsStore`` never writes into the repo, and patch ``HistoricalStore`` /
+``pilots_api._reports_dir``. Write tests use a ``tmp_path`` OUTPUT_DIR so
+nothing is written into the repo, and patch ``HistoricalStore`` /
 ``GlobalKillSwitch`` on the module for account-snapshot / kill-switch state.
 """
 
 from __future__ import annotations
 
 import ast
-import asyncio
 import json
 import os
 import pathlib
@@ -24,7 +23,6 @@ from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import pytest
-import numpy as np
 import pandas as pd
 from fastapi.testclient import TestClient
 
@@ -96,8 +94,7 @@ def test_pilots_list_shape(monkeypatch):
     # cutover needs it on every list item, so it's an exact key of the response.
     assert set(tf.keys()) == {
         "id", "name", "category", "description",
-        "headline", "holdings_count", "top_holdings", "aum_proxy", "followers_proxy",
-        "long_only", "followable"
+        "headline", "holdings_count", "top_holdings", "long_only"
     }
     assert tf["long_only"] is False
     # Headline comes from tests/fixtures/timeseries_momentum_validation_summary.json.
@@ -108,8 +105,9 @@ def test_pilots_list_shape(monkeypatch):
     assert tf["holdings_count"] == 5
     assert len(tf["top_holdings"]) == 3
     assert tf["top_holdings"][0]["symbol"] == "NVDA"
-    assert tf["aum_proxy"] == 0.0
-    assert tf["followers_proxy"] == 0
+    # Follow-a-Pilot archived (2026-09, step 4c): no follow proxies.
+    for gone in ("aum_proxy", "followers_proxy", "followable"):
+        assert gone not in tf
 
 
 def test_pilots_list_headline_null_when_no_backtest(monkeypatch):
@@ -156,8 +154,8 @@ def test_pilot_detail_shape(monkeypatch):
     # long_only so the live frontend type is satisfied (Mismatch 3).
     assert body["long_only"] is False
     assert body["holdings_count"] == 5
-    assert body["aum_proxy"] == 0.0
-    assert body["followers_proxy"] == 0
+    for gone in ("aum_proxy", "followers_proxy", "followable"):
+        assert gone not in body
     assert len(body["holdings"]) == 5
     assert body["holdings"][0]["symbol"]  # each holding carries a symbol
     assert isinstance(body["sector_allocation"], list) and body["sector_allocation"]
@@ -674,7 +672,7 @@ def test_thresholds_shape_and_live_values(monkeypatch):
     assert set(body) == {
         "pbo_max", "dsr_min", "net_sharpe_min", "max_drawdown_max",
         "stress_max_drawdown", "kelly_fraction", "kelly_cap",
-        "robinhood_max_notional_per_order", "follow_min_amount",
+        "robinhood_max_notional_per_order",
         "agentic_max_candidates", "retrain_window_days",
     }
     assert body["pbo_max"] == PBO_MAX
@@ -685,7 +683,7 @@ def test_thresholds_shape_and_live_values(monkeypatch):
     assert body["kelly_fraction"] == settings.KELLY_FRACTION
     assert body["kelly_cap"] == settings.KELLY_CAP
     assert body["robinhood_max_notional_per_order"] == settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER
-    assert body["follow_min_amount"] == settings.FOLLOW_MIN_AMOUNT
+    assert "follow_min_amount" not in body  # Follow-a-Pilot archived (step 4c)
     assert body["agentic_max_candidates"] == float(settings.AGENTIC_MAX_CANDIDATES)
     assert body["retrain_window_days"] == float(MODEL_RETRAIN_WINDOW_DAYS)
 
@@ -978,250 +976,39 @@ def test_equity_curve_buying_power_missing_value_drops_only_that_point(monkeypat
 
 
 # ---------------------------------------------------------------------------
-# Follow endpoints — FAIL-CLOSED command token
+# Follow-a-Pilot endpoints — archived (2026-09, step 4c)
 # ---------------------------------------------------------------------------
 
 
-class TestFollowFailClosed:
-    """When FOLLOW_API_TOKEN is unset, every follow endpoint is 403 (disabled)."""
-
-    def test_get_follows_403_when_token_unset(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
-            resp = client.get("/follows")
-        assert resp.status_code == 403
-
-    def test_put_follows_403_when_token_unset(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
-            resp = client.put("/follows", json={"pilot_id": "trend-following", "amount": 100})
-        assert resp.status_code == 403
-
-    def test_post_follow_403_when_token_unset(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
-            resp = client.post("/pilots/trend-following/follow", json={"amount": 100})
-        assert resp.status_code == 403
-
-
-class TestFollowAuthorized:
-    """With FOLLOW_API_TOKEN set, follow endpoints require the matching token."""
+class TestFollowEndpointsRemoved:
+    """GET/PUT /follows and POST /pilots/{id}/follow were removed with
+    Follow-a-Pilot. With the command token configured and presented they must
+    not resolve to any handler (404/405), so no follow can be persisted."""
 
     def _auth(self):
         return {"Authorization": f"Bearer {_CMD_TOKEN}"}
 
-    def test_get_follows_401_wrong_token(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.get("/follows", headers={"Authorization": "Bearer WRONG"})
-        assert resp.status_code == 401
+    def test_follow_routes_not_registered(self):
+        paths = {getattr(r, "path", "") for r in pilots_api.app.routes}
+        assert "/follows" not in paths
+        assert "/pilots/{pilot_id}/follow" not in paths
 
-    def test_get_follows_ok(self, tmp_path):
+    def test_follow_calls_do_not_resolve(self, tmp_path):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.get("/follows", headers=self._auth())
-        assert resp.status_code == 200
-        assert resp.json() == []
-
-    def test_put_follows_unknown_pilot_404(self, tmp_path):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.put(
-                    "/follows",
-                    json={"pilot_id": "nope", "amount": 100},
+                r1 = client.get("/follows", headers=self._auth())
+                r2 = client.put(
+                    "/follows", json={"pilot_id": "trend-following", "amount": 250.0},
                     headers=self._auth(),
                 )
-        assert resp.status_code == 404
-
-    def test_put_follows_upsert(self, tmp_path):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.put(
-                    "/follows",
-                    json={"pilot_id": "trend-following", "amount": 250.0},
+                r3 = client.post(
+                    "/pilots/trend-following/follow", json={"amount": 1000.0},
                     headers=self._auth(),
                 )
-        assert resp.status_code == 200
-        follow = resp.json()["follow"]
-        assert follow["pilot_id"] == "trend-following"
-        assert follow["amount"] == 250.0
-        assert follow["status"] == "active"
-
-    def test_post_follow_success_preview(self, tmp_path):
-        (tmp_path / "state_snapshot.json").write_text(_SNAPSHOT_FIXTURE, encoding="utf-8")
-
-        class _FakeSnap:
-            total_equity = 100000.0
-
-        class _Store:
-            def latest_account_snapshot(self):
-                return _FakeSnap()
-
-        # This test is about proportional-split math, not Kelly sizing -- stub
-        # the Kelly ceiling generously. plan_follow first calls
-        # estimate_win_rate_and_payoff_per_strategy to decide cold-start vs.
-        # warm; a real (unmocked) TransactionsStore for a brand-new
-        # "Follow:<pilot_id>" strategy always has zero closed trades, which
-        # would report cold-start and route around kelly_sizing_for_strategy
-        # entirely -- so both must be stubbed together for this stub to have
-        # any effect.
-        #
-        # ROBINHOOD_MAX_NOTIONAL_PER_ORDER must be EXPLICITLY pinned to the
-        # "unset" default (0.0) here, not assumed ambient: execution/compose.py's
-        # per-order notional cap clamps every intent's target_notional to this
-        # value when it's a positive real number, which is exactly what a real
-        # operator .env configures for live trading -- and would otherwise
-        # silently truncate this test's $1000 proportional split down to
-        # 5 * min-per-leg-cap, breaking the total-notional assertion below on
-        # whatever machine happens to be running pytest.
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 0.0):
-                with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                    with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
-                        with mock.patch(
-                            "sizing.kelly.estimate_win_rate_and_payoff_per_strategy",
-                            return_value=(0.6, 1.5, 999),
-                        ):
-                            with mock.patch(
-                                "sizing.kelly.kelly_sizing_for_strategy",
-                                return_value=(1.0, "test_stub_no_ceiling"),
-                            ):
-                                resp = client.post(
-                                    "/pilots/trend-following/follow",
-                                    json={"amount": 1000.0},
-                                    headers=self._auth(),
-                                )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["follow"]["pilot_id"] == "trend-following"
-        assert body["follow"]["amount"] == 1000.0
-        assert body["mode"] in ("off", "review", "live")
-        # 5 positive-blend holdings -> 5 proportional preview intents.
-        assert len(body["planned_intents"]) == 5
-        total = sum(i["target_notional"] for i in body["planned_intents"])
-        assert abs(total - 1000.0) < 1.0  # proportional split of the amount
-
-    def test_post_follow_response_matches_followresult_contract(self, tmp_path):
-        """Lock the live POST /follow response to the webapp FollowResult type
-        (webapp/src/api/types.ts) so the live and mock shapes can't silently
-        diverge again — the bug that left the live Follow modal blank."""
-        (tmp_path / "state_snapshot.json").write_text(_SNAPSHOT_FIXTURE, encoding="utf-8")
-
-        class _FakeSnap:
-            total_equity = 100000.0
-
-        class _Store:
-            def latest_account_snapshot(self):
-                return _FakeSnap()
-
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                with mock.patch.object(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 2500.0):
-                    with mock.patch.object(pilots_api, "HistoricalStore", return_value=_Store()):
-                        resp = client.post(
-                            "/pilots/trend-following/follow",
-                            json={"amount": 1000.0},
-                            headers=self._auth(),
-                        )
-        assert resp.status_code == 200
-        body = resp.json()
-        required = {
-            "follow", "planned_intents", "mode", "queue_written",
-            "notional_cap", "min_amount", "notice",
-        }
-        assert required.issubset(body.keys()), f"missing keys: {required - set(body)}"
-        assert body["notional_cap"] == pytest.approx(2500.0)
-        assert body["min_amount"] == pytest.approx(settings.FOLLOW_MIN_AMOUNT)
-        assert isinstance(body["notice"], str) and body["notice"]
-
-    def test_post_follow_kill_switch_423(self, tmp_path):
-        class _ActiveKS:
-            def is_active(self):
-                return True
-
-            def reason(self):
-                return "test halt"
-
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_ActiveKS()):
-                    resp = client.post(
-                        "/pilots/trend-following/follow",
-                        json={"amount": 1000.0},
-                        headers=self._auth(),
-                    )
-        assert resp.status_code == 423
-
-    def test_post_follow_no_account_snapshot_preview_note(self, tmp_path):
-        (tmp_path / "state_snapshot.json").write_text(_SNAPSHOT_FIXTURE, encoding="utf-8")
-
-        class _EmptyStore:
-            def latest_account_snapshot(self):
-                return None
-
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                with mock.patch.object(pilots_api, "HistoricalStore", return_value=_EmptyStore()):
-                    resp = client.post(
-                        "/pilots/trend-following/follow",
-                        json={"amount": 1000.0},
-                        headers=self._auth(),
-                    )
-        assert resp.status_code == 200
-        body = resp.json()
-        # Follow still persisted; no equity fabricated -> empty preview + honest note.
-        assert body["follow"]["amount"] == 1000.0
-        assert body["planned_intents"] == []
-        assert "note" in body
-
-    def test_post_follow_unknown_pilot_404(self, tmp_path):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.post(
-                    "/pilots/nope/follow",
-                    json={"amount": 1000.0},
-                    headers=self._auth(),
-                )
-        assert resp.status_code == 404
-
-    def test_post_follow_non_followable_pilot_400(self, tmp_path):
-        """The `followable` gate that disables the Follow button client-side
-        (PilotDetail.tsx/Comparison.tsx) must also be enforced here — the
-        UI disabling a button is not itself a security boundary, and a
-        direct API call must not be able to persist a follow for a Pilot
-        that is `weights={}` by design (e.g. the options-desk specialist
-        strategies added alongside the Strategy Report Card)."""
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.post(
-                    "/pilots/iron-condor/follow",
-                    json={"amount": 1000.0},
-                    headers=self._auth(),
-                )
-        assert resp.status_code == 400
-        assert "not followable" in resp.json()["detail"]
-
-    def test_put_follows_non_followable_pilot_400(self, tmp_path):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.put(
-                    "/follows",
-                    json={"pilot_id": "copula-stat-arb", "amount": 500.0},
-                    headers=self._auth(),
-                )
-        assert resp.status_code == 400
-        assert "not followable" in resp.json()["detail"]
-
-    def test_put_follows_cancel_non_followable_pilot_still_allowed(self, tmp_path):
-        """`amount == 0` (cancel) must never be blocked by the followable gate
-        — a pre-existing follow (e.g. one created before this fix shipped)
-        must always be cancellable regardless of the Pilot's current
-        followable state."""
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                resp = client.put(
-                    "/follows",
-                    json={"pilot_id": "iron-condor", "amount": 0.0},
-                    headers=self._auth(),
-                )
-        assert resp.status_code == 200
-        assert resp.json()["follow"]["amount"] == 0.0
+        assert r1.status_code in (404, 405)
+        assert r2.status_code in (404, 405)
+        assert r3.status_code in (404, 405)
+        assert not (tmp_path / "follows.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -1767,85 +1554,11 @@ class TestModelsRegistry:
         assert checked_any  # ml/registry.yaml has at least one dated model
 
 
-class TestOptionsMatrix:
-    def test_disabled_is_honest_empty(self, tmp_path):
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            with mock.patch.object(settings, "STATE_API_TOKEN", None):
-                resp = client.get("/options")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["directives"] == []
-        assert body["reason"] and "not generated" in body["reason"]
-
-    def test_reads_persisted_matrix(self, tmp_path):
-        import json as _json
-
-        (tmp_path / "options_matrix.json").write_text(
-            _json.dumps(
-                {
-                    "timestamp": "2026-07-15T00:00:00+00:00",
-                    "target_dte": 30,
-                    "directives": [
-                        {"Symbol": "AAPL", "Strategy": "Put Credit Spread",
-                         "Net_Premium": 1.2, "Integrity_OK": True}
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            with mock.patch.object(settings, "STATE_API_TOKEN", None):
-                resp = client.get("/options")
-                sym = client.get("/symbols/AAPL/options")
-                miss = client.get("/symbols/ZZZ/options")
-        assert resp.json()["directives"][0]["Symbol"] == "AAPL"
-        assert resp.json()["as_of"] == "2026-07-15T00:00:00+00:00"
-        assert sym.json()["directive"]["Strategy"] == "Put Credit Spread"
-        # Honest: a symbol not in the matrix returns directive=null + reason (200).
-        assert miss.status_code == 200
-        assert miss.json()["directive"] is None
-        assert miss.json()["reason"]
-
-
-class TestPairsRadar:
-    def test_disabled_is_honest_empty(self, tmp_path):
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            with mock.patch.object(settings, "STATE_API_TOKEN", None):
-                resp = client.get("/pairs")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["pairs"] == []
-        assert body["reason"] and "not generated" in body["reason"]
-
-    def test_reads_persisted_radar(self, tmp_path):
-        import json as _json
-
-        (tmp_path / "pairs.json").write_text(
-            _json.dumps(
-                {
-                    "timestamp": "2026-07-15T00:00:00+00:00",
-                    "universe": ["XOM", "CVX"],
-                    "pairs": [
-                        {"ticker1": "XOM", "ticker2": "CVX", "p_value": 0.01,
-                         "half_life": 12.0, "z_score": 2.4, "beta": 0.9,
-                         "rolling_p": 0.02, "position": -1.0,
-                         "signal": "ENTER SHORT spread"}
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
-        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-            with mock.patch.object(settings, "STATE_API_TOKEN", None):
-                resp = client.get("/pairs")
-        body = resp.json()
-        assert body["pairs"][0]["ticker1"] == "XOM"
-        assert body["pairs"][0]["signal"] == "ENTER SHORT spread"
-        assert body["universe"] == ["XOM", "CVX"]
+class TestPairsRadarRemoved:
+    def test_pairs_route_is_gone(self):
+        # The Pairs radar screen and its snapshot were removed in 2026-10.
+        with mock.patch.object(settings, "STATE_API_TOKEN", None):
+            assert client.get("/pairs").status_code == 404
 
 
 class TestObservabilitySummary:
@@ -1885,7 +1598,7 @@ class TestObservabilitySummary:
             "portfolio_risk", "portfolio_heat", "equity_curve", "regime",
             "forecast_skill", "forecast_skill_by_symbol", "risk_gate_blocks",
             "circuit_breakers", "system_telemetry", "latency_heatmap",
-            "sizing_cap_audit", "etf_transmission", "heartbeat", "strategy_pnl",
+            "sizing_cap_audit", "heartbeat", "strategy_pnl",
         }
         # system_telemetry is a LIVE psutil sample (point-in-time, not read
         # from a cold-start fixture) -- psutil is a hard requirements.txt
@@ -2374,6 +2087,21 @@ class TestAutomationStatus:
         assert body["last_run"]["run_id"] == "orch-123"
         assert body["last_run_source"] == "daemon_memory"
         assert body["kill_switch"] == {"active": False, "reason": None}
+
+    def test_mode_flags_expose_paper_trading_not_alpaca_paper(self, tmp_path):
+        """API contract (Alpaca removal, 2026-09-30): the paper/live flag is
+        served as ``paper_trading`` from settings.PAPER_TRADING; the old
+        ``alpaca_paper`` key is gone."""
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path), \
+             mock.patch.object(settings, "PAPER_TRADING", False), \
+             mock.patch.object(pilots_api.daemon_client, "get_status", return_value=_fake_daemon_status()), \
+             mock.patch.object(pilots_api.daemon_client, "get_latest_run", return_value=_fake_run_record()), \
+             mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
+            resp = client.get("/automation/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["paper_trading"] is False
+        assert "alpaca_paper" not in body
 
     def test_daemon_unreachable_falls_back_to_daemon_json(self, tmp_path):
         """The restart-honesty core: when the Control API can't be reached,
@@ -2949,9 +2677,10 @@ class TestAutomationRun:
         assert resp.status_code == 401
 
     def test_run_not_gated_by_automation_writes_enabled(self):
-        """Deliberate: run sits behind require_command_token alone, matching
-        POST /pilots/{id}/follow's existing posture -- gating it more
-        strictly than the follow write-path would invert the risk ordering."""
+        """Deliberate: run sits behind require_command_token alone (the
+        posture the since-archived POST /pilots/{id}/follow order-queue write
+        had) -- gating a run trigger more strictly would invert the risk
+        ordering."""
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", False):
                 with mock.patch.object(
@@ -3290,7 +3019,7 @@ class TestAutomationWritesInvariants:
 
 class TestExecutionModeWrite:
     """PUT /automation/execution-mode -- 1-Click Go Live toggle. Tests stub
-    ``shared.strategy_registry.set_active_mode`` (its own DRY_RUN/ALPACA_PAPER
+    ``shared.strategy_registry.set_active_mode`` (its own DRY_RUN/PAPER_TRADING
     writes are covered by that module's own tests) and redirect
     ``env_io.ENV_PATH`` at a scratch file for the ADVISORY_ONLY write, mirroring
     ``TestAutomationIntervalWrite``.
@@ -3323,15 +3052,19 @@ class TestExecutionModeWrite:
                         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["written"] == ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"]
+        assert body["written"] == ["ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"]
         assert body["advisory_only"] is False
         assert body["mode"] == "paper"
-        assert body["applies"] == "next_daemon_restart"
+        # Every key is also written to the (conftest-isolated) runtime-flags
+        # store, so the mode is in force now, not after a restart.
+        assert body["ok"] is True
+        assert body["store_conflict"] is None
+        assert set(body["per_key_applies"]) == {"ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"}
         assert "ADVISORY_ONLY=false" in env_file.read_text(encoding="utf-8")
         mock_set_mode.assert_called_once_with("paper")
 
     def test_advisory_mode_never_calls_set_active_mode(self, tmp_path):
-        """``mode == "advisory"`` carries no DRY_RUN/ALPACA_PAPER pairing --
+        """``mode == "advisory"`` carries no DRY_RUN/PAPER_TRADING pairing --
         ``written`` must say so rather than claiming a write that never
         happened (CONSTRAINT #4). Only ADVISORY_ONLY needs confirming here."""
         env_file = tmp_path / ".env"
@@ -3484,6 +3217,187 @@ class TestExecutionModeWrite:
         assert _CMD_TOKEN not in caplog.text
 
 
+class TestExecutionModeStoreOverride:
+    """``PUT /automation/execution-mode`` must make the mode it writes actually
+    effective. Precedence is shell env > runtime-flags store > ``.env``, so a
+    ``.env``-only write is silently shadowed by a stored override -- a stored
+    ``ADVISORY_ONLY=false`` used to make the "Advisory Only" button's
+    quarantine NOT engage while the endpoint reported success
+    (docs/known_issues/runtime_flags_store_test_contamination_2026_10.md).
+
+    The store is the per-test temp file from the root conftest's
+    ``_isolate_runtime_flags_store_in_tests``; the writer mutates a throwaway
+    ``settings`` singleton, never the real one."""
+
+    _ADVISORY = {
+        "mode": "advisory",
+        "advisory_only": True,
+        "confirm": {"ADVISORY_ONLY": "ADVISORY_ONLY"},
+    }
+
+    @pytest.fixture
+    def throwaway_settings(self, monkeypatch):
+        import settings as settings_module
+
+        for name in ("ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING", "ALPACA_PAPER"):
+            monkeypatch.delenv(name, raising=False)
+        import runtime_flags
+
+        # .env parsing pinned empty so env-pinning depends only on real exports.
+        monkeypatch.setattr(runtime_flags, "_dotenv_entries", lambda: {})
+        fresh = settings_module.Settings()
+        monkeypatch.setattr(settings_module, "settings", fresh)
+        return fresh
+
+    def _put(self, payload, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    with mock.patch("shared.strategy_registry.set_active_mode"):
+                        resp = client.put(
+                            "/automation/execution-mode",
+                            json=payload,
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        return resp, env_file
+
+    @staticmethod
+    def _seed_store(values):
+        import runtime_flags
+
+        path = runtime_flags.store_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "version": runtime_flags.SCHEMA_VERSION,
+                    "flags": {k: {"value": v} for k, v in values.items()},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    @staticmethod
+    def _effective_after_fresh_apply(key):
+        """What a fresh process (the daemon after its next wake/restart) would
+        see: a new Settings() with the store applied on top."""
+        import runtime_flags
+        import settings as settings_module
+
+        fresh = settings_module.Settings()
+        runtime_flags.apply_overrides(fresh)
+        return getattr(fresh, key)
+
+    def test_stale_store_false_no_longer_defeats_the_advisory_button(
+        self, tmp_path, throwaway_settings
+    ):
+        """The headline regression: store seeded ADVISORY_ONLY=false, a
+        confirmed "advisory" press, and the effective value is True."""
+        store = self._seed_store({"ADVISORY_ONLY": False})
+        # Precondition: the stale override really does shadow everything.
+        assert self._effective_after_fresh_apply("ADVISORY_ONLY") is False
+
+        resp, env_file = self._put(self._ADVISORY, tmp_path)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["quarantine_engaged"] is True
+        assert body["store_conflict"] is None
+        assert body["per_key_applies"] == {"ADVISORY_ONLY": "immediately"}
+        assert body["applies"] == "immediately"
+        assert "ADVISORY_ONLY=true" in env_file.read_text(encoding="utf-8")
+        flags = json.loads(store.read_text(encoding="utf-8"))["flags"]
+        assert flags["ADVISORY_ONLY"]["value"] is True
+        assert flags["ADVISORY_ONLY"]["updated_by"] == "pilots_api:execution_mode"
+        assert self._effective_after_fresh_apply("ADVISORY_ONLY") is True
+        assert throwaway_settings.ADVISORY_ONLY is True
+
+    def test_non_advisory_mode_writes_its_pair_to_the_store(
+        self, tmp_path, throwaway_settings
+    ):
+        store = self._seed_store({"DRY_RUN": True})
+        resp, _ = self._put(
+            {
+                "mode": "paper",
+                "advisory_only": False,
+                "confirm": {"ADVISORY_ONLY": "ADVISORY_ONLY", "DRY_RUN": "DRY_RUN"},
+            },
+            tmp_path,
+        )
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["quarantine_engaged"] is False
+        flags = json.loads(store.read_text(encoding="utf-8"))["flags"]
+        assert {k: flags[k]["value"] for k in flags} == {
+            "ADVISORY_ONLY": False,
+            "DRY_RUN": False,
+            "PAPER_TRADING": True,
+        }
+
+    def test_store_write_refused_reports_quarantine_not_engaged(
+        self, tmp_path, throwaway_settings
+    ):
+        """Fail closed: when the ADVISORY_ONLY=true store write fails, the
+        response must say the quarantine is NOT engaged -- never "updated"."""
+        import runtime_flags_writer as writer
+
+        refused = writer.WriteResult(
+            key="ADVISORY_ONLY", ok=False, reason="disk full", applies=writer.APPLIES_REFUSED
+        )
+        with mock.patch.object(writer, "write_override", return_value=refused):
+            resp, env_file = self._put(self._ADVISORY, tmp_path)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["quarantine_engaged"] is False
+        assert body["store_conflict"]["keys"] == ["ADVISORY_ONLY"]
+        assert body["store_conflict"]["reasons"]["ADVISORY_ONLY"] == "disk full"
+        assert "NOT engaged" in body["store_conflict"]["message"]
+        assert body["note"] == body["store_conflict"]["message"]
+        assert "in force" not in body["note"].replace("NOT fully in force", "")
+        assert body["per_key_applies"] == {"ADVISORY_ONLY": "refused"}
+        assert body["applies"] == "next_daemon_restart"
+        # The .env write stands (it already happened).
+        assert "ADVISORY_ONLY=true" in env_file.read_text(encoding="utf-8")
+
+    def test_store_writer_exception_is_a_conflict_not_a_crash(
+        self, tmp_path, throwaway_settings
+    ):
+        import runtime_flags_writer as writer
+
+        with mock.patch.object(writer, "write_override", side_effect=OSError("boom")):
+            resp, _ = self._put(self._ADVISORY, tmp_path)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["quarantine_engaged"] is False
+        assert "OSError" in body["store_conflict"]["reasons"]["ADVISORY_ONLY"]
+
+    def test_env_pinned_disagreeing_value_is_a_conflict(
+        self, tmp_path, monkeypatch, throwaway_settings
+    ):
+        """A real shell export beats the store; if it disagrees with the
+        request the mode is not in force and the response must say so."""
+        import settings as settings_module
+
+        monkeypatch.setenv("ADVISORY_ONLY", "false")
+        pinned = settings_module.Settings()
+        monkeypatch.setattr(settings_module, "settings", pinned)
+        assert pinned.ADVISORY_ONLY is False
+
+        resp, _ = self._put(self._ADVISORY, tmp_path)
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["quarantine_engaged"] is False
+        assert body["per_key_applies"] == {"ADVISORY_ONLY": "env_pinned"}
+        assert "shell environment variable" in body["store_conflict"]["reasons"]["ADVISORY_ONLY"]
+
+
 class TestExecutionModeConfirmation:
     """The gate this PR adds: ``PUT /automation/execution-mode`` must require
     the SAME typed field-name confirmation ``PUT /settings/tunables`` requires
@@ -3491,10 +3405,10 @@ class TestExecutionModeConfirmation:
     DRY_RUN) -- see ``_require_dangerous_confirmation``. Before this gate
     existed, this endpoint wrote both with zero confirmation of any kind,
     even though the general settings editor already required one for the
-    same two fields. ``ALPACA_PAPER`` is also written by this endpoint but is
-    NOT a ``DANGEROUS_KEYS`` member (an Alpaca-specific paper/live selector,
-    not a broker-agnostic quarantine) and so needs no confirmation here
-    either -- see ``test_alpaca_paper_is_written_without_needing_confirmation``."""
+    same two fields. ``PAPER_TRADING`` is also written by this endpoint but is
+    NOT a ``DANGEROUS_KEYS`` member (a paper-vs-live selector, not a
+    broker-agnostic quarantine) and so needs no confirmation here
+    either -- see ``test_paper_trading_is_written_without_needing_confirmation``."""
 
     def _put(self, payload, tmp_path=None, set_active_mode_mock=None):
         env_file = (tmp_path or pathlib.Path("/tmp")) / ".env"
@@ -3614,12 +3528,12 @@ class TestExecutionModeConfirmation:
         assert env_file.read_text(encoding="utf-8") == ""
         set_active_mode_calls[0].assert_not_called()
 
-    def test_alpaca_paper_is_written_without_needing_confirmation(self, tmp_path):
-        """ALPACA_PAPER is written by this same call (mode != "advisory") but
-        is NOT a settings_keysets.DANGEROUS_KEYS member -- an Alpaca-specific
-        paper/live account selector, not a broker-agnostic quarantine like
+    def test_paper_trading_is_written_without_needing_confirmation(self, tmp_path):
+        """PAPER_TRADING is written by this same call (mode != "advisory") but
+        is NOT a settings_keysets.DANGEROUS_KEYS member -- a paper-vs-live
+        selector, not a broker-agnostic quarantine like
         ADVISORY_ONLY/DRY_RUN -- so confirming only those two is sufficient
-        even though ALPACA_PAPER is among the keys `written`."""
+        even though PAPER_TRADING is among the keys `written`."""
         set_active_mode_calls: list = []
         resp, env_file = self._put(
             {
@@ -3631,7 +3545,7 @@ class TestExecutionModeConfirmation:
             set_active_mode_mock=set_active_mode_calls,
         )
         assert resp.status_code == 200
-        assert resp.json()["written"] == ["ADVISORY_ONLY", "DRY_RUN", "ALPACA_PAPER"]
+        assert resp.json()["written"] == ["ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"]
         set_active_mode_calls[0].assert_called_once_with("live")
 
 
@@ -4935,13 +4849,13 @@ class TestAgenticStatus:
                     resp = client.get("/agentic/status")
         assert resp.status_code == 200
         body = resp.json()
-        for key in ("mode", "advisory_only", "kill_switch", "queue", "follows", "agent_loop"):
+        for key in ("mode", "advisory_only", "kill_switch", "queue", "agent_loop"):
             assert key in body
+        assert "follows" not in body  # Follow-a-Pilot archived (step 4c)
         assert body["mode"] == "review"
         assert body["kill_switch"] == {"active": False, "reason": None}
         assert body["queue"]["n_intents"] == 2
         assert body["queue"]["n_placeable"] == 1
-        assert body["follows"] == {"n_active": 0, "total_amount": 0.0}
         # No agent_state.json in tmp_path -> honest cold-start, never fabricated.
         assert body["agent_loop"]["cycle_count"] == 0
         assert body["agent_loop"]["reason"] is not None
@@ -4969,25 +4883,6 @@ class TestAgenticStatus:
         assert resp.status_code == 200
         body = resp.json()
         assert body["kill_switch"] == {"active": True, "reason": "test halt"}
-
-    def test_active_follows_counted_and_summed(self, tmp_path):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
-                client.put(
-                    "/follows", json={"pilot_id": "trend-following", "amount": 250.0},
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
-                client.put(
-                    "/follows", json={"pilot_id": "dip-buyer", "amount": 100.0},
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
-                with mock.patch.object(
-                    pilots_api.execution_panel, "read_execution_queue", return_value=None
-                ):
-                    with mock.patch.object(pilots_api, "GlobalKillSwitch", return_value=_InactiveKS()):
-                        resp = client.get("/agentic/status")
-        assert resp.status_code == 200
-        assert resp.json()["follows"] == {"n_active": 2, "total_amount": 350.0}
 
     def test_fail_open_read_with_no_token(self, tmp_path):
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
@@ -6367,1508 +6262,3 @@ class TestLiveTradeExecutionReject:
         assert first.status_code == 200
         assert second.status_code == 409
         assert second.json()["detail"] == "already_decided"
-
-
-class TestHrpCvarOptimize:
-    """POST /pilots/portfolio/optimize/hrp-cvar previously used
-    np.random.randn as its `returns` input and hardcoded the response's
-    `cvar_95` to the same 0.05 ceiling it was constrained to (audit finding
-    F2). Fixed to fetch real historical bars via HistoricalStore.get_bars
-    and compute the real CVaR of the optimized portfolio's actual returns.
-    """
-
-    class _Store:
-        def __init__(self, series_by_symbol):
-            self._series = series_by_symbol
-
-        def get_bars(self, symbol, lookback_days=504):
-            closes = self._series.get(symbol)
-            if closes is None:
-                return pd.DataFrame()
-            idx = pd.bdate_range(end="2026-08-01", periods=len(closes))
-            return pd.DataFrame({"Close": closes}, index=idx)
-
-    @staticmethod
-    def _synthetic_closes(seed, n=120, start=100.0):
-        rng = np.random.default_rng(seed)
-        rets = rng.normal(loc=0.0003, scale=0.01, size=n)
-        return list(start * np.cumprod(1 + rets))
-
-    def test_cvar_varies_across_requests_and_is_positive(self):
-        series_a = {
-            "AAPL": self._synthetic_closes(1, start=150.0),
-            "MSFT": self._synthetic_closes(2, start=300.0),
-        }
-        series_b = {
-            "AAPL": self._synthetic_closes(3, start=150.0),
-            "MSFT": self._synthetic_closes(4, start=300.0),
-        }
-
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series_a)):
-                resp_a = client.post(
-                    "/pilots/portfolio/optimize/hrp-cvar",
-                    json={"symbols": ["AAPL", "MSFT"]},
-                )
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series_b)):
-                resp_b = client.post(
-                    "/pilots/portfolio/optimize/hrp-cvar",
-                    json={"symbols": ["AAPL", "MSFT"]},
-                )
-
-        assert resp_a.status_code == 200
-        assert resp_b.status_code == 200
-        cvar_a = resp_a.json()["cvar_95"]
-        cvar_b = resp_b.json()["cvar_95"]
-        assert cvar_a > 0.0
-        assert cvar_b > 0.0
-        # No longer the hardcoded 0.05 placeholder, and genuinely differs
-        # across two different real (here: synthetic-but-varied) return series.
-        assert cvar_a != 0.05
-        assert cvar_b != 0.05
-        assert cvar_a != cvar_b
-
-    def test_insufficient_history_returns_honest_422(self):
-        store = self._Store({"AAPL": [], "MSFT": self._synthetic_closes(5, start=300.0)})
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-                resp = client.post(
-                    "/pilots/portfolio/optimize/hrp-cvar",
-                    json={"symbols": ["AAPL", "MSFT"]},
-                )
-        assert resp.status_code == 422
-        assert resp.json()["detail"]["error"] == "insufficient_history"
-        assert "AAPL" in resp.json()["detail"]["symbols_missing"]
-
-    def test_too_few_overlapping_days_returns_honest_422(self):
-        store = self._Store({
-            "AAPL": self._synthetic_closes(6, n=10, start=150.0),
-            "MSFT": self._synthetic_closes(7, n=10, start=300.0),
-        })
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-                resp = client.post(
-                    "/pilots/portfolio/optimize/hrp-cvar",
-                    json={"symbols": ["AAPL", "MSFT"]},
-                )
-        assert resp.status_code == 422
-        assert resp.json()["detail"]["error"] == "insufficient_history"
-
-    def test_turnover_regularization_and_telemetry_fields(self):
-        series = {
-            "AAPL": self._synthetic_closes(10, start=150.0),
-            "MSFT": self._synthetic_closes(11, start=300.0),
-        }
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series)):
-            resp = client.post(
-                "/pilots/portfolio/optimize/hrp-cvar",
-                json={
-                    "symbols": ["AAPL", "MSFT"],
-                    "current_weights": {"AAPL": 0.8, "MSFT": 0.2},
-                    "lambda_turnover": 0.1,
-                    "sector_map": {"AAPL": "Tech", "MSFT": "Tech"},
-                    "sector_caps": {"Tech": 1.0},
-                    "asset_betas": {"AAPL": 1.2, "MSFT": 0.9},
-                    "target_beta_range": [0.8, 1.3],
-                },
-            )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "turnover" in data
-        assert "portfolio_beta" in data
-        assert "sector_exposures" in data
-        assert "diversification_ratio" in data
-        assert "allocations" in data
-        assert "expected_return" in data
-        assert "cvar_95" in data
-        assert "sharpe_ratio" in data
-        assert "as_of" in data
-        assert data["turnover"] >= 0.0
-        assert data["portfolio_beta"] >= 0.0
-        assert "Tech" in data["sector_exposures"]
-        assert data["diversification_ratio"] >= 1.0
-        # Honesty fix (audit finding): status/hrp_fallback must be surfaced on the
-        # happy path too, not just on a forced-fallback request.
-        assert data["status"] == "optimal"
-        assert data["hrp_fallback"] is False
-
-    def test_max_asset_weight_constrains_endpoint_output(self):
-        # Phase 35 remediation item 13: max_asset_weight was previously a UI-only
-        # slider whose value was never sent to the backend, and the backend's own
-        # request model had no such field at all. Construct return series with a
-        # heavy vol skew so an unconstrained HRP-CVaR optimum concentrates weight
-        # in the calmest asset well above 40%, then confirm max_asset_weight=0.4
-        # genuinely caps every allocation end-to-end through the real endpoint.
-        rng_a = np.random.default_rng(100)
-        calm = list(150.0 * np.cumprod(1 + rng_a.normal(0.0005, 0.001, size=150)))
-        rng_b = np.random.default_rng(200)
-        volatile_b = list(150.0 * np.cumprod(1 + rng_b.normal(0.0, 0.05, size=150)))
-        rng_c = np.random.default_rng(300)
-        volatile_c = list(150.0 * np.cumprod(1 + rng_c.normal(0.0, 0.05, size=150)))
-        series = {"CALM": calm, "VOLB": volatile_b, "VOLC": volatile_c}
-
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series)):
-            resp_unconstrained = client.post(
-                "/pilots/portfolio/optimize/hrp-cvar",
-                json={"symbols": ["CALM", "VOLB", "VOLC"], "lambda_turnover": 0.0},
-            )
-            resp_constrained = client.post(
-                "/pilots/portfolio/optimize/hrp-cvar",
-                json={
-                    "symbols": ["CALM", "VOLB", "VOLC"],
-                    "lambda_turnover": 0.0,
-                    "max_asset_weight": 0.4,
-                },
-            )
-        assert resp_unconstrained.status_code == 200
-        assert resp_constrained.status_code == 200
-        unconstrained_weights = {
-            a["symbol"]: a["weight"] for a in resp_unconstrained.json()["allocations"]
-        }
-        constrained_weights = {
-            a["symbol"]: a["weight"] for a in resp_constrained.json()["allocations"]
-        }
-        # Sanity: the unconstrained optimum genuinely concentrates weight above the
-        # cap in the calm asset -- otherwise this test wouldn't exercise the cap.
-        assert unconstrained_weights["CALM"] > 0.4
-        # The cap is genuinely enforced end-to-end through the real endpoint.
-        for w in constrained_weights.values():
-            assert w <= 0.4 + 1e-6
-
-    def test_infeasible_constraints_surface_fallback_status_honestly(self):
-        """
-        Math-audit finding: sizing.hrp_cvar_optimizer.optimize_turnover_regularized_hrp_cvar
-        already computes `status`/`hrp_fallback`, but the API handler previously dropped
-        both from its JSON response -- so a genuinely non-convergent SLSQP solve was
-        indistinguishable over the wire from a clean optimum. Force an infeasible
-        constraint combination (mirrors test_hrp_cvar_optimizer.py's own
-        test_graceful_degradation_infeasible: all symbols in one sector, cap far below
-        100%) through the REAL HTTP endpoint and confirm the response honestly reflects
-        status != "optimal", not just at the sizing-module layer.
-        """
-        series = {
-            "AAPL": self._synthetic_closes(20, start=150.0),
-            "MSFT": self._synthetic_closes(21, start=300.0),
-            "GOOGL": self._synthetic_closes(22, start=140.0),
-        }
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=self._Store(series)):
-                resp = client.post(
-                    "/pilots/portfolio/optimize/hrp-cvar",
-                    json={
-                        "symbols": ["AAPL", "MSFT", "GOOGL"],
-                        "sector_map": {"AAPL": "Tech", "MSFT": "Tech", "GOOGL": "Tech"},
-                        # Impossible: all three assets are Tech but the cap is 20% while
-                        # weights must sum to 100% -- no feasible point exists.
-                        "sector_caps": {"Tech": 0.20},
-                    },
-                )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "status" in data
-        assert data["status"] == "fallback"
-        assert isinstance(data["hrp_fallback"], bool)
-        # Weights must still sum to ~1.0 -- graceful degradation, not a broken response.
-        assert np.isclose(sum(a["weight"] for a in data["allocations"]), 1.0, atol=1e-3)
-
-
-# ---------------------------------------------------------------------------
-# POST /pilots/options/meta-model/retrain -- previously fed the ML
-# meta-labeler hardcoded literals (ivr=50.0, vrp=0.02, vix=20.0,
-# credit_to_width_ratio=0.30, short_delta=0.30) for every simulated trade
-# regardless of its real entry conditions (audit finding F3). Fixed to read
-# validation.options_harness's real, computed entry-condition fields off
-# each OptionsTradeRecord and skip (not silently default) any trade missing
-# one of them.
-# ---------------------------------------------------------------------------
-
-
-class TestOptionsMetaModelRetrain:
-    @staticmethod
-    def _trade(strategy="Put Credit Spread", pnl=10.0, ivr=50.0, vrp=0.02, vix=20.0, ctw=0.30, delta=0.30):
-        from validation.options_harness import OptionsTradeRecord
-
-        return OptionsTradeRecord(
-            entry_date="2023-01-01",
-            exit_date="2023-02-01",
-            strategy=strategy,
-            underlying_entry_price=100.0,
-            underlying_exit_price=101.0,
-            entry_net_premium=30.0,
-            exit_net_cost=10.0,
-            pnl_dollar=pnl,
-            pnl_pct=0.1,
-            exit_reason="profit_target",
-            holding_days=20,
-            contracts=1,
-            entry_ivr=ivr,
-            entry_vrp=vrp,
-            entry_short_delta=delta,
-            entry_credit_to_width_ratio=ctw,
-            entry_vix=vix,
-        )
-
-    def test_fails_closed_when_writes_disabled(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", False):
-                resp = client.post(
-                    "/pilots/options/meta-model/retrain",
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
-        assert resp.status_code == 403
-
-    def test_fails_closed_with_wrong_token(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
-                resp = client.post(
-                    "/pilots/options/meta-model/retrain",
-                    headers={"Authorization": "Bearer WRONG"},
-                )
-        assert resp.status_code == 401
-
-    def test_features_vary_across_trades_not_constant(self):
-        from types import SimpleNamespace
-
-        trades = [
-            self._trade(ivr=10.0, vrp=0.01, vix=15.0, ctw=0.20, delta=0.20, pnl=5.0),
-            self._trade(ivr=90.0, vrp=0.05, vix=30.0, ctw=0.45, delta=0.40, pnl=-5.0),
-        ]
-        fake_res = SimpleNamespace(trades=trades)
-
-        captured = {}
-
-        def fake_train(samples):
-            captured["samples"] = list(samples)
-            return {"samples": len(samples), "accuracy": 0.75, "roc_auc": 0.8}
-
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
-                with mock.patch(
-                    "validation.options_harness.OptionsValidationHarness.run_backtest",
-                    return_value=fake_res,
-                ):
-                    with mock.patch(
-                        "ml.options_meta_labeler.global_options_meta_labeler.train",
-                        side_effect=fake_train,
-                    ) as mock_train:
-                        resp = client.post(
-                            "/pilots/options/meta-model/retrain",
-                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                        )
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "success"
-        assert mock_train.called
-        # run_backtest is mocked identically for all 3 strategies
-        # ("Put Credit Spread", "Call Credit Spread", "Iron Condor"), so
-        # samples = 2 trades * 3 strategy calls = 6.
-        samples = captured["samples"]
-        assert len(samples) == 6
-        assert body["skipped_trades"] == 0
-
-        # The core assertion this test exists for: feature values genuinely
-        # differ across samples instead of every sample carrying the old
-        # hardcoded constants (ivr=50.0/vrp=0.02/vix=20.0/ctw=0.30/delta=0.30).
-        assert len({s.ivr for s in samples}) > 1
-        assert len({s.vrp for s in samples}) > 1
-        assert len({s.vix for s in samples}) > 1
-        assert len({s.credit_to_width_ratio for s in samples}) > 1
-        assert len({s.short_delta for s in samples}) > 1
-
-    def test_skips_trades_missing_a_real_field(self):
-        from types import SimpleNamespace
-
-        good_trade = self._trade(ivr=10.0, vrp=0.01, vix=15.0, ctw=0.20, delta=0.20)
-        missing_vix_trade = self._trade(ivr=20.0, vrp=0.02, vix=None, ctw=0.25, delta=0.25)
-        fake_res = SimpleNamespace(trades=[good_trade, missing_vix_trade])
-
-        captured = {}
-
-        def fake_train(samples):
-            captured["samples"] = list(samples)
-            return {"samples": len(samples), "accuracy": 0.7, "roc_auc": 0.7}
-
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            with mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
-                with mock.patch(
-                    "validation.options_harness.OptionsValidationHarness.run_backtest",
-                    return_value=fake_res,
-                ):
-                    with mock.patch(
-                        "ml.options_meta_labeler.global_options_meta_labeler.train",
-                        side_effect=fake_train,
-                    ):
-                        resp = client.post(
-                            "/pilots/options/meta-model/retrain",
-                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                        )
-
-        assert resp.status_code == 200
-        body = resp.json()
-        # 1 good trade * 3 strategies = 3 samples trained on;
-        # 1 missing-entry_vix trade * 3 strategies = 3 skipped.
-        assert len(captured["samples"]) == 3
-        assert body["skipped_trades"] == 3
-
-
-# ---------------------------------------------------------------------------
-# GET /pilots/options/ai/transformer-forecast -- previously fed the model
-# np.random.randn(...) noise as "market history" and never trained the
-# model's output weights at all (audit finding F7). Fixed to fetch real
-# historical bars, build a real causal feature/window pipeline, and train
-# before predicting.
-# ---------------------------------------------------------------------------
-
-
-class _OhlcvStore:
-    """Minimal HistoricalStore.get_bars stand-in returning a real-shaped
-    OHLCV DataFrame from a pre-baked Close series (matches
-    TestHrpCvarOptimize._Store's convention one section above)."""
-
-    def __init__(self, series_by_symbol):
-        self._series = series_by_symbol
-
-    def get_bars(self, symbol, lookback_days=504):
-        closes = self._series.get(symbol)
-        if closes is None:
-            return pd.DataFrame()
-        idx = pd.bdate_range(end="2026-08-01", periods=len(closes))
-        closes = pd.Series(closes, index=idx)
-        return pd.DataFrame(
-            {
-                "Open": closes.shift(1).fillna(closes.iloc[0]),
-                "High": closes * 1.01,
-                "Low": closes * 0.99,
-                "Close": closes,
-                "Volume": pd.Series(1_000_000.0, index=idx),
-            },
-            index=idx,
-        )
-
-
-def _synthetic_closes_walk(seed, n=400, start=100.0):
-    rng = np.random.default_rng(seed)
-    rets = rng.normal(loc=0.0003, scale=0.011, size=n)
-    return list(start * np.cumprod(1 + rets))
-
-
-class TestTransformerForecast:
-    def test_calls_get_bars_with_symbol_and_returns_trained_forecast(self):
-        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=400, start=150.0)})
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store) as mock_hs:
-                resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["symbol"] == "AAPL"
-        # h=1 was dropped from HORIZONS: a 1-day realized-vol label is
-        # identically zero (std of a single return) and is not a meaningful
-        # training target -- see F7 in
-        # docs/known_issues/forecast_ito_double_correction_and_horizon_units.md.
-        assert "1d" not in body["forecast"]
-        for h in ["5d", "21d", "60d"]:
-            assert h in body["forecast"]
-            assert isinstance(body["forecast"][h], float)
-        assert body["trained_samples"] >= 30
-        assert "quantile_forecast" in body
-        for h in ["5d", "21d", "60d"]:
-            assert h in body["quantile_forecast"]
-            q_h = body["quantile_forecast"][h]
-            assert "q10" in q_h and "q50" in q_h and "q90" in q_h
-            assert q_h["q10"] <= q_h["q50"] <= q_h["q90"]
-        assert "macro_conditioned" in body
-        # get_bars was actually called -- the real-data path is exercised,
-        # not bypassed.
-        mock_hs.assert_called()
-
-    def test_two_different_series_produce_different_forecasts(self):
-        store_a = _OhlcvStore({"AAPL": _synthetic_closes_walk(11, n=400, start=150.0)})
-        store_b = _OhlcvStore({"AAPL": _synthetic_closes_walk(22, n=400, start=150.0)})
-
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_a):
-                resp_a = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_b):
-                resp_b = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
-
-        assert resp_a.status_code == 200 and resp_b.status_code == 200
-        forecast_a = resp_a.json()["forecast"]
-        forecast_b = resp_b.json()["forecast"]
-        assert forecast_a != forecast_b
-
-    def test_insufficient_history_returns_honest_422(self):
-        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=50, start=150.0)})
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-                resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "AAPL"})
-        assert resp.status_code == 422
-        assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
-
-    def test_unknown_symbol_returns_honest_422(self):
-        store = _OhlcvStore({})
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-                resp = client.get("/pilots/options/ai/transformer-forecast", params={"symbol": "ZZZZ"})
-        assert resp.status_code == 422
-        assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
-
-
-# ---------------------------------------------------------------------------
-# POST /pilots/options/ai/diffusion-stress-test -- previously fed the model
-# np.random.randn(...) * volatility + drift as "historical data" (audit
-# finding F7). Fixed to fetch real historical bars and window real log
-# returns. train_diffusion_model already fits its own score-network weights
-# via an internal Adam loop, so the real-input-data swap alone closes this
-# finding (no separate training call needed, unlike the transformer above).
-# ---------------------------------------------------------------------------
-
-
-class TestDiffusionStressTest:
-    def _base_request(self, symbol="AAPL", regime="vol_shock", guidance_scale=2.0):
-        return {
-            "symbol": symbol,
-            "spot_price": 150.0,
-            "volatility": 0.25,
-            "num_paths": 50,
-            "horizon": 30,
-            "drift": 0.0,
-            "regime": regime,
-            "guidance_scale": guidance_scale,
-        }
-
-    def test_calls_get_bars_with_symbol_and_returns_real_data_driven_result(self):
-        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=400, start=150.0)})
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store) as mock_hs:
-                resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["symbol"] == "AAPL"
-        assert body["regime"] == "vol_shock"
-        assert body["guidance_scale"] == 2.0
-        assert len(body["paths"]) == 50
-        assert body["VaR_95"] >= 0.0
-        assert body["CVaR_95"] >= body["VaR_95"]
-        assert body["VaR_99"] >= 0.0
-        assert body["CVaR_99"] >= body["VaR_99"]
-        assert body["trained_windows"] > 0
-        mock_hs.assert_called()
-
-    def test_custom_regime_and_guidance_scale(self):
-        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(5, n=400, start=150.0)})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            resp = client.post(
-                "/pilots/options/ai/diffusion-stress-test",
-                json=self._base_request(regime="stagflation", guidance_scale=3.5),
-            )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["symbol"] == "AAPL"
-        assert body["regime"] == "stagflation"
-        assert body["guidance_scale"] == 3.5
-        assert len(body["paths"]) == 50
-        assert "VaR_99" in body
-        assert "CVaR_99" in body
-
-    def test_two_different_series_produce_different_var(self):
-        store_a = _OhlcvStore({"AAPL": _synthetic_closes_walk(11, n=400, start=150.0)})
-        store_b = _OhlcvStore({"AAPL": _synthetic_closes_walk(22, n=400, start=150.0)})
-
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_a):
-                resp_a = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store_b):
-                resp_b = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
-
-        assert resp_a.status_code == 200 and resp_b.status_code == 200
-        assert resp_a.json()["VaR_95"] != resp_b.json()["VaR_95"]
-
-    def test_insufficient_history_returns_honest_422(self):
-        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=5, start=150.0)})
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-                resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
-        assert resp.status_code == 422
-        assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
-
-    def test_horizon_out_of_bounds_returns_honest_422(self):
-        # 2026-08: horizon is now bounded (Field(30, ge=5, le=35)) -- the
-        # early-stop + Tweedie denoising calibration fix is only verified
-        # well-calibrated up to horizon~30-35; see docs/known_issues/
-        # synthetic_diffusion_reverse_sde_sign_error.md's "Further
-        # mitigated" section for the measured L-dependence table. A
-        # request outside the bound must get a clean Pydantic validation
-        # 422, never a 500 or a silent clamp.
-        req = self._base_request()
-        req["horizon"] = 50
-        resp = client.post("/pilots/options/ai/diffusion-stress-test", json=req)
-        assert resp.status_code == 422
-
-        req2 = self._base_request()
-        req2["horizon"] = 1
-        resp2 = client.post("/pilots/options/ai/diffusion-stress-test", json=req2)
-        assert resp2.status_code == 422
-
-    def test_unknown_symbol_returns_honest_422(self):
-        store = _OhlcvStore({})
-        # STATE_API_TOKEN must be EXPLICITLY unset here, not assumed ambient --
-        # see TestAutomationIntervalWrite.test_command_token_required's comment for why.
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-                resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
-        assert resp.status_code == 422
-        assert resp.json()["detail"]["error"] == "insufficient_history_for_symbol"
-
-    def test_var_cvar_never_reach_or_exceed_spot_price_end_to_end(self):
-        # Phase 34 remediation item 10 (audit Critical #5) regression guard,
-        # exercised through the REAL endpoint (not just the pure helper):
-        # a dollar VaR/CVaR loss can never imply a negative post-loss price,
-        # and every generated price path stays strictly positive, regardless
-        # of how extreme the (undertrained, few-epoch) diffusion model's raw
-        # output happens to be on this draw.
-        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(3, n=400, start=150.0)})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
-        assert resp.status_code == 200
-        body = resp.json()
-        spot = 150.0
-        for key in ("VaR_95", "CVaR_95", "VaR_99", "CVaR_99"):
-            assert 0.0 <= body[key] < spot, f"{key}={body[key]} is not in [0, spot={spot})"
-        for path in body["paths"]:
-            assert all(p > 0 for p in path), "a generated price path went <= 0"
-
-    def test_regime_labels_none_when_macro_unavailable_degrades_gracefully(self):
-        # _OhlcvStore has no get_macro() -- confirms _derive_diffusion_regime_labels
-        # degrades to None (today's exact unconditional-training behavior)
-        # rather than crashing the whole endpoint when macro data is
-        # unavailable (CONSTRAINT #6).
-        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(1, n=400, start=150.0)})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
-        assert resp.status_code == 200
-        assert resp.json()["regime_conditioned"] is False
-
-    def test_var_cvar_computed_from_the_same_paths_returned_to_the_client(self):
-        # 2026-08 regression guard, see docs/known_issues/
-        # synthetic_diffusion_reverse_sde_sign_error.md's "VaR/CVaR-vs-paths
-        # consistency" section. Previously VaR/CVaR were computed from the
-        # raw, unclipped generated log-returns while `paths` were built from
-        # a clipped/compounded variant of the SAME draw -- two consumers
-        # reading different effective data. This recomputes VaR/CVaR
-        # entirely independently from ONLY the `paths` array in the
-        # response body (each path's total realized simple return,
-        # final_price/spot - 1, percentile-ranked) and asserts it matches
-        # the endpoint's own reported figures exactly -- proving VaR/CVaR
-        # really is derived from the exact data the client also sees, not a
-        # separately-drawn or separately-transformed variant of it.
-        store = _OhlcvStore({"AAPL": _synthetic_closes_walk(5, n=400, start=150.0)})
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            resp = client.post("/pilots/options/ai/diffusion-stress-test", json=self._base_request())
-        assert resp.status_code == 200
-        body = resp.json()
-        spot = 150.0
-
-        from validation.synthetic_diffusion_engine import compute_diffusion_var
-
-        total_simple_returns = np.array([p[-1] / spot - 1.0 for p in body["paths"]])
-        for cl, var_key, cvar_key in ((0.95, "VaR_95", "CVaR_95"), (0.99, "VaR_99", "CVaR_99")):
-            expected_var_frac, expected_cvar_frac = compute_diffusion_var(
-                total_simple_returns, confidence_level=cl,
-            )
-            expected_var = max(0.0, spot * expected_var_frac)
-            expected_cvar = max(0.0, spot * expected_cvar_frac)
-            assert body[var_key] == pytest.approx(expected_var, rel=1e-9, abs=1e-9)
-            assert body[cvar_key] == pytest.approx(expected_cvar, rel=1e-9, abs=1e-9)
-
-
-# ---------------------------------------------------------------------------
-# Phase 34 remediation item 10 (audit Critical #5) -- unit tests for the
-# extracted pure helpers directly, independent of the diffusion model's own
-# (possibly extreme, undertrained-at-15-epochs) output.
-# ---------------------------------------------------------------------------
-
-
-class TestDiffusionPriceBoundAndVarUnitFix:
-    def test_clip_and_compound_never_goes_negative_on_adversarial_returns(self):
-        # Mirrors the original audit's repro: an adversarial/extreme
-        # synthetic return path (as an undertrained diffusion model's
-        # reverse SDE could emit -- generate_guided_crisis_paths clips the
-        # latent state to +/-50) that would explode/flip negative under the
-        # OLD unclipped `price_path[-1] * (1.0 + r)` compounding.
-        extreme_returns = [5.0, -3.0, 10.0, -1.5, 2.0, -8.0, 6.0]
-        path = pilots_api._clip_and_compound_diffusion_path(extreme_returns, spot_price=150.0)
-        assert path[0] == 150.0
-        assert all(p > 0 for p in path), "a clipped path went <= 0"
-        assert min(path) >= 0.01
-        # Every step is bounded to a -50%/+200% move, so the path can never
-        # exceed spot * 3^len(extreme_returns).
-        assert path[-1] <= 150.0 * (3.0 ** len(extreme_returns))
-
-    def test_clip_and_compound_matches_naive_compounding_for_normal_returns(self):
-        # A realistic, small-magnitude return path (well inside the clip
-        # bounds) must compound identically to the naive formula -- the fix
-        # must not distort ordinary, non-adversarial paths.
-        normal_returns = [0.01, -0.02, 0.015, -0.01, 0.02]
-        path = pilots_api._clip_and_compound_diffusion_path(normal_returns, spot_price=150.0)
-        expected = [150.0]
-        for r in normal_returns:
-            expected.append(expected[-1] * (1.0 + r))
-        assert path == pytest.approx(expected, rel=1e-9)
-
-    def test_logret_loss_to_dollars_well_under_spot_for_realistic_var(self):
-        # A realistic horizon log-return VaR (a handful of percent to ~25%)
-        # should convert to a dollar loss well under 100% of spot -- not the
-        # near-100%-saturated artifact the old linear formula could produce.
-        spot = 150.0
-        for var_logret in (0.05, 0.10, 0.15, 0.25):
-            dollars = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
-            assert 0.0 <= dollars < spot
-            assert dollars < spot * 0.30, f"VaR ${dollars:.2f} not well under spot ${spot}"
-
-    def test_logret_loss_to_dollars_never_exceeds_spot_for_extreme_var(self):
-        # The exponential form is bounded ABOVE by spot_price (never
-        # exceeds it, unlike the old linear multiply). For a genuinely
-        # extreme var_logret (e.g. 50.0) exp(-var_logret) underflows to a
-        # value indistinguishable from 0.0 in float64, so the loss can
-        # legitimately round to exactly spot_price -- the invariant that
-        # matters is "never exceeds", not "always strictly less than".
-        spot = 150.0
-        for var_logret in (0.9, 1.5, 5.0, 50.0):
-            dollars = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
-            assert 0.0 <= dollars <= spot
-        # At a realistic-to-moderately-stressed magnitude, strictly below spot.
-        for var_logret in (0.9, 1.5, 5.0):
-            dollars = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
-            assert dollars < spot
-
-    def test_old_linear_conversion_would_have_implied_negative_price_regression_guard(self):
-        # Documents the exact bug being fixed: the OLD linear formula
-        # (var_logret * spot_price) implies a negative post-loss price for
-        # any var_logret > 1.0 -- nonsensical for a VaR/CVaR loss on a long
-        # spot position. The new exponential transform never does.
-        spot = 150.0
-        var_logret = 1.5
-        old_linear_loss = var_logret * spot
-        assert old_linear_loss > spot  # the bug: implies price < 0
-        new_loss = pilots_api._diffusion_logret_loss_to_dollars(var_logret, spot)
-        assert new_loss < spot  # fixed: implied price always > 0
-
-
-class _OhlcvAndMacroStore(_OhlcvStore):
-    """Extends _OhlcvStore with a real get_macro() stub for Phase 34
-    remediation item 11 tests. UNRATE is a long, flat monthly history (never
-    triggers RECESSION via the internally-derived Sahm proxy once past
-    rolling-window warmup); T10Y2Y and VIX stay constant/benign; the
-    high-yield credit spread (BAMLH0A0HYM2) steps from a calm 2.0% to a
-    stressed 8.0% at a known cutover business-day index, so a real,
-    non-degenerate CREDIT EVENT regime is reconstructable across the trading
-    history."""
-
-    def __init__(self, series_by_symbol, *, n_days, credit_spread_cutover_idx):
-        super().__init__(series_by_symbol)
-        self._idx = pd.bdate_range(end="2026-08-01", periods=n_days)
-        self._cutover_date = self._idx[credit_spread_cutover_idx]
-
-    def get_macro(self, series_id, *, lookback_days=None, data_engine=None):
-        if series_id == "VIXCLS":
-            return pd.Series(15.0, index=self._idx, name=series_id)
-        if series_id == "T10Y2Y":
-            return pd.Series(1.0, index=self._idx, name=series_id)
-        if series_id == "BAMLH0A0HYM2":
-            values = np.where(self._idx < self._cutover_date, 2.0, 8.0)
-            return pd.Series(values, index=self._idx, name=series_id)
-        if series_id == "UNRATE":
-            # 8 years of flat monthly unemployment so the internally-derived
-            # Sahm proxy is well past its rolling-window warmup (needs ~15
-            # months) and stays 0.0 (never >= 0.6 -- never RECESSION) at
-            # every date this test's window-end dates could touch.
-            monthly_idx = pd.date_range(end="2026-08-01", periods=96, freq="MS")
-            return pd.Series(4.0, index=monthly_idx, name=series_id)
-        if series_id == "BAA10Y":
-            return pd.Series(2.0, index=self._idx, name=series_id)
-        return pd.Series(dtype=float, name=series_id)
-
-
-class TestDiffusionRegimeConditioning:
-    """Phase 34 remediation item 11 (audit Critical #6): the live endpoint
-    never passed regime_labels into train_conditional_diffusion_model, so
-    classifier-free guidance was training against an entirely unconditional
-    dataset regardless of the caller's requested regime."""
-
-    def test_regime_labels_passed_with_multiple_distinct_classes(self):
-        n = 750
-        closes = _synthetic_closes_walk(9, n=n, start=150.0)
-        store = _OhlcvAndMacroStore({"AAPL": closes}, n_days=n, credit_spread_cutover_idx=600)
-
-        # Capture the REAL function BEFORE patching -- re-importing it from
-        # inside the spy while the patch is active would just return the
-        # mock again (infinite recursion), since mock.patch replaces the
-        # module attribute for the duration of the context manager.
-        from validation.synthetic_diffusion_engine import (
-            train_conditional_diffusion_model as _real_train,
-        )
-
-        captured: dict = {}
-
-        def _spy_train(historical_data, regime_labels=None, **kwargs):
-            captured["regime_labels"] = regime_labels
-            captured["n_rows"] = len(historical_data)
-            return _real_train(historical_data, regime_labels=regime_labels, epochs=1, lr=0.01)
-
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store), mock.patch(
-            "validation.synthetic_diffusion_engine.train_conditional_diffusion_model",
-            side_effect=_spy_train,
-        ):
-            resp = client.post(
-                "/pilots/options/ai/diffusion-stress-test",
-                json={
-                    "symbol": "AAPL",
-                    "spot_price": 150.0,
-                    "volatility": 0.25,
-                    "num_paths": 10,
-                    "horizon": 30,
-                    "drift": 0.0,
-                    "regime": "vol_shock",
-                    "guidance_scale": 2.0,
-                },
-            )
-
-        assert resp.status_code == 200
-        assert resp.json()["regime_conditioned"] is True
-
-        regime_labels = captured.get("regime_labels")
-        assert regime_labels is not None
-        assert len(regime_labels) == captured["n_rows"]
-        distinct = set(regime_labels)
-        assert len(distinct) > 1, f"expected multiple distinct regime classes, got {distinct}"
-        assert "credit_freeze" in distinct
-        assert "unconditional" in distinct
-        # This store's get_macro() has no "T10YIE" case (falls through to an
-        # empty Series), so the real T10YIE-based stagflation override in
-        # _derive_diffusion_regime_labels never fires here -- see
-        # TestDiffusionStagflationOverride below for the override itself,
-        # exercised against a store that DOES mock T10YIE.
-        assert "stagflation" not in distinct
-
-    def test_window_end_dates_mirror_build_return_windows_index_math(self):
-        from validation.synthetic_diffusion_engine import build_return_windows
-
-        dates = pd.bdate_range(end="2026-08-01", periods=400)
-        returns = np.arange(400, dtype=float)  # value == position, for an easy check
-        window_len = 29
-        max_windows = 200
-
-        windows = build_return_windows(returns, window_len=window_len, max_windows=max_windows)
-        end_dates = pilots_api._diffusion_window_end_dates(
-            dates, window_len=window_len, max_windows=max_windows,
-        )
-
-        assert len(end_dates) == len(windows)
-        for row, end_date in zip(windows, end_dates):
-            # row[-1] is the raw return value, which we set equal to its
-            # original position in `returns` -- so it's also the position in
-            # `dates` whose date must equal end_date.
-            assert dates[int(row[-1])] == end_date
-
-
-class _StagflationMacroStore:
-    """``HistoricalStore.get_macro()`` stand-in for testing the T10YIE +
-    UNRATE stagflation override added to ``_derive_diffusion_regime_labels``.
-
-    VIXCLS/T10Y2Y/BAA10Y stay flat/benign for the whole history (never push
-    the base bucket toward RECESSION/CREDIT EVENT on their own). BAMLH0A0HYM2
-    (credit spread) is a low, RISK-ON-territory 2.0 everywhere except one
-    single spiked date (8.0, real CREDIT EVENT territory per
-    dto_models.MacroEconomicDTO._rules_based_regime), used to prove the
-    override never overrides an already-more-specific real signal. T10YIE
-    steps from a flat 2.0 baseline to an elevated 3.5 plateau starting at
-    ``elevated_start_idx`` (well within a 126-business-day rolling window of
-    itself by the time any test date is checked). UNRATE is a long, flat 4.0%
-    monthly series (so the Sahm Rule proxy is safely warmed up and near-zero)
-    that rises gently -- 4.0% -> 4.3% over its final 12 months, well under
-    the Sahm Rule's 0.6pp recession trigger -- so "UNRATE trending up" is
-    real without also flipping the base bucket to RECESSION.
-    """
-
-    def __init__(self, dates, *, elevated_start_idx, credit_event_date):
-        self._dates = dates
-        self._elevated_start_idx = elevated_start_idx
-        self._credit_event_date = credit_event_date
-
-    def get_macro(self, series_id, *, lookback_days=None, data_engine=None):
-        idx = self._dates
-        if series_id == "VIXCLS":
-            return pd.Series(15.0, index=idx, name=series_id)
-        if series_id == "T10Y2Y":
-            return pd.Series(1.0, index=idx, name=series_id)
-        if series_id == "BAA10Y":
-            return pd.Series(2.0, index=idx, name=series_id)
-        if series_id == "BAMLH0A0HYM2":
-            values = pd.Series(2.0, index=idx, name=series_id)
-            values.loc[self._credit_event_date] = 8.0
-            return values
-        if series_id == "T10YIE":
-            values = np.where(np.arange(len(idx)) >= self._elevated_start_idx, 3.5, 2.0)
-            return pd.Series(values, index=idx, name=series_id)
-        if series_id == "UNRATE":
-            monthly_idx = pd.date_range(end=idx[-1], periods=120, freq="MS")
-            values = np.full(len(monthly_idx), 4.0)
-            values[-12:] = np.linspace(4.0, 4.3, 12)
-            return pd.Series(values, index=monthly_idx, name=series_id)
-        return pd.Series(dtype=float, name=series_id)
-
-
-class TestDiffusionStagflationOverride:
-    """The plan's item 1: ``_derive_diffusion_regime_labels`` now assigns a
-    real, FRED-sourced ``stagflation`` label (elevated T10YIE + rising
-    UNRATE) rather than never emitting it. Uses window_len=1 so every date
-    in ``dates`` is its own window's end date (n_available == len(dates),
-    n_windows == len(dates) when max_windows >= len(dates)), letting a single
-    store/call exercise three distinct dates deterministically."""
-
-    N_DAYS = 500
-    ELEVATED_START_IDX = 470  # T10YIE plateau starts here
-    CALM_IDX = 200            # before the T10YIE plateau and the UNRATE rise
-    STAGFLATION_IDX = 490     # inside the plateau; credit spread stays calm
-    CREDIT_EVENT_IDX = 485    # inside the plateau; credit spread is spiked here
-
-    def _dates_and_store(self):
-        dates = pd.bdate_range(end="2026-08-01", periods=self.N_DAYS)
-        store = _StagflationMacroStore(
-            dates,
-            elevated_start_idx=self.ELEVATED_START_IDX,
-            credit_event_date=dates[self.CREDIT_EVENT_IDX],
-        )
-        return dates, store
-
-    def test_assigns_stagflation_to_elevated_inflation_and_rising_unemployment_window(self):
-        dates, store = self._dates_and_store()
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            labels = pilots_api._derive_diffusion_regime_labels(
-                dates, window_len=1, max_windows=self.N_DAYS,
-            )
-        assert labels is not None
-        assert labels[self.STAGFLATION_IDX] == "stagflation"
-
-    def test_does_not_assign_stagflation_to_a_calm_window(self):
-        dates, store = self._dates_and_store()
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            labels = pilots_api._derive_diffusion_regime_labels(
-                dates, window_len=1, max_windows=self.N_DAYS,
-            )
-        assert labels is not None
-        assert labels[self.CALM_IDX] != "stagflation"
-
-    def test_does_not_override_an_already_credit_event_window(self):
-        # Elevated T10YIE + rising UNRATE both hold at this date too (it's
-        # inside the same plateau as STAGFLATION_IDX), but the base bucket
-        # is a real, more-specific CREDIT EVENT (credit spread spiked to 8.0
-        # on this exact date) -- the override must never replace a more
-        # specific, already-correct classification with a less specific one.
-        dates, store = self._dates_and_store()
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            labels = pilots_api._derive_diffusion_regime_labels(
-                dates, window_len=1, max_windows=self.N_DAYS,
-            )
-        assert labels is not None
-        assert labels[self.CREDIT_EVENT_IDX] == "credit_freeze"
-
-    def test_no_t10yie_series_never_applies_override(self):
-        # Same elevated-plateau/rising-UNRATE setup, but get_macro("T10YIE")
-        # degrades to an empty Series (mirrors a real HistoricalStore that
-        # has never cached T10YIE) -- the override must never fire, and the
-        # rest of the label derivation must proceed unaffected (CONSTRAINT #6).
-        dates, store = self._dates_and_store()
-
-        real_get_macro = store.get_macro
-
-        def _get_macro_no_t10yie(series_id, **kwargs):
-            if series_id == "T10YIE":
-                return pd.Series(dtype=float, name=series_id)
-            return real_get_macro(series_id, **kwargs)
-
-        store.get_macro = _get_macro_no_t10yie
-        with mock.patch.object(pilots_api, "HistoricalStore", return_value=store):
-            labels = pilots_api._derive_diffusion_regime_labels(
-                dates, window_len=1, max_windows=self.N_DAYS,
-            )
-        assert labels is not None
-        assert "stagflation" not in set(labels)
-        assert labels[self.STAGFLATION_IDX] == "unconditional"
-
-
-# ---------------------------------------------------------------------------
-# FIX 4.4 Protocol Gateway Session Management Endpoints
-# ---------------------------------------------------------------------------
-
-
-class TestFixGatewaySessionEndpoints:
-    def test_get_fix_session_status_success(self):
-        # Phase 36 remediation item 15: the status endpoint no longer fabricates a
-        # NYSE/NASDAQ/BATS/IEX/ARCA equity venue list or a synthetic 3-message audit
-        # log fallback -- it reports the module's REAL configured venues (CBOE, MIAX,
-        # BOX, PHLX, ARCA, EDGX from MultiVenueAggregator) and only ever real
-        # session.message_log entries. Send a real Test Request first so message_log
-        # is deterministically non-empty regardless of what order tests run in
-        # (the global FixSession singleton is process-wide and this test module is
-        # not guaranteed to run before/after its siblings under pytest-randomly).
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            client.post(
-                "/pilots/execution/fix/session/test-request",
-                json={"test_req_id": "TEST-STATUS-SEED"},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-
-        with mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
-            resp = client.get(
-                "/pilots/execution/fix/session/status",
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "session_id" in body
-        assert body["sender_comp_id"] == "INVESTYO_PWA"
-        assert body["target_comp_id"] == "FIX_GATEWAY"
-        assert body["state"] in {
-            "ACTIVE", "CONNECTING", "LOGON_SENT", "LOGON_RECEIVED",
-            "RESEND_REQUESTED", "GAP_FILL_PROCESSING", "LOGOUT_SENT", "DISCONNECTED", "SUSPENDED"
-        }
-        assert isinstance(body["in_seq_num"], int)
-        assert isinstance(body["out_seq_num"], int)
-        assert isinstance(body["gap_queue_depth"], int)
-        assert isinstance(body["venues_active"], list)
-        # Real MultiVenueAggregator venues, not the old fabricated equity list.
-        assert set(body["venues_active"]) == {"CBOE", "MIAX", "BOX", "PHLX", "ARCA", "EDGX"}
-        assert "NYSE" not in body["venues_active"]
-        assert "NASDAQ" not in body["venues_active"]
-        assert "venue_stats" in body
-        assert len(body["venue_stats"]) == 6
-        for v in body["venue_stats"]:
-            # Real VenueConfig-backed fields are always populated numerically.
-            assert isinstance(v["base_latency_ms"], (int, float))
-            assert isinstance(v["maker_fee"], (int, float))
-            assert isinstance(v["taker_fee"], (int, float))
-            assert isinstance(v["liquidity_depth"], (int, float))
-            # Fields with no real source in this stateless aggregator are honestly
-            # None rather than a fabricated plausible-looking number.
-            assert v["fill_rate_pct"] is None
-            assert v["share_of_flow_pct"] is None
-        assert "audit_log" in body
-        assert len(body["audit_log"]) > 0
-        # No fabricated ORD-99124/CL-3019 fake fill in the log.
-        assert not any("ORD-99124" in line for line in body["audit_log"])
-        assert "session_uptime_sec" in body
-        assert body["session_uptime_sec"] is None or body["session_uptime_sec"] >= 0
-
-    def test_get_fix_session_status_no_fabricated_audit_log_when_empty(self):
-        # A brand-new session with zero real messages returns an honest empty
-        # audit_log rather than a synthetic fallback (audit finding Critical #9).
-        import execution.fix_gateway as fix_gateway_module
-
-        with mock.patch.object(fix_gateway_module, "_global_fix_session", None):
-            with mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
-                resp = client.get(
-                    "/pilots/execution/fix/session/status",
-                    headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-                )
-        assert resp.status_code == 200
-        assert resp.json()["audit_log"] == []
-
-    def test_get_fix_session_status_fail_open_without_token(self):
-        with mock.patch.object(settings, "STATE_API_TOKEN", None):
-            resp = client.get("/pilots/execution/fix/session/status")
-        assert resp.status_code == 200
-        assert resp.json()["session_id"].startswith("FIX.4.4:")
-
-    def test_post_fix_session_test_request_success(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.post(
-                "/pilots/execution/fix/session/test-request",
-                json={"test_req_id": "TEST-UNIT-01"},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "ok"
-        assert body["test_req_id"] == "TEST-UNIT-01"
-        assert "Heartbeat" in body["message"]
-        assert body["session_state"] == "ACTIVE"
-        assert "round_trip_ms" in body
-        # Real measurement, not the fixed sentinel this endpoint used to return
-        # for every call regardless of how long the round trip actually took.
-        assert isinstance(body["round_trip_ms"], (int, float))
-        assert body["round_trip_ms"] >= 0.0
-
-    def test_post_fix_session_test_request_round_trip_reflects_real_elapsed_time(self):
-        """`round_trip_ms` must be computed from real elapsed wall-clock time
-        (CONSTRAINT #4), not the old hardcoded `1.25` constant -- proven by
-        injecting a real, measurable `time.sleep()` into the session's own
-        `simulate_receive` call (this repo's established pattern for
-        timing-sensitive tests, see `tests/test_market_data.py`) and
-        asserting the returned value reflects it. This deliberately does NOT
-        try to fully control `time.perf_counter()` globally, since
-        ASGI/Starlette internals make their own untracked calls to it during
-        a request."""
-        import time as time_module
-
-        from execution.fix_gateway import get_global_fix_session
-
-        session = get_global_fix_session()
-        real_simulate_receive = session.simulate_receive
-
-        def _make_slow_simulate_receive(delay_s):
-            def _fn(*args, **kwargs):
-                time_module.sleep(delay_s)
-                return real_simulate_receive(*args, **kwargs)
-            return _fn
-
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
-                mock.patch.object(session, "simulate_receive", side_effect=_make_slow_simulate_receive(0.05)):
-            resp = client.post(
-                "/pilots/execution/fix/session/test-request",
-                json={"test_req_id": "TEST-TIMING-01"},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 200
-        body = resp.json()
-        # Must reflect (at least most of) the injected 50ms delay -- a
-        # hardcoded 1.25 could never do this.
-        assert body["round_trip_ms"] >= 0.05 * 1000 * 0.8
-        assert body["round_trip_ms"] != 1.25
-
-        # A LONGER injected delay must produce a LARGER round_trip_ms --
-        # proving this isn't a constant in disguise.
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
-                mock.patch.object(session, "simulate_receive", side_effect=_make_slow_simulate_receive(0.15)):
-            resp2 = client.post(
-                "/pilots/execution/fix/session/test-request",
-                json={"test_req_id": "TEST-TIMING-02"},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp2.status_code == 200
-        body2 = resp2.json()
-        assert body2["round_trip_ms"] > body["round_trip_ms"]
-
-    def test_post_fix_session_reset_seq_hard_and_gap_fill(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            # Hard reset
-            resp1 = client.post(
-                "/pilots/execution/fix/session/reset-seq",
-                json={"new_seq_num": 500, "gap_fill": False},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-            assert resp1.status_code == 200
-            body1 = resp1.json()
-            assert body1["status"] == "ok"
-            assert body1["new_seq_num"] == 500
-            assert body1["out_seq_num"] == 500
-
-            # Gap fill
-            resp2 = client.post(
-                "/pilots/execution/fix/session/reset-seq",
-                json={"new_seq_num": 600, "gap_fill": True},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-            assert resp2.status_code == 200
-            body2 = resp2.json()
-            assert body2["status"] == "ok"
-            assert body2["new_seq_num"] == 600
-            assert body2["out_seq_num"] == 600
-
-    def test_post_fix_session_reconnect_success(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.post(
-                "/pilots/execution/fix/session/reconnect",
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "ok"
-        assert body["session_state"] == "ACTIVE"
-
-    def test_post_fix_session_command_auth_required(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.post(
-                "/pilots/execution/fix/session/test-request",
-                json={},
-                headers={"Authorization": "Bearer WRONG_TOKEN"},
-            )
-        assert resp.status_code == 401
-
-
-# ---------------------------------------------------------------------------
-# PR #792 deep-dive audit follow-up (Cluster A): items 4 and 5
-# ---------------------------------------------------------------------------
-
-
-class TestFixGatewayEnabledFlag:
-    """Item 5: settings.FIX_GATEWAY_ENABLED is an ADDITIONAL gate on top of
-    each endpoint's existing require_command_token/require_read_token check
-    -- when False, every route/session-management endpoint must refuse with
-    403 rather than proceeding, even with a valid command/read token."""
-
-    def test_route_blocked_when_disabled(self):
-        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
-                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.post(
-                "/pilots/execution/fix/route",
-                json={"symbol": "AAPL", "side": "BUY", "quantity": 10, "limit_price": 100.0},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 403
-        assert "FIX_GATEWAY_ENABLED" in resp.json()["detail"]
-
-    def test_session_status_blocked_when_disabled(self):
-        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
-                mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
-            resp = client.get(
-                "/pilots/execution/fix/session/status",
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 403
-        assert "FIX_GATEWAY_ENABLED" in resp.json()["detail"]
-
-    def test_test_request_blocked_when_disabled(self):
-        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
-                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.post(
-                "/pilots/execution/fix/session/test-request",
-                json={},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 403
-
-    def test_reset_seq_blocked_when_disabled(self):
-        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
-                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.post(
-                "/pilots/execution/fix/session/reset-seq",
-                json={"new_seq_num": 5},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 403
-
-    def test_reconnect_blocked_when_disabled(self):
-        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
-                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.post(
-                "/pilots/execution/fix/session/reconnect",
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 403
-
-    def test_venues_endpoint_not_gated_by_flag(self):
-        """GET /pilots/execution/fix/venues is explicitly out of scope for
-        this gate per the approved plan -- confirm it is unaffected."""
-        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", False), \
-                mock.patch.object(settings, "STATE_API_TOKEN", _CMD_TOKEN):
-            resp = client.get(
-                "/pilots/execution/fix/venues",
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 200
-
-    def test_route_allowed_when_enabled(self):
-        """Sanity companion: the default (True) must not block anything --
-        no regression versus pre-existing behavior."""
-        with mock.patch.object(settings, "FIX_GATEWAY_ENABLED", True), \
-                mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.post(
-                "/pilots/execution/fix/route",
-                json={"symbol": "MSFT", "side": "BUY", "quantity": 5, "limit_price": 50.0},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 200
-
-
-class TestFixSessionStatusConcurrency:
-    """Item 4: GET /pilots/execution/fix/session/status previously read
-    FixSession's mutable state (message_log, _incoming_buffer, state,
-    sequence numbers, ...) from FastAPI's threadpool with zero locking while
-    connect()/disconnect() mutate the same singleton on the main event loop
-    under session._lock. The handler is now `async def` and must genuinely
-    acquire that same lock for the duration of its reads."""
-
-    @pytest.mark.anyio
-    async def test_status_handler_blocks_while_lock_held_externally(self):
-        import execution.fix_gateway as fix_gateway_module
-
-        with mock.patch.object(fix_gateway_module, "_global_fix_session", None):
-            session = fix_gateway_module.get_global_fix_session()
-            await session._lock.acquire()
-            try:
-                task = asyncio.ensure_future(
-                    pilots_api.get_pilots_execution_fix_session_status()
-                )
-                # Give the handler every chance to run past its lock acquire
-                # if it were (incorrectly) not honoring the lock at all.
-                await asyncio.sleep(0.05)
-                assert not task.done(), (
-                    "status handler completed while session._lock was held "
-                    "externally -- it is not genuinely acquiring the lock"
-                )
-            finally:
-                session._lock.release()
-
-            result = await asyncio.wait_for(task, timeout=2.0)
-            assert result["sender_comp_id"] == "INVESTYO_PWA"
-            assert result["target_comp_id"] == "FIX_GATEWAY"
-
-    @pytest.mark.anyio
-    async def test_status_handler_concurrent_with_connect_disconnect_no_corruption(self):
-        """A real concurrent connect()/disconnect() racing the status read
-        must never surface a torn/inconsistent snapshot (e.g. a KeyError, a
-        half-updated sequence number, or an exception) -- with the lock in
-        place, each of the concurrent operations sees a consistent, fully
-        applied state."""
-        import execution.fix_gateway as fix_gateway_module
-
-        with mock.patch.object(fix_gateway_module, "_global_fix_session", None):
-            session = fix_gateway_module.get_global_fix_session()
-
-            results = await asyncio.gather(
-                pilots_api.get_pilots_execution_fix_session_status(),
-                session.connect(),
-                pilots_api.get_pilots_execution_fix_session_status(),
-                return_exceptions=True,
-            )
-
-            for r in results:
-                assert not isinstance(r, Exception), f"concurrent call raised: {r!r}"
-
-            status_results = [r for r in results if isinstance(r, dict)]
-            assert len(status_results) == 2
-            for status in status_results:
-                assert status["session_id"] == "FIX.4.4:INVESTYO_PWA->FIX_GATEWAY"
-                assert isinstance(status["in_seq_num"], int)
-                assert isinstance(status["out_seq_num"], int)
-                assert status["state"] in {
-                    "ACTIVE", "CONNECTING", "LOGON_SENT", "LOGON_RECEIVED",
-                    "RESEND_REQUESTED", "GAP_FILL_PROCESSING", "LOGOUT_SENT",
-                    "DISCONNECTED", "SUSPENDED",
-                }
-
-            await session.disconnect()
-
-
-class TestFixRouteOrderSymbolValidation:
-    """Phase 36 remediation item 19 (audit High): FixRouteOrderRequest.symbol must
-    reject FIX tag-injection characters (SOH, '=', '|') rather than silently
-    accepting them, since they could inject spurious tag-value pairs into a
-    downstream raw FIX message via the Symbol tag (55).
-    """
-
-    @pytest.mark.parametrize("bad_symbol", ["AAPL\x0135=D", "AAPL=INJECT", "AAPL|55=XYZ"])
-    def test_soh_and_delimiter_symbols_rejected_with_422(self, bad_symbol):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.post(
-                "/pilots/execution/fix/route",
-                json={
-                    "symbol": bad_symbol,
-                    "side": "BUY",
-                    "quantity": 10,
-                    "limit_price": 100.0,
-                },
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 422
-
-    def test_clean_symbol_accepted(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
-            resp = client.post(
-                "/pilots/execution/fix/route",
-                json={
-                    "symbol": "AAPL",
-                    "side": "BUY",
-                    "quantity": 10,
-                    "limit_price": 100.0,
-                },
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 200
-
-# ---------------------------------------------------------------------------
-# vol_mispricing HAS a live paper-execute path as of 2026-08-18 (`POST
-# /pilots/options/mispricing/execute`). Like earnings_crush/dispersion_trading/
-# zero_dte_engine (each an UNGATEABLE_DATA_GAP), vol_mispricing is a MEASURED
-# deployability failure, so ALL FOUR endpoints BLOCK execution by default and
-# only proceed when the request explicitly sets override_deployability_gate=True
-# (as of 2026-08-29, closing a gap where zero_dte_engine's handler called
-# execute_0dte_trade unconditionally with no enforcement check at all -- see
-# tests/test_options_desk_deployability_runtime_gap.py for that endpoint's own
-# blocked-without-override coverage). See docs/signals/vol_mispricing.md's
-# "Live Paper-Execution Status" section and the comment above
-# OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"] in api/pilots_api.py.
-# ---------------------------------------------------------------------------
-
-
-def _all_pilots_api_route_paths_and_methods(app) -> set:
-    """Recursively collect every (path, method) pair served by *app*,
-    unwrapping FastAPI's lazy sub-router mount wrapper -- mirrors
-    ``tests/test_control_api.py::_all_route_paths`` / ``tests/test_data_api.py``'s
-    equivalent so a mounted sub-router's routes are never silently missed."""
-    pairs: set = set()
-    stack = list(app.routes)
-    while stack:
-        route = stack.pop()
-        path = getattr(route, "path", None)
-        methods = getattr(route, "methods", None)
-        if path and methods:
-            for method in methods:
-                pairs.add((path, method))
-        original_router = getattr(route, "original_router", None)
-        if original_router is not None:
-            stack.extend(original_router.routes)
-    return pairs
-
-
-def test_vol_mispricing_has_a_paper_execute_endpoint():
-    """`POST /pilots/options/mispricing/execute` exists (superseding the prior
-    "no execute endpoint" regression guard now that this closes
-    docs/VALIDATION_STRATEGY_FIX_LOG.md's follow-up decision to build a
-    gated execute path for vol_mispricing rather than leave it
-    documentation-only)."""
-    pairs = _all_pilots_api_route_paths_and_methods(pilots_api.app)
-    assert ("/pilots/options/mispricing/execute", "POST") in pairs
-
-
-_VOL_MISPRICING_CANDIDATE = {
-    "strategy_type": "bull_put_spread",
-    "name": "Bull Put Credit Spread ($185.00/$190.00P)",
-    "legs": [
-        {
-            "symbol": "AAPL 2026-09-18 $190.00 PUT",
-            "action": "sell",
-            "type": "PUT",
-            "strike": 190.0,
-            "expiration": "2026-09-18",
-            "unit_price": 2.50,
-        },
-        {
-            "symbol": "AAPL 2026-09-18 $185.00 PUT",
-            "action": "buy",
-            "type": "PUT",
-            "strike": 185.0,
-            "expiration": "2026-09-18",
-            "unit_price": 1.00,
-        },
-    ],
-}
-
-
-class TestVolMispricingExecuteDeployabilityGate:
-    """POST /pilots/options/mispricing/execute is blocked-by-default (MEASURED_FAIL
-    deployability gate) and only proceeds with an explicit per-request override."""
-
-    def test_blocked_without_override_never_executes_a_trade(self):
-        """Without override_deployability_gate, the endpoint refuses -- and never
-        even calls execute_vol_mispricing_trade (no PaperAccountStore write)."""
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
-             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True), \
-             mock.patch("pilots.vol_mispricing.execute_vol_mispricing_trade") as mock_exec:
-            resp = client.post(
-                "/pilots/options/mispricing/execute",
-                json={"symbol": "AAPL", "candidate": _VOL_MISPRICING_CANDIDATE},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["ok"] is False
-        assert body["blocked"] is True
-        mock_exec.assert_not_called()
-
-    def test_override_true_with_dry_run_proceeds_to_dry_run_path(self):
-        """override_deployability_gate=True does not block; dry_run=True reaches
-        the real execute_vol_mispricing_trade dry-run preview path (no fill)."""
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
-             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
-            resp = client.post(
-                "/pilots/options/mispricing/execute",
-                json={
-                    "symbol": "AAPL",
-                    "candidate": _VOL_MISPRICING_CANDIDATE,
-                    "dry_run": True,
-                    "override_deployability_gate": True,
-                },
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body.get("blocked") is not True
-        assert body["ok"] is True
-        assert body["dry_run"] is True
-        assert body["override_applied"] is True
-
-    def test_response_always_includes_real_gate_status_blocked(self):
-        expected_gate = pilots_api.OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
-             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
-            resp = client.post(
-                "/pilots/options/mispricing/execute",
-                json={"symbol": "AAPL", "candidate": _VOL_MISPRICING_CANDIDATE},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        body = resp.json()
-        assert body["gate_status"] == expected_gate
-        assert expected_gate["deployable"] is False
-        assert expected_gate["gate_status"] == "MEASURED_FAIL"
-        assert "-0.499" in expected_gate["reason"]
-        assert "0.027" in expected_gate["reason"]
-
-    def test_response_always_includes_real_gate_status_overridden(self):
-        expected_gate = pilots_api.OPTIONS_DESK_DEPLOYABILITY_GATES["vol_mispricing"]
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
-             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
-            resp = client.post(
-                "/pilots/options/mispricing/execute",
-                json={
-                    "symbol": "AAPL",
-                    "candidate": _VOL_MISPRICING_CANDIDATE,
-                    "dry_run": True,
-                    "override_deployability_gate": True,
-                },
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        body = resp.json()
-        assert body["gate_status"] == expected_gate
-
-    def test_fails_closed_when_writes_disabled(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
-             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", False):
-            resp = client.post(
-                "/pilots/options/mispricing/execute",
-                json={"symbol": "AAPL", "candidate": _VOL_MISPRICING_CANDIDATE},
-                headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
-            )
-        assert resp.status_code == 403
-
-    def test_fails_closed_with_wrong_token(self):
-        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN), \
-             mock.patch.object(settings, "PAPER_BROKER_WRITES_ENABLED", True):
-            resp = client.post(
-                "/pilots/options/mispricing/execute",
-                json={"symbol": "AAPL", "candidate": _VOL_MISPRICING_CANDIDATE},
-                headers={"Authorization": "Bearer WRONG"},
-            )
-        assert resp.status_code == 401

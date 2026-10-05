@@ -36,18 +36,6 @@ Responsibilities
    ``settings.DRY_RUN``), intents are logged but never forwarded to the broker;
    returns synthetic OrderResult with status=ACCEPTED.
 
-7. **Execution audit trail** — every real fill (``result.filled_qty > 0`` and
-   ``status != ERROR``) is best-effort persisted to
-   ``data/execution_audit_store.py::ExecutionAuditStore`` — the durable table
-   backing ``execution/sec_rule_606_reporter.py``'s SEC Rule 606 reporting. A DB
-   hiccup here is logged but never raises or affects the order's already-decided
-   fill state (dead-letter safe, matching ``RunHistoryStore``'s pattern in
-   ``desktop/daemon_runtime.py``). **Known limitation**: this only covers a fill
-   returned synchronously from ``broker.submit_order`` (true for
-   ``FMPPaperBroker``, the default paper broker, and any ``BrokerBase`` that
-   fills inline). A broker whose fills arrive later via ``stream_trade_updates``
-   is not covered by this hook — a disclosed follow-up.
-
 Kill-switch integration
 -----------------------
 ``GlobalKillSwitch`` is injected at construction.  If ``None`` (default), a
@@ -75,7 +63,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional, TYPE_CHECKING
+from typing import Optional
 
 from execution.broker_base import (
     BrokerBase,
@@ -87,9 +75,6 @@ from execution.kill_switch import GlobalKillSwitch, KillSwitchActiveError
 from execution.leaky_bucket_queue import LeakyBucketQueue
 from execution.risk_gate import PreTradeRiskGate, RiskContext
 from settings import settings
-
-if TYPE_CHECKING:  # pragma: no cover - type-only import, avoids a DB import at module load
-    from data.execution_audit_store import ExecutionAuditStore
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +101,7 @@ def make_client_order_id(
     the provided fields.  ``timestamp`` is bucketed to ``bucket_seconds``
     so the same intent re-submitted within the window yields the same ID.
 
-    Alpaca's client_order_id max length is 128 chars; 48 is safe.
+    Brokers commonly cap client_order_id at 128 chars; 48 is safe.
 
     The canonical string is a ``json.dumps`` of the field list, not a raw
     ``|``-joined f-string -- a literal ``|`` inside ``strategy_id`` or
@@ -181,7 +166,7 @@ class OrderManager:
     Parameters
     ----------
     broker : BrokerBase
-        Any BrokerBase implementation (AlpacaBroker, MockBroker, …).
+        Any BrokerBase implementation (FMPPaperBroker, MockBroker, …).
     dry_run : bool
         When True every order intent is logged but not submitted.
     risk_gate : PreTradeRiskGate | None
@@ -195,13 +180,6 @@ class OrderManager:
         Seconds to wait between retry attempts (default 2.0).
     alert_webhook_url : str | None
         Slack/Discord incoming webhook; sourced from settings if None.
-    audit_store : ExecutionAuditStore | None
-        Durable execution-audit sink (``data/execution_audit_store.py``) for
-        SEC Rule 606 reporting. Pass an instance to control where audit rows
-        land (e.g. an isolated DB in tests); ``None`` (default) lazily
-        constructs one against the default resolved DB on the first real
-        fill, so an ``OrderManager`` that never fills a real order never
-        pays for a DB engine it doesn't need.
     """
 
     def __init__(
@@ -214,7 +192,6 @@ class OrderManager:
         max_retries: int = 1,
         retry_delay_seconds: float = 2.0,
         alert_webhook_url: Optional[str] = None,
-        audit_store: Optional["ExecutionAuditStore"] = None,
     ) -> None:
         self._broker = broker
         self._dry_run = dry_run
@@ -223,7 +200,6 @@ class OrderManager:
         self._max_retries = max_retries
         self._retry_delay = retry_delay_seconds
         self._alert_url = alert_webhook_url or getattr(settings, "ALERT_WEBHOOK_URL", None)
-        self._audit_store = audit_store
         # Set of client_order_ids already submitted this process lifetime.
         # Prevents a double-call bug even when the broker's dedup window expires.
         self._submitted: set[str] = set()
@@ -240,7 +216,7 @@ class OrderManager:
         # Rate-limiting queue — sheds low-priority (BUY) requests under load;
         # high-priority (SELL / stop-loss) are allowed to wait for a token.
         self._queue: LeakyBucketQueue = LeakyBucketQueue(
-            capacity=200,      # Alpaca ~200 req/min on the free IEX feed
+            capacity=200,      # ~200 req/min submission budget
             refill_rate=3.33,  # 200 tokens / 60 seconds
         )
 
@@ -355,8 +331,6 @@ class OrderManager:
                     coid,
                     result.broker_order_id,
                 )
-                if (result.filled_qty or 0) > 0:
-                    self._record_execution_audit(intent, result)
             else:
                 logger.error(
                     "Order FAILED after retries: %s %s x %.4f | coid=%s | %s",
@@ -448,71 +422,6 @@ class OrderManager:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _record_execution_audit(self, intent: OrderIntent, result: OrderResult) -> None:
-        """Best-effort persist of a real fill into the durable execution-audit
-        store (``data/execution_audit_store.py``) backing SEC Rule 606
-        reporting (``execution/sec_rule_606_reporter.py``).
-
-        Never raises -- a DB hiccup here must not affect the order's
-        already-decided fill state, matching ``RunHistoryStore``'s identical
-        best-effort persistence pattern in
-        ``desktop/daemon_runtime.py::_run_one_cycle``.
-
-        NBBO bid/ask are still omitted here (left ``None``) -- CORRECTION
-        (secondary audit, 2026-08-24): a single-provider quote via
-        ``data.market_data.get_provider().get_latest_quote()`` DOES carry a
-        real ``bid``/``ask`` (see that ``Quote`` dataclass), so the previous
-        docstring's "this class has no generic NBBO source across brokers"
-        was not accurate -- a real source exists, it's just not wired in
-        here. Deliberately not wired in THIS pass: it would add a
-        synchronous network call to the post-fill audit hot path with no
-        bounded timeout, a cost/latency tradeoff that deserves its own
-        design pass rather than being folded into an audit-fixing change,
-        and a single provider's own quote is at best an approximation of a
-        true cross-exchange NBBO, which should be labeled honestly if wired
-        in. ``ExecutionAuditStore._build_record_dict`` already treats a
-        missing NBBO honestly (price_improvement computes to 0.0 AND
-        ``nbbo_available`` is stamped ``False`` so a report can distinguish
-        "measured, zero improvement" from "unmeasurable" -- CONSTRAINT #4)
-        rather than requiring one. See
-        docs/known_issues/sec_606_price_improvement_fabricated_zero.md for
-        the full write-up and this disclosed follow-up. ``limit_price`` IS
-        passed through below when present -- combined with a real NBBO (from
-        any future caller/source), it lets ``classify_limit_order`` actually
-        run instead of staying permanently dead code.
-        """
-        try:
-            if self._audit_store is None:
-                from data.execution_audit_store import ExecutionAuditStore
-
-                self._audit_store = ExecutionAuditStore()
-
-            venue = str(
-                getattr(self._broker, "broker_id", None) or type(self._broker).__name__
-            ).upper()
-            order_type = getattr(intent.order_type, "value", str(intent.order_type))
-
-            self._audit_store.record_audit({
-                "order_id": result.broker_order_id or result.client_order_id,
-                "client_order_id": result.client_order_id,
-                "symbol": intent.symbol,
-                "side": intent.side.value,
-                "venue": venue,
-                "order_type": order_type,
-                "limit_price": intent.limit_price,
-                "routing_timestamp": result.submitted_at,
-                "fill_price": result.filled_avg_price,
-                "executed_shares": result.filled_qty,
-                "is_option": bool(intent.legs),
-            })
-        except Exception as exc:  # pragma: no cover - defensive only
-            logger.warning(
-                "Execution audit record failed for coid=%s (%s); SEC Rule 606 "
-                "reporting will be missing this fill -- order execution itself "
-                "is unaffected.",
-                result.client_order_id, exc,
-            )
 
     async def _submit_with_retry(self, intent: OrderIntent) -> OrderResult:
         """Dry-run check, then the rate-limit gate + retry loop around the real broker call.

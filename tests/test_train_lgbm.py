@@ -56,6 +56,21 @@ def tmp_registry(tmp_path) -> Path:
     return dst
 
 
+@pytest.fixture
+def skip_cpcv(monkeypatch):
+    """Replace the CPCV fold loop with its honest "no paths" result.
+
+    For tests that only check where run_training() saves the model and
+    writes the registry. CPCV is ~15s per call and irrelevant to those
+    checks; real CPCV output is still covered by ``trained_model_fixture``.
+    """
+    monkeypatch.setattr(
+        train_lgbm,
+        "compute_cpcv_metrics",
+        lambda panel: {"dsr": None, "pbo": None, "mean_oos_sharpe": None, "mean_oos_max_dd": None},
+    )
+
+
 class _DistinctEngine:
     """Offline engine: distinct random-walk price series per ticker."""
 
@@ -324,7 +339,7 @@ def test_training_produces_model_and_real_metrics(trained_model_fixture):
     assert row["cpcv_mean_oos_sharpe"] == pytest.approx(summary["mean_oos_sharpe"])
 
 
-def test_default_save_path_is_dated_not_mutable_latest(tmp_path, tmp_registry, monkeypatch):
+def test_default_save_path_is_dated_not_mutable_latest(tmp_path, tmp_registry, monkeypatch, skip_cpcv):
     """run_training(save_path=None) must NOT force a mutable *_latest.pkl name.
 
     Regression test: train_lgbm.py used to default save_path to a hardcoded
@@ -419,7 +434,7 @@ class TestSharedStateGuard:
                 historical_store=False,
             )
 
-    def test_both_paths_explicit_never_requires_the_flag(self, tmp_path, tmp_registry):
+    def test_both_paths_explicit_never_requires_the_flag(self, tmp_path, tmp_registry, skip_cpcv):
         # No confirm_shared_write passed at all -- must not raise, since both
         # paths are explicit and isolated (tmp_path-based).
         summary = train_lgbm.run_training(
@@ -432,7 +447,7 @@ class TestSharedStateGuard:
         assert summary["deployable"] in (True, False)  # ran to completion
 
     def test_confirm_shared_write_true_bypasses_the_guard_even_with_no_paths(
-        self, monkeypatch
+        self, monkeypatch, skip_cpcv
     ):
         """Proves the escape hatch itself genuinely lets a caller through
         (exercised for real by scripts/train_lgbm.py's own main() /

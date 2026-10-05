@@ -1,4 +1,6 @@
-# Feature: ETF Volatility Transmission
+# Feature: ETF Volatility Transmission (archived)
+
+> **Archived (2026-09, step 4d).** ETF volatility transmission was moved to `legacy/` (`legacy/risk/etf_transmission.py`, `legacy/data/etf_holdings.py`, tests under `legacy/tests/`). The pipeline no longer computes it; the four `ETF_*` columns are written as NaN until the step-4f schema trim. What follows describes the feature as it stood before archiving.
 
 **File:** `risk/etf_transmission.py` (pure math, zero I/O)
 **Wiring:** `pipeline/production_steps.py::_apply_etf_transmission` (measurement columns) + `_apply_etf_transmission_multiplier` (per-name sizing derate) + `_build_etf_transmission_cov_matrix` (portfolio-level covariance) — all called from `StrategyEvalStep.run`
@@ -518,21 +520,17 @@ happen.
   no ETF-holdings source at all: `_build_context_extras` builds a minimal
   `universe_df` with no holdings input, and `engine/advisory.py` is not
   routed through `size_position()` or `apply_portfolio_gross_cap()`.
-- `legacy/streamlit_command_center/panels/settings_manager.py` — all nine settings (`ETF_HOLDINGS_*`,
-  `ETF_TRANSMISSION_*`) are GUI-writable via the standard `_SETTINGS_LAYOUT`
-  bool/int/number/text/tickers widgets, allowlisted in
-  `shared/env_io.py::ALLOWED_KEYS`.
-- `legacy/streamlit_command_center/panels/observability.py::_render_observability_etf_transmission` — a
-  read-only Mission Control sub-section showing each of the three master
-  switches' ON/OFF state plus a per-symbol table (`ETF_Ownership_Pct` /
-  `ETF_Comovement_R2` / `ETF_Primary_Wrapper` / `ETF_Transmission_Multiplier`)
-  sourced from `state_snapshot.json`, sorted so the most heavily-derated
-  names surface first. Row extraction/sorting is a pure, Streamlit-free
-  helper (`shared.observability_panel_helpers.etf_transmission_rows`,
-  unit-tested in `tests/test_observability_panel.py`) — the panel itself
-  never writes anything and degrades to an info message (never a table of
-  fabricated nulls) when the measurement gate is off or no symbol has
-  coverage yet.
+- Web app **Settings → ETF Transmission** (`/settings/etf-transmission`,
+  `webapp/src/screens/EtfTransmissionSettings.tsx`) — edits the `ETF_HOLDINGS_*` /
+  `ETF_TRANSMISSION_*` settings, allowlisted in `shared/env_io.py::ALLOWED_KEYS`.
+- Web app **Mission Control** → "ETF volatility transmission" section — read-only: each
+  master switch's ON/OFF state plus a per-symbol table (`ETF_Ownership_Pct` /
+  `ETF_Comovement_R2` / `ETF_Primary_Wrapper` / `ETF_Transmission_Multiplier`) sourced from
+  `state_snapshot.json`, most heavily-derated names first. Row extraction/sorting is
+  `shared.observability_panel_helpers.etf_transmission_rows` (unit-tested in
+  `tests/test_observability_panel.py`), reused by `pilots/observability.py`. It degrades to
+  an info message (never a table of fabricated nulls) when the measurement gate is off or no
+  symbol has coverage yet. (The Streamlit desktop app's equivalents were deleted in 2026-09.)
 
 ## Not wired into
 
@@ -545,5 +543,5 @@ happen.
   by grep: no adapter calls `size_position()` or `apply_portfolio_gross_cap()`).
   This is a risk overlay, not a strategy: it produces no trade signal, so
   PBO/DSR/Sharpe/MaxDD have nothing to gate.
-- `legacy/streamlit_command_center/` panels, `shared/env_io.py` `ALLOWED_KEYS`, and the
-  Pilots PWA — all explicitly out of scope for this first cut.
+- (`shared/env_io.py` `ALLOWED_KEYS` and the Pilots PWA were out of scope for the first cut;
+  both were added later — see above.)

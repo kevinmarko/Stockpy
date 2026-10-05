@@ -21,17 +21,13 @@ TestSummariseRun         — empty → "empty" health; agreement clean →
                            "clean"; disagreement → "warn"; Claude FAILED →
                            "fail".
 TestHealthCaption        — every health value produces a non-empty caption.
-TestPanelWiring          — ``legacy.streamlit_command_center.panels`` exports the new section
-                           function AND ``render_gravity_audit`` calls it.
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict
-from unittest import mock
 
 import pytest
 
@@ -166,7 +162,6 @@ class TestLoadAuditReport:
     def test_uses_settings_path_when_path_is_none(self, tmp_path, monkeypatch):
         # The default branch reads settings.GRAVITY_AI_RUNNER_OUTPUT_PATH.
         # We point it at a tmp file via monkeypatching the loaded settings object.
-        from shared import gravity_ai_panel as panel_mod
 
         # Re-import settings inside the function — patch the module-level
         # `from settings import settings` lookup.
@@ -326,35 +321,3 @@ class TestHealthCaption:
 # ---------------------------------------------------------------------------
 # TestPanelWiring
 # ---------------------------------------------------------------------------
-
-
-class TestPanelWiring:
-    def test_section_helper_exported(self):
-        from legacy.streamlit_command_center import panels
-
-        assert hasattr(panels, "_render_gravity_ai_runner_section")
-        assert callable(panels._render_gravity_ai_runner_section)
-
-    def test_render_gravity_audit_calls_runner_section(self):
-        # Lives in gui/panels/gravity_audit.py post-refactor (Phase 4a extracted
-        # gui/panels/__init__.py into per-tab modules; __init__.py is now a
-        # thin re-export stub — see tests/test_ai_insights_panel.py for the
-        # same fix pattern applied to the AI Insights tab).
-        path = Path(__file__).resolve().parents[1] / "legacy" / "streamlit_command_center" / "panels" / "gravity_audit.py"
-        src = path.read_text(encoding="utf-8")
-        assert "_render_gravity_ai_runner_section()" in src
-
-    def test_section_imports_from_helper_module(self):
-        # Lives in gui/panels/gravity_audit.py post-refactor (see
-        # test_render_gravity_audit_calls_runner_section for the rationale).
-        path = Path(__file__).resolve().parents[1] / "legacy" / "streamlit_command_center" / "panels" / "gravity_audit.py"
-        src = path.read_text(encoding="utf-8")
-        assert "from shared.gravity_ai_panel import" in src
-        for name in (
-            "health_caption",
-            "load_audit_report",
-            "runner_status",
-            "step_rows",
-            "summarise_run",
-        ):
-            assert name in src, f"helper {name} missing from legacy/streamlit_command_center/panels/gravity_audit.py"

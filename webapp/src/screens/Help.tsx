@@ -75,7 +75,7 @@ export function Help() {
       <input
         type="search"
         className="input"
-        placeholder='Search terms (e.g. "kelly", "deployable", "z-score")'
+        placeholder='Search terms (e.g. "kelly", "deployable", "regime")'
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         aria-label="Search glossary"

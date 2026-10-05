@@ -24,7 +24,8 @@ from settings import Settings, LEAKED_FRED_KEY_SHA256
 def test_settings_load_from_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("FRED_API_KEY", "live-key-123")
     monkeypatch.setenv("RISK_FREE_RATE", "0.05")
-    monkeypatch.setenv("ALPACA_PAPER", "false")
+    monkeypatch.delenv("ALPACA_PAPER", raising=False)
+    monkeypatch.setenv("PAPER_TRADING", "false")
     monkeypatch.setenv("DEFAULT_TICKERS", '["NVDA", "TSLA"]')
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "reports"))
     monkeypatch.setenv("STATE_API_TOKEN", "tok-123")
@@ -36,7 +37,7 @@ def test_settings_load_from_environment(monkeypatch, tmp_path):
 
     assert s.FRED_API_KEY == "live-key-123"
     assert s.RISK_FREE_RATE == 0.05
-    assert s.ALPACA_PAPER is False
+    assert s.PAPER_TRADING is False
     assert s.DEFAULT_TICKERS == ["NVDA", "TSLA"]
     assert s.OUTPUT_DIR == (tmp_path / "reports")
     assert s.STATE_API_TOKEN == "tok-123"
@@ -44,21 +45,93 @@ def test_settings_load_from_environment(monkeypatch, tmp_path):
 
 
 # =============================================================================
+# 1b. PAPER_TRADING legacy alias (ALPACA_PAPER, pre-2026-09-30)
+# =============================================================================
+def test_legacy_alpaca_paper_env_var_still_read(monkeypatch, tmp_path):
+    """An operator .env that still says ALPACA_PAPER=false keeps meaning
+    'not paper' after the rename -- the posture must never silently flip."""
+    monkeypatch.delenv("PAPER_TRADING", raising=False)
+    monkeypatch.setenv("ALPACA_PAPER", "false")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+    s = Settings(_env_file=None)
+    assert s.PAPER_TRADING is False
+
+
+def test_legacy_alpaca_paper_in_env_file_still_read(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text("ALPACA_PAPER=false\n", encoding="utf-8")
+    monkeypatch.delenv("PAPER_TRADING", raising=False)
+    monkeypatch.delenv("ALPACA_PAPER", raising=False)
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+    s = Settings(_env_file=str(env_file))
+    assert s.PAPER_TRADING is False
+
+
+@pytest.mark.parametrize("new_value,old_value,expected", [
+    ("true", "false", True),
+    ("false", "true", False),
+])
+def test_paper_trading_wins_over_legacy_alpaca_paper(monkeypatch, tmp_path, new_value, old_value, expected):
+    monkeypatch.setenv("PAPER_TRADING", new_value)
+    monkeypatch.setenv("ALPACA_PAPER", old_value)
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+    s = Settings(_env_file=None)
+    assert s.PAPER_TRADING is expected
+
+
+def test_removed_alpaca_fields_are_gone_and_ignored(monkeypatch, tmp_path):
+    """Alpaca was removed 2026-09-30: leftover keys in an operator .env are
+    ignored (extra='ignore'), never re-materialized as Settings fields."""
+    removed = {
+        "ALPACA_API_KEY": "k",
+        "ALPACA_SECRET_KEY": "s",
+        "ALPACA_REQUEST_TIMEOUT_SECONDS": "5",
+        "ALPACA_KEY_ROTATED_DATE": "2026-01-01",
+        "MARKET_DATA_WS_ENABLED": "true",
+        "MARKET_DATA_WS_STALE_SECONDS": "10",
+        "MARKET_DATA_WS_SYMBOLS": "AAPL",
+        "MARKET_DATA_WS_RECONNECT_BASE_SECONDS": "1",
+        "MARKET_DATA_WS_RECONNECT_MAX_SECONDS": "30",
+    }
+    env_file = tmp_path / ".env"
+    env_file.write_text("".join(f"{k}={v}\n" for k, v in removed.items()), encoding="utf-8")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+    s = Settings(_env_file=str(env_file))
+    for key in removed:
+        assert key not in Settings.model_fields
+        assert not hasattr(s, key)
+
+
+def test_retired_alpaca_secrets_are_still_masked(tmp_path, monkeypatch):
+    """A real Alpaca key left in an operator's .env must never be displayed in
+    cleartext by the settings reader, even though the fields are gone."""
+    from shared import env_io
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ALPACA_API_KEY=PKREALKEY123\nALPACA_SECRET_KEY=supersecretvalue\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(env_io, "ENV_PATH", env_file, raising=False)
+    shown = env_io.read_settings()
+    assert "PKREALKEY123" not in shown["ALPACA_API_KEY"]
+    assert "supersecretvalue" not in shown["ALPACA_SECRET_KEY"]
+
+
+# =============================================================================
 # 2. DEFAULTS — unset fields fall back to documented defaults
 # =============================================================================
 def test_settings_defaults(monkeypatch, tmp_path):
-    # Ensure nothing leaks in from the host environment. ALPACA_API_KEY is
-    # required here (not merely nice-to-have): on a machine with a real,
-    # populated .env, another test module's own load_dotenv(ENV_PATH,
-    # override=False) call earlier in this same pytest session copies it
-    # (and only it, of the fields this test asserts on) into real
-    # os.environ -- Settings(_env_file=None) skips the .env FILE but still
-    # reads os.environ, so without this delenv the assertion below observes
-    # the operator's real key instead of the documented None default.
+    # Ensure nothing leaks in from the host environment. On a machine with a
+    # real, populated .env, another test module's own load_dotenv(ENV_PATH,
+    # override=False) call earlier in this same pytest session can copy keys
+    # into real os.environ -- Settings(_env_file=None) skips the .env FILE but
+    # still reads os.environ. ALPACA_PAPER is the legacy alias of
+    # PAPER_TRADING, so it must be cleared too.
     for key in (
         "FRED_API_KEY",
-        "ALPACA_API_KEY",
         "RISK_FREE_RATE",
+        "PAPER_TRADING",
         "ALPACA_PAPER",
         "DEFAULT_TICKERS",
         "STATE_API_TOKEN",
@@ -72,8 +145,7 @@ def test_settings_defaults(monkeypatch, tmp_path):
     s = Settings(_env_file=None)
 
     assert s.FRED_API_KEY == ""
-    assert s.ALPACA_API_KEY is None
-    assert s.ALPACA_PAPER is True
+    assert s.PAPER_TRADING is True
     # DRY_RUN gates OrderManager._submit_with_retry (see CLAUDE.md: "Dry-run
     # is enforced at manager level") -- a silent flip to True here would
     # make every broker order a no-op without any other signal. Mirrors
@@ -127,8 +199,6 @@ def test_sentiment_attention_scaffolding_defaults(monkeypatch, tmp_path):
         "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS",
         "PYTRENDS_ENABLED",
         "SENTIMENT_INDEX_ENABLED",
-        "ETF_TRANSMISSION_ENABLED",
-        "ETF_HOLDINGS_ENABLED",
         "MARKET_DATA_LATENCY_TRACKING_ENABLED",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -147,8 +217,6 @@ def test_sentiment_attention_scaffolding_defaults(monkeypatch, tmp_path):
     assert s.WIKIPEDIA_ATTENTION_LOOKBACK_DAYS == 30
     assert s.PYTRENDS_ENABLED is False
     assert s.SENTIMENT_INDEX_ENABLED is False
-    assert s.ETF_TRANSMISSION_ENABLED is False
-    assert s.ETF_HOLDINGS_ENABLED is False
     assert s.MARKET_DATA_LATENCY_TRACKING_ENABLED is False
 
 
@@ -433,8 +501,82 @@ class TestFMPSettingsDefaults:
         assert s.FMP_ECON_CALENDAR_ENABLED is True
         assert s.FMP_INSIDER_ENABLED is True
         assert s.FMP_SECTOR_SNAPSHOT_ENABLED is True
-        assert s.FMP_OPTIONS_HEALTH_ENABLED is True
-        assert s.FMP_OPTIONS_CONTEXT_ENABLED is True
         assert s.FMP_PEERS_ENABLED is True
         assert s.FMP_UNIVERSE_ENABLED is True
+
+
+class TestStep4fRetiredKeysAreHarmless:
+    """Step 4f retired ~60 options-desk / FIX / circuit-breaker / ETF fields.
+    The operator's real ``.env`` (and ``output/runtime_flags.json``) may still
+    set some of them. That must stay harmless: pydantic-settings ignores the
+    unknown keys (``extra="ignore"``), the runtime store skips them as
+    unknown, and a retired webhook URL keeps being masked by env_io."""
+
+    _RETIRED = {
+        "OPTIONS_0DTE_ENABLED": "true",
+        "PAPER_OPTIONS_AUTO_EXECUTE_ENABLED": "true",
+        "ETF_TRANSMISSION_ENABLED": "true",
+        "ETF_HOLDINGS_TICKERS": '["SPY","QQQ"]',
+        "OFI_SHIELD_ENABLED": "true",
+        "FIX_GATEWAY_ENABLED": "false",
+        "MULTI_BROKER_GATEWAY_ENABLED": "true",
+        "OPTIONS_ALERT_WEBHOOK_URL": "https://hooks.example.invalid/x",
+    }
+
+    def test_retired_keys_in_env_file_are_ignored(self, tmp_path, monkeypatch):
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "".join(f"{k}={v}\n" for k, v in self._RETIRED.items()) + "KELLY_FRACTION=0.4\n",
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("KELLY_FRACTION", raising=False)
+        monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+        s = Settings(_env_file=str(env_file))
+        assert s.KELLY_FRACTION == pytest.approx(0.4)  # the file really was read
+        for key in self._RETIRED:
+            assert key not in Settings.model_fields
+            assert not hasattr(s, key)
+
+    def test_retired_keys_in_real_environment_are_ignored(self, tmp_path, monkeypatch):
+        for key, value in self._RETIRED.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+        s = Settings(_env_file=None)
+        for key in self._RETIRED:
+            assert not hasattr(s, key)
+
+    def test_runtime_store_skips_retired_keys_as_unknown(self, tmp_path, monkeypatch):
+        import json
+
+        import runtime_flags
+
+        store = tmp_path / "runtime_flags.json"
+        store.write_text(json.dumps({
+            "version": 1,
+            "flags": {
+                "OFI_SHIELD_ENABLED": {"value": True},
+                "CIRCUIT_BREAKER_ENABLED": {"value": True},
+                "KELLY_FRACTION": {"value": 0.3},
+            },
+        }), encoding="utf-8")
+        monkeypatch.delenv("KELLY_FRACTION", raising=False)
+        monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+        s = Settings(_env_file=None)
+        report = runtime_flags.apply_overrides(s, path=store)
+        assert report.error is None
+        assert set(report.skipped_unknown) == {"OFI_SHIELD_ENABLED", "CIRCUIT_BREAKER_ENABLED"}
+        assert "KELLY_FRACTION" in report.applied
+        assert s.KELLY_FRACTION == pytest.approx(0.3)
+
+    def test_retired_webhook_url_is_still_masked(self, tmp_path, monkeypatch):
+        from shared import env_io
+
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "OPTIONS_ALERT_WEBHOOK_URL=https://hooks.example.invalid/secret-path\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(env_io, "ENV_PATH", env_file, raising=False)
+        shown = env_io.read_settings()["OPTIONS_ALERT_WEBHOOK_URL"]
+        assert "secret-path" not in shown
 

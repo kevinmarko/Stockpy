@@ -243,27 +243,3 @@ models:
       AFML takes priority in meta_bootstrap.py if both exist and are deployable.
     path: null
     trained_date: null
-  meta_labeler_backfill_vrp_premium_selling:
-    role: meta_labeler
-    owner: TBD
-    materiality_tier: experimental
-    cpcv_dsr: null
-    pbo: null
-    n_train: 0
-    deployable: false
-    notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_vrp_premium_selling.
-      AFML takes priority in meta_bootstrap.py if both exist and are deployable.
-    path: null
-    trained_date: null
-  meta_labeler_backfill_options_flow_sentiment:
-    role: meta_labeler
-    owner: TBD
-    materiality_tier: experimental
-    cpcv_dsr: null
-    pbo: null
-    n_train: 0
-    deployable: false
-    notes: Forecast Backfill meta-labeler stub. Distinct from meta_labeler_options_flow_sentiment.
-      AFML takes priority in meta_bootstrap.py if both exist and are deployable.
-    path: null
-    trained_date: null

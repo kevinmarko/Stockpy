@@ -86,17 +86,17 @@ honest caveats baked into the catalog below:
   exact currently-deployed ``ml/models/lgbm_latest.pkl`` artifact the live
   signal module actually loads — see the Pilot's own inline comment and
   ``docs/signals/lgbm_ranker.md``'s Backtest Validation section.
-* ``vrp-premium-selling`` joins ``vrp_premium_selling`` (2026-08) — the
-  first OPTIONS-SELLING ``STRATEGY_REGISTRY`` entry, gated by the 4-scenario
-  tail-risk stress gate (``validation/stress_scenarios.py``,
-  ``StrategyValidationHarness(is_options_selling=True, ...)``) on top of the
-  usual PBO/DSR/Sharpe/MaxDD gates. No historical options-chain data exists
-  anywhere in this codebase, so True_IVR/VRP are documented, real-price-driven
-  proxies, and CREDIT-EVENT detection is only real from 2023-08-08 onward
-  (``BAMLH0A0HYM2``'s real FRED coverage start) — VIX gating is real across
-  the full history. See ``docs/signals/vrp_premium_selling.md``'s Backtest
-  Validation section and ``validation/options_selling_backtest.py``'s module
-  docstring for the full honesty contract.
+* ``vrp-premium-selling`` and ``options-flow-sentiment`` were removed in
+  2026-09 (step 3d') when their signal modules were retired from live scoring
+  with the options desk; an existing follow of either no longer resolves to a
+  Pilot.
+* The 10 ``category="Options"`` Pilots (``earnings-crush``,
+  ``dispersion-trading``, ``zero-dte-momentum-breakout``, ``copula-stat-arb``,
+  the four credit/debit spreads, ``covered-call``, ``iron-condor``) and
+  ``OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID`` were removed in 2026-09 (step 4a)
+  with the options desk. Historical paper trades under those ids still
+  attribute on the Strategy Report Card, as retired non-Pilot buckets
+  (``pilots/strategy_report_card.py::RETIRED_OPTIONS_PILOT_NAMES``).
 """
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ from typing import Dict, List, Optional
 
 from settings import settings
 
-__all__ = ["Pilot", "PILOTS", "list_pilots", "get_pilot", "OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID"]
+__all__ = ["Pilot", "PILOTS", "list_pilots", "get_pilot"]
 
 
 @dataclass(frozen=True)
@@ -134,8 +134,6 @@ class Pilot:
         Join key into ``scripts.refresh_validations.STRATEGY_REGISTRY`` for the
         Pilot's honest, PBO/DSR-gated backtest, or ``None`` when no honest match
         exists.
-    followable:
-        Whether the Pilot can be followed by a user.
     """
 
     id: str
@@ -145,7 +143,6 @@ class Pilot:
     weights: Dict[str, float] = field(default_factory=dict)
     long_only: bool = False
     validation_strategy_id: Optional[str] = None
-    followable: bool = True
 
 
 def _full_blend_weights() -> Dict[str, float]:
@@ -316,7 +313,7 @@ PILOTS: List[Pilot] = [
         # adapter in scripts/refresh_validations.py). NOT a literal
         # reconstruction of the full 17-module blend above: 3 modules are
         # excluded for the whole backtest window --
-        # news_catalyst (live Finnhub calls), lgbm_ranker (always loads the
+        # news_catalyst (live news-provider calls), lgbm_ranker (always loads the
         # CURRENT persisted model regardless of historical date),
         # forecast_alignment (only backtestable within forecast_direction_arima_hw's
         # own bounded 5yr window -- excluded here to keep one consistent
@@ -534,157 +531,8 @@ PILOTS: List[Pilot] = [
         # bounded 6-year feature-panel window / proxy-OHLCV caveats.
         validation_strategy_id="lgbm_ranker",
     ),
-    Pilot(
-        id="vrp-premium-selling",
-        name="Volatility Premium Seller",
-        category="Factor",
-        description=(
-            "Sells options premium only when the Volatility Risk Premium regime "
-            "gate clears (True IVR > 50, VRP > 2%, VIX < 30, no Credit Event); "
-            "otherwise stays in Cash/Wait."
-        ),
-        weights={"vrp_premium_selling": 1.0},
-        long_only=False,
-        # Real backtest (2026-08): validation/options_selling_backtest.py's
-        # simulate_vrp_iron_condor_returns genuinely constructs and marks to
-        # market a real Black-Scholes Iron Condor via the SAME
-        # OptionsPricingRecommender the live pipeline uses -- not a
-        # closed-form approximation. HONEST SCOPE: no historical
-        # options-chain data exists anywhere in this codebase, so True_IVR/
-        # VRP are documented, real-price-driven proxies (the identical
-        # fallback tier build_premium_directive itself uses absent a live
-        # chain), and CREDIT-EVENT detection is only real from 2023-08-08
-        # onward (BAMLH0A0HYM2's real FRED coverage start) -- VIX gating is
-        # real across the full history. See
-        # docs/signals/vrp_premium_selling.md's Backtest Validation section
-        # for the full honesty contract and measured numbers.
-        validation_strategy_id="vrp_premium_selling",
-    ),
-    Pilot(
-        id="options-flow-sentiment",
-        name="Options Flow Sentiment",
-        category="Factor",
-        description=(
-            "Tracks aggressive institutional options order flow (sweeps and blocks) "
-            "to capture directional alpha and smart-money positioning."
-        ),
-        weights={"options_flow_sentiment": 1.0},
-        long_only=False,
-        validation_strategy_id="options_flow_sentiment",
-    ),
-    Pilot(
-        id="earnings-crush",
-        name="Earnings Volatility Crush",
-        category="Options",
-        description="Sells inflated premium into scheduled earnings binary events.",
-        weights={},
-        followable=False,
-        validation_strategy_id=None,
-    ),
-    Pilot(
-        id="dispersion-trading",
-        name="Dispersion Trading",
-        category="Options",
-        description="Trades index volatility against single-name volatility components.",
-        weights={},
-        followable=False,
-        validation_strategy_id=None,
-    ),
-    Pilot(
-        id="zero-dte-momentum-breakout",
-        name="0DTE Momentum Breakout",
-        category="Options",
-        description="Intraday momentum strategy using same-day expirations.",
-        weights={},
-        followable=False,
-        validation_strategy_id=None,
-    ),
-    Pilot(
-        id="copula-stat-arb",
-        name="Copula Stat Arb",
-        category="Options",
-        description="Statistical arbitrage using copula-derived joint probabilities.",
-        weights={},
-        followable=False,
-        validation_strategy_id="copula_stat_arb",
-    ),
-    Pilot(
-        id="put-credit-spread",
-        name="Put Credit Spread",
-        category="Options",
-        description="Defined-risk bullish/neutral premium selling strategy.",
-        weights={},
-        followable=False,
-        validation_strategy_id="put_credit_spread",
-    ),
-    Pilot(
-        id="call-credit-spread",
-        name="Call Credit Spread",
-        category="Options",
-        description="Defined-risk bearish/neutral premium selling strategy.",
-        weights={},
-        followable=False,
-        validation_strategy_id="call_credit_spread",
-    ),
-    Pilot(
-        id="call-debit-spread",
-        name="Call Debit Spread",
-        category="Options",
-        description="Defined-risk bullish directional strategy.",
-        weights={},
-        followable=False,
-        validation_strategy_id="call_debit_spread",
-    ),
-    Pilot(
-        id="put-debit-spread",
-        name="Put Debit Spread",
-        category="Options",
-        description="Defined-risk bearish directional strategy.",
-        weights={},
-        followable=False,
-        validation_strategy_id="put_debit_spread",
-    ),
-    Pilot(
-        id="covered-call",
-        name="Covered Call",
-        category="Options",
-        description="Yield enhancement strategy against existing long stock positions.",
-        weights={},
-        followable=False,
-        validation_strategy_id="covered_call",
-    ),
-    Pilot(
-        id="iron-condor",
-        name="Iron Condor",
-        category="Options",
-        description="Range-bound premium selling strategy combining credit spreads.",
-        weights={},
-        followable=False,
-        validation_strategy_id=None,
-    ),
 ]
 
-
-# Mapping of OptionsDirective strategy strings to catalog Pilot IDs.
-#
-# Keys MUST be the exact Title-Case strings ``technical_options_engine.py``'s
-# ``generate_strategy_pricing_matrix`` writes to ``directive["Strategy"]``
-# (see that module's ``directive["Strategy"] = "Put Credit Spread"`` etc.
-# assignments) — NOT the ``structure_type`` UPPER_SNAKE_CASE convention used
-# elsewhere (e.g. ``pilots/multi_leg_pricing.py``'s ``"IRON_CONDOR"``, a
-# different field entirely). ``execution/options_paper_executor.py`` looks up
-# a live directive's ``strategy``/``candidate["strategy"]`` value (itself
-# read straight from ``directive["Strategy"]``) against this dict verbatim —
-# an UPPER_SNAKE_CASE key here would never match a real directive and this
-# normalization would silently no-op for every live trade.
-OPTIONS_DIRECTIVE_STRATEGY_TO_PILOT_ID = {
-    "Put Credit Spread": "put-credit-spread",
-    "Call Credit Spread": "call-credit-spread",
-    "Iron Condor": "iron-condor",
-    "Call Debit Spread": "call-debit-spread",
-    "Put Debit Spread": "put-debit-spread",
-    "Covered Call": "covered-call",
-}
 
 # Fast id -> Pilot index (built once at import; catalog is static).
 _BY_ID: Dict[str, Pilot] = {p.id: p for p in PILOTS}

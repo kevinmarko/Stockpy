@@ -38,7 +38,6 @@ function widgets(overrides: Partial<CustomViewWidgets> = {}): CustomViewWidgets 
     pilotsTable: false,
     sentimentMini: false,
     portfolioHeat: false,
-    optionsDirective: false,
     signalBreakdown: false,
     macroRegime: false,
     ...overrides,
@@ -193,9 +192,9 @@ describe("CreateDataApp screen", () => {
 
     const raw = JSON.parse(localStorage.getItem("stockpy.custom-views:v1") as string);
     expect(raw).toHaveLength(1);
-    expect(raw[0].widgetOrder).toEqual(["macroRegime", "portfolioHeat", "optionsDirective"]);
+    expect(raw[0].widgetOrder).toEqual(["macroRegime", "portfolioHeat"]);
     expect(raw[0].widgets).toEqual(
-      widgets({ macroRegime: true, portfolioHeat: true, optionsDirective: true })
+      widgets({ macroRegime: true, portfolioHeat: true })
     );
   });
 

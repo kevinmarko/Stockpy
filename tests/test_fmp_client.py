@@ -538,6 +538,61 @@ class TestDeadEndpoint:
                 _fmp_get("institutional-ownership", {"symbol": "MSFT"})
         assert get.call_count == 0
 
+    def test_402_restricted_endpoint_is_latched_like_a_403(self, clock, client_settings):
+        """FMP refuses /batch-quote on Starter with HTTP 402 and a plain-text
+        "Restricted Endpoint" body. It must latch as out of plan, not surface
+        as an unparseable-body error that is retried every call."""
+        from data.fmp_client import is_endpoint_out_of_plan
+
+        resp = _resp(402)
+        resp.text = (
+            "Restricted Endpoint: This endpoint is not available under your "
+            "current subscription please visit our subscription page"
+        )
+        resp.json.side_effect = ValueError("Expecting value")
+        with patch("data.fmp_client.requests.get", return_value=resp) as get:
+            with pytest.raises(FMPUnavailable, match="HTTP 402"):
+                _fmp_get("batch-quote", {"symbols": "AAPL,MSFT"})
+        assert get.call_count == 1
+        assert is_endpoint_out_of_plan("batch-quote")
+        assert not is_endpoint_out_of_plan("quote")
+
+        with patch("data.fmp_client.requests.get", return_value=_resp(200)) as get:
+            with pytest.raises(FMPUnavailable):
+                _fmp_get("batch-quote", {"symbols": "AAPL"})
+        assert get.call_count == 0
+
+    def test_402_that_is_not_a_plan_restriction_is_transient(self, clock, client_settings, monkeypatch):
+        """A billing/quota 402 on /quote must not latch it for the life of the
+        daemon: it counts toward the cooldown, and the next call goes out."""
+        from data.fmp_client import is_endpoint_out_of_plan
+
+        monkeypatch.setattr(settings, "FMP_COOLDOWN_THRESHOLD", 5)
+        resp = _resp(402)
+        resp.text = "Payment required: your last invoice failed."
+        with patch("data.fmp_client.requests.get", return_value=resp) as get:
+            with pytest.raises(FMPUnavailable, match="not a plan restriction"):
+                _fmp_get("quote", {"symbol": "AAPL"})
+        assert get.call_count == 1  # never retried in a tight loop
+        assert not is_endpoint_out_of_plan("quote")
+
+        with patch("data.fmp_client.requests.get", return_value=_resp(200)) as get:
+            _fmp_get("quote", {"symbol": "AAPL"})
+        assert get.call_count == 1
+
+    def test_non_plan_402s_open_the_cooldown(self, clock, client_settings, monkeypatch):
+        monkeypatch.setattr(settings, "FMP_COOLDOWN_THRESHOLD", 2)
+        resp = _resp(402)
+        resp.text = "Bandwidth limit reached"
+        with patch("data.fmp_client.requests.get", return_value=resp):
+            for _ in range(2):
+                with pytest.raises(FMPUnavailable):
+                    _fmp_get("quote", {"symbol": "AAPL"})
+        with patch("data.fmp_client.requests.get", return_value=_resp(200)) as get:
+            with pytest.raises(FMPUnavailable, match="cooldown"):
+                _fmp_get("quote", {"symbol": "AAPL"})
+        assert get.call_count == 0
+
     def test_a_dead_endpoint_does_not_disable_the_others(self, clock, client_settings):
         """Starter serves /quote perfectly well while refusing Form 13F. One
         refusal must not take the working feeds down with it."""
