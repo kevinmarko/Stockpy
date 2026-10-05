@@ -111,3 +111,16 @@ It is caused by the export, and passes alone without it.
 
 **Settings artifacts were already current.** Regenerating them changed only the measured-at commit hash, so
 nothing was committed.
+
+### After rebase onto origin/main (6313b85d, includes #1107)
+- **What conflicted:**
+  - `docs/known_issues/README.md`: both sides added a row. Kept both.
+  - `docs/settings_field_census.{json,md}`: took main's copy, then regenerated with `--write`.
+  - `docs/settings_liveness.json` did not conflict but was regenerated anyway.
+  - `conftest.py` did not conflict, since this branch does not touch it.
+- **Targeted tests: 646 passed.** Same files as before, plus the census and liveness tests.
+- **Lint and typecheck: clean.**
+  - `ruff --select=F821,F822,F823,E9`: all checks passed.
+  - `npm run --prefix webapp typecheck`: clean.
+- **`make ci` with `INVESTYO_RUNTIME_FLAGS_PATH` unset: 11730 passed, 24 skipped, 0 failed.**
+- **Live runtime-flags store untouched:** `~/.stockpy_local/output/runtime_flags.json` had the same mtime and size before and after the run.
