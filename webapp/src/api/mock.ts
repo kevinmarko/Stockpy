@@ -8182,7 +8182,19 @@ export const MOCK_RETROSPECTIVE_TRADES: RetrospectiveTradeRecord[] = [
     realized_pnl: 320.0,
     realized_pnl_pct: 0.0381,
     holding_period_days: 2.26,
-    close_reason: "target_reached",
+    // Pipeline-style exit: the Action Signal that fired + its exit context.
+    close_reason: "signal_risk_reduce",
+    exit_context: {
+      context_schema_version: 1,
+      context_status: "partial",
+      exit_signal: "RISK REDUCE",
+      score: 31,
+      price_at_decision: 218.0,
+      macro_status: null,
+      dual_momentum_signal: "BIL",
+      held_qty: 40,
+    },
+    exit_context_status: "captured",
     provenance: "signal_driven",
     snapshot: {
       captured: true,
@@ -12375,6 +12387,7 @@ let paperClosedTrades: PaperBrokerClosedTrade[] = MOCK_RETROSPECTIVE_TRADES.map(
   realized_pnl_pct: t.realized_pnl_pct,
   holding_period_days: t.holding_period_days,
   close_reason: t.close_reason,
+  exit_context_json: t.exit_context ? JSON.stringify(t.exit_context) : null,
   leg_group_id: null,
 }));
 let paperClosedTradeIdSeq = 105;

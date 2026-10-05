@@ -893,3 +893,131 @@ def test_probe_disabled_when_closed_count_unavailable(monkeypatch):
     df = _probe_df([{"Symbol": "AGNC", "Action Signal": "BUY", "Price": 10.0}])
     asyncio.run(main_orchestrator._execute_broker_orders(df, dry_run=False))
     assert broker.submitted == []
+
+
+# ---------------------------------------------------------------------------
+# (k) decision context (execution/trade_context.py) is inert for trading:
+#     builders working vs. forced to raise -> identical orders and ids
+# ---------------------------------------------------------------------------
+
+_FIXED_NOW = datetime(2026, 10, 5, 15, 0, 0)
+
+
+def _freeze_orchestrator_now(monkeypatch):
+    from datetime import timezone as _tz
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _FIXED_NOW.replace(tzinfo=_tz.utc)
+
+    monkeypatch.setattr(main_orchestrator, "datetime", _FrozenDatetime)
+
+
+def _context_df() -> pd.DataFrame:
+    """One Kelly-sized BUY, one probe-sized zero-Kelly BUY, one RISK REDUCE
+    exit on an open pipeline position, plus a HOLD that must not trade."""
+    return _df([
+        {"Symbol": "AAPL", "Action Signal": "STRONG BUY", "Kelly Target": 0.05,
+         "Kelly_Target_Post_Regime": 0.08, "Price": 100.0, "Score": 82,
+         "Regime_Multiplier": 1.0, "Meta_Label_Composite": 1.0,
+         "DualMomentum_Signal": "disabled", "Macro Status": "RISK_ON",
+         "Forecast_30": 110.0, "Actionable Advice Signal": "STRONG BUY: test",
+         "Advisory_Action": "BUY", "Advisory_Conviction": 0.7},
+        {"Symbol": "AGNC", "Action Signal": "BUY", "Kelly Target": 0.0,
+         "Kelly_Target_Post_Regime": 0.0, "Price": 10.0, "Score": 61,
+         "Regime_Multiplier": 1.0, "Meta_Label_Composite": 1.0,
+         "DualMomentum_Signal": "disabled", "Macro Status": "RISK_ON",
+         "Forecast_30": float("nan"), "Actionable Advice Signal": "BUY: test",
+         "Advisory_Action": "", "Advisory_Conviction": 0.0},
+        {"Symbol": "SPY", "Action Signal": "RISK REDUCE", "Kelly Target": 0.0,
+         "Price": 500.0, "Score": 20, "Regime_Multiplier": 1.0,
+         "Meta_Label_Composite": 1.0, "DualMomentum_Signal": "BIL",
+         "Macro Status": "RISK_OFF"},
+        {"Symbol": "MSFT", "Action Signal": "HOLD", "Kelly Target": 0.0, "Price": 200.0},
+    ])
+
+
+def _run_context_cycle(monkeypatch, *, builders_raise: bool, priority_queue: bool):
+    import execution.trade_context as tc
+
+    broker = MockBroker(
+        positions=[_tagged_pos("SPY", 1.3, main_orchestrator.PIPELINE_STRATEGY_ID)],
+        equity=100_000.0,
+    )
+    telemetry_mock = _install_fmp_paper_stack(
+        monkeypatch, broker=broker, ts_store=_make_ts_store(), market_open=True
+    )
+    _probe_on(monkeypatch, weight=0.01, closed=0)
+    _freeze_orchestrator_now(monkeypatch)
+    monkeypatch.setattr(main_orchestrator.settings, "EXECUTION_PRIORITY_QUEUE_ENABLED", priority_queue, raising=False)
+    monkeypatch.setattr(main_orchestrator.settings, "EXECUTION_QUEUE_LEAK_RATE_PER_SEC", -1, raising=False)
+    if builders_raise:
+        def _boom(*a, **k):
+            raise RuntimeError("context builder exploded")
+        monkeypatch.setattr(tc, "build_entry_context", _boom)
+        monkeypatch.setattr(tc, "build_exit_context", _boom)
+
+    asyncio.run(main_orchestrator._execute_broker_orders(_context_df(), dry_run=False))
+    return broker.submitted, telemetry_mock
+
+
+def _trading_fields(intents):
+    return [
+        (i.strategy_id, i.symbol, i.side, i.qty, i.target_qty, i.order_type,
+         i.priority, i.limit_price, i.time_in_force, i.dry_run, i.client_order_id)
+        for i in intents
+    ]
+
+
+@pytest.mark.parametrize("priority_queue", [False, True])
+def test_decision_context_never_changes_orders_or_client_order_ids(monkeypatch, priority_queue):
+    with_ctx, _ = _run_context_cycle(monkeypatch, builders_raise=False, priority_queue=priority_queue)
+    monkeypatch.undo()
+    without_ctx, telemetry_mock = _run_context_cycle(monkeypatch, builders_raise=True, priority_queue=priority_queue)
+
+    # Same orders, same submission order, same sizes, same ids.
+    assert len(with_ctx) == 3
+    assert _trading_fields(with_ctx) == _trading_fields(without_ctx)
+    assert all(i.client_order_id for i in with_ctx)
+
+    # Context attached when the builders work; None (and the order still
+    # submitted) when they raise.
+    assert all(isinstance(i.decision_context, dict) for i in with_ctx)
+    assert all(i.decision_context is None for i in without_ctx)
+    warned = " ".join(str(c.args[0]) for c in telemetry_mock.warning.call_args_list if c.args)
+    assert "Trade decision context unavailable" in warned
+
+
+def test_decision_context_content_for_entry_probe_and_exit(monkeypatch):
+    import json
+
+    submitted, _ = _run_context_cycle(monkeypatch, builders_raise=False, priority_queue=False)
+    by_symbol = {i.symbol: i.decision_context for i in submitted}
+
+    aapl = by_symbol["AAPL"]
+    assert aapl["kind"] == "entry"
+    assert aapl["provenance"] == "signal_driven"
+    assert aapl["provenance_tag"] == "main_pipeline:kelly"
+    assert aapl["signal_score"] == 82.0
+    assert aapl["conviction"] is None  # never the advisory engine's number
+    ind = json.loads(aapl["key_indicators_json"])
+    assert ind["advisory_conviction_same_cycle"] == 0.7
+    assert ind["effective_weight"] == pytest.approx(0.05)
+
+    agnc = by_symbol["AGNC"]
+    assert agnc["provenance_tag"] == "main_pipeline:probe"
+    assert agnc["raw_forecast"] is None  # NaN forecast -> None, not 0.0
+    agnc_ind = json.loads(agnc["key_indicators_json"])
+    assert agnc_ind["effective_weight"] == pytest.approx(0.01)
+    assert agnc_ind["kelly_target_row"] == 0.0
+    # Advisory 0.0 blank-fill with no Advisory_Action is a placeholder.
+    assert agnc_ind["advisory_conviction_same_cycle"] is None
+
+    spy = by_symbol["SPY"]
+    assert spy["kind"] == "exit"
+    assert spy["close_reason"] == "signal_risk_reduce"
+    exit_ctx = json.loads(spy["exit_context_json"])
+    assert exit_ctx["exit_signal"] == "RISK REDUCE"
+    assert exit_ctx["dual_momentum_signal"] == "BIL"
+    assert exit_ctx["held_qty"] == pytest.approx(1.3)

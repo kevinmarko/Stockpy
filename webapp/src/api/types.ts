@@ -3815,7 +3815,13 @@ export interface PaperBrokerClosedTrade {
   realized_pnl: number;
   realized_pnl_pct: number | null;
   holding_period_days: number | null;
+  // "flatten" (default/manual), "roll", "expiry_settlement", or for pipeline
+  // exits the Action Signal that fired: "signal_sell" | "signal_trim" |
+  // "signal_risk_reduce" | "signal_avoid".
   close_reason: string;
+  // Pipeline exits only: JSON of the exit row context (execution/
+  // trade_context.py). null when never captured -- not reconstructed.
+  exit_context_json?: string | null;
   leg_group_id: string | null;
 }
 
@@ -4197,6 +4203,9 @@ export interface RetrospectiveTradeRecord {
   realized_pnl_pct: number | null;
   holding_period_days: number | null;
   close_reason: string;
+  // Parsed paper_closed_trades.exit_context_json (pipeline exits only).
+  exit_context?: Record<string, unknown> | null;
+  exit_context_status?: "captured" | "not_captured" | "unparseable" | string;
   provenance: RetrospectiveProvenance;
   snapshot: RetrospectiveSnapshot | null;
   entry_snapshot?: RetrospectiveSnapshot | null;

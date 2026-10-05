@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 # (e.g. 1e-13 rather than exactly 0.0) -- see CLAUDE.md's "Degenerate-std
 # guard convention": never compare a computed float to 0 with ==.
 _QTY_EPSILON = 1e-9
+# paper_closed_trades.close_reason vocabulary guard (String(20)).
+_CLOSE_REASON_RE = re.compile(r"[a-z][a-z0-9_]{0,19}")
 
 # Option-contract multiplier: paper option prices (avg_entry_price, marks,
 # fills) are stored per CONTRACT, i.e. per-share premium x 100.
@@ -303,6 +305,10 @@ class PaperClosedTrade(Base):
     holding_period_days = Column(Float, nullable=True)
     close_reason = Column(String(20), nullable=False)
     leg_group_id = Column(String(100), nullable=True)
+    # Exit decision context (execution/trade_context.py) for pipeline closes:
+    # the exit Action Signal and the row it came from. None when no context
+    # was supplied (manual closes, rolls, expiry, pre-2026-10 rows).
+    exit_context_json = Column(Text, nullable=True)
 
     # Retrospective Learning Loop (M1) additive fields
     entry_snapshot_id = Column(String(64), nullable=True)
@@ -492,6 +498,7 @@ class PaperAccountStore:
                         ("bridged_trade_id", "INTEGER"),
                         ("bridge_error", "TEXT"),
                         ("bridged_at", "DATETIME"),
+                        ("exit_context_json", "TEXT"),
                     ]
                     for col_name, col_type in new_cols:
                         if col_name not in existing:
@@ -1160,6 +1167,8 @@ class PaperAccountStore:
         key_indicators_json: Optional[str] = None,
         decision_rationale: Optional[str] = None,
         entry_snapshot_id: Optional[str] = None,
+        close_reason: Optional[str] = None,
+        exit_context_json: Optional[str] = None,
     ) -> bool:
 
         """
@@ -1195,9 +1204,15 @@ class PaperAccountStore:
         ``retag_position()`` to explicitly move a legacy untagged position
         onto its real strategy_id once known, instead of relying on this
         fallback at fill time.
+
+        ``close_reason``/``exit_context_json`` (keyword-only, default None)
+        label a closing fill with its real trigger (e.g.
+        ``signal_risk_reduce``, see execution/trade_context.py). None keeps
+        today's ``"flatten"``; an invalid value falls back to it as well.
         """
         if self._readonly:
             raise RuntimeError("Cannot apply fill in readonly mode.")
+        close_reason_val = self._normalize_close_reason(close_reason, default="flatten")
             
         side = side.lower().strip()
         cost_basis_impact = qty * fill_price
@@ -1242,7 +1257,7 @@ class PaperAccountStore:
 
                     closed_qty = min(abs(pos.qty), qty)
                     prorated_comm = commission_and_fees * (closed_qty / qty) if qty > 0 else 0.0
-                    self._record_closed_trade(session, pos, closed_qty, fill_price, "flatten", prorated_comm)
+                    self._record_closed_trade(session, pos, closed_qty, fill_price, close_reason_val, prorated_comm, exit_context_json=exit_context_json)
 
                     new_qty = pos.qty + qty
                     if abs(new_qty) < _QTY_EPSILON:
@@ -1323,7 +1338,7 @@ class PaperAccountStore:
 
                     closed_qty = min(pos.qty, qty)
                     prorated_comm = commission_and_fees * (closed_qty / qty) if qty > 0 else 0.0
-                    self._record_closed_trade(session, pos, closed_qty, fill_price, "flatten", prorated_comm)
+                    self._record_closed_trade(session, pos, closed_qty, fill_price, close_reason_val, prorated_comm, exit_context_json=exit_context_json)
 
                     pos.qty -= qty
                     if abs(pos.qty) < _QTY_EPSILON:
@@ -2015,7 +2030,18 @@ class PaperAccountStore:
             return f"excluded: strategy_id {sid!r} is not a model-driven strategy"
         return None
 
-    def _record_closed_trade(self, session, pos: PaperPosition, closed_qty: float, exit_price: float, close_reason: str, commission: float = 0.0):
+    @staticmethod
+    def _normalize_close_reason(value: Optional[str], default: str = "flatten") -> str:
+        """Validated close_reason: None -> default; must match ^[a-z][a-z0-9_]{0,19}$
+        (fits String(20)); anything else -> default with a warning. Never raises."""
+        if value is None:
+            return default
+        if isinstance(value, str) and _CLOSE_REASON_RE.fullmatch(value):
+            return value
+        logger.warning("Ignoring invalid close_reason %r; using %r", value, default)
+        return default
+
+    def _record_closed_trade(self, session, pos: PaperPosition, closed_qty: float, exit_price: float, close_reason: str, commission: float = 0.0, exit_context_json: Optional[str] = None):
         closed_qty_abs = abs(closed_qty)
         is_long = pos.qty > 0
         if is_long:
@@ -2079,6 +2105,7 @@ class PaperAccountStore:
             holding_period_days=holding_period_days,
             close_reason=close_reason,
             leg_group_id=None,
+            exit_context_json=exit_context_json,
             entry_snapshot_id=entry_snapshot_id,
             bridge_status=(
                 "disabled" if not bridge_enabled
@@ -2276,6 +2303,7 @@ class PaperAccountStore:
                     "realized_pnl_pct": t.realized_pnl_pct,
                     "holding_period_days": t.holding_period_days,
                     "close_reason": t.close_reason,
+                    "exit_context_json": t.exit_context_json,
                     "leg_group_id": t.leg_group_id,
                     "entry_snapshot_id": t.entry_snapshot_id,
                     "bridge_status": t.bridge_status,

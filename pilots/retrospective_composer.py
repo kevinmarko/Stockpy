@@ -32,6 +32,7 @@ Strict Anti-Fabrication Safeguards (MANDATORY INTEGRITY GATES):
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -75,6 +76,25 @@ STATUS_EVALUATION_UNAVAILABLE = "evaluation data unavailable"
 #: needs to pass a real `None` down for the latter case. See
 #: compose_retrospectives_batch's own N+1 comment for why this exists.
 _CALIBRATION_UNSET = object()
+
+
+def _parse_exit_context(raw: Any) -> tuple[dict[str, Any] | None, str]:
+    """Parse paper_closed_trades.exit_context_json -> (dict | None, status).
+
+    Status is "captured", "not_captured" (no context was ever recorded, e.g.
+    manual closes or pre-2026-10 rows) or "unparseable". Never raises and
+    never reconstructs a missing context.
+    """
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, STATUS_NOT_CAPTURED
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else None
+    except (TypeError, ValueError):
+        parsed = None
+    if not isinstance(parsed, dict):
+        return None, "unparseable"
+    return parsed, STATUS_CAPTURED
+
 
 # =============================================================================
 # Retrospective Composer
@@ -152,6 +172,7 @@ class RetrospectiveComposer:
             "realized_pnl_pct": float(row.realized_pnl_pct) if row.realized_pnl_pct is not None else None,
             "holding_period_days": float(row.holding_period_days) if row.holding_period_days is not None else None,
             "close_reason": row.close_reason,
+            "exit_context_json": getattr(row, "exit_context_json", None),
             "leg_group_id": row.leg_group_id,
             "entry_snapshot_id": row.entry_snapshot_id,
             "bridge_status": row.bridge_status or "not_attempted",
@@ -200,6 +221,7 @@ class RetrospectiveComposer:
             "realized_pnl_pct": pnl_pct,
             "holding_period_days": holding_days,
             "close_reason": "closed",
+            "exit_context_json": None,
             "leg_group_id": None,
             "entry_snapshot_id": None,
             "bridge_status": "bridged",
@@ -639,6 +661,9 @@ class RetrospectiveComposer:
                 "reason": "Model calibration not applicable for manual or uncalibrated trades",
             }
 
+        # Exit decision context (pipeline closes only; never inferred).
+        exit_context, exit_context_status = _parse_exit_context(closed_trade.get("exit_context_json"))
+
         # 5. Narrative Generation (Zero None/NaN formatting leakage)
         narrative_text = build_trade_narrative(
             provenance=provenance,
@@ -659,6 +684,7 @@ class RetrospectiveComposer:
             bin_count=calibration_record.get("bin_trade_count"),
             bridge_reached=(bridge_status == "bridged"),
             bars_available=bars_available,
+            close_reason=closed_trade.get("close_reason"),
         )
 
         record = {
@@ -678,6 +704,8 @@ class RetrospectiveComposer:
             "realized_pnl_pct": closed_trade.get("realized_pnl_pct"),
             "holding_period_days": closed_trade.get("holding_period_days"),
             "close_reason": closed_trade.get("close_reason"),
+            "exit_context": exit_context,
+            "exit_context_status": exit_context_status,
             "provenance": provenance,
             "snapshot": snapshot_record,
             "entry_snapshot": snapshot_record,

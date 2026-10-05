@@ -38,6 +38,7 @@ from execution.broker_base import (
     TradeUpdateEvent
 )
 from execution.cost_model import TieredCostModel
+from execution.trade_context import apply_fill_kwargs
 from data.paper_account_store import PaperAccountStore
 from data import fmp_client
 from settings import settings
@@ -323,6 +324,16 @@ class FMPPaperBroker(BrokerBase):
         fill_price = raw_price
         
         # 6. Apply Fill
+        # Decision context (execution/trade_context.py) becomes extra
+        # apply_fill kwargs: an entry snapshot on open, a real close_reason +
+        # exit_context_json on close. No context -> {} -> the exact call this
+        # broker always made. Telemetry only: a failure here never blocks the
+        # fill.
+        try:
+            context_kwargs = apply_fill_kwargs(getattr(intent, "decision_context", None))
+        except Exception as ctx_err:  # noqa: BLE001
+            logger.warning(f"FMPPaperBroker: decision context ignored for {intent.symbol}: {ctx_err}")
+            context_kwargs = {}
         success = self.store.apply_fill(
             client_order_id=client_order_id,
             symbol=intent.symbol,
@@ -333,6 +344,7 @@ class FMPPaperBroker(BrokerBase):
             target_qty=getattr(intent, "target_qty", None),
             status=OrderStatus.FILLED.value,
             strategy_id=getattr(intent, "strategy_id", "untagged"),
+            **context_kwargs,
         )
         
         if not success:
