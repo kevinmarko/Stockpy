@@ -25,9 +25,10 @@ Several PUT tests below exercise a live-safe field (e.g. ``KELLY_FRACTION``)
 through the real endpoint with ``write_many_atomic`` mocked but
 ``runtime_flags_writer.write_override`` left genuinely live — proving the
 field really does apply immediately, not just that the code claims it does.
-``_isolated_runtime_flags_store`` (autouse) redirects that real writer's
-target file to a throwaway path so those writes never touch this checkout's
-own ``output/runtime_flags.json``.
+The root ``conftest.py`` fixture ``_isolate_runtime_flags_store_in_tests``
+(autouse, suite-wide) redirects that real writer's target file to a throwaway
+path so those writes never touch the operator's live
+``~/.stockpy_local/output/runtime_flags.json``.
 """
 
 from __future__ import annotations
@@ -39,14 +40,12 @@ import json
 import pathlib
 from unittest import mock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from settings import Settings, settings
 from settings_keysets import DANGEROUS_KEYS
 import api.pilots_api as pilots_api
 import pilots.settings_meta as settings_meta
-import runtime_flags
 
 # Starlette's TestClient defaults request.client.host to the literal
 # string "testclient" -- NOT loopback -- which would trip
@@ -55,21 +54,6 @@ import runtime_flags
 # An explicit loopback host here is what these tests have always meant.
 client = TestClient(pilots_api.app, client=("127.0.0.1", 54123))
 
-
-@pytest.fixture(autouse=True)
-def _isolated_runtime_flags_store(tmp_path, monkeypatch):
-    """Redirect the real runtime-flags store for every test in this file.
-
-    PUT handlers call ``runtime_flags_writer.write_override`` with no
-    ``path=`` override, exactly like production — so without this, a test
-    that PUTs a live-safe field through the real endpoint writes to this
-    checkout's actual ``output/runtime_flags.json`` instead of an isolated
-    file. ``INVESTYO_RUNTIME_FLAGS_PATH`` is the one override both the
-    writer and the reader (``runtime_flags.load_store``) already respect.
-    """
-    monkeypatch.setenv(
-        runtime_flags.PATH_OVERRIDE_ENV_VAR, str(tmp_path / "runtime_flags.json")
-    )
 
 _CMD_TOKEN = "cmd-tok"
 _READ_TOKEN = "read-tok"

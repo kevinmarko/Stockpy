@@ -573,6 +573,11 @@ class TestSuccessfulWrite:
             "ok",
             "persisted",
             "applies",
+            # Value-free provenance (runtime_flags_store_test_contamination_2026_10):
+            "pid",
+            "process",
+            "previous_present",
+            "changed",
         }
         assert record["action"] == "write"
         assert record["key"] == FIELD
@@ -580,11 +585,16 @@ class TestSuccessfulWrite:
         assert record["ok"] is True
         assert record["persisted"] is True
         assert record["applies"] == writer.APPLIES_IMMEDIATELY
-        # No field of the record is (or contains) the written value.
-        assert 4242 not in record.values()
-        assert "4242" not in json.dumps(
-            {k: v for k, v in record.items() if k != "ts"}
-        )
+        assert record["pid"] == os.getpid()
+        assert record["process"] == os.path.basename(sys.argv[0])
+        # First write for this key: nothing to compare against.
+        assert record["previous_present"] is False
+        assert record["changed"] is None
+        # No field of the record is (or contains) the written value. `pid` is
+        # excluded only because an OS pid could coincide with the probe value.
+        no_ts_pid = {k: v for k, v in record.items() if k not in ("ts", "pid")}
+        assert 4242 not in no_ts_pid.values()
+        assert "4242" not in json.dumps(no_ts_pid)
 
     def test_the_audit_log_lands_beside_the_store_not_in_output(
         self, store: Path, live: Settings, no_dotenv
@@ -610,6 +620,61 @@ class TestSuccessfulWrite:
 # ===========================================================================
 # Precedence — a real shell export still wins
 # ===========================================================================
+
+
+class TestAuditChangeTracking:
+    """``previous_present`` / ``changed`` say WHETHER a write moved a value,
+    as booleans only — the question the 2026-10 ADVISORY_ONLY investigation
+    could not answer from the audit log
+    (docs/known_issues/runtime_flags_store_test_contamination_2026_10.md)."""
+
+    def test_same_value_rewrite_reports_unchanged(
+        self, store: Path, live: Settings, no_dotenv
+    ):
+        writer.write_override(FIELD, 300, actor="a", path=store)
+        writer.write_override(FIELD, 300, actor="b", path=store)
+        second = audit_records(store)[1]
+        assert second["previous_present"] is True
+        assert second["changed"] is False
+
+    def test_different_value_reports_changed(
+        self, store: Path, live: Settings, no_dotenv
+    ):
+        writer.write_override(FIELD, 300, actor="a", path=store)
+        writer.write_override(FIELD, 301, actor="b", path=store)
+        second = audit_records(store)[1]
+        assert second["previous_present"] is True
+        assert second["changed"] is True
+        # Booleans only: neither value appears anywhere but the store itself.
+        dumped = json.dumps({k: v for k, v in second.items() if k not in ("ts", "pid")})
+        assert "300" not in dumped and "301" not in dumped
+
+    def test_coercion_is_compared_post_validation(
+        self, store: Path, live: Settings, no_dotenv
+    ):
+        """"300" for an int field coerces to 300, so it is not a change."""
+        writer.write_override(FIELD, 300, actor="a", path=store)
+        writer.write_override(FIELD, "300", actor="b", path=store)
+        assert audit_records(store)[1]["changed"] is False
+
+    def test_refusal_carries_no_changed_field(self, store: Path, live: Settings):
+        writer.write_override("NOT_A_REAL_FIELD", 1, path=store)
+        record = audit_records(store)[0]
+        assert record["ok"] is False
+        assert "changed" not in record
+
+    def test_delete_reports_previous_presence(
+        self, store: Path, live: Settings, no_dotenv
+    ):
+        writer.delete_override(FIELD, actor="a", path=store)  # absent -> no-op
+        writer.write_override(FIELD, 300, actor="a", path=store)
+        writer.delete_override(FIELD, actor="a", path=store)
+        records = audit_records(store)
+        assert records[0]["action"] == "delete"
+        assert records[0]["previous_present"] is False
+        assert records[2]["action"] == "delete"
+        assert records[2]["previous_present"] is True
+        assert "changed" not in records[2]
 
 
 class TestEnvPinned:

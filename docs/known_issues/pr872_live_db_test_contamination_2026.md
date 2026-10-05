@@ -169,3 +169,7 @@ at the store's own construction boundary (a session-wide autouse fixture, matchi
 remember to pass an explicit `db_url`. See CLAUDE.md's dated PR 872 remediation
 bullet and `docs/architecture/execution.md`'s `data/paper_account_store.py` entry
 for how this fits into the broader remediation.
+
+See also [`runtime_flags_store_test_contamination_2026_10.md`](runtime_flags_store_test_contamination_2026_10.md):
+the same bug class recurred for the runtime-flags store (2026-10), fixed the same way with a
+session-wide `conftest.py` fixture (`_isolate_runtime_flags_store_in_tests`).

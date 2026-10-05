@@ -251,6 +251,9 @@ class TestPathAnchoring:
     def test_explicit_path_beats_env_var_beats_default(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ):
+        # The root conftest's _isolate_runtime_flags_store_in_tests sets the
+        # override for every test; clear it to observe the default branch.
+        monkeypatch.delenv(runtime_flags.PATH_OVERRIDE_ENV_VAR, raising=False)
         assert runtime_flags.store_path() == runtime_flags.DEFAULT_STORE_PATH
 
         monkeypatch.setenv(runtime_flags.PATH_OVERRIDE_ENV_VAR, str(tmp_path / "a.json"))
