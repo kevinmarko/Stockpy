@@ -928,7 +928,9 @@ def _write_state_snapshot(
                     "symbol": str(row.get("Symbol", "")),
                     "action": str(row.get("Action Signal", "")),
                     "kelly_target": float(row.get("Kelly Target", 0.0) or 0.0),
-                    "score": float(row.get("Score", 0.0) or 0.0),
+                    # StrategyEngine score; null (never a fabricated 0.0) when
+                    # the symbol was not evaluated this cycle.
+                    "score": _safe_float_or_none(row.get("Score")),
                     "price": float(row.get("Price", 0.0) or 0.0),
                     "shares": shares,
                     "macro_status": str(row.get("Macro Status", "")),

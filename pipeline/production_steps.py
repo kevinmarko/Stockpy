@@ -698,6 +698,39 @@ def _apply_trend_vol_columns(dashboard_df: pd.DataFrame, trend_vol_indicators: d
         )
 
 
+def _apply_strategy_score_column(dashboard_df: pd.DataFrame, eval_results: dict) -> None:
+    """Write each symbol's ``StrategyEngine.evaluate_security()`` "Score" onto
+    ``dashboard_df``.
+
+    A symbol that never reached the 'results' stage this cycle (dead-lettered,
+    or skipped for a zero/missing price) gets NaN, never a fabricated number
+    (CONSTRAINT #4). A genuine score of 0 stays 0.0.
+
+    Until this helper existed the daemon path NaN-filled "Score" as if it were
+    advisory-only metadata, so every snapshot carried score=NaN — see
+    docs/known_issues/daemon_strategy_score_always_nan.md.
+    """
+    nan = float("nan")
+    dashboard_df['Score'] = pd.to_numeric(
+        dashboard_df['Symbol'].map(lambda x: eval_results.get(x, {}).get('Score', nan)),
+        errors="coerce",
+    ).astype(float)
+
+
+# The daemon does NOT write symbol ratings (rating/symbol_rating_store.py).
+# It never did in practice: "Score" was always NaN on this path, so
+# _record_symbol_ratings skipped every row. Now that Score is real, writing
+# ratings here would change trading behavior: SYMBOL_RATING_AUTO_DROP_ENABLED
+# counts consecutive BAD *cycles*, and the daemon runs hourly, so an unheld
+# symbol could be dropped from the universe within hours instead of the ~5
+# trading days main.py's once-a-day run gives today. Kept off on purpose
+# (operator decision, 2026-10-05, during the step-7 feature freeze). When
+# main.py is retired (step 5.5) nobody writes ratings any more, so this needs
+# a once-per-trading-day cadence before it is turned on — see
+# docs/known_issues/daemon_strategy_score_always_nan.md.
+_DAEMON_RECORDS_SYMBOL_RATINGS = False
+
+
 def _record_symbol_ratings(dashboard_df: Optional[pd.DataFrame], cycle_id: str) -> None:
     """Best-effort write of this cycle's per-symbol GOOD/BAD rating
     (``rating.symbol_rating.classify_tier``) to the durable
@@ -2046,17 +2079,18 @@ class StrategyEvalStep(PipelineStep):
                 lambda x: attention_scores.get(x, float('nan'))
             )
 
-        # docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1 — five ADVISORY METADATA columns
-        # (config.COLUMN_SCHEMA's "# --- ADVISORY METADATA ---" section) are
-        # populated only by the advisory path (engine/advisory.py's
+        # docs/plans/CONFIG_SCHEMA_PLAN.md Phase C1 — four of the five ADVISORY
+        # METADATA columns (config.COLUMN_SCHEMA's "# --- ADVISORY METADATA ---"
+        # section) are populated only by the advisory path (engine/advisory.py's
         # Recommendation; the Sheet sink that mapped it was archived in step
         # 4e); this orchestrator
         # path has no equivalent per-symbol conviction/data-quality concept,
         # so blank/NaN-fill them here — same pattern already used above for
         # "Correlation_Cluster" / "News_Sentiment" — so DashboardSchema.validate()
         # keeps passing (every declared column must be present) without
-        # fabricating advisory-only values (CONSTRAINT #4).
-        ctx.dashboard_df['Score'] = float('nan')
+        # fabricating advisory-only values (CONSTRAINT #4). The fifth, "Score",
+        # is StrategyEngine's own score and is written from eval_results after
+        # the loop below (_apply_strategy_score_column).
         ctx.dashboard_df['Forecast_30_Pct'] = float('nan')
         ctx.dashboard_df['Advisory_Conviction'] = float('nan')
         ctx.dashboard_df['Advisory_Position_Pct'] = float('nan')
@@ -2289,6 +2323,9 @@ class StrategyEvalStep(PipelineStep):
                     'book_value': fund_dto.book_value,
                     'graham_number': fund_dto.graham_number,
                     'Kelly Target': float(strategy_output['Kelly Target']),
+                    # StrategyEngine's 0-100 score (the one that set Action
+                    # Signal). Bare .get(): absent stays absent -> NaN.
+                    'Score': strategy_output.get('Score'),
                     # Guardrail telemetry (sizing/position_sizer.py) -- schema-driven
                     # ("format": "string" in config.COLUMN_SCHEMA), so serialize the
                     # bool/Optional[str] into the plain-text convention
@@ -2359,6 +2396,12 @@ class StrategyEvalStep(PipelineStep):
                 telemetry.info("All symbols processed cleanly — dead_letter.json cleared.")
         except Exception as dl_exc:
             telemetry.warning("Failed to write dead-letter report: %s", dl_exc)
+
+        try:
+            _apply_strategy_score_column(ctx.dashboard_df, eval_results)
+        except Exception as score_exc:  # noqa: BLE001 -- display column only; never abort the cycle
+            telemetry.warning("Strategy Score column write failed (non-critical): %s", score_exc)
+            ctx.dashboard_df['Score'] = float('nan')
 
         _SIZING_DECOMPOSITION_COLS = (
             'Meta_Label_Composite', 'Regime_Multiplier',
@@ -2577,10 +2620,12 @@ class StrategyEvalStep(PipelineStep):
         # _apply_sector_heat_factor) so it can be
         # exercised directly in tests without going through the whole of
         # StrategyEvalStep.run().
-        try:
-            _record_symbol_ratings(ctx.dashboard_df, cycle_id)
-        except Exception as rating_exc:
-            telemetry.warning(f"Symbol-rating audit write failed (non-critical): {rating_exc}")
+        # Off on purpose — see _DAEMON_RECORDS_SYMBOL_RATINGS.
+        if _DAEMON_RECORDS_SYMBOL_RATINGS:
+            try:
+                _record_symbol_ratings(ctx.dashboard_df, cycle_id)
+            except Exception as rating_exc:
+                telemetry.warning(f"Symbol-rating audit write failed (non-critical): {rating_exc}")
 
         # Populate the two config.COLUMN_SCHEMA-registered rating columns on
         # the dashboard itself (HTML report/state snapshot) -- a

@@ -264,7 +264,10 @@ COLUMN_SCHEMA = [
     # Raw StrategyEngine weighted-sum score (0-100 scale) — distinct from
     # "Quality Score" (a fundamentals-only metric) and from "Kelly Target"
     # (post-Kelly position sizing); this is the signal-aggregation score
-    # that gates BUY/SELL/HOLD before sizing is applied.
+    # that gates BUY/SELL/HOLD before sizing is applied. Unlike the other four
+    # columns in this section it is populated on BOTH paths (the daemon writes
+    # it from StrategyEngine output via
+    # pipeline/production_steps.py::_apply_strategy_score_column).
     {"header": "Advisory Score", "key": "Score", "format": "number"},
     # 30-day forecast expressed as a fractional % change from current price
     # (Forecast_30 is the dollar price target; this is the derived percent).
