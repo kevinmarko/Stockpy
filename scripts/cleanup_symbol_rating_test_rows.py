@@ -221,4 +221,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    # Venv re-exec + .env loading (placed here, not at module top, so tests can
+    # import this module as a library).
+    from scripts._bootstrap import bootstrap
+
+    bootstrap()
     raise SystemExit(main())
