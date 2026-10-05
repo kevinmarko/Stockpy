@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "ba362db7f9fccc3a1520c35938b11e6992ebf533",
+    "git_commit": "d589237c50acc22b31694d81d5549819a2a3d280",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3515,12 +3515,12 @@
         },
         {
           "file": "runtime_flags_writer.py",
-          "line": 773,
+          "line": 884,
           "expr": "getattr(settings_module.settings, key, None)"
         },
         {
           "file": "runtime_flags_writer.py",
-          "line": 782,
+          "line": 893,
           "expr": "getattr(settings_module.settings, key, None)"
         }
       ]

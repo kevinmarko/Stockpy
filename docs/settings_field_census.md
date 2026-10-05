@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `ba362db7f9fccc3a1520c35938b11e6992ebf533`
+- Measured at commit: `d589237c50acc22b31694d81d5549819a2a3d280`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -430,8 +430,8 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:84` | `getattr(_settings, name, None)` |
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |
-| `runtime_flags_writer.py:773` | `getattr(settings_module.settings, key, None)` |
-| `runtime_flags_writer.py:782` | `getattr(settings_module.settings, key, None)` |
+| `runtime_flags_writer.py:884` | `getattr(settings_module.settings, key, None)` |
+| `runtime_flags_writer.py:893` | `getattr(settings_module.settings, key, None)` |
 
 ### Fields read via `os.environ` (form d) — 2 field(s)
 

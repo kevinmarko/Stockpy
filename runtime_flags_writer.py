@@ -164,6 +164,25 @@ pydantic's ``errors()[0]["msg"]``, which describes the constraint
 ("Input should be a valid integer") without echoing the input. ``str(exc)`` is
 never used — it embeds ``input_value=`` (verified in this repo's tests).
 
+Besides ``ts``/``action``/``key``/``actor``/``ok``/``persisted``/``applies``
+(and ``reason`` on refusal), each record carries value-free provenance:
+``pid`` and ``process`` (basename of ``sys.argv[0]``) identify the WRITING
+PROCESS, ``previous_present`` says whether the key already had a stored entry,
+and — on a successful write — ``changed`` says whether the new value differs
+from the one it replaced (``null`` when there was no prior entry). These answer
+"did this write flip anything, and who made it?" without ever recording what
+the value was. They were added after the test suite wrote the operator's live
+store for weeks under the same ``actor="pilots_api"`` the real API uses
+(``docs/known_issues/runtime_flags_store_test_contamination_2026_10.md``).
+
+*Pytest backstop.* :func:`write_override` and :func:`delete_override` refuse,
+writing nothing (not even an audit line, since the audit log sits beside the
+live store), when ``pytest`` is loaded in this process AND the resolved target
+is ``runtime_flags.DEFAULT_STORE_PATH``. The primary isolation is the root
+``conftest.py`` fixture ``_isolate_runtime_flags_store_in_tests``; this guard
+only catches a test that bypasses it. It is inert in any process that has not
+imported pytest.
+
 *Partial failure.* If the store write succeeds but the audit append fails, the
 call still reports ``ok=True`` / ``persisted=True``: the value genuinely IS
 persisted and live, and reporting failure would invite a retry that
@@ -177,6 +196,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -304,6 +324,68 @@ def audit_path(path: Optional[Any] = None) -> Path:
     return _resolved_store_path(path).with_name(AUDIT_FILENAME)
 
 
+def _process_name() -> str:
+    """Basename of ``sys.argv[0]`` (e.g. ``pytest``, ``uvicorn``,
+    ``orchestrator_daemon.py``) — a program name, never an argument, so it
+    cannot carry a value. ``""`` when unavailable."""
+    try:
+        argv0 = sys.argv[0] if sys.argv else ""
+        return os.path.basename(str(argv0 or ""))
+    except Exception:  # pragma: no cover - defensive
+        return ""
+
+
+def _pytest_loaded() -> bool:
+    """True only inside a pytest process.
+
+    ``"pytest" in sys.modules`` rather than the ``PYTEST_CURRENT_TEST``
+    environment variable: no production entry point imports pytest, and this
+    keeps the module off the ``os.environ`` allowlist that
+    ``tests/test_measure_settings_census.py`` enforces. Kept as its own
+    function so the "inert outside pytest" test can exercise the real check.
+    """
+    return "pytest" in sys.modules
+
+
+def _is_live_default_store(store: Path) -> bool:
+    """Whether ``store`` is the machine-global default store every worktree
+    and the live daemon share. Read from ``runtime_flags.DEFAULT_STORE_PATH``
+    at call time (not captured at import) so a test can point it at tmp."""
+    try:
+        return store == Path(runtime_flags.DEFAULT_STORE_PATH).resolve()
+    except Exception:  # pragma: no cover - defensive: fail closed
+        return True
+
+
+def _refuse_live_store_under_test(store: Path, key: str, action: str) -> Optional[WriteResult]:
+    """Backstop against the test suite writing the operator's LIVE store.
+
+    Returns a refusal when this is a pytest process AND the resolved target is
+    the real default store; ``None`` (proceed) otherwise. The root
+    ``conftest.py`` fixture ``_isolate_runtime_flags_store_in_tests`` is the
+    primary isolation; this exists so a test that bypasses it still cannot
+    touch live state. Deliberately writes NO audit record — the audit log is a
+    sibling of the live store, so auditing the refusal would itself be the
+    contamination being prevented. Logged at ERROR instead.
+    """
+    if not (_pytest_loaded() and _is_live_default_store(store)):
+        return None
+    reason = (
+        "refusing to touch the live runtime settings store from a pytest "
+        "process; redirect it with runtime_flags.PATH_OVERRIDE_ENV_VAR or an "
+        "explicit path= (see conftest.py::_isolate_runtime_flags_store_in_tests)"
+    )
+    logger.error("runtime_flags_writer: %s %s — %s", action, key, reason)
+    return WriteResult(
+        key=str(key),
+        ok=False,
+        applied_value=None,
+        reason=reason,
+        persisted=False,
+        applies=APPLIES_REFUSED,
+    )
+
+
 def _utc_now_iso() -> str:
     """Timezone-aware UTC, ISO 8601 (e.g. ``2026-08-03T12:00:00.123456+00:00``)."""
     return datetime.now(timezone.utc).isoformat()
@@ -324,11 +406,16 @@ def _append_audit(
     persisted: bool,
     applies: str,
     reason: Optional[str] = None,
+    previous_present: Optional[bool] = None,
+    changed: Optional[bool] = None,
 ) -> bool:
     """Append exactly one JSON line to the audit log. Returns success.
 
     Note the signature: there is NO parameter that could carry the value being
-    written. That is the mechanism by which "the audit log never records a
+    written. ``previous_present`` / ``changed`` are booleans computed by the
+    caller (``changed`` is ``None`` when there was no prior entry to compare
+    against), so they say WHETHER a value moved without ever saying what it
+    was. That is the mechanism by which "the audit log never records a
     stored value" is guaranteed rather than merely intended — and it is also
     why ``exc_info=True`` below is safe, since no stored value is ever in this
     function's frame to appear in a traceback.
@@ -344,7 +431,19 @@ def _append_audit(
         "ok": bool(ok),
         "persisted": bool(persisted),
         "applies": applies,
+        # Provenance of the WRITING PROCESS, not of the value: which process
+        # made this call. Added after the test suite silently wrote the live
+        # store for weeks under the indistinguishable actor "pilots_api"
+        # (docs/known_issues/runtime_flags_store_test_contamination_2026_10.md).
+        "pid": os.getpid(),
+        "process": _process_name(),
     }
+    # Value-free answers to "did this write move anything?". Both are plain
+    # booleans (or None for "unknown / no prior entry"), never the value.
+    if previous_present is not None:
+        record["previous_present"] = bool(previous_present)
+    if action == "write" and ok:
+        record["changed"] = None if changed is None else bool(changed)
     if reason:
         record["reason"] = reason
 
@@ -689,6 +788,11 @@ def _write_override_inner(
 ) -> WriteResult:
     store = _resolved_store_path(path)
 
+    # -- Gate 0: never the live store from a test process -------------------
+    refused = _refuse_live_store_under_test(store, key, "write")
+    if refused is not None:
+        return refused
+
     # -- Gate 1: secrets ----------------------------------------------------
     # First, before the field-existence check: 38 of the 40 SECRET_KEYS are
     # real Settings fields, so this ordering is what makes the refusal
@@ -760,9 +864,16 @@ def _write_override_inner(
         "updated_by": str(actor or ""),
     }
     with _WRITE_LOCK:
+        # Prior entry, read under the same lock as the merge, so the value-free
+        # `changed` audit field compares against what this write replaced.
+        previous_entry = _read_raw_flags(store).get(key) if store.exists() else None
         changed, error = _merge_and_replace(store, upserts={key: entry})
     if error is not None:
         return _refuse(store, key, error, actor, action="write")
+    previous_present = isinstance(previous_entry, Mapping) and "value" in previous_entry
+    value_changed: Optional[bool] = (
+        (previous_entry["value"] != coerced) if previous_present else None
+    )
 
     # -- Apply to this process ---------------------------------------------
     report = _reapply(store)
@@ -794,6 +905,8 @@ def _write_override_inner(
         ok=True,
         persisted=bool(changed),
         applies=applies,
+        previous_present=previous_present,
+        changed=value_changed,
     )
     logger.info(
         "runtime_flags_writer: stored override for %s (actor=%r, applies=%s).",
@@ -863,6 +976,10 @@ def _delete_override_inner(
 ) -> WriteResult:
     store = _resolved_store_path(path)
 
+    refused = _refuse_live_store_under_test(store, key, "delete")
+    if refused is not None:
+        return refused
+
     with _WRITE_LOCK:
         changed, error = _merge_and_replace(store, deletes=(key,))
     if error is not None:
@@ -883,6 +1000,7 @@ def _delete_override_inner(
             ok=True,
             persisted=False,
             applies=APPLIES_IMMEDIATELY,
+            previous_present=False,
         )
         return WriteResult(
             key=key,
@@ -938,6 +1056,7 @@ def _delete_override_inner(
         ok=True,
         persisted=True,
         applies=applies,
+        previous_present=True,
     )
     logger.info(
         "runtime_flags_writer: removed stored override for %s (actor=%r, "

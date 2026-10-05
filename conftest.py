@@ -329,6 +329,36 @@ def _isolate_broker_fills_db_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_runtime_flags_store_in_tests(monkeypatch, tmp_path_factory):
+    """Point the runtime-flags store (and its sibling audit log) at a per-test
+    temp file for every test.
+
+    ``runtime_flags_writer.write_override`` with no ``path=`` resolves
+    ``runtime_flags.store_path()``, which is the machine-global
+    ``~/.stockpy_local/output/runtime_flags.json`` that the live daemon reads
+    and every worktree shares. It is reachable implicitly from every
+    ``/settings/*`` PUT in ``api/pilots_api.py`` (``_apply_live_overrides``),
+    so a test that drives one of those endpoints with only the ``.env`` write
+    mocked writes the operator's live store. That happened: from 2026-09-07
+    ``tests/test_settings_reference.py`` wrote ``SECTOR_HEAT_ENABLED=true`` on
+    every suite run, and from 2026-09-27 (when ``ADVISORY_ONLY`` became
+    ``live_safe``) ``ADVISORY_ONLY=false`` too, all under the real API's actor
+    name — see
+    ``docs/known_issues/runtime_flags_store_test_contamination_2026_10.md``.
+
+    ``INVESTYO_RUNTIME_FLAGS_PATH`` is the override both the writer and the
+    read path (``runtime_flags.load_store``/``apply_overrides``) honour. A
+    test that needs a specific store still sets it (or passes ``path=``)
+    itself; its later ``setenv`` wins. ``runtime_flags_writer`` additionally
+    refuses the live default store whenever pytest is loaded, as a backstop.
+    """
+    import runtime_flags as _rf
+
+    store_dir = tmp_path_factory.mktemp("runtime_flags")
+    monkeypatch.setenv(_rf.PATH_OVERRIDE_ENV_VAR, str(store_dir / _rf.STORE_FILENAME))
+
+
+@pytest.fixture(autouse=True)
 def _isolate_robinhood_login_lock_in_tests(monkeypatch, tmp_path_factory):
     """Point data.robinhood_login's cross-process login lock (+ its owner
     sidecar) at a per-test temp dir. Without this, every xdist worker's
