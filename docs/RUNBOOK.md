@@ -905,6 +905,30 @@ round trips while the pipeline's conviction positions stay open and never count:
 If the quality block fails it prints `Quality report unavailable: <reason>` (JSON:
 `quality.error`) and the gate result and exit code are unaffected.
 
+### 3.17 Execution mode change says "Quarantine NOT engaged" / store conflict
+
+**Symptom:** after Settings > Execution Mode > "Advisory Only" (or another mode) and the typed
+confirmation, the screen shows a warning `execution-mode-store-conflict` ("Quarantine NOT engaged"
+or "Mode change not fully in force") instead of a success toast.
+
+**What it means:** the `.env` write landed, but at least one key could not be written to the
+runtime-flags store or made live. The store overrides `.env`, so **assume the old mode is still in
+force**. The warning lists each key with its reason.
+
+**What to do:**
+1. If you were trying to stop order placement, engage the kill switch now
+   (`python -m execution.kill_switch --status`, then activate it; §6) — it does not depend on the store.
+2. Read the reason per key:
+   - `a shell environment variable pins this key...` → a real shell export of that key beats both the
+     store and `.env`. Remove the export from the daemon's environment (launchd plist / shell) and
+     restart the stack (`launchctl kickstart -k ...com.investyo.stack`).
+   - `runtime-flags store write failed (...)` / a writer refusal → inspect
+     `~/.stockpy_local/output/runtime_flags.json` (valid JSON? `version` = 1? disk full / permissions?)
+     and the last lines of `runtime_flags_audit.jsonl` (each record names `actor`, `pid`, `process`).
+3. Retry the mode change once the cause is fixed; it must end with "Execution mode changed to ...".
+4. Never hand-edit the store while the daemon is running; use
+   `runtime_flags_writer.write_override`/`delete_override` with an `actor` naming you.
+
 ---
 
 ## 4. Contacts

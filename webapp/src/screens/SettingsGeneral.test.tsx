@@ -180,8 +180,12 @@ describe("SettingsGeneral screen — Execution mode (typed confirmation)", () =>
       written: ["ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"],
       advisory_only: false,
       mode: "live",
-      applies: "next_daemon_restart",
-      note: "Execution mode updated.",
+      applies: "immediately",
+      per_key_applies: { ADVISORY_ONLY: "immediately", DRY_RUN: "immediately", PAPER_TRADING: "immediately" },
+      ok: true,
+      quarantine_engaged: false,
+      store_conflict: null,
+      note: "Execution mode updated and in force.",
     });
     renderScreen();
 
@@ -214,8 +218,12 @@ describe("SettingsGeneral screen — Execution mode (typed confirmation)", () =>
       written: ["ADVISORY_ONLY"],
       advisory_only: true,
       mode: "advisory",
-      applies: "next_daemon_restart",
-      note: "Execution mode updated.",
+      applies: "immediately",
+      per_key_applies: { ADVISORY_ONLY: "immediately" },
+      ok: true,
+      quarantine_engaged: true,
+      store_conflict: null,
+      note: "Execution mode updated and in force.",
     });
     renderScreen();
 
@@ -284,5 +292,84 @@ describe("SettingsGeneral screen — Execution mode (typed confirmation)", () =>
       await screen.findByText("confirmation_required: this change touches safety-critical setting(s).")
     ).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Confirm Mode Change" })).toBeInTheDocument();
+  });
+});
+
+describe("SettingsGeneral -- execution-mode store conflict (quarantine NOT engaged)", () => {
+  // PUT /automation/execution-mode now also writes the runtime-flags store,
+  // because a stored override shadows .env. When that store write fails, the
+  // backend returns 200 with ok=false + store_conflict, and the screen must
+  // say the quarantine is NOT engaged -- never a "mode changed" success.
+  // docs/known_issues/runtime_flags_store_test_contamination_2026_10.md
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const LIVE_STATUS: AutomationStatus = {
+    ...HEALTHY_STATUS,
+    advisory_only: false,
+    dry_run: false,
+    paper_trading: false,
+  };
+
+  it("surfaces the store_conflict warning (and survives the post-save reload) instead of a success", async () => {
+    const user = userEvent.setup();
+    const statusSpy = vi.spyOn(api, "getAutomationStatus").mockResolvedValue(LIVE_STATUS);
+    vi.spyOn(api, "setExecutionMode").mockResolvedValueOnce({
+      written: ["ADVISORY_ONLY"],
+      advisory_only: true,
+      mode: "advisory",
+      applies: "next_daemon_restart",
+      per_key_applies: { ADVISORY_ONLY: "refused" },
+      ok: false,
+      quarantine_engaged: false,
+      store_conflict: {
+        keys: ["ADVISORY_ONLY"],
+        reasons: { ADVISORY_ONLY: "disk full" },
+        message:
+          "Saved to .env, but ADVISORY_ONLY could not be made effective, so the requested mode is NOT fully in force. The ADVISORY_ONLY quarantine is NOT engaged.",
+      },
+      note: "Saved to .env, but ADVISORY_ONLY could not be made effective.",
+    });
+    renderScreen();
+
+    await user.click(await screen.findByRole("button", { name: "🛑 Advisory Only" }));
+    await user.type(screen.getByLabelText('Type "ADVISORY_ONLY" to confirm'), "ADVISORY_ONLY");
+    await user.click(screen.getByTestId("execution-mode-confirm"));
+
+    const warning = await screen.findByTestId("execution-mode-store-conflict");
+    expect(warning).toHaveTextContent("Quarantine NOT engaged.");
+    expect(warning).toHaveTextContent("ADVISORY_ONLY: disk full");
+    // The status reload happened (it unmounts the section) and the warning
+    // is still there afterwards.
+    expect(statusSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText(/Execution mode changed to/)).not.toBeInTheDocument();
+  });
+
+  it("shows no conflict warning for an in-force change", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAutomationStatus").mockResolvedValue(LIVE_STATUS);
+    vi.spyOn(api, "setExecutionMode").mockResolvedValueOnce({
+      written: ["ADVISORY_ONLY"],
+      advisory_only: true,
+      mode: "advisory",
+      applies: "immediately",
+      per_key_applies: { ADVISORY_ONLY: "immediately" },
+      ok: true,
+      quarantine_engaged: true,
+      store_conflict: null,
+      note: "Execution mode updated and in force.",
+    });
+    renderScreen();
+
+    await user.click(await screen.findByRole("button", { name: "🛑 Advisory Only" }));
+    await user.type(screen.getByLabelText('Type "ADVISORY_ONLY" to confirm'), "ADVISORY_ONLY");
+    await user.click(screen.getByTestId("execution-mode-confirm"));
+
+    await screen.findByRole("button", { name: "🛑 Advisory Only" });
+    expect(screen.queryByTestId("execution-mode-store-conflict")).not.toBeInTheDocument();
   });
 });

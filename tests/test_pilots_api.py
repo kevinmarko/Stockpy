@@ -3055,7 +3055,11 @@ class TestExecutionModeWrite:
         assert body["written"] == ["ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"]
         assert body["advisory_only"] is False
         assert body["mode"] == "paper"
-        assert body["applies"] == "next_daemon_restart"
+        # Every key is also written to the (conftest-isolated) runtime-flags
+        # store, so the mode is in force now, not after a restart.
+        assert body["ok"] is True
+        assert body["store_conflict"] is None
+        assert set(body["per_key_applies"]) == {"ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING"}
         assert "ADVISORY_ONLY=false" in env_file.read_text(encoding="utf-8")
         mock_set_mode.assert_called_once_with("paper")
 
@@ -3211,6 +3215,187 @@ class TestExecutionModeWrite:
                                 headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
                             )
         assert _CMD_TOKEN not in caplog.text
+
+
+class TestExecutionModeStoreOverride:
+    """``PUT /automation/execution-mode`` must make the mode it writes actually
+    effective. Precedence is shell env > runtime-flags store > ``.env``, so a
+    ``.env``-only write is silently shadowed by a stored override -- a stored
+    ``ADVISORY_ONLY=false`` used to make the "Advisory Only" button's
+    quarantine NOT engage while the endpoint reported success
+    (docs/known_issues/runtime_flags_store_test_contamination_2026_10.md).
+
+    The store is the per-test temp file from the root conftest's
+    ``_isolate_runtime_flags_store_in_tests``; the writer mutates a throwaway
+    ``settings`` singleton, never the real one."""
+
+    _ADVISORY = {
+        "mode": "advisory",
+        "advisory_only": True,
+        "confirm": {"ADVISORY_ONLY": "ADVISORY_ONLY"},
+    }
+
+    @pytest.fixture
+    def throwaway_settings(self, monkeypatch):
+        import settings as settings_module
+
+        for name in ("ADVISORY_ONLY", "DRY_RUN", "PAPER_TRADING", "ALPACA_PAPER"):
+            monkeypatch.delenv(name, raising=False)
+        import runtime_flags
+
+        # .env parsing pinned empty so env-pinning depends only on real exports.
+        monkeypatch.setattr(runtime_flags, "_dotenv_entries", lambda: {})
+        fresh = settings_module.Settings()
+        monkeypatch.setattr(settings_module, "settings", fresh)
+        return fresh
+
+    def _put(self, payload, tmp_path):
+        env_file = tmp_path / ".env"
+        env_file.write_text("", encoding="utf-8")
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "AUTOMATION_WRITES_ENABLED", True):
+                with mock.patch.object(pilots_api.env_io, "ENV_PATH", env_file):
+                    with mock.patch("shared.strategy_registry.set_active_mode"):
+                        resp = client.put(
+                            "/automation/execution-mode",
+                            json=payload,
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        return resp, env_file
+
+    @staticmethod
+    def _seed_store(values):
+        import runtime_flags
+
+        path = runtime_flags.store_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "version": runtime_flags.SCHEMA_VERSION,
+                    "flags": {k: {"value": v} for k, v in values.items()},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    @staticmethod
+    def _effective_after_fresh_apply(key):
+        """What a fresh process (the daemon after its next wake/restart) would
+        see: a new Settings() with the store applied on top."""
+        import runtime_flags
+        import settings as settings_module
+
+        fresh = settings_module.Settings()
+        runtime_flags.apply_overrides(fresh)
+        return getattr(fresh, key)
+
+    def test_stale_store_false_no_longer_defeats_the_advisory_button(
+        self, tmp_path, throwaway_settings
+    ):
+        """The headline regression: store seeded ADVISORY_ONLY=false, a
+        confirmed "advisory" press, and the effective value is True."""
+        store = self._seed_store({"ADVISORY_ONLY": False})
+        # Precondition: the stale override really does shadow everything.
+        assert self._effective_after_fresh_apply("ADVISORY_ONLY") is False
+
+        resp, env_file = self._put(self._ADVISORY, tmp_path)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["quarantine_engaged"] is True
+        assert body["store_conflict"] is None
+        assert body["per_key_applies"] == {"ADVISORY_ONLY": "immediately"}
+        assert body["applies"] == "immediately"
+        assert "ADVISORY_ONLY=true" in env_file.read_text(encoding="utf-8")
+        flags = json.loads(store.read_text(encoding="utf-8"))["flags"]
+        assert flags["ADVISORY_ONLY"]["value"] is True
+        assert flags["ADVISORY_ONLY"]["updated_by"] == "pilots_api:execution_mode"
+        assert self._effective_after_fresh_apply("ADVISORY_ONLY") is True
+        assert throwaway_settings.ADVISORY_ONLY is True
+
+    def test_non_advisory_mode_writes_its_pair_to_the_store(
+        self, tmp_path, throwaway_settings
+    ):
+        store = self._seed_store({"DRY_RUN": True})
+        resp, _ = self._put(
+            {
+                "mode": "paper",
+                "advisory_only": False,
+                "confirm": {"ADVISORY_ONLY": "ADVISORY_ONLY", "DRY_RUN": "DRY_RUN"},
+            },
+            tmp_path,
+        )
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["quarantine_engaged"] is False
+        flags = json.loads(store.read_text(encoding="utf-8"))["flags"]
+        assert {k: flags[k]["value"] for k in flags} == {
+            "ADVISORY_ONLY": False,
+            "DRY_RUN": False,
+            "PAPER_TRADING": True,
+        }
+
+    def test_store_write_refused_reports_quarantine_not_engaged(
+        self, tmp_path, throwaway_settings
+    ):
+        """Fail closed: when the ADVISORY_ONLY=true store write fails, the
+        response must say the quarantine is NOT engaged -- never "updated"."""
+        import runtime_flags_writer as writer
+
+        refused = writer.WriteResult(
+            key="ADVISORY_ONLY", ok=False, reason="disk full", applies=writer.APPLIES_REFUSED
+        )
+        with mock.patch.object(writer, "write_override", return_value=refused):
+            resp, env_file = self._put(self._ADVISORY, tmp_path)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["quarantine_engaged"] is False
+        assert body["store_conflict"]["keys"] == ["ADVISORY_ONLY"]
+        assert body["store_conflict"]["reasons"]["ADVISORY_ONLY"] == "disk full"
+        assert "NOT engaged" in body["store_conflict"]["message"]
+        assert body["note"] == body["store_conflict"]["message"]
+        assert "in force" not in body["note"].replace("NOT fully in force", "")
+        assert body["per_key_applies"] == {"ADVISORY_ONLY": "refused"}
+        assert body["applies"] == "next_daemon_restart"
+        # The .env write stands (it already happened).
+        assert "ADVISORY_ONLY=true" in env_file.read_text(encoding="utf-8")
+
+    def test_store_writer_exception_is_a_conflict_not_a_crash(
+        self, tmp_path, throwaway_settings
+    ):
+        import runtime_flags_writer as writer
+
+        with mock.patch.object(writer, "write_override", side_effect=OSError("boom")):
+            resp, _ = self._put(self._ADVISORY, tmp_path)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["quarantine_engaged"] is False
+        assert "OSError" in body["store_conflict"]["reasons"]["ADVISORY_ONLY"]
+
+    def test_env_pinned_disagreeing_value_is_a_conflict(
+        self, tmp_path, monkeypatch, throwaway_settings
+    ):
+        """A real shell export beats the store; if it disagrees with the
+        request the mode is not in force and the response must say so."""
+        import settings as settings_module
+
+        monkeypatch.setenv("ADVISORY_ONLY", "false")
+        pinned = settings_module.Settings()
+        monkeypatch.setattr(settings_module, "settings", pinned)
+        assert pinned.ADVISORY_ONLY is False
+
+        resp, _ = self._put(self._ADVISORY, tmp_path)
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["quarantine_engaged"] is False
+        assert body["per_key_applies"] == {"ADVISORY_ONLY": "env_pinned"}
+        assert "shell environment variable" in body["store_conflict"]["reasons"]["ADVISORY_ONLY"]
 
 
 class TestExecutionModeConfirmation:

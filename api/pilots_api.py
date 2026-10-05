@@ -3827,7 +3827,14 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
     the FMP paper ledger; live = the pipeline places no orders at all, since
     Alpaca was removed 2026-09-30), not a broker-agnostic quarantine like
     ``ADVISORY_ONLY``/``DRY_RUN``, and
-    deliberately not hardened further here (operator decision, 2026-08-04)."""
+    deliberately not hardened further here (operator decision, 2026-08-04).
+
+    After the ``.env`` write, every written key is ALSO written to the
+    runtime-flags store (``_apply_execution_mode_to_store``), because a stored
+    override silently shadows ``.env``. The response reports the real per-key
+    ``applies``, ``ok``, ``quarantine_engaged`` and an explicit
+    ``store_conflict`` when a key could not be made effective — never a bare
+    "updated" for a mode that is not actually in force."""
     from shared import strategy_registry
 
     dangerous_keys = ["ADVISORY_ONLY"]
@@ -3837,18 +3844,137 @@ def update_execution_mode(body: ExecutionModeUpdateRequest) -> Dict[str, Any]:
     _require_dangerous_confirmation(dangerous_keys, body.confirm)
 
     env_io.write_setting("ADVISORY_ONLY", body.advisory_only)
-    written = ["ADVISORY_ONLY"]
+    requested: Dict[str, bool] = {"ADVISORY_ONLY": bool(body.advisory_only)}
 
     if body.mode != "advisory":
         strategy_registry.set_active_mode(body.mode)
-        written += ["DRY_RUN", "PAPER_TRADING"]
+        requested.update(strategy_registry.mode_env_values(body.mode))
 
+    return _apply_execution_mode_to_store(requested, mode=body.mode)
+
+
+_EXECUTION_MODE_ACTOR = "pilots_api:execution_mode"
+
+
+def _apply_execution_mode_to_store(requested: Dict[str, bool], *, mode: str) -> Dict[str, Any]:
+    """Make the ``.env`` values ``PUT /automation/execution-mode`` just wrote
+    actually EFFECTIVE, by writing the same values to the runtime-flags store.
+
+    Why: precedence is shell env > runtime-flags store > ``.env``. A ``.env``
+    write alone is silently shadowed by any stored override for the same key,
+    so before this, a stored ``ADVISORY_ONLY=false`` (left by an earlier
+    Feature Flags/Reference save, or planted by the test suite until #1107 —
+    docs/known_issues/runtime_flags_store_test_contamination_2026_10.md) made
+    the "Advisory Only" button's quarantine silently NOT engage, while this
+    endpoint reported "Execution mode updated."
+
+    Every key is written with ``runtime_flags_writer.write_override`` (actor
+    ``pilots_api:execution_mode``). A key counts as effective only if the
+    writer reports ``ok`` AND the value now live in this process equals the
+    requested one (a shell-exported, env-pinned value that disagrees is a
+    conflict, not a success). Anything else lands in ``store_conflict`` and
+    the response says so instead of claiming success (CONSTRAINT #4).
+
+    Fail closed on the quarantine: ``quarantine_engaged`` is ``True`` only when
+    the ADVISORY_ONLY store write succeeded and ADVISORY_ONLY is ``True`` in
+    this process right now. If the request asked for ``True`` and that could
+    not be confirmed, it is ``False`` and the note says the quarantine is NOT
+    engaged — never a guess in the safe-sounding direction.
+
+    Never raises (CONSTRAINT #6): a missing writer or a writer exception is a
+    per-key conflict; the ``.env`` write already happened and stands.
+    """
+    per_key_applies: Dict[str, str] = {}
+    conflicts: Dict[str, str] = {}
+    effective: Dict[str, bool] = {}
+
+    try:
+        from runtime_flags_writer import write_override  # noqa: PLC0415 - lazy
+    except Exception:  # noqa: BLE001 - writer not installed in this checkout
+        write_override = None  # type: ignore[assignment]
+
+    for key, value in requested.items():
+        if write_override is None:
+            per_key_applies[key] = "refused"
+            conflicts[key] = "runtime-flags writer unavailable; only .env was written"
+            continue
+        try:
+            result = write_override(key, value, actor=_EXECUTION_MODE_ACTOR)
+        except Exception as exc:  # noqa: BLE001 - dead-letter per key
+            per_key_applies[key] = "refused"
+            conflicts[key] = f"runtime-flags store write failed ({type(exc).__name__})"
+            continue
+        applies = str(getattr(result, "applies", "refused") or "refused")
+        per_key_applies[key] = applies
+        if not getattr(result, "ok", False):
+            conflicts[key] = str(
+                getattr(result, "reason", None) or "runtime-flags store write refused"
+            )
+            continue
+        live_value = getattr(result, "applied_value", None)
+        if live_value != value:
+            if applies == settings_meta.APPLIES_ENV_PINNED:
+                conflicts[key] = (
+                    "a shell environment variable pins this key to a different "
+                    "value; it overrides both the store and .env"
+                )
+            else:
+                conflicts[key] = (
+                    "stored, but not yet live in this process "
+                    f"(applies: {applies})"
+                )
+            continue
+        effective[key] = value
+
+    advisory_requested = requested.get("ADVISORY_ONLY")
+    if "ADVISORY_ONLY" in effective:
+        quarantine_engaged: Optional[bool] = bool(effective["ADVISORY_ONLY"])
+    elif advisory_requested:
+        # Asked to engage, could not confirm it: fail closed.
+        quarantine_engaged = False
+    else:
+        quarantine_engaged = None  # unknown: the old value may still be live
+
+    ok = not conflicts
+    store_conflict: Optional[Dict[str, Any]] = None
+    if conflicts:
+        message = (
+            "Saved to .env, but "
+            + ", ".join(sorted(conflicts))
+            + " could not be made effective, so the requested mode is NOT fully in force."
+        )
+        if advisory_requested and quarantine_engaged is not True:
+            message += " The ADVISORY_ONLY quarantine is NOT engaged."
+        store_conflict = {
+            "keys": sorted(conflicts),
+            "reasons": conflicts,
+            "message": message,
+        }
+        logger.warning(
+            "execution-mode: store conflict for %s; the mode change is not fully effective.",
+            sorted(conflicts),
+        )
+
+    all_immediate = bool(per_key_applies) and all(
+        v == settings_meta.APPLIES_IMMEDIATELY for v in per_key_applies.values()
+    )
     return {
-        "written": written,
-        "advisory_only": body.advisory_only,
-        "mode": body.mode,
-        "applies": "next_daemon_restart",
-        "note": "Execution mode updated.",
+        "written": list(requested),
+        "advisory_only": bool(requested["ADVISORY_ONLY"]),
+        "mode": mode,
+        "per_key_applies": per_key_applies,
+        "applies": (
+            settings_meta.APPLIES_IMMEDIATELY if all_immediate and ok
+            else settings_meta.APPLIES_NEXT_RESTART
+        ),
+        "ok": ok,
+        "quarantine_engaged": quarantine_engaged,
+        "store_conflict": store_conflict,
+        "note": (
+            "Execution mode updated and in force."
+            if ok
+            else store_conflict["message"]  # type: ignore[index]
+        ),
     }
 
 
