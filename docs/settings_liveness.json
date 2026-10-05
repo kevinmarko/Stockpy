@@ -110,7 +110,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 375,
+  "files_scanned": 376,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -593,7 +593,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:379",
+        "site": "data/paper_account_store.py:385",
         "via": []
       },
       {
@@ -748,7 +748,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:390",
+        "site": "data/paper_account_store.py:396",
         "via": []
       },
       {
@@ -757,7 +757,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:392",
+        "site": "data/paper_account_store.py:398",
         "via": []
       },
       {
@@ -993,7 +993,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:390",
+        "site": "data/paper_account_store.py:396",
         "via": []
       },
       {
@@ -1002,7 +1002,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:392",
+        "site": "data/paper_account_store.py:398",
         "via": []
       },
       {
@@ -1281,9 +1281,9 @@
         "rules": [
           "indirect_init_helper_d1"
         ],
-        "site": "data/paper_account_store.py:514",
+        "site": "data/paper_account_store.py:521",
         "via": [
-          414
+          420
         ]
       }
     ],
@@ -1865,7 +1865,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/paper_account_store.py:390",
+        "site": "data/paper_account_store.py:396",
         "via": []
       },
       {
@@ -2281,7 +2281,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "data/paper_account_store.py:415",
+        "site": "data/paper_account_store.py:421",
         "via": []
       }
     ],

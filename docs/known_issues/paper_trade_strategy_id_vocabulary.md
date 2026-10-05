@@ -184,3 +184,5 @@ initiated manual trades (`"Manual Trade"`, `"untagged"`) and the advisory
 bridge's `"advisory"`/`"composed"` bucket are legitimately NOT
 pilot-attributable and should stay as their own explicit, documented
 buckets rather than being folded into the pilot-slug vocabulary.
+
+Related (2026-10): `paper_closed_trades.close_reason` has its own small vocabulary (`flatten`, `roll`, `expiry_settlement`, and `signal_sell|signal_trim|signal_risk_reduce|signal_avoid` for pipeline exits) -- see [`paper_pipeline_trades_missing_entry_exit_context.md`](paper_pipeline_trades_missing_entry_exit_context.md) and `docs/architecture/data-layer.md`.

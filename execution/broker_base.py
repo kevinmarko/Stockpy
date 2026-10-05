@@ -91,6 +91,12 @@ class OrderIntent:
     # it (today's exact prior behavior). See main_orchestrator.py's
     # ``_execute_broker_orders`` BUY/SELL branches for the one real producer.
     target_qty: Optional[float] = None
+    # Optional decision context (execution/trade_context.py), telemetry only.
+    # Never read by sizing, the risk gate, the kill switch, OrderManager or
+    # make_client_order_id, so it cannot change an order or its id. Brokers
+    # may ignore it; today only FMPPaperBroker forwards it to the paper
+    # ledger (entry snapshot / close reason). ``None`` for every other caller.
+    decision_context: Optional[dict] = None
 
 
 @dataclass

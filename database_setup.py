@@ -368,7 +368,7 @@ def migrate_paper_closed_trades_schema(cursor, conn):
     Retrospective Learning Loop: Additive schema migration for paper_closed_trades.
     Inspects existing columns via PRAGMA table_info and issues ALTER TABLE statements
     for any missing columns (entry_snapshot_id, bridge_status, bridged_trade_id,
-    bridge_error, bridged_at). Non-destructive, idempotent.
+    bridge_error, bridged_at, exit_context_json). Non-destructive, idempotent.
     """
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_closed_trades';")
     if not cursor.fetchone():
@@ -384,6 +384,7 @@ def migrate_paper_closed_trades_schema(cursor, conn):
         ("bridged_trade_id", "INTEGER"),
         ("bridge_error", "TEXT"),
         ("bridged_at", "TEXT"),
+        ("exit_context_json", "TEXT"),
     ]
 
     cols_to_add = [(col, col_type) for col, col_type in new_columns if col not in existing_cols]

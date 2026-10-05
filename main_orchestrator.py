@@ -503,6 +503,23 @@ def _probe_weight_for_row(row: Any, base_weight: float) -> tuple:
     return base_weight * min(regime, 1.0), None
 
 
+def _safe_decision_context(builder_name: str, symbol: str, *args: Any, **kwargs: Any) -> Optional[dict]:
+    """Run ``execution.trade_context.<builder_name>``; any error -> None.
+
+    Decision context is telemetry. It is built after the order's trading
+    fields are final and must never block, delay or resize an order, so it
+    fails open for the order -- including an import failure, which is why
+    the module is imported here rather than with the broker imports.
+    """
+    try:
+        from execution import trade_context
+        ctx = getattr(trade_context, builder_name)(*args, **kwargs)
+        return ctx if isinstance(ctx, dict) else None
+    except Exception as exc:  # noqa: BLE001
+        telemetry.warning("Trade decision context unavailable for %s: %s", symbol, exc)
+        return None
+
+
 async def _execute_broker_orders(
     final_df: "pd.DataFrame",
     dry_run: bool,
@@ -686,6 +703,9 @@ async def _execute_broker_orders(
             if not symbol:
                 continue
 
+            # Records whether the probe sized this BUY (decision context only).
+            used_probe = False
+
             # Paper-only cold-start probe (settings.PAPER_PIPELINE_PROBE_WEIGHT):
             # with no closed pipeline trades Kelly scales every target to 0,
             # which would stop the pipeline ever collecting the closed trades
@@ -697,6 +717,7 @@ async def _execute_broker_orders(
                 if why is None and w > 0:
                     kelly = w
                     probe_gross_left -= w
+                    used_probe = True
                 else:
                     probe_skips[why] = probe_skips.get(why, 0) + 1
 
@@ -747,6 +768,16 @@ async def _execute_broker_orders(
                         priority=OrderPriority.NORMAL,
                         target_qty=target_qty_value,
                     )
+                    # Attached after the trading fields are final; inert for
+                    # sizing, the risk gate and the client_order_id.
+                    intent.decision_context = _safe_decision_context(
+                        "build_entry_context", symbol, row,
+                        sizing_source="probe" if used_probe else "kelly",
+                        effective_weight=kelly,
+                        equity=equity,
+                        price=price,
+                        macro_dto=macro_dto,
+                    )
 
                     def _log_buy(result, symbol=symbol, buy_qty=buy_qty, kelly=kelly,
                                  equity=equity, price=price):
@@ -777,6 +808,11 @@ async def _execute_broker_orders(
                         order_type=OrderType.MARKET,
                         priority=OrderPriority.URGENT,
                         target_qty=sell_qty,
+                    )
+                    # Real exit trigger (close_reason) + exit row context.
+                    intent.decision_context = _safe_decision_context(
+                        "build_exit_context", symbol, row,
+                        signal=signal, held_qty=sell_qty,
                     )
 
                     def _log_sell(result, symbol=symbol, sell_qty=sell_qty):
