@@ -874,6 +874,37 @@ freshness rule keeps it from being placed.
 **Rollback:** set `DAEMON_AGENTIC_QUEUE_MODE=off` (or `shadow`) and reload
 `com.investyo.daily-advisory`; main.py resumes as the writer on its next run.
 
+### 3.16 Feature-freeze progress and trade quality (step 7)
+
+```bash
+python scripts/feature_freeze_status.py            # text report
+python scripts/feature_freeze_status.py --json     # machine output, adds a "quality" block
+python scripts/feature_freeze_status.py --live-quotes   # opt in: mark open positions from live quotes (network)
+```
+
+**The gate is unchanged:** exit 0 once `closed_pipeline_trades >= --min` (default 30), exit 2 while
+frozen. Only `paper_closed_trades` rows with `strategy_id == "main_pipeline"` count.
+
+The extra "Trade quality" section is informational and read-only (the DB is opened `mode=ro`; no
+writes; no network by default). It exists because the closed-trade count can be reached by quick
+round trips while the pipeline's conviction positions stay open and never count:
+
+- **Hold time of closed trades**: median, mean, share under 1 day, buckets. Trades with no
+  measurable hold are counted as `unmeasured`, never as 0. Read `n` first: with few trades the
+  statistics are marked "low sample".
+- **Close reasons**: count per `close_reason`.
+- **Entry dates**: distinct entry dates (ET, closed plus open) and the largest single-day clump. One
+  big cycle of entries counts as one independent decision, not many.
+- **Open positions**: days held, mark, unrealized P&L, sector. Marks default to the latest stored
+  `price_bars.close` (so they can be a few days old; the mark date is printed and anything older
+  than 4 days is flagged STALE). A position with no mark shows `n/a`, never cost basis. Option
+  symbols are not marked.
+- **Sector concentration**: share of open cost basis by sector, from the latest stored fundamentals
+  snapshot (not point in time); unknown sectors are counted separately.
+
+If the quality block fails it prints `Quality report unavailable: <reason>` (JSON:
+`quality.error`) and the gate result and exit code are unaffected.
+
 ---
 
 ## 4. Contacts

@@ -19,3 +19,6 @@ The operator-defined exit condition could not be reached. The pipeline had never
 
 ## State at start
 0 closed pipeline paper trades; the freeze is on.
+
+## Update: trade-quality report
+`scripts/feature_freeze_status.py` now also reports hold times, close reasons, entry clumping, open P&L and sector concentration (informational; the gate is unchanged). See `.claude/freeze_status_quality_report_walkthrough.md` and RUNBOOK 3.16.
