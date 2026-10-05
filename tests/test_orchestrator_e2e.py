@@ -264,6 +264,17 @@ class TestStateSnapshot:
                 f"engine actually scored, got {aapl_signal[key]!r}"
             )
 
+    def test_strategy_score_populated_via_real_run_pipeline(self, orchestrator_run):
+        """StrategyEngine's own Score reaches state_snapshot.json through a
+        REAL run_pipeline() call. It used to be NaN-filled on this path for
+        every symbol (docs/known_issues/daemon_strategy_score_always_nan.md)."""
+        snap = _read_json(orchestrator_run["output_dir"] / "state_snapshot.json")
+        aapl_signal = next(s for s in snap["signals"] if s["symbol"] == "AAPL")
+        score = aapl_signal["score"]
+        assert isinstance(score, float), f"score should be a real float, got {score!r}"
+        assert score == score  # not NaN
+        assert 0.0 <= score <= 100.0
+
     def test_advisory_loop_ran_and_populated_advisory_action(self, orchestrator_run):
         """The only externally-observable proof that Step 3b (the advisory
         evaluation loop) actually executed and wrote back into final_df is

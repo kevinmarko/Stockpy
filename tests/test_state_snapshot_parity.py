@@ -720,3 +720,29 @@ class TestPrimaryModeAdvisoryFields:
         for sig in self._orchestrator(tmp_path, monkeypatch, None):
             for key in PRIMARY_MODE_SIGNAL_FIELDS:
                 assert key not in sig
+
+
+class TestOrchestratorStrategyScore:
+    """The daemon snapshot's ``score`` is StrategyEngine's own score. It used
+    to be NaN for every row (docs/known_issues/daemon_strategy_score_always_nan.md)
+    and a fabricated 0.0 when the column was absent."""
+
+    def test_round_trips_when_present(self, orchestrator_signals):
+        assert _by_symbol(orchestrator_signals, "AAPL")["score"] == pytest.approx(1.0)
+
+    def test_is_null_when_absent(self, orchestrator_signals):
+        sig = _by_symbol(orchestrator_signals, "MSFT")
+        assert sig["score"] is None
+        assert sig["score"] != 0.0
+
+    def test_nan_score_is_null_and_snapshot_is_strict_json(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{tmp_path / 'rating_parity.db'}")
+        final_df = pd.DataFrame([
+            {"Symbol": "AAPL", "Action Signal": "HOLD", "Score": float("nan"), "Price": 150.0, "Shares": 0.0},
+        ])
+        mo._write_state_snapshot({"market_regime": "RISK ON"}, final_df, ["AAPL"])
+        raw = (tmp_path / "state_snapshot.json").read_text(encoding="utf-8")
+        snap = json.loads(raw)
+        assert snap["signals"][0]["score"] is None
+        assert '"score": NaN' not in raw
