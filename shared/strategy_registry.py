@@ -257,6 +257,31 @@ def read_active_mode() -> ModeState:
     return ModeState(mode=mode, paper_trading=paper_trading, dry_run=dry_run)
 
 
+def _coerce_mode(mode: ExecutionMode | str) -> ExecutionMode:
+    if isinstance(mode, str):
+        try:
+            return ExecutionMode(mode.lower())
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid mode {mode!r}; expected one of "
+                f"{[m.value for m in ExecutionMode]}"
+            ) from exc
+    return mode
+
+
+def mode_env_values(mode: ExecutionMode | str) -> dict[str, bool]:
+    """The ``{DRY_RUN, PAPER_TRADING}`` values that define ``mode`` — the single
+    mapping :func:`set_active_mode` writes to ``.env``. Pure (no I/O), so a
+    caller that must also write the same values somewhere else (the
+    runtime-flags store, in ``PUT /automation/execution-mode``) cannot drift
+    from it. Raises ``ValueError`` on an unknown mode."""
+    resolved = _coerce_mode(mode)
+    return {
+        "DRY_RUN": resolved is ExecutionMode.SIMULATION,
+        "PAPER_TRADING": resolved is not ExecutionMode.LIVE,
+    }
+
+
 def set_active_mode(mode: ExecutionMode | str) -> ModeState:
     """Persist a new :class:`ExecutionMode` to ``.env`` via :mod:`shared.env_io`.
 
@@ -265,9 +290,13 @@ def set_active_mode(mode: ExecutionMode | str) -> ModeState:
     * ``DRY_RUN``       — ``true`` only for SIMULATION.
     * ``PAPER_TRADING``  — ``true`` for SIMULATION + PAPER; ``false`` for LIVE.
 
-    The change takes effect on the next orchestrator launch — we do NOT
-    monkey-patch a running ``settings.Settings`` instance, because mid-run
-    mode flips would inevitably create order-routing race conditions.
+    This function itself only writes ``.env`` — it does NOT monkey-patch a
+    running ``settings.Settings`` instance, because mid-run mode flips would
+    inevitably create order-routing race conditions. Note that a ``.env``
+    value is shadowed by a runtime-flags store override for the same key, so
+    ``PUT /automation/execution-mode`` ALSO writes these values to the store
+    (via :func:`mode_env_values`); the daemon applies a store change at its
+    next wake, between cycles, never mid-run.
 
     Raises
     ------
@@ -277,17 +306,10 @@ def set_active_mode(mode: ExecutionMode | str) -> ModeState:
         Propagated from :mod:`shared.env_io` if either env var is not in the
         allowlist.
     """
-    if isinstance(mode, str):
-        try:
-            mode = ExecutionMode(mode.lower())
-        except ValueError as exc:
-            raise ValueError(
-                f"Invalid mode {mode!r}; expected one of "
-                f"{[m.value for m in ExecutionMode]}"
-            ) from exc
-
-    dry_run = (mode is ExecutionMode.SIMULATION)
-    paper_trading = (mode is not ExecutionMode.LIVE)
+    mode = _coerce_mode(mode)
+    values = mode_env_values(mode)
+    dry_run = values["DRY_RUN"]
+    paper_trading = values["PAPER_TRADING"]
 
     from shared import env_io  # local import keeps the module import-light
     env_io.write_setting("DRY_RUN", dry_run)

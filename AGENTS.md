@@ -355,7 +355,10 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   (`write_override`/`delete_override`) refuses `SECRET_KEYS`, `BOOTSTRAP_KEYS`, unknown fields and
   invalid values, validates via `Settings.__pydantic_validator__.validate_assignment` (never
   `TypeAdapter`, which skips field validators), writes atomically, and never logs a value. The daemon
-  re-reads the store each wake when `RUNTIME_FLAGS_REFRESH_ENABLED`.
+  re-reads the store each wake when `RUNTIME_FLAGS_REFRESH_ENABLED`. **A `.env` write of a key must
+  also update or clear that key's runtime-flags store override**, or the stored value silently wins
+  (`PUT /automation/execution-mode` does this; see
+  `docs/known_issues/runtime_flags_store_test_contamination_2026_10.md`).
 - **Default-value policy.** New admin/API write or execution capabilities ship active by default
   rather than behind a fresh opt-in flag. New settings that change **trading behavior** (signals,
   sizing, data sources, forecasting, execution) default to today's exact behavior (off/opt-in) — a

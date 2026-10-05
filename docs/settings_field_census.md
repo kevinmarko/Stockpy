@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `6313b85da1c417892c5eb4e3df657d1586c79cd3`
+- Measured at commit: `cf68ef897797f69eb455b9b9782eec8f64e7465c`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -163,7 +163,7 @@ Three *distinct* mutation mechanisms exist — a liveness model that only consid
 | in-process `setattr(settings, ...)` | 0 | patches THIS process's singleton only |
 | push to the daemon via `daemon_client.set_*` | 1 | HTTP call into a **separately running** daemon process |
 
-Routes declaring an `applies` value in their response: **6** of 20.
+Routes declaring an `applies` value in their response: **5** of 20.
 
 Resolution is AST-based and follows one level of indirection: a handler that only calls a
 module-level helper which itself calls `env_io.write_*` (or builds the response carrying
@@ -177,22 +177,22 @@ module-level helper which itself calls `env_io.write_*` (or builds the response 
 | `/llm/setting` | PUT | `set_llm_setting` | 2992 | yes | no | no | `immediately`, `next_daemon_restart` |
 | `/automation/schedule/interval` | PUT | `set_automation_interval` | 3637 | yes | no | yes | `immediately`, `next_daemon_restart` |
 | `/strategy/modules` | PUT | `set_strategy_modules` | 3720 | yes | no | no | `next_daemon_restart` |
-| `/automation/execution-mode` | PUT | `update_execution_mode` | 3807 | yes | no | no | `next_daemon_restart` |
-| `/settings/tunables` | PUT | `put_settings_tunables` | 4240 | yes | no | no | _(none)_ |
-| `/settings/tunables` | PATCH | `put_settings_tunables` | 4240 | yes | no | no | _(none)_ |
-| `/settings/sentiment` | PUT | `put_settings_sentiment` | 4819 | yes | no | no | _(none)_ |
-| `/settings/sentiment` | PATCH | `put_settings_sentiment` | 4819 | yes | no | no | _(none)_ |
-| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 4844 | yes | no | no | _(none)_ |
-| `/settings/sector-selection` | PATCH | `put_settings_sector_selection` | 4844 | yes | no | no | _(none)_ |
-| `/settings/paper-broker` | PUT | `put_settings_paper_broker` | 4867 | yes | no | no | _(none)_ |
-| `/settings/paper-broker` | PATCH | `put_settings_paper_broker` | 4867 | yes | no | no | _(none)_ |
-| `/settings/feature-flags` | PUT | `put_feature_flags_settings` | 4932 | yes | no | no | _(none)_ |
-| `/settings/feature-flags` | PATCH | `put_feature_flags_settings` | 4932 | yes | no | no | _(none)_ |
-| `/settings/fmp` | PUT | `put_settings_fmp` | 4961 | yes | no | no | _(none)_ |
-| `/settings/fmp` | PATCH | `put_settings_fmp` | 4961 | yes | no | no | _(none)_ |
-| `/settings/reference` | PUT | `put_settings_reference` | 5173 | yes | no | no | _(none)_ |
-| `/settings/reference` | PATCH | `put_settings_reference` | 5173 | yes | no | no | _(none)_ |
-| `/prompts/pin` | PUT | `put_prompts_pin` | 5454 | yes | no | no | `next_daemon_restart` |
+| `/automation/execution-mode` | PUT | `update_execution_mode` | 3807 | yes | no | no | _(none)_ |
+| `/settings/tunables` | PUT | `put_settings_tunables` | 4366 | yes | no | no | _(none)_ |
+| `/settings/tunables` | PATCH | `put_settings_tunables` | 4366 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PUT | `put_settings_sentiment` | 4945 | yes | no | no | _(none)_ |
+| `/settings/sentiment` | PATCH | `put_settings_sentiment` | 4945 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PUT | `put_settings_sector_selection` | 4970 | yes | no | no | _(none)_ |
+| `/settings/sector-selection` | PATCH | `put_settings_sector_selection` | 4970 | yes | no | no | _(none)_ |
+| `/settings/paper-broker` | PUT | `put_settings_paper_broker` | 4993 | yes | no | no | _(none)_ |
+| `/settings/paper-broker` | PATCH | `put_settings_paper_broker` | 4993 | yes | no | no | _(none)_ |
+| `/settings/feature-flags` | PUT | `put_feature_flags_settings` | 5058 | yes | no | no | _(none)_ |
+| `/settings/feature-flags` | PATCH | `put_feature_flags_settings` | 5058 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PUT | `put_settings_fmp` | 5087 | yes | no | no | _(none)_ |
+| `/settings/fmp` | PATCH | `put_settings_fmp` | 5087 | yes | no | no | _(none)_ |
+| `/settings/reference` | PUT | `put_settings_reference` | 5299 | yes | no | no | _(none)_ |
+| `/settings/reference` | PATCH | `put_settings_reference` | 5299 | yes | no | no | _(none)_ |
+| `/prompts/pin` | PUT | `put_prompts_pin` | 5580 | yes | no | no | `next_daemon_restart` |
 
 ### Existing in-process hot-reload beachhead — `shared/ai_control_center.py::LIVE_PATCHABLE_KEYS`
 
@@ -253,12 +253,12 @@ referenced by name somewhere and is probably read dynamically.
 
 | Field | Name-literal sites | Verdict |
 |---|---|---|
-| `BROKER_BACKEND` | `api/pilots_api.py:4707`, `settings_keysets.py:305` | likely read dynamically |
-| `CORRELATION_CLUSTER_LOOKBACK_DAYS` | `api/pilots_api.py:3929` | likely read dynamically |
-| `DASHBOARD_REFRESH_SECONDS` | `api/pilots_api.py:4039`, `pilots/settings_domains.py:129` | likely read dynamically |
-| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4658` | likely read dynamically |
-| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4657` | likely read dynamically |
-| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4778` | likely read dynamically |
+| `BROKER_BACKEND` | `api/pilots_api.py:4833`, `settings_keysets.py:305` | likely read dynamically |
+| `CORRELATION_CLUSTER_LOOKBACK_DAYS` | `api/pilots_api.py:4055` | likely read dynamically |
+| `DASHBOARD_REFRESH_SECONDS` | `api/pilots_api.py:4165`, `pilots/settings_domains.py:129` | likely read dynamically |
+| `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4784` | likely read dynamically |
+| `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4783` | likely read dynamically |
+| `FMP_ECON_INDICATORS` | `api/pilots_api.py:4904` | likely read dynamically |
 | `GOOGLE_TRENDS_OVERLAP_DAYS` | _none_ | no read and no name reference found |
 | `GOOGLE_TRENDS_WINDOW_DAYS` | _none_ | no read and no name reference found |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
@@ -424,9 +424,9 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/auth.py:150` | `getattr(settings, token_setting_name, None)` |
 | `api/data_api.py:166` | `getattr(settings, flag_name, False)` |
 | `api/pilots_api.py:3061` | `getattr(settings, body.key)` |
-| `api/pilots_api.py:4177` | `getattr(settings, key, None)` |
-| `api/pilots_api.py:4282` | `getattr(settings, key, None)` |
-| `api/pilots_api.py:5092` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:4303` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:4408` | `getattr(settings, key, None)` |
+| `api/pilots_api.py:5218` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:84` | `getattr(_settings, name, None)` |
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |
