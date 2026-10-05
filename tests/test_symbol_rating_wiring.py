@@ -112,7 +112,7 @@ class TestRecordSymbolRatingsOrchestratorPath:
             {"Symbol": "AAPL", "Score": 20.0, "Action Signal": "RISK REDUCE", "Robinhood Shares": 5.0},
             {"Symbol": "MSFT", "Score": 60.0, "Action Signal": "BUY", "Robinhood Shares": 0.0},
         ])
-        _record_symbol_ratings(df, "cycle-1")
+        assert _record_symbol_ratings(df, "cycle-1") == 2
 
         assert len(_FakeRatingStore.calls) == 1
         events = {e["symbol"]: e for e in _FakeRatingStore.calls[0]["events"]}
@@ -134,7 +134,7 @@ class TestRecordSymbolRatingsOrchestratorPath:
             {"Symbol": "AAPL", "Score": float("nan"), "Action Signal": None, "Robinhood Shares": 0.0},
             {"Symbol": "MSFT", "Score": 60.0, "Action Signal": "BUY", "Robinhood Shares": 0.0},
         ])
-        _record_symbol_ratings(df, "cycle-1")
+        assert _record_symbol_ratings(df, "cycle-1") == 1  # the count reflects rows written, not rows seen
 
         symbols = {e["symbol"] for e in _FakeRatingStore.calls[0]["events"]}
         assert symbols == {"MSFT"}
@@ -148,7 +148,7 @@ class TestRecordSymbolRatingsOrchestratorPath:
         monkeypatch.setattr(rating_store_mod, "SymbolRatingStore", _boom)
 
         df = _dashboard_df([{"Symbol": "AAPL", "Score": 20.0, "Action Signal": "RISK REDUCE", "Robinhood Shares": 0.0}])
-        _record_symbol_ratings(df, "cycle-1")  # must not raise, must not construct the store
+        assert _record_symbol_ratings(df, "cycle-1") == 0  # must not raise, must not construct the store
 
     def test_empty_dashboard_df_is_a_no_op(self, monkeypatch):
         monkeypatch.setattr(settings, "SYMBOL_RATING_ENABLED", True)
@@ -157,7 +157,7 @@ class TestRecordSymbolRatingsOrchestratorPath:
             raise AssertionError("store must not be constructed on an empty df")
 
         monkeypatch.setattr(rating_store_mod, "SymbolRatingStore", _boom)
-        _record_symbol_ratings(pd.DataFrame(), "cycle-1")
+        assert _record_symbol_ratings(pd.DataFrame(), "cycle-1") == 0
 
     def test_store_failure_propagates_from_the_helper_itself(self, monkeypatch):
         """SymbolRatingStore.record_ratings' own documented contract is to
@@ -307,22 +307,98 @@ class TestAdvisoryEvalStepSymbolRatingWrite:
         assert ctx.errors == []  # the write failure is logged, not surfaced as a symbol error
 
 
-class TestDaemonRatingWritesStayOff:
-    """The daemon must not write symbol ratings until a once-per-trading-day
-    cadence exists (see production_steps._DAEMON_RECORDS_SYMBOL_RATINGS): with
-    auto-drop on, an hourly writer would drop symbols within hours."""
+class TestDaemonDailyRatingCadence:
+    """The daemon records at most one rating cycle per trading day
+    (production_steps._daemon_should_record_ratings): with auto-drop on, an
+    hourly writer would drop symbols within hours."""
 
-    def test_gate_is_off(self):
-        assert ps_mod._DAEMON_RECORDS_SYMBOL_RATINGS is False
+    # 2026-10-05 is a Monday; 14:00 UTC = 10:00 ET (EDT).
+    NOW = datetime(2026, 10, 5, 14, 0, tzinfo=timezone.utc)
 
-    def test_call_is_gated_by_the_constant(self):
+    @pytest.fixture
+    def store(self, monkeypatch, tmp_path):
+        url = f"sqlite:///{tmp_path / 'ratings.db'}"
+        real = rating_store_mod.SymbolRatingStore(db_url=url)
+        monkeypatch.setattr(rating_store_mod, "SymbolRatingStore", lambda **kw: real)
+        monkeypatch.setattr(settings, "SYMBOL_RATING_ENABLED", True)
+        return real
+
+    @pytest.fixture
+    def market(self, monkeypatch):
+        import engine.advisory_agent as agent
+
+        state = {"open": True}
+        monkeypatch.setattr(agent, "is_us_market_open_now", lambda now: state["open"])
+        return state
+
+    @staticmethod
+    def _write(store, ts, cycle_id="cyc"):
+        store.record_ratings(
+            [{"symbol": "AAPL", "score": 50.0, "tier": "GOOD", "is_held": False, "timestamp": ts}],
+            cycle_id=cycle_id,
+        )
+
+    def test_market_closed_skips(self, store, market):
+        market["open"] = False
+        assert ps_mod._daemon_should_record_ratings(self.NOW) is False
+
+    def test_open_with_no_cycle_today_writes(self, store, market):
+        assert ps_mod._daemon_should_record_ratings(self.NOW) is True
+
+    def test_main_py_cycle_earlier_today_skips(self, store, market):
+        self._write(store, datetime(2026, 10, 5, 12, 47, tzinfo=timezone.utc))  # 08:47 ET
+        assert ps_mod._daemon_should_record_ratings(self.NOW) is False
+
+    def test_yesterdays_cycle_does_not_count(self, store, market):
+        self._write(store, datetime(2026, 10, 2, 20, 0, tzinfo=timezone.utc))
+        assert ps_mod._daemon_should_record_ratings(self.NOW) is True
+
+    def test_et_midnight_boundary(self, store, market):
+        # 03:30 UTC Oct 5 = 23:30 ET Oct 4 -> yesterday in New York.
+        self._write(store, datetime(2026, 10, 5, 3, 30, tzinfo=timezone.utc))
+        assert ps_mod._daemon_should_record_ratings(self.NOW) is True
+        # 04:30 UTC Oct 5 = 00:30 ET Oct 5 -> today.
+        self._write(store, datetime(2026, 10, 5, 4, 30, tzinfo=timezone.utc))
+        assert ps_mod._daemon_should_record_ratings(self.NOW) is False
+
+    def test_manual_reinclude_is_not_a_cycle(self, store, market):
+        self._write(store, datetime(2026, 10, 5, 13, 0, tzinfo=timezone.utc), cycle_id="manual_reinclude")
+        assert ps_mod._daemon_should_record_ratings(self.NOW) is True
+
+    def test_second_cycle_same_day_skips(self, store, market):
+        assert ps_mod._daemon_should_record_ratings(self.NOW) is True
+        self._write(store, self.NOW)
+        later = datetime(2026, 10, 5, 19, 0, tzinfo=timezone.utc)
+        assert ps_mod._daemon_should_record_ratings(later) is False
+
+    def test_store_error_fails_closed(self, monkeypatch, market):
+        monkeypatch.setattr(settings, "SYMBOL_RATING_ENABLED", True)
+
+        class _Boom:
+            def has_cycle_since(self, _):
+                raise RuntimeError("db down")
+
+        monkeypatch.setattr(rating_store_mod, "SymbolRatingStore", lambda **kw: _Boom())
+        assert ps_mod._daemon_should_record_ratings(self.NOW) is False
+
+    def test_disabled_skips_without_touching_store(self, monkeypatch, market):
+        monkeypatch.setattr(settings, "SYMBOL_RATING_ENABLED", False)
+
+        def _no_store(**kw):
+            raise AssertionError("store must not be opened when ratings are disabled")
+
+        monkeypatch.setattr(rating_store_mod, "SymbolRatingStore", _no_store)
+        assert ps_mod._daemon_should_record_ratings(self.NOW) is False
+
+    def test_call_is_gated_by_the_cadence_check(self):
         tree = ast.parse(textwrap.dedent(inspect.getsource(ps_mod.StrategyEvalStep.run)))
         gated = False
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.If)
-                and isinstance(node.test, ast.Name)
-                and node.test.id == "_DAEMON_RECORDS_SYMBOL_RATINGS"
+                and isinstance(node.test, ast.Call)
+                and isinstance(node.test.func, ast.Name)
+                and node.test.func.id == "_daemon_should_record_ratings"
             ):
                 for inner in ast.walk(node):
                     if (
@@ -331,4 +407,4 @@ class TestDaemonRatingWritesStayOff:
                         and inner.func.id == "_record_symbol_ratings"
                     ):
                         gated = True
-        assert gated, "_record_symbol_ratings must only run under `if _DAEMON_RECORDS_SYMBOL_RATINGS:`"
+        assert gated, "_record_symbol_ratings must only run under `if _daemon_should_record_ratings(...):`"

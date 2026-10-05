@@ -435,7 +435,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 798,
+    "attr": 799,
     "factory_param": 4,
     "getattr_const": 308,
     "os_environ": 2
@@ -665,7 +665,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:109",
+        "site": "rating/symbol_rating_store.py:111",
         "via": []
       },
       {
@@ -865,7 +865,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:114",
+        "site": "rating/symbol_rating_store.py:116",
         "via": []
       },
       {
@@ -874,7 +874,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:116",
+        "site": "rating/symbol_rating_store.py:118",
         "via": []
       },
       {
@@ -1110,7 +1110,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:114",
+        "site": "rating/symbol_rating_store.py:116",
         "via": []
       },
       {
@@ -1119,7 +1119,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:116",
+        "site": "rating/symbol_rating_store.py:118",
         "via": []
       },
       {
@@ -1919,7 +1919,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "rating/symbol_rating_store.py:114",
+        "site": "rating/symbol_rating_store.py:116",
         "via": []
       },
       {

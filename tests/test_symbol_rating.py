@@ -474,3 +474,40 @@ class TestTimestampHandling:
         store.record_ratings([_event("AAPL")])
         rows = store.get_recent(limit=10)
         assert rows[0]["timestamp"] is not None
+
+
+class TestHasCycleSince:
+    """SymbolRatingStore.has_cycle_since -- the read behind the daemon's
+    once-per-trading-day write gate."""
+
+    START = datetime(2026, 10, 5, 4, 0, tzinfo=timezone.utc)
+
+    def _store_with(self, ts, cycle_id="cycle-1"):
+        store = SymbolRatingStore(db_url="sqlite:///:memory:")
+        store.record_ratings([_event(timestamp=ts)], cycle_id=cycle_id)
+        return store
+
+    def test_empty_table_is_false(self):
+        assert SymbolRatingStore(db_url="sqlite:///:memory:").has_cycle_since(self.START) is False
+
+    def test_row_after_start_is_true(self):
+        store = self._store_with(datetime(2026, 10, 5, 12, 47, tzinfo=timezone.utc))
+        assert store.has_cycle_since(self.START) is True
+
+    def test_row_before_start_is_false(self):
+        store = self._store_with(datetime(2026, 10, 5, 3, 59, tzinfo=timezone.utc))
+        assert store.has_cycle_since(self.START) is False
+
+    def test_naive_and_aware_start_agree(self):
+        store = self._store_with(datetime(2026, 10, 5, 4, 0, tzinfo=timezone.utc))
+        assert store.has_cycle_since(self.START) is True
+        assert store.has_cycle_since(self.START.replace(tzinfo=None)) is True
+
+    def test_manual_reinclude_rows_do_not_count(self):
+        store = SymbolRatingStore(db_url="sqlite:///:memory:")
+        store.reinclude("AAPL")
+        assert store.has_cycle_since(datetime(2000, 1, 1, tzinfo=timezone.utc)) is False
+
+    def test_null_cycle_id_rows_count(self):
+        store = self._store_with(datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc), cycle_id=None)
+        assert store.has_cycle_since(self.START) is True

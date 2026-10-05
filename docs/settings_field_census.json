@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "d85a26849ef76c4ae81206b546ba29f4e98af73b",
+    "git_commit": "f6a99f498213f91ba827a47be6df28652973d828",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3013,7 +3013,7 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 712,
+      "total_reads": 713,
       "distinct_fields": 246,
       "counts": {
         "OUTPUT_DIR": 116,
@@ -3057,6 +3057,7 @@
         "SIZING_CAP_ALERT_THRESHOLD_PCT": 4,
         "SIZING_CAP_ESCALATION_FACTOR": 4,
         "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES": 4,
+        "SYMBOL_RATING_ENABLED": 4,
         "WATCH_RULES_FILE": 4,
         "ALERT_EMAIL_FROM": 3,
         "ALERT_EMAIL_TO": 3,
@@ -3084,7 +3085,6 @@
         "SENTIMENT_SOURCES": 3,
         "SIZING_CAP_AUDIT_ENABLED": 3,
         "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 3,
-        "SYMBOL_RATING_ENABLED": 3,
         "WATCHLIST": 3,
         "WEEKLY_DIGEST_ENABLED": 3,
         "AGENTIC_DISCOVERY_ENABLED": 2,
