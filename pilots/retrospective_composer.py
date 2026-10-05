@@ -78,6 +78,18 @@ STATUS_EVALUATION_UNAVAILABLE = "evaluation data unavailable"
 _CALIBRATION_UNSET = object()
 
 
+def _row_exit_context_json(row: Any) -> Any:
+    """exit_context_json of a PaperClosedTrade row, or None when the column
+    was deferred because the DB predates it (never triggers a load)."""
+    try:
+        from sqlalchemy import inspect as _sa_inspect
+        if "exit_context_json" in _sa_inspect(row).unloaded:
+            return None
+    except Exception:  # noqa: BLE001 -- non-ORM row (tests): plain attribute
+        pass
+    return getattr(row, "exit_context_json", None)
+
+
 def _parse_exit_context(raw: Any) -> tuple[dict[str, Any] | None, str]:
     """Parse paper_closed_trades.exit_context_json -> (dict | None, status).
 
@@ -172,7 +184,7 @@ class RetrospectiveComposer:
             "realized_pnl_pct": float(row.realized_pnl_pct) if row.realized_pnl_pct is not None else None,
             "holding_period_days": float(row.holding_period_days) if row.holding_period_days is not None else None,
             "close_reason": row.close_reason,
-            "exit_context_json": getattr(row, "exit_context_json", None),
+            "exit_context_json": _row_exit_context_json(row),
             "leg_group_id": row.leg_group_id,
             "entry_snapshot_id": row.entry_snapshot_id,
             "bridge_status": row.bridge_status or "not_attempted",
@@ -438,7 +450,11 @@ class RetrospectiveComposer:
                 from data.paper_account_store import PaperClosedTrade, session_scope
                 with session_scope(target_paper_store.Session) as session:
                     if int_id is not None:
-                        row = session.query(PaperClosedTrade).filter_by(trade_id=int_id).first()
+                        if hasattr(target_paper_store, "query_closed_trades"):
+                            # Safe on a pre-2026-10 schema (exit_context_json missing).
+                            row = target_paper_store.query_closed_trades(session).filter_by(trade_id=int_id).first()
+                        else:
+                            row = session.query(PaperClosedTrade).filter_by(trade_id=int_id).first()
                         if row is not None:
                             closed_trade = self._row_to_closed_trade_dict(row)
             except Exception as exc:  # noqa: BLE001

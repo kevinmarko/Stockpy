@@ -33,6 +33,12 @@ Read-only live DB, 2026-10-05:
   - New nullable column `paper_closed_trades.exit_context_json`, with a migration.
   - `get_full_closed_trades` returns it.
   - Multi-leg, roll and expiry paths are unchanged.
+- **Readers are safe before migration** (added after rebasing onto #1106). A readonly store never migrates, and
+  #1106's `feature_freeze_status` tests hit `no such column: paper_closed_trades.exit_context_json`. Readers now go
+  through `PaperAccountStore.query_closed_trades()` / `closed_trade_exit_context()`: on an unmigrated DB the
+  column is deferred and reads as None. These are used by `get_full_closed_trades`, the bridge-metrics last-failure
+  query and the composer. Checked against a scratch copy of the live DB, which lacks the column: 2 closed trades
+  read, `exit_context_json=None`, bridge status healthy.
 - **`database_setup.py`**: the same column in `migrate_paper_closed_trades_schema`.
 - **Readers**:
   - The composer adds `exit_context` and `exit_context_status`.
@@ -89,3 +95,19 @@ All runs used `INVESTYO_RUNTIME_FLAGS_PATH` pointing at a scratch file in the wo
 settings-census / settings-liveness freshness checks. The new module raised the scanned file count from 375 to 376.
 `docs/settings_field_census.{json,md}` and `docs/settings_liveness.json` were regenerated with their `--write`
 scripts, and those checks pass on the second run.
+
+### After rebase onto origin/main (39e19533, includes #1106; #1107 not yet on main)
+Added a mock parity fix (`exit_context_json: null` on Quick Trade closes) and the readonly-reader fix above.
+
+**Targeted tests: 589 passed.** Same files as above, plus `test_pilots_strategy_report_card.py`.
+
+**Lint and typecheck: clean.**
+- `ruff --select=F821,F822,F823,E9`: all checks passed.
+- `npm run --prefix webapp typecheck`: clean.
+
+**`make ci` (with `INVESTYO_RUNTIME_FLAGS_PATH` exported, since #1107 is not on main): 11716 passed, 1 failed, 24 skipped.**
+The one failure is `test_runtime_flags.py::TestPathAnchoring::test_explicit_path_beats_env_var_beats_default`.
+It is caused by the export, and passes alone without it.
+
+**Settings artifacts were already current.** Regenerating them changed only the measured-at commit hash, so
+nothing was committed.

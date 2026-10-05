@@ -36,6 +36,12 @@ The feature freeze (step 7) ends on the evidence of the pipeline's own closed pa
   `key_indicators_json.advisory_conviction_same_cycle`, so retrospective calibration never silently
   measures a different engine.
 
+- **Readers stay safe before the column exists.** Readonly stores (freeze status, Pilots API, composer)
+  never migrate. They read through `PaperAccountStore.query_closed_trades()`, which defers
+  `exit_context_json` when the live DB has not yet been migrated by a write-mode store. This was caught
+  when rebasing onto #1106: its `feature_freeze_status` tests hit `no such column`. It was verified
+  against a scratch copy of the live DB.
+
 ## Not done (deliberately)
 
 - **No backfill.** Rebuilding the 8 open positions' or SPY's entry context from `DailySignals` would be

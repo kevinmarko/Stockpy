@@ -421,7 +421,9 @@ def _old_schema_db(path: Path) -> None:
         "experiment_arm TEXT, symbol TEXT NOT NULL, side TEXT NOT NULL, qty REAL NOT NULL, entry_ts DATETIME, "
         "entry_price REAL NOT NULL, exit_ts DATETIME NOT NULL, exit_price REAL NOT NULL, commission REAL, "
         "realized_pnl REAL NOT NULL, realized_pnl_pct REAL, holding_period_days REAL, "
-        "close_reason TEXT NOT NULL, leg_group_id TEXT)"
+        "close_reason TEXT NOT NULL, leg_group_id TEXT, entry_snapshot_id TEXT, "
+        "bridge_status TEXT DEFAULT 'not_attempted', bridged_trade_id INTEGER, bridge_error TEXT, "
+        "bridged_at TEXT)"
     )
     conn.execute(
         "INSERT INTO paper_closed_trades (strategy_id, symbol, side, qty, entry_price, exit_ts, exit_price, "
@@ -456,6 +458,38 @@ def test_database_setup_migrates_exit_context_column(tmp_path):
     migrate_paper_closed_trades_schema(conn.cursor(), conn)
     conn.close()
     assert "exit_context_json" in _columns(db)
+
+
+def test_readonly_store_reads_a_db_that_predates_the_column(tmp_path):
+    """A readonly store never migrates. Readers (freeze status, Pilots API,
+    composer) must still work on a DB no write-mode store has opened since
+    the upgrade -- exit_context_json reads as None, no 'no such column'."""
+    db = tmp_path / "pre.db"
+    _old_schema_db(db)
+    ro = PaperAccountStore(db_url=f"sqlite:///{db}", readonly=True)
+    assert "exit_context_json" not in _columns(db)
+
+    trades = ro.get_full_closed_trades()
+    assert len(trades) == 1
+    assert trades[0]["close_reason"] == "flatten"
+    assert trades[0]["exit_context_json"] is None
+    assert ro.get_bridge_completeness_metrics() is not None
+    assert "exit_context_json" not in _columns(db)  # still never written
+
+    rec = _composer(ro, tmp_path).compose_trade_retrospective(trades[0]["trade_id"])
+    assert rec is not None
+    assert rec["exit_context"] is None
+    assert rec["exit_context_status"] == "not_captured"
+
+
+def test_readonly_store_reads_exit_context_once_migrated(tmp_path):
+    db = tmp_path / "post.db"
+    w = PaperAccountStore(db_url=f"sqlite:///{db}")
+    w.apply_fill("c1", "AAPL", "buy", 5.0, 100.0, strategy_id="main_pipeline")
+    w.apply_fill("c2", "AAPL", "sell", 5.0, 95.0, strategy_id="main_pipeline",
+                 close_reason="signal_sell", exit_context_json='{"exit_signal": "SELL"}')
+    ro = PaperAccountStore(db_url=f"sqlite:///{db}", readonly=True)
+    assert ro.get_full_closed_trades()[0]["exit_context_json"] == '{"exit_signal": "SELL"}'
 
 
 def test_orm_has_exit_context_column():

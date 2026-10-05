@@ -16,7 +16,7 @@ from typing import Optional, List, Dict, Any
 
 
 from sqlalchemy import Column, Integer, String, Float, DateTime, inspect, text, Text, func
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import declarative_base, defer, sessionmaker
 
 from db_config import resolve_database_url, create_db_engine, session_scope
 from settings import settings
@@ -2041,6 +2041,39 @@ class PaperAccountStore:
         logger.warning("Ignoring invalid close_reason %r; using %r", value, default)
         return default
 
+    def _has_exit_context_column(self) -> bool:
+        """Whether paper_closed_trades has exit_context_json (added 2026-10).
+
+        A write-mode store migrates the column on construction, but a
+        readonly store never migrates. Against a DB no write-mode store has
+        opened since the upgrade, selecting the column would raise "no such
+        column" (the same incident class as paper_positions.entry_snapshot_id),
+        so readers check first. Not cached: a concurrent writer may migrate
+        the DB while this store is alive. Fails closed to False.
+        """
+        try:
+            cols = {c["name"] for c in inspect(self.engine).get_columns("paper_closed_trades")}
+        except Exception:  # noqa: BLE001
+            return False
+        return "exit_context_json" in cols
+
+    def query_closed_trades(self, session):
+        """``session.query(PaperClosedTrade)`` that is safe on a pre-2026-10
+        schema: when exit_context_json is missing it is deferred (never
+        selected). Read it only via ``closed_trade_exit_context()``."""
+        q = session.query(PaperClosedTrade)
+        if not self._has_exit_context_column():
+            q = q.options(defer(PaperClosedTrade.exit_context_json, raiseload=True))
+        return q
+
+    @staticmethod
+    def closed_trade_exit_context(row) -> Optional[str]:
+        """exit_context_json of a row from ``query_closed_trades``; None when
+        the column was deferred because the DB predates it (never loaded)."""
+        if "exit_context_json" in inspect(row).unloaded:
+            return None
+        return row.exit_context_json
+
     def _record_closed_trade(self, session, pos: PaperPosition, closed_qty: float, exit_price: float, close_reason: str, commission: float = 0.0, exit_context_json: Optional[str] = None):
         closed_qty_abs = abs(closed_qty)
         is_long = pos.qty > 0
@@ -2278,7 +2311,7 @@ class PaperAccountStore:
 
         results = []
         with session_scope(self.Session) as session:
-            q = session.query(PaperClosedTrade)
+            q = self.query_closed_trades(session)
             if symbol:
                 q = q.filter_by(symbol=symbol.upper())
             q = q.order_by(PaperClosedTrade.exit_ts.desc()).limit(limit)
@@ -2303,7 +2336,7 @@ class PaperAccountStore:
                     "realized_pnl_pct": t.realized_pnl_pct,
                     "holding_period_days": t.holding_period_days,
                     "close_reason": t.close_reason,
-                    "exit_context_json": t.exit_context_json,
+                    "exit_context_json": self.closed_trade_exit_context(t),
                     "leg_group_id": t.leg_group_id,
                     "entry_snapshot_id": t.entry_snapshot_id,
                     "bridge_status": t.bridge_status,
@@ -2444,7 +2477,7 @@ class PaperAccountStore:
             if failed_count > 0:
                 try:
                     last_fail = (
-                        session.query(PaperClosedTrade)
+                        self.query_closed_trades(session)
                         .filter(PaperClosedTrade.bridge_status == "failed")
                         .order_by(PaperClosedTrade.exit_ts.desc())
                         .first()
