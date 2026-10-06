@@ -17,6 +17,20 @@ import pytest
 # resolve correctly regardless of where pytest is invoked from.
 sys.path.insert(0, os.path.dirname(__file__))
 
+# Keep the test suite out of the operator's live OUTPUT_DIR
+# (~/.stockpy_local/output). Without this, tests that write through default
+# OUTPUT_DIR paths overwrote live files: queue_sources/advisory.json (emptied
+# while main.py's real queue source was live), risk_gate_blocks.jsonl,
+# progress.json, watch_state.json, dead_letter.json and others (2026-10-05,
+# docs/known_issues/output_dir_test_contamination_2026_10.md). Set as a real
+# environment variable BEFORE any platform import, so settings.OUTPUT_DIR AND
+# every module-level constant derived from it at import time point at a
+# throwaway directory. A shell-provided OUTPUT_DIR is honored unchanged.
+if not os.environ.get("OUTPUT_DIR"):
+    import tempfile
+
+    os.environ["OUTPUT_DIR"] = tempfile.mkdtemp(prefix="stockpy_test_output_")
+
 def _field_default(model_cls: type, name: str) -> Any:
     """The TRUE coded default for a Settings field, independent of .env, real
     shell env, and output/runtime_flags.json.

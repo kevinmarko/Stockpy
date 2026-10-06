@@ -105,8 +105,11 @@ class TestModuleSurface:
     def test_canonical_paths_point_at_output_dir(self):
         assert EXECUTION_QUEUE_PATH.name == "execution_queue.json"
         assert EXECUTION_RECEIPTS_PATH.name == "execution_receipts.jsonl"
-        assert EXECUTION_QUEUE_PATH.parent.name == "output"
-        assert EXECUTION_RECEIPTS_PATH.parent.name == "output"
+        # The root conftest points OUTPUT_DIR at a temp dir, so compare against
+        # the resolved setting rather than the literal "output" folder name.
+        from settings import settings as _s
+        assert EXECUTION_QUEUE_PATH.parent == Path(_s.OUTPUT_DIR)
+        assert EXECUTION_RECEIPTS_PATH.parent == Path(_s.OUTPUT_DIR)
 
     def test_canonical_paths_resolve_under_settings_output_dir_not_repo_root(self):
         """Regression coverage for a real incident: EXECUTION_QUEUE_PATH (and
@@ -494,7 +497,8 @@ class TestNtfyTopicConfigured:
 class TestNotifiedStatePathConvention:
     def test_canonical_path_points_at_output_dir(self):
         assert NOTIFIED_STATE_PATH.name == "execution_queue_notified.json"
-        assert NOTIFIED_STATE_PATH.parent.name == "output"
+        from settings import settings as _s
+        assert NOTIFIED_STATE_PATH.parent == Path(_s.OUTPUT_DIR)
 
 
 # ---------------------------------------------------------------------------
@@ -731,7 +735,8 @@ class TestHelpContentKeys:
 class TestPlacedLedgerPathConvention:
     def test_canonical_path_points_at_output_dir(self):
         assert EXECUTION_PLACED_PATH.name == "execution_placed.jsonl"
-        assert EXECUTION_PLACED_PATH.parent.name == "output"
+        from settings import settings as _s
+        assert EXECUTION_PLACED_PATH.parent == Path(_s.OUTPUT_DIR)
 
 
 # ---------------------------------------------------------------------------
