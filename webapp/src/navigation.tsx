@@ -29,6 +29,7 @@ import {
   LayoutTemplate,
   ShieldCheck,
   History,
+  Search,
 } from "lucide-react";
 import { useCustomViews } from "./customViews";
 
@@ -96,6 +97,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/sector-selection", label: "Sector Selection", ico: Puzzle, match: (p) => p.startsWith("/sector-selection"), section: "research" },
   { to: "/forecast", label: "Forecast Viewer", ico: TrendingUp, match: (p) => p === "/forecast", section: "research" },
   { to: "/forecast/backfill", label: "Forecast Backfill", ico: TrendingUp, match: (p) => p.startsWith("/forecast/backfill"), section: "research" },
+  { to: "/research/trends", label: "Search Attention", ico: Search, match: (p) => p.startsWith("/research/trends"), section: "research" },
   { to: "/data-explorer", label: "Data Explorer", ico: FolderOpen, match: (p) => p.startsWith("/data-explorer"), section: "research" },
   { to: "/symbol-screener", label: "Symbol Screener", ico: Filter, match: (p) => p.startsWith("/symbol-screener"), section: "research" },
   { to: "/trade-history", label: "Trade History", ico: Briefcase, match: (p) => p.startsWith("/trade-history"), section: "research" },
