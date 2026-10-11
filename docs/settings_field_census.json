@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "551db674b4bcb613a1e05717468c076c3257a26b",
+    "git_commit": "3b8c2e74e9ddcf3252571571136e7c3e3bb8bf09",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2870,7 +2870,7 @@
           "route": "/data/universe",
           "method": "PUT",
           "function": "update_universe",
-          "line": 734,
+          "line": 794,
           "writes_env": true,
           "env_write_calls_direct": [
             "write_setting"
@@ -2889,7 +2889,7 @@
           "route": "/data/ai/commentary/{symbol}",
           "method": "POST",
           "function": "generate_commentary",
-          "line": 1281,
+          "line": 1341,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2906,7 +2906,7 @@
           "route": "/data/ai/chart/{symbol}",
           "method": "POST",
           "function": "generate_chart_insight",
-          "line": 1324,
+          "line": 1384,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2923,7 +2923,7 @@
           "route": "/data/ai/research/{symbol}",
           "method": "POST",
           "function": "generate_research",
-          "line": 1426,
+          "line": 1486,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2940,7 +2940,7 @@
           "route": "/data/sync",
           "method": "POST",
           "function": "post_data_sync",
-          "line": 1575,
+          "line": 1635,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2961,7 +2961,7 @@
           "route": "/api/chat",
           "method": "POST",
           "function": "chat_endpoint",
-          "line": 2149,
+          "line": 2209,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2990,7 +2990,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 377,
+    "files_scanned": 378,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3019,7 +3019,7 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 721,
+      "total_reads": 730,
       "distinct_fields": 251,
       "counts": {
         "OUTPUT_DIR": 116,
@@ -3042,6 +3042,7 @@
         "AI_CHAT_TIMEOUT_SECONDS": 5,
         "CORS_ALLOWED_ORIGINS": 5,
         "FINBERT_ENABLED": 5,
+        "GOOGLE_TRENDS_ENABLED": 5,
         "KELLY_FRACTION": 5,
         "ORCHESTRATOR_API_PORT": 5,
         "PAPER_TRADING": 5,
@@ -3075,6 +3076,7 @@
         "FUNDAMENTALS_REFRESH_DAYS": 3,
         "GEMINI_API_KEY": 3,
         "GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS": 3,
+        "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS": 3,
         "HMM_CREDIT_SPREAD_FEATURE_ENABLED": 3,
         "HMM_TOL": 3,
         "MAX_PORTFOLIO_HEAT": 3,
@@ -3116,7 +3118,10 @@
         "FORECAST_USE_GARCH_SIGMA": 2,
         "FRED_REQUEST_TIMEOUT_SECONDS": 2,
         "FUNDAMENTALS_CACHE_TTL_SECONDS": 2,
-        "GOOGLE_TRENDS_ENABLED": 2,
+        "GOOGLE_TRENDS_MAX_TERMS_PER_PASS": 2,
+        "GOOGLE_TRENDS_OVERLAP_DAYS": 2,
+        "GOOGLE_TRENDS_RAW_RETENTION_BATCHES": 2,
+        "GOOGLE_TRENDS_WINDOW_DAYS": 2,
         "GRAVITY_AI_RUNNER_OUTPUT_PATH": 2,
         "HMM_COVARIANCE_TYPE": 2,
         "HMM_N_STATES": 2,
@@ -3196,11 +3201,6 @@
         "GOOGLE_TRENDS_COOLDOWN_SECONDS": 1,
         "GOOGLE_TRENDS_MAX_RETRIES": 1,
         "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE": 1,
-        "GOOGLE_TRENDS_MAX_TERMS_PER_PASS": 1,
-        "GOOGLE_TRENDS_OVERLAP_DAYS": 1,
-        "GOOGLE_TRENDS_RAW_RETENTION_BATCHES": 1,
-        "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS": 1,
-        "GOOGLE_TRENDS_WINDOW_DAYS": 1,
         "GRAVITY_REQUIRE_NATIVE": 1,
         "HMM_N_INITS": 1,
         "HMM_RISK_OFF_BLOCK_THRESHOLD": 1,
@@ -3914,7 +3914,7 @@
       {
         "field": "UNIVERSE_SYNC_ENABLED",
         "name_literal_sites": [
-          "api/data_api.py:1564",
+          "api/data_api.py:1624",
           "pilots/feature_flags.py:49"
         ],
         "name_literal_site_count": 2,
