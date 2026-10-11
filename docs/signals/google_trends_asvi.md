@@ -20,6 +20,18 @@ This module implements the end-to-end data ingestion, overlapping stitching, and
 - `GOOGLE_TRENDS_COOLDOWN_THRESHOLD`: Failures required to enter cooldown.
 - `GOOGLE_TRENDS_COOLDOWN_SECONDS`: Duration of cooldown lock-out.
 - `GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE`: Wall-clock budget for the per-symbol pipeline dashboard-column loop (default: 120).
+- `GOOGLE_TRENDS_MAX_TERMS_PER_PASS`: Most terms the daemon downloads in one refresh pass, stalest first (default: 10).
+- `GOOGLE_TRENDS_RAW_RETENTION_BATCHES`: Complete download batches kept per term in `raw_trends_downloads` (default: 14).
+
+**Daemon refresh (`maybe_refresh_google_trends`), since 2026-10:**
+- **Universe.** The tracked universe via `data/portfolio_sync.py::compute_tracked_universe()` (held ∪ watchlist ∪ discovered, else `DEFAULT_TICKERS`), using only the cached Robinhood snapshot. It used to be `DEFAULT_TICKERS` alone.
+- **Schedule.** A term is due when its last download *attempt* (complete, partial or failed) is older than `GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS`, so a term Google has no data for is not retried on every wake. The schedule is read from the `trends_download_batches` table, so it survives a daemon restart. Each pass takes at most `GOOGLE_TRENDS_MAX_TERMS_PER_PASS` due terms, never-attempted first, then oldest attempt first (round-robin), so a large universe is covered across several timer wakes.
+- **Batches.** The windows of one download share a `batch_id` and are recorded in `trends_download_batches` with `status` `complete` (every planned window returned), `partial` or `failed`, plus a `reason`. Raw rows carry `window_id = "<batch_id>/<window_start>/<window_end>"`.
+- **Only complete batches are stitched.** The new stitch *replaces* the term's stored series in one transaction (`save_stitched_series(..., replace=True)`), so no days from an older stitch, on an older scale, are left behind. A partial or failed batch leaves the stored series unchanged.
+- **Partial current day dropped.** `fetch_overlapping_windows` drops rows pytrends flags `isPartial`. The current day's value climbs while the day is in progress, so the dashboard ASVI (the last stored day) is now computed from the last *complete* day.
+- **Rate-limit cooldown stops the pass.** The terms not reached stay due for a later wake.
+- **Retention.** After a complete batch, raw rows older than the newest `GOOGLE_TRENDS_RAW_RETENTION_BATCHES` complete batches are pruned, including pre-2026-10 rows with bare `uuid4` window ids.
+- Write-up: [`docs/known_issues/google_trends_stale_scale_and_partial_day_2026_10.md`](../known_issues/google_trends_stale_scale_and_partial_day_2026_10.md).
 
 
 ```
@@ -85,6 +97,8 @@ $$ASVI_t = \ln(SVI_t) - \ln\left(\text{Median}(SVI_{t-k \dots t-1})\right)$$
 
 **Lookahead-Free Causality**:
 The rolling median strictly operates on $SVI$ shifted by 1 day ($t-1$), ensuring information from date $t$ never enters the baseline calculation.
+
+**Warm-up rows are NaN.** The first 7 rows have no prior data to form a baseline, so their ASVI is NaN. Until 2026-10 they were filled with the median of the first 84 days, which includes dates after $t$ (a lookahead). `tests/test_trends_stitcher.py::test_asvi_no_lookahead_in_warmup_perturbation` pins this with cutoffs inside the first lookback window. The dashboard takes the last valid value, so it is unaffected unless a term has 7 or fewer stored days, in which case it now shows NaN.
 
 ### C. Technical Indicators (`FMPDataLoader`)
 Computes normalized input features for sequence modeling:

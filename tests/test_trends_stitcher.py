@@ -427,8 +427,35 @@ class TestASVICalculator:
         svi.iloc[10:20] = 20.0
 
         asvi = ASVICalculator.compute_asvi(svi, lookback_weeks=4, epsilon=0.1)
-        assert not asvi.isna().any()
-        assert not np.isinf(asvi.values).any()
+        # The 7 warm-up rows have no causal baseline and are NaN; every row
+        # after them must be finite.
+        assert asvi.iloc[:7].isna().all()
+        assert not asvi.iloc[7:].isna().any()
+        assert not np.isinf(asvi.iloc[7:].values).any()
+
+    def test_asvi_warmup_rows_are_nan_not_a_future_median(self):
+        """Rows before min_periods used to be filled with the median of the
+        first lookback window, which includes later dates. They must be NaN."""
+        dates = pd.date_range("2026-01-01", periods=60, freq="D")
+        svi = pd.Series(np.arange(1.0, 61.0), index=dates)
+        asvi = ASVICalculator.compute_asvi(svi, lookback_weeks=4)
+        assert asvi.iloc[:7].isna().all()
+        assert asvi.iloc[7:].notna().all()
+
+    def test_asvi_no_lookahead_in_warmup_perturbation(self):
+        """Perturbation test with the cutoff inside the first lookback window,
+        the region the old warm-up fill leaked future data into: ASVI up to
+        the cutoff must be bit-identical (NaN positions included) whatever
+        happens after it."""
+        dates = pd.date_range("2026-01-01", periods=120, freq="D")
+        rng = np.random.default_rng(7)
+        base = pd.Series(rng.uniform(10, 80, size=len(dates)), index=dates)
+        for cutoff in (3, 7, 10, 40, 83):
+            perturbed = base.copy()
+            perturbed.iloc[cutoff + 1:] = perturbed.iloc[cutoff + 1:] * 50.0 + 900.0
+            a = ASVICalculator.compute_asvi(base, lookback_weeks=12).iloc[: cutoff + 1]
+            b = ASVICalculator.compute_asvi(perturbed, lookback_weeks=12).iloc[: cutoff + 1]
+            np.testing.assert_array_equal(a.values, b.values)
 
     def test_asvi_no_lookahead_bias_perturbation(self):
         """CRITICAL NO-LOOKAHEAD TEST:
