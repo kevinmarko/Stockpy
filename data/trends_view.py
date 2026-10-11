@@ -389,8 +389,10 @@ def build_svi_view(store: Any, term: str, *, now: Optional[datetime] = None) -> 
             if rows:
                 out["status"] = "stitched_only"
                 out["reason"] = (
-                    "no complete download batch is stored (it was pruned or never "
-                    "finished); showing the stored stitched series without its raw windows"
+                    "no complete download batch is on record for this series (it was "
+                    "stored before download batches existed, or recent downloads were "
+                    "incomplete); showing the stored stitched series and its ASVI without "
+                    "raw windows or seams, which appear after the next complete download"
                 )
             else:
                 out["status"] = "partial_only"

@@ -2,7 +2,7 @@
 
 **Design source:** `.claude/google_trends_svi_live_implementation_plan.md` §3, Phases B and C (payloads, seam maths, statuses). This file is the **build order**: what to do, in which file, and the check that must pass before the next step. Tick boxes as you go.
 
-**Status (2026-10-11):** not started. Phase A (data fixes) is done on this branch, CI green, not merged (draft PR #1114).
+**Status (2026-10-11):** done. Built by 6 agents in 3 waves against `.claude/google_trends_svi_live_phase_bc_contract.md` and reviewed by the lead. Evidence: `.claude/google_trends_svi_live_phase_bc_walkthrough.md`. Boxes below are left unticked as the original checklist; the walkthrough records what was verified.
 
 ---
 

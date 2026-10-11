@@ -1,6 +1,6 @@
 # Live Google Trends SVI Stitching Viewer — Implementation Plan
 
-**Branch:** `claude/google-trends-svi-live-drw74r` · **Date:** 2026-10-06, revised 2026-10-11 · **Status:** Phase A implemented on this branch (draft PR #1114, CI green, **not merged**). Phases B/C are a refined plan only (revised 2026-10-11 after a design spike); nothing for them is built.
+**Branch:** `claude/google-trends-svi-live-drw74r` · **Date:** 2026-10-06, revised 2026-10-11 · **Status:** Phases A, B and C implemented on this branch (PR #1114, shipped together per the operator, 2026-10-11). Phase D not planned. Walkthroughs: `.claude/google_trends_svi_live_phase_a_walkthrough.md`, `.claude/google_trends_svi_live_phase_bc_walkthrough.md`.
 **Predecessors:** [#953](https://github.com/kevinmarko/Stockpy/pull/953) (mock-only demo; live route returned 501),
 a later revision that read `TrendsStore` with an SPY-volume proxy fallback, and
 [#1100](https://github.com/kevinmarko/Stockpy/pull/1100) (removed the screen as "a demo showing stale Trends data").
@@ -100,7 +100,7 @@ A read-only **Search Attention (Google Trends)** screen. For each term the daemo
 
 **Build order:** `.claude/google_trends_svi_live_phase_bc_task.md` (step-by-step tracker with a check after each step).
 
-**Status:** plan only. A design spike on 2026-10-11 was stopped at the operator's request and reverted. The design below includes what it found.
+**Status:** built 2026-10-11 (see the Phases B/C walkthrough). One design change from the spike: HTTP tests use a file-backed SQLite store, because sync FastAPI endpoints run in a worker thread and an in-memory SQLite DB is private to its connection.
 
 **Where the code goes.**
 - New pure module `data/trends_view.py`: `build_terms_view(store, tracked_universe, now=None)` and `build_svi_view(store, term, now=None)`. Both read the store only and catch their own failures, returning `status:"error"` with a reason (CONSTRAINT #6).
@@ -240,11 +240,11 @@ A command-tier endpoint (`FOLLOW_API_TOKEN`) asks the **daemon** to refresh one 
 
 **Answered 2026-10-11:** Decisions 2–7 below were accepted as recommended and are implemented in Phase A. That means: switch the universe with a cap of 10, the partial-day fix, NaN warm-up, K = 14, no Phase D, and the re-stitch cleans up orphans (no purge script).
 
-**Still open:**
-1. **Freeze exception for Phases B/C** (the new screen). On 2026-10-11 the operator first asked to "merge Phase A with Phases B and C", then asked for the plan only. So B/C remain unbuilt, pending a go-ahead.
-2. **When to merge Phase A.** Options: on its own, since it is freeze-allowed and CI is green, or held until B/C are built so the screen ships with the data fixes. It changes the dashboard `Google_Trends_ASVI` values (partial day dropped), so the operator should pick the timing.
-3. **Mobile reach for the screen:** a Marketplace "Explore" tile as well, or the desktop sidebar plus Research hub only. *Recommendation: the Research hub card and sidebar only. This is a research page, not a daily-use one.*
-4. **Sampling-noise band (§2 item 6):** in the first B/C PR, or later. *Recommendation: later. It needs ≥ 2 retained complete batches per term, which Phase A's retention now provides, but it adds a chart and an API field.*
+**Answered later on 2026-10-11:**
+1. Freeze exception for Phases B/C: **granted** ("do b and c").
+2. Merge timing: **ship A + B + C together** in #1114.
+3. Mobile reach: **no Marketplace tile**; desktop sidebar + Research hub only.
+4. Sampling-noise band: **later** (not built).
 
 Original decision list (kept for the record):
 
