@@ -8440,7 +8440,10 @@ const TRENDS_NOW_MS = Date.UTC(2026, 9, 11, 12, 0, 0);
 const TRENDS_END_MS = Date.UTC(2026, 9, 10);
 const TRENDS_DAY_MS = 86_400_000;
 const TRENDS_DAYS = 365;
-const TRENDS_WINDOW = 91;
+// Same walk as data/google_trends_client.py::plan_windows: a window spans
+// start..start+90 days (both ends included) and the next one starts at
+// end-30 days, so each window and overlap match the backend's.
+const TRENDS_WINDOW = 90;
 const TRENDS_OVERLAP = 30;
 const TRENDS_ASVI_LOOKBACK = 84;
 
@@ -8449,8 +8452,8 @@ const TRENDS_CONFIG: TrendsConfig = {
   window_days: TRENDS_WINDOW,
   overlap_days: TRENDS_OVERLAP,
   refresh_interval_hours: 24,
-  max_terms_per_pass: 5,
-  retention_batches: 3,
+  max_terms_per_pass: 10,
+  retention_batches: 14,
   stale_after_hours: 48,
   asvi_lookback_days: TRENDS_ASVI_LOOKBACK,
 };
@@ -8481,7 +8484,7 @@ function trendsBuild(degenerateSeam1: boolean): TrendsSeries {
   const ends: number[] = [];
   let s = 0;
   while (s < TRENDS_DAYS) {
-    const e = Math.min(s + TRENDS_WINDOW - 1, TRENDS_DAYS - 1);
+    const e = Math.min(s + TRENDS_WINDOW, TRENDS_DAYS - 1);
     const vals: [number, number][] = [];
     for (let i = s; i <= e; i++) vals.push([t0 + i * TRENDS_DAY_MS, trendsUnderlying(i)]);
     const mx = Math.max(...vals.map(([, v]) => v));
@@ -8491,7 +8494,7 @@ function trendsBuild(degenerateSeam1: boolean): TrendsSeries {
     starts.push(t0 + s * TRENDS_DAY_MS);
     ends.push(t0 + e * TRENDS_DAY_MS);
     if (e >= TRENDS_DAYS - 1) break;
-    s = e - TRENDS_OVERLAP + 1;
+    s = e - TRENDS_OVERLAP;
   }
   if (degenerateSeam1) {
     // Zero window 1's overlap with its predecessor so the 1e-9 guard fires.

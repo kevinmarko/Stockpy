@@ -36,7 +36,7 @@ describe("TrendsAttention screen (mock API)", () => {
     expect(screen.queryByTestId("trends-mismatch-warning")).toBeNull();
     expect(screen.getByLabelText("Term")).toHaveValue("AAL");
     expect(screen.getByText("Trends data for 5 of 12 tracked symbols")).toBeInTheDocument();
-    expect(screen.getByText("91 d / 30 d")).toBeInTheDocument();
+    expect(screen.getByText("90 d / 30 d")).toBeInTheDocument();
   });
 
   it("switching to AM shows the recompute mismatch warning", async () => {

@@ -1275,6 +1275,18 @@ button:focus-visible {
   border: 1px solid rgba(16, 185, 129, 0.28);
   color: #a7f3d0;
 }
+/* The text colours above are light tints meant for the dark theme; on the
+   light theme they sit on a near-white background and are unreadable
+   (measured: #fce3b4 on ~#fffaf0). Use dark tones of the same hues there. */
+:root[data-theme="light"] .notice-warn {
+  color: #92400e;
+}
+:root[data-theme="light"] .notice-info {
+  color: #075985;
+}
+:root[data-theme="light"] .notice-success {
+  color: #065f46;
+}
 
 /* ---- States ---- */
 .empty {
