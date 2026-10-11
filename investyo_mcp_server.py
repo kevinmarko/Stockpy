@@ -5679,7 +5679,7 @@ def audit_webapp_vitals(route: str = "/") -> str:
 @mcp.tool(meta=_DEVTOOLS_INSPECTOR_UI, annotations=ToolAnnotations(readOnlyHint=True))
 def audit_all_pwa_screens() -> str:
     """
-    Audits all 19 defined routes in the Pilots PWA, checking availability, response times,
+    Audits all 20 defined routes in the Pilots PWA, checking availability, response times,
     and console health.
     """
     import json
@@ -5705,6 +5705,7 @@ def audit_all_pwa_screens() -> str:
         "/agentic",
         "/paper-broker",
         "/universe",
+        "/research/trends",
         "/settings",
     ]
 

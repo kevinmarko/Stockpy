@@ -281,6 +281,7 @@ The web app is a graphical front-end over the same pipeline. Its main screens:
   **Symbol Screener**, **Forecast Viewer**, and other research screens.
 - **Calibration** (`/calibration`) and **Attribution** (`/attribution`) — decision journal,
   conviction calibration, and Brinson-Fachler attribution.
+- **Search Attention** (`/research/trends`) — Google Trends search interest per ticker, with the stitching work shown; see [Reading the Search Attention screen](#reading-the-search-attention-screen).
 - **Report Library** (`/operations/reports`) — generated reports.
 - **Universe Transparency** (`/universe`) — tracked universe and coverage status.
 - **Settings** (`/settings`) — execution mode and kill switch (General), tunables, strategy
@@ -960,6 +961,40 @@ If a symbol is not currently tracked and you want to look it up, you can use the
 ### Explain This Ticker
 
 On the Universe Transparency screen (and other ticker lists), you can click the **ⓘ button** next to any symbol to open the **Explain This Ticker** slide-over drawer. This drawer breaks down exactly why a symbol is tracked (e.g., held in your account, on a watchlist, or from the fallback sheet), its current data coverage, and if it is being automatically dropped due to consecutive bad rating cycles.
+
+### Reading the Search Attention screen
+
+The **Search Attention** screen (`/research/trends`, under Research) shows how much people are searching Google for each ticker, and lets you audit how that number was built. It is read-only: it displays what the daemon has already saved and never calls Google itself.
+
+**Why it looks the way it does.** Google Trends only returns a short window per request, and it scales each window so its busiest day is 100. Two windows therefore disagree about the level. The platform downloads several *overlapping* windows, measures how the shared days compare, rescales each window to match the one before it, and joins them into one long series (this is *overlap stitching*). ASVI (Abnormal Search Volume Index) then compares each day with that term's own recent normal: above 0 means more attention than usual, below 0 means less.
+
+**Picking a term.** The list on the left (or top, on a phone) shows every term with data: when it was last downloaded, how old that is (marked stale once it is well past the refresh interval), how many stitched days it has, and its latest ASVI. A coverage line says how many tracked symbols have data. Choose a term to load it.
+
+**What each part shows**
+
+- **Raw windows** - one line per downloaded window, exactly as Google returned it, each on its own 0-100 scale. The windows overlap by a few days. Expect the lines to sit at different heights; that is the problem stitching solves.
+- **Seams table** - one row per join between windows. It lists the overlap dates, the sum of the overlap in each side, the *applied factor* (the multiplier actually used to rescale the new window) and the *pair factor* (a diagnostic: the ratio from just the two neighbouring raw windows). A large gap between the two factors means earlier corrections changed this seam. A *degenerate* seam means the overlap was zero or nearly so, so no honest ratio exists; the row shows dashes instead of a made-up number.
+- **Stitched chart** - the rescaled windows drawn together, with the final stitched series on top and the seams marked. If the stitch worked, the rescaled windows line up across each overlap.
+- **ASVI chart** - the attention score over time. The first days have no baseline yet and are left blank on purpose. The length of the baseline is shown on the screen.
+- **Honesty strip** - the facts you need to trust the rest: whether refresh is enabled, the latest download attempt and its result, the age of the last complete download, and the recompute check below.
+
+**Statuses**
+
+| Status | Meaning |
+|---|---|
+| `ok` | A complete download exists and its stitched series is saved. Everything above is shown. |
+| `stitched_only` | A stitched series is saved but no complete download is on record (for example the raw rows were pruned). The stitched chart and ASVI show; raw windows and seams do not. |
+| `partial_only` | Only incomplete downloads exist (some windows failed, often a rate limit) and nothing was stitched. Nothing is charted, and the reason says why. |
+| `no_data` | Nothing has been downloaded for this term yet. Refresh is on, so it will be fetched in a later pass. |
+| `disabled` | Nothing is stored and the Trends refresh switch is off. |
+| `error` | Reading the saved data failed. The reason names the kind of error only. The rest of the app is unaffected. |
+
+**The recompute check.** For an `ok` term the screen re-runs the stitch from the saved raw windows and compares it day by day with the stitched series stored in the database. "Matches" means the same dates and values equal to within a rounding error, so what you see is exactly what the signal consumes. A mismatch means the stored series came from a different download than the latest complete one, or the stitching code changed since it was saved. It is a warning to look closer, not proof the numbers are wrong; the next complete download for the term replaces the stored series and normally clears it.
+
+**Two things that look like bugs but are not**
+
+- *The newest point is yesterday, not today.* Google reports the current day while it is still accumulating, so it is biased low; the downloader drops those *partial day* rows.
+- *Two downloads disagree by a few points.* Google answers from a random sample of its logs (*sampling noise*). On the operator's own database one complete day came back as 78, 79, 80 and 81 across four downloads. Read sustained moves, not single-point wiggles.
 
 ### In `.env` (simplest)
 

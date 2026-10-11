@@ -267,6 +267,91 @@ class TrendsStore:
             logger.warning("TrendsStore.latest_batch: %s", exc)
             return None
 
+    def latest_batches(self) -> dict[str, dict[str, Optional[dict]]]:
+        """Per term, its latest batch of any status (``"latest"``) and its
+        latest complete batch (``"complete"``), each as a ``_batch_to_dict``
+        dict or ``None``. Two queries for every term, so a viewer listing
+        hundreds of terms does not pay one query per term. ``{}`` on any error.
+        """
+        try:
+            session = self.Session()
+            try:
+                out: dict[str, dict[str, Optional[dict]]] = {}
+                rows = (
+                    session.query(TrendsDownloadBatch)
+                    .order_by(TrendsDownloadBatch.started_at.desc())
+                    .all()
+                )
+                # Newest first, so the first row seen per term is its latest
+                # and the first complete row seen is its latest complete.
+                for row in rows:
+                    slot = out.setdefault(row.query_term, {"latest": None, "complete": None})
+                    if slot["latest"] is None:
+                        slot["latest"] = _batch_to_dict(row)
+                    if slot["complete"] is None and row.status == BATCH_COMPLETE:
+                        slot["complete"] = _batch_to_dict(row)
+                return out
+            finally:
+                session.close()
+        except Exception as exc:
+            logger.warning("TrendsStore.latest_batches: %s", exc)
+            return {}
+
+    def stitched_summary(self) -> dict[str, dict[str, Any]]:
+        """Per term with a stored stitched series: ``days`` (row count),
+        ``first_date``, ``last_date`` and ``stitched_at`` (newest row's).
+        ``{}`` on any error."""
+        try:
+            session = self.Session()
+            try:
+                out: dict[str, dict[str, Any]] = {}
+                for term, days, first, last, at in (
+                    session.query(
+                        StitchedGoogleTrends.query_term,
+                        func.count(StitchedGoogleTrends.date),
+                        func.min(StitchedGoogleTrends.date),
+                        func.max(StitchedGoogleTrends.date),
+                        func.max(StitchedGoogleTrends.stitched_at),
+                    )
+                    .group_by(StitchedGoogleTrends.query_term)
+                    .all()
+                ):
+                    out[term] = {
+                        "days": int(days),
+                        "first_date": first,
+                        "last_date": last,
+                        "stitched_at": at,
+                    }
+                return out
+            finally:
+                session.close()
+        except Exception as exc:
+            logger.warning("TrendsStore.stitched_summary: %s", exc)
+            return {}
+
+    def get_stitched_rows(self, query_term: str) -> list[dict]:
+        """A term's stitched rows with their ``stitched_at`` stamp, ordered by
+        date ascending (``get_stitched_series`` drops the stamp). ``[]`` on
+        any error."""
+        try:
+            session = self.Session()
+            try:
+                rows = (
+                    session.query(StitchedGoogleTrends)
+                    .filter_by(query_term=query_term)
+                    .order_by(StitchedGoogleTrends.date.asc())
+                    .all()
+                )
+                return [
+                    {"date": r.date, "value": r.value, "stitched_at": r.stitched_at}
+                    for r in rows
+                ]
+            finally:
+                session.close()
+        except Exception as exc:
+            logger.warning("TrendsStore.get_stitched_rows: %s", exc)
+            return []
+
     def load_batch_windows(self, batch_id: str) -> list[RawTrendsDownload]:
         """The raw rows of one batch, ordered by window id then date (so each
         window's rows are contiguous and windows come in chronological

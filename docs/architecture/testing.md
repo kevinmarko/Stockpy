@@ -5,6 +5,8 @@
 > **2026-09 (step 4b):** any options-desk module mentioned below (`technical_options_engine.py`, `volatility/iv_engine.py`, and the rest of the step-4 archive set) moved to `legacy/` — see `legacy/README.md` for the full list.
 
 - **tests/lookahead_check.py** — utility exposing `verify_no_lookahead` to detect and prevent lookahead bias in quantitative indicators.
+- **tests/test_trends_view.py** — `data/trends_view.py` builders against a temp `TrendsStore`: every status (ok, stitched_only, partial_only, no_data, disabled, error), seam factors including the degenerate guard, the recompute check (match and mismatch), staleness, and that errors expose only the exception type.
+- **tests/test_data_api_trends_svi.py** — `GET /data/trends/terms` and `GET /data/trends/svi?term=` on `api/data_api.py`: auth, term validation (422 `invalid_term`), 200 for a valid term with no data, NaN-clean JSON, and no network access.
 - **tests/test_indicators_lookahead.py** — lookahead perturbation tests for RSI, MACD, ATR, Aroon, Chandelier, and RS-MACD.
 - **tests/test_forecasting_lookahead.py** — tests to ensure `MinMaxScaler` in the forecasting engine is fit strictly on training partitions.
 - **tests/test_universe.py** — unit, integration, and point-in-time lookahead checks for `universe_engine.py`.

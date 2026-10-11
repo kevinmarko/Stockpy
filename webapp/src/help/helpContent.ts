@@ -208,6 +208,23 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "Why isn't symbol X covered? A symbol shows as Uncovered, Quotes-only, or Equity-only when the upstream data provider (FMP, with yfinance as the fallback) doesn't have fundamental data or historical bars for it, or the ticker was delisted/renamed.",
   "weekly digest":
     "A periodic 'names worth a look' panel that reuses Today's Radar's ranking rather than a second scoring system. Each pick is tagged with which rule selected it (Personalized, Sector Gap, or Today's Radar) and a confidence tier — a Personalized pick only appears once real view-tracking history exists; otherwise the digest honestly falls back to plain Radar picks rather than pretending to know your habits.",
+  svi:
+    "Search Volume Index: Google Trends' 0-100 score for how often people searched a term, where 100 is the busiest day inside whatever window Google was asked about. It is relative, not a count of searches, so two downloads of the same term can sit on different scales. That is why this platform stitches windows together instead of trusting any single download.",
+  asvi:
+    // The 12-week lookback is compute_asvi's fixed default (lookback_weeks=12,
+    // shown on screen as the live 'asvi_lookback_days'), a fixed algorithm
+    // constant rather than a tunable setting, so the prose may name it.
+    "Abnormal Search Volume Index: today's stitched SVI compared with that term's own recent normal, using the log of the value minus the log of the median of the preceding lookback (a fixed 12 weeks, the default of compute_asvi; the screen shows the live length). Above 0 means more attention than usual, below 0 means less. The first several days of a series have no baseline yet and are left blank rather than filled in. Informational only: it is one input to a signal, never a trade instruction.",
+  "overlap stitching":
+    "Google rescales every download window to its own 0-100, so consecutive windows disagree about the level. Stitching asks each new window to overlap the previous one by a few days, measures how the shared days compare, multiplies the new window by the ratio that makes them agree, and joins them into one long series on a single scale. The seams table on the screen shows that ratio for every join.",
+  "applied factor":
+    "The multiplier the stitcher actually used to rescale a window at a seam. It is measured against the whole series stitched so far, so it already carries every earlier correction. A value near 1 means the windows barely disagreed; a large or tiny value means Google's scale shifted a lot between those two downloads. Shown as '—' when it could not be computed.",
+  "pair factor":
+    "A diagnostic, not used in the stitch: the ratio you would get by comparing only two neighbouring raw windows over their shared days. Set it beside the applied factor. If the two differ a lot, the earlier corrections are changing the outcome at that seam. A flagged 'degenerate' seam means the overlap was all zeros or nearly so, so no honest ratio exists and the screen shows '—' instead of inventing one.",
+  "partial day":
+    "A day that is still in progress. Google reports today's value while searches are still accumulating, so it is biased low and keeps rising. The downloader drops those rows, which means the newest point on the chart is the last COMPLETE day, not today.",
+  "sampling noise":
+    "Google answers each request from a random sample of its search logs, so asking for the same term and the same day twice can return slightly different numbers, typically a few points apart. A difference of a few points between two downloads is expected, not a bug. Treat small wiggles in ASVI as noise and look for sustained moves.",
   "decision snapshot":
     "A forward-only capture of what the platform knew at the moment a trade was opened — its provenance (manual vs. an automated strategy), conviction, macro regime, and named factors. Only trades opened by a writer that's been wired into this capture show one; a trade with none honestly reports 'unknown' on the Trade Journal, never a guess inferred from its strategy name.",
   "evaluation bridge":
@@ -229,6 +246,20 @@ export const TAB_HELP: Record<string, TabHelp> = {
     keyConcepts: ["paper broker", "tiered cost model", "slippage"],
   },
 
+  trends: {
+    title: "Search Attention",
+    description:
+      "How much people are searching for a ticker on Google, shown step by step so you can check the work. Google only returns short windows, each scaled to its own 0-100, so the platform downloads overlapping windows and stitches them into one series, then turns that into ASVI (attention versus the term's own recent normal). Pick a term to see the raw windows, the seam table that records every rescaling, the stitched chart, the ASVI line and an honesty strip showing how fresh the data is and whether a recompute matches what was stored. The screen only reads data already saved; it never calls Google, and anything unavailable shows '—' or a stated reason, never a made-up number.",
+    keyConcepts: [
+      "svi",
+      "asvi",
+      "overlap stitching",
+      "applied factor",
+      "pair factor",
+      "partial day",
+      "sampling noise",
+    ],
+  },
   dashboard: {
     title: "Dashboard",
     description:

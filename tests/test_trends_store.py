@@ -268,3 +268,84 @@ def test_replace_with_empty_series_is_refused():
     store.save_stitched_series("AAL", [{"date": date(2026, 1, 1), "value": 5.0}], datetime(2026, 1, 2))
     store.save_stitched_series("AAL", [], datetime(2026, 2, 2), replace=True)
     assert store.get_stitched_series("AAL") == [{"date": date(2026, 1, 1), "value": 5.0}]
+
+
+# ── Viewer read helpers: latest_batches / stitched_summary / get_stitched_rows ──
+
+
+def test_latest_batches_pairs_latest_with_latest_complete():
+    store = TrendsStore()
+    t0 = datetime(2026, 10, 1, 6, 0)
+    _record(store, "AAL", "a1", t0)
+    _record(store, "AAL", "a2", t0 + timedelta(days=1), status=BATCH_PARTIAL, n_windows=1)
+    _record(store, "DEAD", "d1", t0, status=BATCH_FAILED)
+
+    out = store.latest_batches()
+
+    assert out["AAL"]["latest"]["batch_id"] == "a2"
+    assert out["AAL"]["latest"]["status"] == BATCH_PARTIAL
+    assert out["AAL"]["complete"]["batch_id"] == "a1"
+    assert out["DEAD"]["latest"]["batch_id"] == "d1"
+    assert out["DEAD"]["complete"] is None
+    assert set(out["AAL"]["latest"]) >= {
+        "batch_id", "started_at", "finished_at", "windows_expected",
+        "windows_fetched", "status", "reason",
+    }
+
+
+def test_latest_batches_empty_store_is_empty_dict():
+    assert TrendsStore().latest_batches() == {}
+
+
+def test_latest_batches_swallows_session_errors():
+    store = TrendsStore()
+    with mock.patch.object(store, "Session", side_effect=RuntimeError("db down")):
+        assert store.latest_batches() == {}
+
+
+def test_stitched_summary_counts_and_bounds_per_term():
+    store = TrendsStore()
+    t1, t2 = datetime(2026, 2, 1), datetime(2026, 3, 1)
+    store.save_stitched_series("AAL", [
+        {"date": date(2026, 1, 1), "value": 1.0},
+        {"date": date(2026, 1, 5), "value": 2.0},
+        {"date": date(2026, 1, 3), "value": 3.0},
+    ], t1)
+    store.save_stitched_series("ABR", [{"date": date(2026, 1, 9), "value": 4.0}], t2)
+
+    out = store.stitched_summary()
+
+    assert out["AAL"] == {
+        "days": 3, "first_date": date(2026, 1, 1),
+        "last_date": date(2026, 1, 5), "stitched_at": t1,
+    }
+    assert out["ABR"]["days"] == 1
+    assert out["ABR"]["stitched_at"] == t2
+
+
+def test_stitched_summary_swallows_session_errors():
+    store = TrendsStore()
+    with mock.patch.object(store, "Session", side_effect=RuntimeError("db down")):
+        assert store.stitched_summary() == {}
+
+
+def test_get_stitched_rows_ordered_with_stamp():
+    store = TrendsStore()
+    at = datetime(2026, 2, 1, 12)
+    store.save_stitched_series("AAL", [
+        {"date": date(2026, 1, 3), "value": 3.0},
+        {"date": date(2026, 1, 1), "value": 1.0},
+    ], at)
+    store.save_stitched_series("OTHER", [{"date": date(2026, 1, 1), "value": 9.0}], at)
+
+    assert store.get_stitched_rows("AAL") == [
+        {"date": date(2026, 1, 1), "value": 1.0, "stitched_at": at},
+        {"date": date(2026, 1, 3), "value": 3.0, "stitched_at": at},
+    ]
+    assert store.get_stitched_rows("NONE") == []
+
+
+def test_get_stitched_rows_swallows_session_errors():
+    store = TrendsStore()
+    with mock.patch.object(store, "Session", side_effect=RuntimeError("db down")):
+        assert store.get_stitched_rows("AAL") == []
