@@ -98,6 +98,8 @@ A read-only **Search Attention (Google Trends)** screen. For each term the daemo
 
 ### Phase B — Read API *(freeze exception needed; same PR as C)*
 
+**Build order:** `.claude/google_trends_svi_live_phase_bc_task.md` (step-by-step tracker with a check after each step).
+
 **Status:** plan only. A design spike on 2026-10-11 was stopped at the operator's request and reverted. The design below includes what it found.
 
 **Where the code goes.**
