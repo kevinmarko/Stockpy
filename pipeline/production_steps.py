@@ -73,6 +73,39 @@ def _warn_on_universe_funnel_drop(before: int, after: int, stage_label: str) -> 
         pass
 
 
+def _drop_benchmark_only_rows(dashboard_df: pd.DataFrame, universe, benchmarks) -> pd.DataFrame:
+    """Return *dashboard_df* without benchmark rows that aren't in *universe*.
+
+    ``fetch_all_data_async`` adds the benchmark symbols (``BENCHMARK_SYMBOLS``)
+    to tech_raw as reference data, and ``compile_dashboard`` makes a row for
+    every tech_raw key -- so without this the benchmark rides through
+    forecasting, strategy eval, the advisory queue and paper execution as if
+    it were a tracked symbol. A benchmark that IS in the universe (held,
+    watchlisted, discovered, retained) keeps its row. Logs one INFO line naming
+    what it dropped. Never raises: on bad input the frame is returned unchanged.
+    """
+    try:
+        if dashboard_df is None or dashboard_df.empty or 'Symbol' not in dashboard_df.columns:
+            return dashboard_df
+        # Case-insensitive: universe entries and the Symbol column don't
+        # always share case. An empty/None universe drops the benchmark too --
+        # with nothing tracked it is still not a tracked symbol.
+        universe_upper = {str(s).upper() for s in (universe or ()) if s}
+        benchmark_only = {str(b).upper() for b in (benchmarks or ())} - universe_upper
+        symbols_upper = dashboard_df['Symbol'].astype(str).str.upper()
+        drop_mask = symbols_upper.isin(benchmark_only)
+        dropped = sorted(set(symbols_upper[drop_mask]))
+        if not drop_mask.any():
+            return dashboard_df
+        logger.info(
+            "Dropped benchmark-only row(s) not in the cycle universe: %s", ", ".join(dropped)
+        )
+        return dashboard_df.loc[~drop_mask].reset_index(drop=True)
+    except Exception as exc:  # noqa: BLE001 - must never break ProcessingStep
+        logger.warning("Benchmark-row filter failed (kept dashboard unchanged): %s", exc)
+        return dashboard_df
+
+
 class AsyncDataFetchStep(PipelineStep):
     """Fetches macro, fundamentals, and technicals concurrently."""
     name = "data"
@@ -400,7 +433,7 @@ class ProcessingStep(PipelineStep):
     
     def run(self, ctx: RunContext) -> None:
         """Process indicators and build the dashboard DataFrame."""
-        from main_orchestrator import ProcessingEngine, FundamentalDataDTO
+        from main_orchestrator import BENCHMARK_SYMBOLS, ProcessingEngine, FundamentalDataDTO
 
         telemetry.info("Routing data through Computational Core (Processing)...")
         if ctx.progress is not None:
@@ -433,6 +466,10 @@ class ProcessingStep(PipelineStep):
         fund_metrics = pe.calculate_fundamental_metrics(fund_dtos, realized_vol_60d_map=realized_vol_60d_map)
         
         ctx.dashboard_df = pe.compile_dashboard(tech_metrics, fund_metrics, regime_metrics)
+        # tech_raw carries the benchmark (SPY) for RS/beta/HMM, and
+        # compile_dashboard() turns every tech_raw key into a row -- drop it
+        # unless it is genuinely in the cycle universe.
+        ctx.dashboard_df = _drop_benchmark_only_rows(ctx.dashboard_df, ctx.symbols, BENCHMARK_SYMBOLS)
 
         # Universe-funnel diagnostic (see AsyncDataFetchStep above and
         # docs/known_issues/universe_count_reporting_mismatch.md).
@@ -1919,7 +1956,11 @@ class StrategyEvalStep(PipelineStep):
         # Finding 15: raw returns and percentile ranks are now sourced from
         # ONE helper (_compute_xsec_momentum) instead of two independent
         # formula implementations that could silently diverge.
-        xsec_return_dict, xsec_rank_series = _compute_xsec_momentum(ctx.tech_raw)
+        # Ranked over the cycle universe only (main.py's cross-section): tech_raw
+        # also holds the benchmark, which must not shift every symbol's rank.
+        xsec_return_dict, xsec_rank_series = _compute_xsec_momentum(
+            {t: ctx.tech_raw[t] for t in ctx.symbols if t in ctx.tech_raw}
+        )
 
         ctx.dashboard_df['XSec_12_1M'] = ctx.dashboard_df['Symbol'].map(xsec_return_dict)
         ctx.dashboard_df['XSec_Momentum_Rank'] = ctx.dashboard_df['Symbol'].map(xsec_rank_series)
