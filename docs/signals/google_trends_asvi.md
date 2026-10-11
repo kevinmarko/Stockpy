@@ -20,6 +20,18 @@ This module implements the end-to-end data ingestion, overlapping stitching, and
 - `GOOGLE_TRENDS_COOLDOWN_THRESHOLD`: Failures required to enter cooldown.
 - `GOOGLE_TRENDS_COOLDOWN_SECONDS`: Duration of cooldown lock-out.
 - `GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE`: Wall-clock budget for the per-symbol pipeline dashboard-column loop (default: 120).
+- `GOOGLE_TRENDS_MAX_TERMS_PER_PASS`: Most terms the daemon downloads in one refresh pass, stalest first (default: 10).
+- `GOOGLE_TRENDS_RAW_RETENTION_BATCHES`: Complete download batches kept per term in `raw_trends_downloads` (default: 14).
+
+**Daemon refresh (`maybe_refresh_google_trends`), since 2026-10:**
+- **Universe.** The tracked universe via `data/portfolio_sync.py::compute_tracked_universe()` (held ∪ watchlist ∪ discovered, else `DEFAULT_TICKERS`), using only the cached Robinhood snapshot. It used to be `DEFAULT_TICKERS` alone.
+- **Schedule.** A term is due when its last download *attempt* (complete, partial or failed) is older than `GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS`, so a term Google has no data for is not retried on every wake. The schedule is read from the `trends_download_batches` table, so it survives a daemon restart. Each pass takes at most `GOOGLE_TRENDS_MAX_TERMS_PER_PASS` due terms, never-attempted first, then oldest attempt first (round-robin), so a large universe is covered across several timer wakes.
+- **Batches.** The windows of one download share a `batch_id` and are recorded in `trends_download_batches` with `status` `complete` (every planned window returned), `partial` or `failed`, plus a `reason`. Raw rows carry `window_id = "<batch_id>/<window_start>/<window_end>"`.
+- **Only complete batches are stitched.** The new stitch *replaces* the term's stored series in one transaction (`save_stitched_series(..., replace=True)`), so no days from an older stitch, on an older scale, are left behind. A partial or failed batch leaves the stored series unchanged.
+- **Partial current day dropped.** `fetch_overlapping_windows` drops rows pytrends flags `isPartial`. The current day's value climbs while the day is in progress, so the dashboard ASVI (the last stored day) is now computed from the last *complete* day.
+- **Rate-limit cooldown stops the pass.** The terms not reached stay due for a later wake.
+- **Retention.** After every batch, raw rows beyond the newest `GOOGLE_TRENDS_RAW_RETENTION_BATCHES` batches of each kind (complete; partial/failed) are pruned. Pre-2026-10 rows with bare `uuid4` window ids go once the term has a complete batch.
+- Write-up: [`docs/known_issues/google_trends_stale_scale_and_partial_day_2026_10.md`](../known_issues/google_trends_stale_scale_and_partial_day_2026_10.md).
 
 
 ```
@@ -86,6 +98,8 @@ $$ASVI_t = \ln(SVI_t) - \ln\left(\text{Median}(SVI_{t-k \dots t-1})\right)$$
 **Lookahead-Free Causality**:
 The rolling median strictly operates on $SVI$ shifted by 1 day ($t-1$), ensuring information from date $t$ never enters the baseline calculation.
 
+**Warm-up rows are NaN.** The first 7 rows have no prior data to form a baseline, so their ASVI is NaN. Until 2026-10 they were filled with the median of the first 84 days, which includes dates after $t$ (a lookahead). `tests/test_trends_stitcher.py::test_asvi_no_lookahead_in_warmup_perturbation` pins this with cutoffs inside the first lookback window. The dashboard takes the last valid value, so it is unaffected unless a term has 7 or fewer stored days, in which case it now shows NaN.
+
 ### C. Technical Indicators (`FMPDataLoader`)
 Computes normalized input features for sequence modeling:
 - **Exponential Moving Averages**:
@@ -109,4 +123,6 @@ Unit tests are implemented in `tests/test_trends_stitcher.py`:
 - `TestFMPDataLoader`: Verifies indicator computation accuracy and bounds.
 
 ### D. Visualizations
-- **Trends Stitching Demo:** *(removed 2026-10.)* The Pilots PWA's `/research/trends-stitcher` demo screen, its `GET /data/trends/stitch-demo` endpoint and the TypeScript port `webapp/src/utils/trendsStitch.ts` were removed as a demo-only screen; git history has them. `data/trends_stitcher.py` itself stays — the ASVI pipeline uses it.
+- **Search Attention viewer (live, 2026-10):** the Pilots PWA screen `/research/trends` (`webapp/src/screens/TrendsAttention.tsx`) shows, per term, the raw downloaded windows, a seams table (overlap sums, applied factor, pair factor, degenerate-guard flag), the rescaled windows with the stitched series, the ASVI line, and an honesty strip (latest attempt, age, staleness, recompute check). It is served by two read-only endpoints on the data API (port 8603): `GET /data/trends/terms` (every term with data, plus tracked-universe coverage) and `GET /data/trends/svi?term=` (the full per-term view; a valid term with no data returns 200 with `status: "no_data"`, never 404). Both build their payload in `data/trends_view.py`, which reads `TrendsStore` only. **Neither endpoint makes a network call:** no pytrends, no Google, no FMP. The viewer displays what the daemon already saved and recomputes the stitch from the saved raw windows to compare it with the stored series. See [HOW_TO_GUIDE.md](../HOW_TO_GUIDE.md) ("Reading the Search Attention screen") for the operator's reading guide.
+- **Sampling noise:** Google answers each request from a random sample of its logs, so repeated downloads of the same day differ by a few points. The live DB showed 78 / 79 / 80 / 81 for one complete day (AAL, 2026-10-03) across four downloads. This is inherent to the data source, not a stitching bug; do not read single-point differences between downloads as signal.
+- *(The earlier demo, `/research/trends-stitcher` with `GET /data/trends/stitch-demo` and `webapp/src/utils/trendsStitch.ts`, was removed 2026-10 and is in git history. `data/trends_stitcher.py` is used by both the ASVI pipeline and the live viewer.)*

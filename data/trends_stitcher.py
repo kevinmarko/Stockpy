@@ -186,7 +186,8 @@ class ASVICalculator:
             epsilon (float): Floor value to prevent log(0) domain errors.
 
         Returns:
-            pd.Series: ASVI time series.
+            pd.Series: ASVI time series. The first ``min(7, lookback_days)``
+            rows are NaN (no prior data to form a baseline).
         """
         if svi_series.empty:
             return pd.Series(dtype=float)
@@ -206,11 +207,12 @@ class ASVICalculator:
             .median()
         )
         
-        # Fallback for initial window before min_periods
-        initial_median = float(svi_clean.iloc[:min(len(svi_clean), lookback_days)].median())
-        if np.isnan(initial_median) or initial_median <= 0:
-            initial_median = epsilon
-        rolling_median = rolling_median.fillna(initial_median)
+        # Rows before min_periods (the first 7) have no causal baseline and
+        # stay NaN. They used to be filled with the median of the first
+        # lookback_days rows, which includes dates after t: a lookahead, and
+        # a made-up value (CONSTRAINT #4). Callers take the last valid value
+        # (``dropna()``), so a NaN warm-up only means a very short series
+        # yields no ASVI at all.
 
         # Calculate ln(Median)
         ln_median = np.log(rolling_median.clip(lower=epsilon))

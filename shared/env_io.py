@@ -537,6 +537,8 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "GOOGLE_TRENDS_COOLDOWN_THRESHOLD",
     "GOOGLE_TRENDS_COOLDOWN_SECONDS",
     "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE",
+    "GOOGLE_TRENDS_RAW_RETENTION_BATCHES",
+    "GOOGLE_TRENDS_MAX_TERMS_PER_PASS",
     # Related Sector Selection tunables (webapp /settings/sector-selection,
     # api/pilots_api.py's _SECTOR_SELECTION_GROUPS) — data/sector_selection_heat.py's
     # semantic-similarity feature backing the SectorSelection.tsx screen.

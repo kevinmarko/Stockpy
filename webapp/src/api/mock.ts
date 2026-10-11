@@ -144,6 +144,16 @@ import type { StrategyReportCardSnapshot,
   ScreenerFilterOptions,
   SymbolBackfillResult,
   SyncReportResponse,
+  TrendsAsvi,
+  TrendsBatch,
+  TrendsConfig,
+  TrendsPoint,
+  TrendsRawWindow,
+  TrendsRescaledWindow,
+  TrendsSeam,
+  TrendsSviResponse,
+  TrendsTermRow,
+  TrendsTermsResponse,
   SyncReportSymbol,
   SymbolReincludeResult,
   RecommendationsResponse,
@@ -8421,6 +8431,306 @@ export const MOCK_RETROSPECTIVE_INSIGHTS: BatchRetrospectiveInsightsResponse = {
 
 export const MOCK_BRIDGE_RELIABILITY: BridgeReliabilityResponse = MOCK_RETROSPECTIVE_INSIGHTS.bridge_health;
 
+// ================= Google Trends fixtures (deterministic, internally consistent) =================
+// ONE fixed underlying daily series is cut into 6 overlapping 91-day windows
+// (same walk as the backend), each normalised to its own max = 100 (1 dp, like
+// Google), then chained with a TS port of the stitcher so the seams, rescaled
+// windows and stitched line are mathematically consistent. No Math.random.
+const TRENDS_NOW_MS = Date.UTC(2026, 9, 11, 12, 0, 0);
+const TRENDS_END_MS = Date.UTC(2026, 9, 10);
+const TRENDS_DAY_MS = 86_400_000;
+const TRENDS_DAYS = 365;
+// Same walk as data/google_trends_client.py::plan_windows: a window spans
+// start..start+90 days (both ends included) and the next one starts at
+// end-30 days, so each window and overlap match the backend's.
+const TRENDS_WINDOW = 90;
+const TRENDS_OVERLAP = 30;
+const TRENDS_ASVI_LOOKBACK = 84;
+
+const TRENDS_CONFIG: TrendsConfig = {
+  enabled: true,
+  window_days: TRENDS_WINDOW,
+  overlap_days: TRENDS_OVERLAP,
+  refresh_interval_hours: 24,
+  max_terms_per_pass: 10,
+  retention_batches: 14,
+  stale_after_hours: 48,
+  asvi_lookback_days: TRENDS_ASVI_LOOKBACK,
+};
+
+const trendsIso = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
+const trendsStamp = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+
+function trendsUnderlying(i: number): number {
+  let v = 30 + 10 * Math.sin(i / 20) + 4 * Math.sin(i / 7);
+  if (i >= 100 && i <= 102) v += [60, 35, 15][i - 100];
+  if (i >= 250 && i <= 251) v += [40, 18][i - 250];
+  return Math.max(v, 1);
+}
+
+interface TrendsSeries {
+  raw: Map<number, number>[];
+  starts: number[];
+  ends: number[];
+  seams: TrendsSeam[];
+  rescaled: Map<number, number>[];
+  stitched: Map<number, number>;
+}
+
+function trendsBuild(degenerateSeam1: boolean): TrendsSeries {
+  const t0 = TRENDS_END_MS - (TRENDS_DAYS - 1) * TRENDS_DAY_MS;
+  const raw: Map<number, number>[] = [];
+  const starts: number[] = [];
+  const ends: number[] = [];
+  let s = 0;
+  while (s < TRENDS_DAYS) {
+    const e = Math.min(s + TRENDS_WINDOW, TRENDS_DAYS - 1);
+    const vals: [number, number][] = [];
+    for (let i = s; i <= e; i++) vals.push([t0 + i * TRENDS_DAY_MS, trendsUnderlying(i)]);
+    const mx = Math.max(...vals.map(([, v]) => v));
+    const w = new Map<number, number>();
+    for (const [ms, v] of vals) w.set(ms, Math.round((v / mx) * 1000) / 10);
+    raw.push(w);
+    starts.push(t0 + s * TRENDS_DAY_MS);
+    ends.push(t0 + e * TRENDS_DAY_MS);
+    if (e >= TRENDS_DAYS - 1) break;
+    s = e - TRENDS_OVERLAP;
+  }
+  if (degenerateSeam1) {
+    // Zero window 1's overlap with its predecessor so the 1e-9 guard fires.
+    for (const ms of raw[1].keys()) if (ms <= ends[0]) raw[1].set(ms, 0);
+  }
+  const overlapSum = (a: Map<number, number>, b: Map<number, number>) => {
+    let sa = 0;
+    let sb = 0;
+    let n = 0;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const [ms, v] of b) {
+      const av = a.get(ms);
+      if (av === undefined) continue;
+      sa += av;
+      sb += v;
+      n += 1;
+      lo = Math.min(lo, ms);
+      hi = Math.max(hi, ms);
+    }
+    return { sa, sb, n, lo, hi };
+  };
+  let stitched = new Map(raw[0]);
+  const rescaled: Map<number, number>[] = [new Map(raw[0])];
+  const seams: TrendsSeam[] = [];
+  for (let k = 1; k < raw.length; k++) {
+    const o = overlapSum(stitched, raw[k]);
+    const degenerate = o.sa <= 1e-9 || o.sb <= 1e-9;
+    const f = degenerate ? 1 : o.sa / o.sb;
+    const p = overlapSum(raw[k - 1], raw[k]);
+    const pair = p.sa <= 1e-9 || p.sb <= 1e-9 ? null : p.sa / p.sb;
+    const r = new Map<number, number>();
+    for (const [ms, v] of raw[k]) r.set(ms, v * f);
+    const next = new Map(stitched);
+    for (const [ms, v] of r) {
+      const av = stitched.get(ms);
+      next.set(ms, av === undefined ? v : (av + v) / 2);
+    }
+    seams.push({
+      index: k,
+      a_window: k - 1,
+      b_window: k,
+      overlap_start: trendsIso(o.lo),
+      overlap_end: trendsIso(o.hi),
+      overlap_days: o.n,
+      sum_a: o.sa,
+      sum_b: o.sb,
+      applied_factor: f,
+      pair_factor: pair,
+      degenerate_guard: degenerate,
+    });
+    rescaled.push(r);
+    stitched = next;
+  }
+  return { raw, starts, ends, seams, rescaled, stitched };
+}
+
+const trendsPoints = (m: Map<number, number>): TrendsPoint[] =>
+  [...m.entries()].sort((a, b) => a[0] - b[0]).map(([ms, v]) => [ms, v] as TrendsPoint);
+
+function trendsAsvi(stitched: TrendsPoint[]): TrendsAsvi {
+  const pts: TrendsPoint[] = stitched.map(([ms, v], i) => {
+    const prev = stitched
+      .slice(Math.max(0, i - TRENDS_ASVI_LOOKBACK), i)
+      .map(([, x]) => x)
+      .filter((x): x is number => x !== null)
+      .sort((a, b) => a - b);
+    if (v === null || prev.length < 7) return [ms, null];
+    const mid = Math.floor(prev.length / 2);
+    const med = prev.length % 2 ? prev[mid] : (prev[mid - 1] + prev[mid]) / 2;
+    if (med <= 0) return [ms, null];
+    return [ms, Math.log(Math.max(v, 0.1)) - Math.log(med)];
+  });
+  const valid = pts.filter((p) => p[1] !== null);
+  const last = valid.length ? valid[valid.length - 1] : null;
+  return {
+    points: pts,
+    latest: last ? last[1] : null,
+    latest_date: last ? trendsIso(last[0]) : null,
+    lookback_days: TRENDS_ASVI_LOOKBACK,
+  };
+}
+
+function trendsBatch(
+  id: string,
+  status: TrendsBatch["status"],
+  ageHours: number,
+  fetched: number,
+  reason: string | null
+): TrendsBatch {
+  const fin = TRENDS_NOW_MS - ageHours * 3_600_000;
+  return {
+    batch_id: id,
+    status,
+    reason,
+    started_at: trendsStamp(fin - 90_000),
+    finished_at: trendsStamp(fin),
+    windows_expected: 6,
+    windows_fetched: fetched,
+    age_hours: ageHours,
+    stale: ageHours > TRENDS_CONFIG.stale_after_hours,
+  };
+}
+
+const TRENDS_SVI_TERMS = ["AAL", "ABR", "AGNC", "AM", "AQN", "ARCC"] as const;
+
+function trendsSviFor(termIn: string): TrendsSviResponse {
+  const term = termIn.trim().toUpperCase();
+  const empty = (
+    status: TrendsSviResponse["status"],
+    reason: string | null,
+    enabled = true
+  ): TrendsSviResponse => ({
+    ...TRENDS_CONFIG,
+    enabled,
+    term,
+    status,
+    reason,
+    batch: null,
+    latest_attempt: null,
+    raw_windows: [],
+    seams: [],
+    rescaled_windows: [],
+    stitched: null,
+    recompute_check: null,
+    asvi: null,
+  });
+  if (term === "ZZZZ") return empty("disabled", "Trends refresh is disabled and no data is stored.", false);
+  if (term === "ERR") return empty("error", "RuntimeError");
+  if (!(TRENDS_SVI_TERMS as readonly string[]).includes(term)) {
+    return empty("no_data", "No Google Trends batch or stitched series stored for this term.");
+  }
+  if (term === "ARCC") {
+    return {
+      ...empty(
+        "partial_only",
+        "Latest batch is partial (3 of 6 windows returned); no complete batch and no stitched series yet."
+      ),
+      latest_attempt: trendsBatch("mock-arcc-1", "partial", 6, 3, "3 of 6 windows returned"),
+    };
+  }
+  const built = trendsBuild(term === "AQN");
+  const stitchedPts = trendsPoints(built.stitched);
+  const asvi = trendsAsvi(stitchedPts);
+  const ageHours = term === "ABR" ? 70 : 6;
+  const stitchedBlock = (fromLatest: boolean, persistedAgeH: number): TrendsSviResponse["stitched"] => ({
+    points: stitchedPts,
+    first_date: trendsIso(stitchedPts[0][0]),
+    last_date: trendsIso(stitchedPts[stitchedPts.length - 1][0]),
+    days: stitchedPts.length,
+    persisted_at: trendsStamp(TRENDS_NOW_MS - persistedAgeH * 3_600_000),
+    from_latest_batch: fromLatest,
+  });
+  if (term === "AGNC") {
+    return {
+      ...empty(
+        "stitched_only",
+        "A stitched series is stored but no complete batch of raw windows remains (retention), so seams cannot be shown."
+      ),
+      latest_attempt: trendsBatch("mock-agnc-9", "failed", 30, 0, "all windows failed (429)"),
+      stitched: stitchedBlock(false, 200),
+      asvi,
+    };
+  }
+  const rawWindows: TrendsRawWindow[] = built.raw.map((w, i) => {
+    const pts = trendsPoints(w);
+    let peak = pts[0];
+    for (const p of pts) if ((p[1] ?? -1) > (peak[1] ?? -1)) peak = p;
+    return {
+      index: i,
+      start: trendsIso(built.starts[i]),
+      end: trendsIso(built.ends[i]),
+      points: pts,
+      peak_date: trendsIso(peak[0]),
+      peak_value: peak[1],
+    };
+  });
+  const rescaled: TrendsRescaledWindow[] = built.rescaled.map((w, i) => ({
+    index: i,
+    points: trendsPoints(w),
+  }));
+  const mismatch = term === "AM";
+  return {
+    ...TRENDS_CONFIG,
+    term,
+    status: "ok",
+    reason: null,
+    batch: trendsBatch(`mock-${term.toLowerCase()}-1`, "complete", ageHours, 6, null),
+    latest_attempt: trendsBatch(`mock-${term.toLowerCase()}-1`, "complete", ageHours, 6, null),
+    raw_windows: rawWindows,
+    seams: built.seams,
+    rescaled_windows: rescaled,
+    stitched: stitchedBlock(true, ageHours),
+    recompute_check: {
+      compared_days: stitchedPts.length,
+      max_abs_diff: mismatch ? 4.2 : 0,
+      same_dates: true,
+      matches: !mismatch,
+    },
+    asvi,
+  };
+}
+
+function trendsTermsFixture(): TrendsTermsResponse {
+  const rows: TrendsTermRow[] = TRENDS_SVI_TERMS.map((term) => {
+    const v = trendsSviFor(term);
+    const att = v.latest_attempt;
+    const hasComplete = v.batch !== null;
+    const days = v.stitched?.days ?? 0;
+    const ageH = v.batch?.age_hours ?? (v.stitched ? 200 : null);
+    return {
+      term,
+      in_tracked_universe: true,
+      last_attempt_at: att?.started_at ?? null,
+      last_attempt_status: att?.status ?? null,
+      last_attempt_reason: att?.reason ?? null,
+      last_complete_at: v.batch?.finished_at ?? null,
+      age_hours: ageH,
+      stale: ageH === null ? null : ageH > TRENDS_CONFIG.stale_after_hours,
+      stitched_days: days,
+      last_date: v.stitched?.last_date ?? null,
+      latest_asvi: v.asvi?.latest ?? null,
+      latest_asvi_date: v.asvi?.latest_date ?? null,
+      has_complete_batch: hasComplete,
+    };
+  });
+  return {
+    ...TRENDS_CONFIG,
+    status: "ok",
+    reason: null,
+    tracked_universe_size: 12,
+    tracked_with_data: 5,
+    terms: rows,
+  };
+}
+
 // ================= public mock API (shape-identical to client.ts) =================
 export const mockApi = {
     getWeeklyDigest: async (): Promise<DigestPayload> => {
@@ -8798,6 +9108,15 @@ export const mockApi = {
       .sort()
       .map((symbol) => ({ symbol, action: ACTIONS[symbol] ?? null }));
     return delay({ symbols });
+  },
+
+  // Google Trends search-attention viewer (see trends fixtures above).
+  async getTrendsTerms(): Promise<TrendsTermsResponse> {
+    return delay(trendsTermsFixture());
+  },
+
+  async getTrendsSvi(term: string): Promise<TrendsSviResponse> {
+    return delay(trendsSviFor(term));
   },
 
   async getSyncReport(): Promise<SyncReportResponse> {

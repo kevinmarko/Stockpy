@@ -4,7 +4,7 @@ import { theme } from "../theme";
 
 /**
  * ResearchHub — landing screen for the "Research" nav section (see
- * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's 11
+ * App.tsx's NAV_ITEMS/SECTION_LABEL). A static overview of the section's
  * screens as clickable cards; someone else wires the section-header tap that
  * routes here. This screen owns only its own content and navigation.
  *
@@ -44,6 +44,7 @@ const CARDS: HubCard[] = [
   { to: "/sentiment", label: "Sentiment Dynamics", ico: "🎭", description: TAB_HELP.sentiment.description },
   { to: "/sector-selection", label: "Sector Selection", ico: "🧩", description: TAB_HELP["sector-selection"].description },
   { to: "/forecast", label: "Forecast Viewer", ico: "📈", description: TAB_HELP.forecast.description },
+  { to: "/research/trends", label: "Search Attention", ico: "🔎", description: TAB_HELP.trends.description },
   { to: "/data-explorer", label: "Data Explorer", ico: "🗂️", description: TAB_HELP["data-explorer"].description },
 ];
 

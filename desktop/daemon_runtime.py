@@ -78,6 +78,35 @@ _STORE_UNCHECKED = object()
 #: case this constant was introduced to fix.
 _PARKED_TIMER_POLL_SECONDS = 3600.0
 
+def _google_trends_due_terms(
+    universe: list[str],
+    last_attempts: dict[str, dict[str, Optional[datetime]]],
+    now: datetime,
+    *,
+    interval_hours: float,
+    max_terms: int,
+) -> list[str]:
+    """The terms to download this pass, at most ``max_terms``.
+
+    ``last_attempts`` is ``TrendsStore.last_attempts()``. A term is due when
+    it has never been attempted or its last attempt, of any status, is at
+    least ``interval_hours`` old. Keying on attempts rather than complete
+    downloads keeps a term Google has no data for (or one that keeps failing)
+    from being retried on every wake and crowding out the rest. Due terms are
+    taken never-attempted first, then oldest attempt first, then by name, so
+    a universe larger than the cap is covered round-robin. ``max_terms < 1``
+    is treated as 1.
+    """
+    interval = timedelta(hours=max(0.0, interval_hours))
+    due: list[tuple[datetime, str]] = []
+    for term in universe:
+        attempt = (last_attempts.get(term) or {}).get("attempt")
+        if attempt is not None and now - attempt < interval:
+            continue
+        due.append((attempt or datetime.min, term))
+    due.sort()
+    return [term for _, term in due[: max(1, int(max_terms))]]
+
 #: US/Eastern -- the scheduled Robinhood login's wall-clock zone (same zone
 #: engine.advisory_agent's market-hours gates use; no holiday calendar).
 _ET = ZoneInfo("America/New_York")
@@ -920,73 +949,264 @@ class OrchestratorDaemon:
 
 
     def maybe_refresh_google_trends(self) -> None:
-        """Periodic refresh of Google Trends data.
-        
-        Gated by settings.GOOGLE_TRENDS_ENABLED. Tracks last run time internally
-        and throttles based on settings.GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS.
-        Never raises.
+        """Download, store and stitch Google Trends data for the terms that are due.
+
+        Gated by ``settings.GOOGLE_TRENDS_ENABLED``. Never raises.
+
+        **Which terms.** The tracked universe (``_google_trends_universe``),
+        not ``DEFAULT_TICKERS`` alone. A term is due when its last download
+        attempt is older than ``GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS`` (see
+        ``_google_trends_due_terms``). Each pass takes at most
+        ``GOOGLE_TRENDS_MAX_TERMS_PER_PASS`` due terms, oldest attempt first,
+        so a large universe is covered over several wakes instead of one long
+        burst of requests to Google.
+
+        **Schedule survives restarts.** "Last downloaded" comes from the
+        ``trends_download_batches`` table, not from process memory. The old
+        in-memory throttle refetched everything on every daemon start (three
+        passes in one day were seen in the live DB).
+
+        **One batch per term per pass.** The windows fetched together share a
+        ``batch_id`` and are recorded with their status. Only a *complete*
+        batch (every planned window returned) is stitched. The stitch then
+        replaces the term's stored series in one transaction, so no older,
+        differently-scaled days are left behind. Raw rows are pruned to the
+        newest ``GOOGLE_TRENDS_RAW_RETENTION_BATCHES`` complete batches.
+
+        If the client's 429 cooldown opens, the pass stops. The terms not
+        reached stay due and are picked up on a later wake.
         """
         if not getattr(settings, "GOOGLE_TRENDS_ENABLED", False):
             return
-            
-        now = time.monotonic()
-        refresh_hours = getattr(settings, "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS", 24.0)
-        
-        # Internal throttle
-        if getattr(self, "_last_google_trends_refresh", 0.0) > 0.0:
-            if (now - self._last_google_trends_refresh) < (refresh_hours * 3600):
-                return
-                
+
         try:
-            from data.google_trends_client import fetch_overlapping_windows
+            import pandas as pd
+
+            from data.google_trends_client import (
+                fetch_overlapping_windows,
+                is_in_cooldown,
+                plan_windows,
+            )
             from data.trends_stitcher import GoogleTrendsStitcher
-            from data.trends_store import TrendsStore
-            import uuid
+            from data.trends_store import (
+                BATCH_COMPLETE,
+                BATCH_FAILED,
+                BATCH_PARTIAL,
+                TrendsStore,
+                batch_window_id,
+            )
 
             store = TrendsStore()
-            symbols = list(getattr(settings, "DEFAULT_TICKERS", []) or [])
-            if not symbols:
+            universe = self._google_trends_universe()
+            if not universe:
                 return
 
-            end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            # Pull 1 year of data
-            start_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
+            # The batch table stores naive UTC datetimes (SQLite DateTime has
+            # no time zone), so every comparison here is naive UTC too.
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            due = _google_trends_due_terms(
+                universe,
+                store.last_attempts(),
+                now,
+                interval_hours=float(settings.GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS),
+                max_terms=int(settings.GOOGLE_TRENDS_MAX_TERMS_PER_PASS),
+            )
+            if not due:
+                return
+
+            window_days = int(settings.GOOGLE_TRENDS_WINDOW_DAYS)
+            overlap_days = int(settings.GOOGLE_TRENDS_OVERLAP_DAYS)
+            end_dt = datetime.strptime(now.strftime("%Y-%m-%d"), "%Y-%m-%d")
+            start_dt = end_dt - timedelta(days=365)
+            start_date = start_dt.strftime("%Y-%m-%d")
+            end_date = end_dt.strftime("%Y-%m-%d")
+            windows_expected = len(plan_windows(start_dt, end_dt, window_days, overlap_days))
+            logger.info(
+                "Google Trends refresh: %d due term(s) this pass (of %d tracked): %s",
+                len(due), len(universe), ", ".join(due),
+            )
 
             # Each symbol is isolated in its own try/except so one bad symbol
             # (a malformed stitcher input, a transient DB write error, ...)
             # never aborts the remaining symbols in this pass -- matching this
             # repo's convention for per-ticker loops (see CLAUDE.md).
-            for sym in symbols:
+            for sym in due:
+                # A cooldown left open by an earlier pass makes the client
+                # return [] without sending anything. Stop before fetching so
+                # the term is not recorded as a failed attempt it never made.
+                if is_in_cooldown():
+                    logger.warning(
+                        "maybe_refresh_google_trends: rate-limit cooldown open; "
+                        "stopping this pass before %s. Remaining terms stay due.",
+                        sym,
+                    )
+                    break
                 try:
-                    # fetch overlapping windows
-                    series_list = fetch_overlapping_windows(sym, start_date, end_date)
-                    if not series_list:
-                        continue
+                    batch_id = uuid.uuid4().hex
+                    started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                    series_list = fetch_overlapping_windows(
+                        sym, start_date, end_date,
+                        window_days=window_days, overlap_days=overlap_days,
+                    )
+                    finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-                    window_ids = [str(uuid.uuid4()) for _ in series_list]
+                    windows: list[tuple[str, list[dict]]] = []
+                    clean_series: list = []
+                    for series in series_list:
+                        series = series.dropna()
+                        if series.empty:
+                            continue
+                        idx = pd.to_datetime(series.index)
+                        series = pd.Series(series.to_numpy(dtype=float), index=idx)
+                        window_id = batch_window_id(batch_id, idx[0].date(), idx[-1].date())
+                        windows.append((
+                            window_id,
+                            [{"date": d.date(), "value": float(v)} for d, v in series.items()],
+                        ))
+                        clean_series.append(series)
 
-                    # store raw
-                    for i, series in enumerate(series_list):
-                        raw_data = [{"date": d.date(), "value": v} for d, v in series.items()]
-                        store.insert_raw_window(sym, window_ids[i], raw_data, datetime.now(timezone.utc))
+                    cooling_down = is_in_cooldown()
+                    stitched_rows: list[dict] = []
+                    if windows_expected and len(windows) == windows_expected:
+                        # Stitch before recording, so a batch is only marked
+                        # complete once its stitch exists. A stitch that
+                        # raises (e.g. adjacent windows with no shared dates)
+                        # or comes back empty marks the batch failed instead.
+                        try:
+                            stitched = GoogleTrendsStitcher.stitch_multiple_intervals(clean_series)
+                            stitched_rows = [
+                                {"date": d.date(), "value": float(v)}
+                                for d, v in stitched.dropna().items()
+                            ]
+                            if stitched_rows:
+                                status, reason = BATCH_COMPLETE, None
+                            else:
+                                status, reason = BATCH_FAILED, "stitch produced no rows"
+                        except Exception as stitch_exc:  # noqa: BLE001
+                            status = BATCH_FAILED
+                            reason = f"stitch failed: {type(stitch_exc).__name__}: {stitch_exc}"[:500]
+                    elif windows:
+                        status = BATCH_PARTIAL
+                        reason = f"{len(windows)} of {windows_expected} windows returned"
+                        if cooling_down:
+                            reason += "; rate-limit cooldown opened"
+                    elif not windows_expected:
+                        status = BATCH_FAILED
+                        reason = (
+                            "no windows planned: GOOGLE_TRENDS_WINDOW_DAYS must be "
+                            "greater than GOOGLE_TRENDS_OVERLAP_DAYS"
+                        )
+                    else:
+                        status = BATCH_FAILED
+                        reason = (
+                            "rate-limit cooldown" if cooling_down
+                            else "no data returned (or pytrends unavailable; see log)"
+                        )
 
-                    # stitch and store
-                    stitched = GoogleTrendsStitcher.stitch_multiple_intervals(series_list)
-                    if not stitched.empty:
-                        stitched_data = [{"date": d.date(), "value": v} for d, v in stitched.items()]
-                        store.save_stitched_series(sym, stitched_data, datetime.now(timezone.utc))
+                    store.record_batch(
+                        batch_id=batch_id,
+                        query_term=sym,
+                        started_at=started_at,
+                        finished_at=finished_at,
+                        windows_expected=windows_expected,
+                        windows=windows,
+                        status=status,
+                        reason=reason,
+                    )
+
+                    if status == BATCH_COMPLETE:
+                        store.save_stitched_series(sym, stitched_rows, finished_at, replace=True)
+                    else:
+                        logger.warning(
+                            "maybe_refresh_google_trends: %s batch for %s (%s); "
+                            "stored series left unchanged",
+                            status, sym, reason,
+                        )
+                    # After every batch, so a term that never completes does
+                    # not accumulate partial/failed raw rows forever.
+                    store.prune_raw_batches(
+                        sym, int(settings.GOOGLE_TRENDS_RAW_RETENTION_BATCHES)
+                    )
+
+                    if cooling_down:
+                        logger.warning(
+                            "maybe_refresh_google_trends: rate-limit cooldown open; "
+                            "stopping this pass after %s. Remaining terms stay due.",
+                            sym,
+                        )
+                        break
                 except Exception as sym_exc:  # noqa: BLE001 - one bad symbol must not abort the rest
                     logger.warning(
                         "maybe_refresh_google_trends: symbol %s failed: %s", sym, sym_exc
                     )
-
-            # Update the throttle timestamp regardless of whether individual
-            # symbols failed above -- otherwise a single bad symbol would
-            # defeat the throttle entirely and every subsequent timer wake
-            # would retry immediately with no backoff.
-            self._last_google_trends_refresh = time.monotonic()
+                    # Record the attempt so the schedule moves on. Without a
+                    # batch row the term would look never-attempted and be
+                    # retried first on every wake.
+                    try:
+                        failed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                        store.record_batch(
+                            batch_id=uuid.uuid4().hex,
+                            query_term=sym,
+                            started_at=failed_at,
+                            finished_at=failed_at,
+                            windows_expected=windows_expected,
+                            windows=[],
+                            status=BATCH_FAILED,
+                            reason=f"error: {type(sym_exc).__name__}: {sym_exc}"[:500],
+                        )
+                    except Exception as rec_exc:  # noqa: BLE001
+                        logger.warning(
+                            "maybe_refresh_google_trends: could not record failure for %s: %s",
+                            sym, rec_exc,
+                        )
         except Exception as exc:
             logger.warning("maybe_refresh_google_trends: unexpected failure: %s", exc)
+
+    def _google_trends_universe(self) -> list[str]:
+        """The tracked universe, for Google Trends: held ∪ watchlist ∪
+        discovered (minus rating auto-drops), else ``DEFAULT_TICKERS``.
+
+        Goes through ``compute_tracked_universe`` as CLAUDE.md requires. Like
+        ``GET /data/universe`` it reads only the cached Robinhood snapshot
+        (``allow_live_fetch=False``), never a live broker login. Each source
+        degrades to empty on error. Never raises.
+        """
+        try:
+            from data.portfolio_sync import compute_tracked_universe, load_env_watchlist
+
+            try:
+                from data.robinhood_portfolio import fetch_account_snapshot
+
+                snapshot = fetch_account_snapshot(allow_live_fetch=False)
+                held = list((snapshot.positions or {}).keys()) if snapshot else []
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Google Trends universe: held positions unavailable: %s", exc)
+                held = []
+            try:
+                watchlist = load_env_watchlist("watchlist.txt")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Google Trends universe: watchlist unavailable: %s", exc)
+                watchlist = []
+            try:
+                from pilots.discovery import discovery
+
+                discovered = [
+                    c["symbol"] for c in discovery(limit=None).get("candidates", [])
+                    if c.get("symbol")
+                ]
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Google Trends universe: discovery unavailable: %s", exc)
+                discovered = []
+
+            return compute_tracked_universe(
+                held=held,
+                watchlist=watchlist,
+                discovered=discovered,
+                default_tickers=list(settings.DEFAULT_TICKERS or []),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Google Trends universe: failed to resolve: %s", exc)
+            return []
 
 
     def maybe_dispatch_weekly_digest(self) -> None:

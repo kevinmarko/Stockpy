@@ -4314,3 +4314,133 @@ export interface BatchRetrospectiveInsightsResponse {
 }
 
 export interface BridgeReliabilityResponse extends BridgeHealthMetrics {}
+
+// ================= Google Trends "Search Attention" (GET /data/trends/*) =================
+// Mirrors data/trends_view.py payloads 1:1 (contract:
+// .claude/google_trends_svi_live_phase_bc_contract.md). Datetimes are ISO 8601
+// UTC with "Z"; dates "YYYY-MM-DD"; any uncomputable number is null, never 0.
+
+export type TrendsStatus =
+  | "ok"
+  | "stitched_only"
+  | "partial_only"
+  | "no_data"
+  | "disabled"
+  | "error";
+export type TrendsTermsStatus = "ok" | "no_data" | "disabled" | "error";
+export type TrendsBatchStatus = "complete" | "partial" | "failed";
+
+/** [epoch_ms at UTC midnight, value or null]. */
+export type TrendsPoint = [number, number | null];
+
+export interface TrendsConfig {
+  enabled: boolean;
+  window_days: number;
+  overlap_days: number;
+  refresh_interval_hours: number;
+  max_terms_per_pass: number;
+  retention_batches: number;
+  stale_after_hours: number;
+  asvi_lookback_days: number;
+}
+
+export interface TrendsBatch {
+  batch_id: string;
+  status: TrendsBatchStatus;
+  reason: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  windows_expected: number | null;
+  windows_fetched: number | null;
+  age_hours: number | null;
+  stale: boolean | null;
+}
+
+export interface TrendsTermRow {
+  term: string;
+  in_tracked_universe: boolean | null;
+  last_attempt_at: string | null;
+  last_attempt_status: TrendsBatchStatus | null;
+  last_attempt_reason: string | null;
+  last_complete_at: string | null;
+  age_hours: number | null;
+  stale: boolean | null;
+  stitched_days: number;
+  last_date: string | null;
+  latest_asvi: number | null;
+  latest_asvi_date: string | null;
+  has_complete_batch: boolean;
+}
+
+export interface TrendsTermsResponse extends TrendsConfig {
+  status: TrendsTermsStatus;
+  reason: string | null;
+  tracked_universe_size: number | null;
+  tracked_with_data: number | null;
+  terms: TrendsTermRow[];
+}
+
+export interface TrendsRawWindow {
+  index: number;
+  start: string;
+  end: string;
+  points: TrendsPoint[];
+  peak_date: string | null;
+  peak_value: number | null;
+}
+
+export interface TrendsSeam {
+  index: number;
+  a_window: number;
+  b_window: number;
+  overlap_start: string;
+  overlap_end: string;
+  overlap_days: number;
+  sum_a: number | null;
+  sum_b: number | null;
+  applied_factor: number | null;
+  pair_factor: number | null;
+  degenerate_guard: boolean;
+}
+
+export interface TrendsRescaledWindow {
+  index: number;
+  points: TrendsPoint[];
+}
+
+export interface TrendsStitched {
+  points: TrendsPoint[];
+  first_date: string;
+  last_date: string;
+  days: number;
+  persisted_at: string | null;
+  from_latest_batch: boolean;
+}
+
+export interface TrendsRecomputeCheck {
+  compared_days: number;
+  max_abs_diff: number | null;
+  same_dates: boolean;
+  matches: boolean;
+}
+
+export interface TrendsAsvi {
+  points: TrendsPoint[];
+  latest: number | null;
+  latest_date: string | null;
+  lookback_days: number;
+}
+
+export interface TrendsSviResponse extends TrendsConfig {
+  term: string;
+  status: TrendsStatus;
+  reason: string | null;
+  batch: TrendsBatch | null;
+  latest_attempt: TrendsBatch | null;
+  raw_windows: TrendsRawWindow[];
+  seams: TrendsSeam[];
+  rescaled_windows: TrendsRescaledWindow[];
+  stitched: TrendsStitched | null;
+  recompute_check: TrendsRecomputeCheck | null;
+  asvi: TrendsAsvi | null;
+}

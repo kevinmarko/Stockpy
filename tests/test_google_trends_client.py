@@ -271,3 +271,87 @@ class TestLockAndMonotonicClock:
                     )
 
         assert len(results) == 1
+
+
+# ── plan_windows / partial-day drop / cooldown probe ─────────────────────────
+
+from datetime import datetime
+
+
+def _run_fetch(df, start="2023-01-01", end="2023-06-01"):
+    trend_req = MagicMock()
+    trend_req.return_value.interest_over_time.return_value = df
+    with mock.patch.multiple(
+        "settings.settings",
+        GOOGLE_TRENDS_ENABLED=True,
+        GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS=0.0,
+    ):
+        with patch.dict("sys.modules", {"pytrends": MagicMock(), "pytrends.request": _pytrends_module(trend_req)}):
+            results = google_trends_client.fetch_overlapping_windows(
+                "AAPL", start, end, window_days=90, overlap_days=30
+            )
+    return results, trend_req
+
+
+def test_plan_windows_matches_the_timeframes_fetch_requests():
+    """The daemon uses plan_windows to know how many windows a complete
+    download has, so it must agree with what the fetch loop requests."""
+    dates = pd.date_range("2023-01-01", periods=5)
+    df = pd.DataFrame({"AAPL": [1, 2, 3, 4, 5], "isPartial": [False] * 5}, index=dates)
+    _, trend_req = _run_fetch(df, "2023-01-01", "2024-01-01")
+    requested = [c.kwargs["timeframe"] for c in trend_req.return_value.build_payload.call_args_list]
+
+    planned = google_trends_client.plan_windows(datetime(2023, 1, 1), datetime(2024, 1, 1), 90, 30)
+    assert requested == [f"{a:%Y-%m-%d} {b:%Y-%m-%d}" for a, b in planned]
+    assert len(planned) == 6  # 365 days with 90-day windows and 30-day overlap
+    assert planned[-1][1] == datetime(2024, 1, 1)
+
+
+def test_plan_windows_degenerate_inputs():
+    d0, d1 = datetime(2023, 1, 1), datetime(2023, 6, 1)
+    assert google_trends_client.plan_windows(d1, d0, 90, 30) == []
+    assert google_trends_client.plan_windows(d0, d0, 90, 30) == []
+    assert google_trends_client.plan_windows(d0, d1, 30, 30) == []
+    assert google_trends_client.plan_windows(d0, datetime(2023, 1, 10), 90, 30) == [(d0, datetime(2023, 1, 10))]
+
+
+@pytest.mark.parametrize("flags", [
+    [False, False, False, True],
+    ["False", "False", "False", "True"],  # older pytrends returns strings
+])
+def test_partial_day_rows_are_dropped(flags):
+    dates = pd.date_range("2023-01-01", periods=4)
+    df = pd.DataFrame({"AAPL": [70, 72, 75, 41], "isPartial": flags}, index=dates)
+    results, _ = _run_fetch(df)
+    assert results
+    for series in results:
+        assert list(series.values) == [70, 72, 75]
+        assert series.index[-1] == pd.Timestamp("2023-01-03")
+
+
+def test_frame_without_ispartial_column_is_kept_whole():
+    dates = pd.date_range("2023-01-01", periods=3)
+    df = pd.DataFrame({"AAPL": [1, 2, 3]}, index=dates)
+    results, _ = _run_fetch(df)
+    assert all(len(s) == 3 for s in results)
+
+
+def test_window_with_only_a_partial_row_is_skipped():
+    dates = pd.date_range("2023-01-01", periods=1)
+    df = pd.DataFrame({"AAPL": [12], "isPartial": [True]}, index=dates)
+    results, _ = _run_fetch(df)
+    assert results == []
+
+
+def test_is_in_cooldown_tracks_the_shared_limiter_state():
+    with mock.patch.multiple(
+        "settings.settings",
+        GOOGLE_TRENDS_COOLDOWN_THRESHOLD=3,
+        GOOGLE_TRENDS_COOLDOWN_SECONDS=300.0,
+    ):
+        assert google_trends_client.is_in_cooldown() is False
+        google_trends_client._consecutive_failures = 3
+        google_trends_client._cooldown_until = google_trends_client.time.monotonic() + 100
+        assert google_trends_client.is_in_cooldown() is True
+        google_trends_client._cooldown_until = google_trends_client.time.monotonic() - 1
+        assert google_trends_client.is_in_cooldown() is False

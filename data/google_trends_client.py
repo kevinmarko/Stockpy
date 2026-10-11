@@ -3,7 +3,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Tuple
 
 import pandas as pd
 
@@ -23,6 +23,73 @@ _state_lock = threading.Lock()
 _consecutive_failures = 0
 _cooldown_until = 0.0
 _last_request_time = 0.0
+
+
+def plan_windows(
+    start_dt: datetime,
+    end_dt: datetime,
+    window_days: int,
+    overlap_days: int,
+) -> List[Tuple[datetime, datetime]]:
+    """The ``(window_start, window_end)`` pairs ``fetch_overlapping_windows``
+    requests for a range, in order.
+
+    Exposed so a caller can tell how many windows a *complete* download has
+    (the daemon records ``windows_expected`` per download batch and only
+    stitches complete batches). ``fetch_overlapping_windows`` walks this same
+    list, so the two cannot drift apart. Returns ``[]`` for an empty or
+    inverted range, or when ``window_days <= overlap_days`` (the walk would
+    never advance).
+    """
+    if window_days <= overlap_days or start_dt >= end_dt:
+        return []
+    windows: List[Tuple[datetime, datetime]] = []
+    current_start = start_dt
+    while current_start < end_dt:
+        current_end = min(current_start + timedelta(days=window_days), end_dt)
+        windows.append((current_start, current_end))
+        if current_end >= end_dt:
+            break
+        current_start = current_end - timedelta(days=overlap_days)
+    return windows
+
+
+def is_in_cooldown() -> bool:
+    """True while the shared 429 cooldown is open.
+
+    ``fetch_overlapping_windows`` returns ``[]`` both for "no data" and for
+    "skipped, cooling down". The daemon uses this to tell the two apart, so it
+    can stop the pass instead of recording every remaining term as a failed
+    download.
+    """
+    with _state_lock:
+        return (
+            settings.GOOGLE_TRENDS_COOLDOWN_THRESHOLD > 0
+            and _consecutive_failures >= settings.GOOGLE_TRENDS_COOLDOWN_THRESHOLD
+            and time.monotonic() < _cooldown_until
+        )
+
+
+def _drop_partial_rows(df: pd.DataFrame, query_term: str) -> pd.DataFrame:
+    """Remove the rows pytrends flags ``isPartial``.
+
+    Google reports the current, still-accumulating day as partial. Its value
+    climbs during the day (the live DB had AAL on 2026-10-05 read as 45, then
+    66, then 80, settling at 78). Keeping it would make the dashboard ASVI,
+    which reads the *last* stitched value, a downward-biased partial number.
+    Older pytrends versions return the flag as the strings "True"/"False",
+    hence the string comparison. A frame without the column is returned
+    unchanged.
+    """
+    if "isPartial" not in df.columns:
+        return df
+    partial = df["isPartial"].astype(str).str.strip().str.lower() == "true"
+    n_partial = int(partial.sum())
+    if n_partial:
+        logger.info(
+            "Google Trends: dropped %d partial-day row(s) for %s", n_partial, query_term
+        )
+    return df.loc[~partial]
 
 def fetch_overlapping_windows(
     query_term: str,
@@ -103,13 +170,7 @@ def fetch_overlapping_windows(
 
     results: List[pd.Series] = []
 
-    current_start = start_dt
-
-    while current_start < end_dt:
-        current_end = current_start + timedelta(days=window_days)
-        if current_end > end_dt:
-            current_end = end_dt
-
+    for current_start, current_end in plan_windows(start_dt, end_dt, window_days, overlap_days):
         timeframe = f"{current_start.strftime('%Y-%m-%d')} {current_end.strftime('%Y-%m-%d')}"
 
         # Enforce shared rate limiter / cooldown.
@@ -161,6 +222,14 @@ def fetch_overlapping_windows(
                     logger.warning("Google Trends returned empty data for %s during %s", query_term, timeframe)
                     break # Not a failure per se, just no data, so break retry loop
 
+                df = _drop_partial_rows(df, query_term)
+                if df.empty:
+                    logger.warning(
+                        "Google Trends returned only partial-day data for %s during %s",
+                        query_term, timeframe,
+                    )
+                    break  # nothing complete to keep; same handling as an empty response
+
                 series = df[query_term]
                 success = True
                 with _state_lock:
@@ -191,12 +260,6 @@ def fetch_overlapping_windows(
 
         if success:
             results.append(series)
-
-        # Advance the window
-        current_start = current_end - timedelta(days=overlap_days)
-        # Prevent infinite loop if overlap >= window_days, handled by check above
-        if current_end >= end_dt:
-            break
 
     return results
 

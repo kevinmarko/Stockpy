@@ -1,5 +1,5 @@
 /**
- * ResearchHub.test.tsx — the Research section's landing hub: all 9 screen
+ * ResearchHub.test.tsx — the Research section's landing hub: all 10 screen
  * cards render with their label + description (Sentiment Dynamics and
  * Sector Selection closing parity gap G2 — the hub previously listed only a
  * subset of the screens the nav actually carries), the TAB_HELP-sourced
@@ -41,6 +41,7 @@ function renderHub(initialPath = "/research") {
         <Route path="/sentiment" element={<Stub marker="landed:sentiment" />} />
         <Route path="/sector-selection" element={<Stub marker="landed:sector-selection" />} />
         <Route path="/forecast" element={<Stub marker="landed:forecast" />} />
+        <Route path="/research/trends" element={<Stub marker="landed:trends" />} />
         <Route path="/data-explorer" element={<Stub marker="landed:data-explorer" />} />
       </Routes>
     </MemoryRouter>
@@ -56,7 +57,7 @@ describe("ResearchHub screen", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders all 9 card labels", () => {
+  it("renders all 10 card labels", () => {
     renderHub();
     for (const label of [
       "Pilots",
@@ -67,13 +68,14 @@ describe("ResearchHub screen", () => {
       "Sentiment Dynamics",
       "Sector Selection",
       "Forecast Viewer",
+      "Search Attention",
       "Data Explorer",
     ]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
 
-  it("renders live TAB_HELP descriptions for all 9 cards, not a hard-coded duplicate", () => {
+  it("renders live TAB_HELP descriptions for all 10 cards, not a hard-coded duplicate", () => {
     renderHub();
     // Asserts against the actual TAB_HELP.* text at runtime -- a change to
     // helpContent.ts's prose would break this test if ResearchHub still
@@ -90,6 +92,7 @@ describe("ResearchHub screen", () => {
       screen.getByText(TAB_HELP["sector-selection"].description)
     ).toBeInTheDocument();
     expect(screen.getByText(TAB_HELP.forecast.description)).toBeInTheDocument();
+    expect(screen.getByText(TAB_HELP.trends.description)).toBeInTheDocument();
     expect(
       screen.getByText(TAB_HELP["data-explorer"].description)
     ).toBeInTheDocument();
@@ -104,6 +107,7 @@ describe("ResearchHub screen", () => {
     ["Sentiment Dynamics", "landed:sentiment"],
     ["Sector Selection", "landed:sector-selection"],
     ["Forecast Viewer", "landed:forecast"],
+    ["Search Attention", "landed:trends"],
     ["Data Explorer", "landed:data-explorer"],
   ])("clicking the %s card's body navigates to its route", async (label, marker) => {
     const user = userEvent.setup();

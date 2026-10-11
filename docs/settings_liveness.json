@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 313,
-    "no_op": 4,
+    "live_safe": 317,
+    "no_op": 2,
     "restart_required": 81,
-    "total": 398
+    "total": 400
   },
   "dynamic_sites": [
     {
@@ -110,7 +110,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 377,
+  "files_scanned": 378,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -253,8 +253,12 @@
     "GOOGLE_TRENDS_ENABLED",
     "GOOGLE_TRENDS_MAX_RETRIES",
     "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE",
+    "GOOGLE_TRENDS_MAX_TERMS_PER_PASS",
     "GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS",
+    "GOOGLE_TRENDS_OVERLAP_DAYS",
+    "GOOGLE_TRENDS_RAW_RETENTION_BATCHES",
     "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS",
+    "GOOGLE_TRENDS_WINDOW_DAYS",
     "GRAVITY_AI_RUNNER_ENABLED",
     "GRAVITY_AI_RUNNER_OUTPUT_PATH",
     "GRAVITY_REQUIRE_NATIVE",
@@ -428,22 +432,20 @@
     "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS"
   ],
   "no_op": [
-    "GOOGLE_TRENDS_OVERLAP_DAYS",
-    "GOOGLE_TRENDS_WINDOW_DAYS",
     "PROMPT_MAX_CHARS",
     "SENTIMENT_PIT_MIN_MONTHS"
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 799,
+    "attr": 816,
     "factory_param": 4,
-    "getattr_const": 308,
+    "getattr_const": 306,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 249,
+    "attr": 254,
     "factory_param": 4,
-    "getattr_const": 181,
+    "getattr_const": 179,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -620,7 +622,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/trends_store.py:42",
+        "site": "data/trends_store.py:80",
         "via": []
       },
       {
@@ -802,7 +804,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/trends_store.py:46",
+        "site": "data/trends_store.py:84",
         "via": []
       },
       {
@@ -811,7 +813,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/trends_store.py:48",
+        "site": "data/trends_store.py:86",
         "via": []
       },
       {
@@ -1047,7 +1049,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/trends_store.py:46",
+        "site": "data/trends_store.py:84",
         "via": []
       },
       {
@@ -1056,7 +1058,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/trends_store.py:48",
+        "site": "data/trends_store.py:86",
         "via": []
       },
       {
@@ -1892,7 +1894,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "data/trends_store.py:46",
+        "site": "data/trends_store.py:84",
         "via": []
       },
       {
@@ -1966,7 +1968,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6124",
+        "site": "investyo_mcp_server.py:6125",
         "via": []
       }
     ],
@@ -1986,7 +1988,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6069",
+        "site": "investyo_mcp_server.py:6070",
         "via": []
       }
     ],
@@ -2026,7 +2028,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6077",
+        "site": "investyo_mcp_server.py:6078",
         "via": []
       }
     ],
