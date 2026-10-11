@@ -1,6 +1,6 @@
 # Live Google Trends SVI Stitching Viewer — Implementation Plan
 
-**Branch:** `claude/google-trends-svi-live-drw74r` · **Date:** 2026-10-06 · **Status:** plan, awaiting operator review
+**Branch:** `claude/google-trends-svi-live-drw74r` · **Date:** 2026-10-06, revised 2026-10-11 · **Status:** Phase A implemented on this branch (draft PR #1114, CI green, **not merged**). Phases B/C are a refined plan only (revised 2026-10-11 after a design spike); nothing for them is built.
 **Predecessors:** [#953](https://github.com/kevinmarko/Stockpy/pull/953) (mock-only demo; live route returned 501),
 a later revision that read `TrendsStore` with an SPY-volume proxy fallback, and
 [#1100](https://github.com/kevinmarko/Stockpy/pull/1100) (removed the screen as "a demo showing stale Trends data").
@@ -96,41 +96,111 @@ A read-only **Search Attention (Google Trends)** screen. For each term the daemo
 - `tests/test_production_steps_google_trends.py`: the dashboard value equals the last complete-day ASVI.
 - Root `conftest.py` already has `_isolate_trends_store_db_in_tests`. The new `trends_download_batches` table lives on the same `Base`/engine, so it is covered too. Add one assertion that a default `TrendsStore()` in tests is in-memory.
 
-### Phase B — Read API *(needs freeze OK; PR 2)*
+### Phase B — Read API *(freeze exception needed; same PR as C)*
 
-`api/data_api.py` (port 8603, where heavy pandas/stitcher imports are allowed, same as the old demo), read tier `require_token`:
+**Status:** plan only. A design spike on 2026-10-11 was stopped at the operator's request and reverted. The design below includes what it found.
 
-- `GET /data/trends/terms` returns `{enabled, window_days, overlap_days, refresh_interval_hours, tracked_universe_size, terms: [{term, last_batch_at, age_hours, stale, last_status, windows_fetched, windows_expected, stitched_days}]}`.
-- `GET /data/trends/svi?term=AAL&batch=latest` returns:
-  - `status`: one of `ok | disabled | no_data | partial_only | error`, with a `reason`
-  - `batch {id, started_at, status, partial_day_dropped}`
-  - `raw_windows[{start, end, points[[ts, v]], peak_date}]`
-  - `seams[{a_window, b_window, overlap_start, overlap_end, overlap_days, sum_a, sum_b, factor, degenerate_guard}]`
-  - `rescaled_windows[...]`
-  - `stitched {points, persisted_at}`
-  - `recompute_check {max_abs_diff, matches}`: the stitch is recomputed from the batch's raw windows and compared with the persisted one, as an integrity signal
-  - `asvi {points, latest, latest_date, lookback_days}`
-  - `sampling_band` (optional, from retained batches)
-- Honesty contract: every missing number is `null`, never `0`, and `_clean_nan` runs on output. Disabled or no data is **200 + status**, not 5xx. An unknown term is 404 with a stable tag. Term input is validated (`^[A-Z0-9.\-]{1,12}$`). A store failure degrades to `status:"error"` (CONSTRAINT #6).
-- **No network calls** from the API process. That keeps the single shared pytrends limiter, which lives in the daemon, the only client.
-- Tests: `tests/test_data_api_trends_svi.py` covering every status branch, the seams math against `get_scaling_metadata`, the recompute check, NaN → null, the auth tier, the 404/422 tags, and *latest ASVI == `_apply_google_trends_asvi` value* for the same store.
+**Where the code goes.**
+- New pure module `data/trends_view.py`: `build_terms_view(store, tracked_universe, now=None)` and `build_svi_view(store, term, now=None)`. Both read the store only and catch their own failures, returning `status:"error"` with a reason (CONSTRAINT #6).
+- Two thin endpoints in `api/data_api.py` (port 8603, read tier `require_token`, output passed through `_clean_nan`). They open `TrendsStore(readonly=True)`.
+- **No network calls.** The daemon's pytrends client and its single shared limiter remain the only path to Google.
 
-### Phase C — Webapp screen *(needs freeze OK; same PR as B)*
+**Store read helpers to add to `data/trends_store.py`** (each returns an empty value on error and never raises):
+- `latest_batches()`: per term, `{"latest": batch|None, "complete": batch|None}` from one ordered scan. Retention keeps the table small, so a scan is fine.
+- `stitched_summary()`: per term, `{days, first_date, last_date, stitched_at}` via `GROUP BY`.
+- `get_stitched_rows(term)`: like `get_stitched_series` but also returns `stitched_at`. This lets the viewer tell whether the stored series came from the latest batch.
 
-Follows the `new-pwa-screen` skill order: **types → client + mock → screen → route → test**.
+**`GET /data/trends/terms`** returns `status`, `reason`, a config echo, coverage fields and one row per term:
+- Status: `ok | no_data | disabled | error`.
+- Config echo: `enabled, window_days, overlap_days, refresh_interval_hours, max_terms_per_pass, retention_batches, stale_after_hours, asvi_lookback_days`.
+- Coverage: `tracked_universe_size` and `tracked_with_data`, both `null` if the universe lookup fails. The universe comes from the existing `get_universe()` function in the same file (cached broker snapshot only).
+- `terms[]` is the union of terms with batches and terms with stitched rows, sorted. Each row has `term, in_tracked_universe, last_attempt_at, last_attempt_status, last_attempt_reason, last_complete_at, age_hours, stale, stitched_days, last_date, latest_asvi, latest_asvi_date, has_complete_batch`.
+- `stale` means age > 2 × `GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS`. One interval late is normal round-robin slack.
 
-- `webapp/src/api/types.ts`: `TrendsTermsResponse`, `TrendsSviResponse` (status union included).
-- `client.ts` + `mock.ts` in parity. The mock fixtures must cover **ok, disabled, no_data, partial_only, stale and degenerate-guard seam** shapes. The mock's raw windows are built by normalizing one fixed series per window, so the mock seams are mathematically consistent and not random.
-- `webapp/src/screens/TrendsAttention.tsx` at route `/research/trends`, plus a card in `ResearchHub.tsx` ("Search Attention").
-- Components in `webapp/src/components/charts/`:
-  - `TrendsRawWindowsChart`
-  - `TrendsStitchChart` (rescaled + stitched, shaded overlaps)
-  - `TrendsAsviChart` (zero line, latest marker)
-  - `TrendsSeamsTable`
-  - Recharts is already a dependency; load the `dataviz` skill before writing chart code.
-- Help: a `TAB_HELP.trends` entry plus `GLOSSARY` entries (SVI, ASVI, overlap stitching, partial day, sampling noise). Window and overlap days come from the API response, **not literals**. Add a `docs/HOW_TO_GUIDE.md` section for the anchor.
-- Tests: screen vitest for each status shape; chart components render with empty and degenerate data.
-- Also update the MCP `audit_all_pwa_screens` route list (#1100 made it a fixed list).
+**`GET /data/trends/svi?term=AAL`**: the term is upper-cased and validated against `^[A-Z0-9.\-]{1,12}$`. An invalid term returns 422 with `detail` starting `invalid_term`.
+
+A valid term with no data returns **200 with `no_data`, not 404**. Any tracked symbol is a legitimate term the daemon may simply not have reached yet. *This changes the original plan, which said 404.*
+
+The response carries the same config echo plus:
+- `status`, one of:
+  - `ok`: a complete batch and a stitched series.
+  - `stitched_only`: a stored series with no complete batch. This covers pre-batch legacy data and series whose recent downloads were incomplete. The stitched curve and ASVI are shown; raw windows and seams are empty, and a reason explains why.
+  - `partial_only`: only partial or failed batches, nothing stitched.
+  - `no_data`
+  - `disabled`: only when there is also no data. Stored data is still shown when refresh is off, with `enabled:false`.
+  - `error`
+- `reason`
+- `batch`: the latest complete batch, `{batch_id, status, reason, started_at, finished_at, windows_expected, windows_fetched, age_hours, stale}`.
+- `latest_attempt`: the same shape, for the newest batch of any status.
+- `raw_windows[]`: `{index, start, end, points[[epoch_ms, v]], peak_date, peak_value}`. Built with `GoogleTrendsStitcher.group_raw_windows_into_series(load_batch_windows(id))`.
+- `seams[]`: `{index, a_window, b_window, overlap_start, overlap_end, overlap_days, sum_a, sum_b, applied_factor, pair_factor, degenerate_guard}`.
+- `rescaled_windows[]`
+- `stitched`: `{points, first_date, last_date, days, persisted_at, from_latest_batch}`.
+- `recompute_check`: `{compared_days, max_abs_diff, same_dates, matches}`.
+- `asvi`: `{points, latest, latest_date, lookback_days}`. Warm-up points are `null`.
+
+**Seam maths: the important subtlety the spike found.** `stitch_multiple_intervals` is a *chain*. Window *k* is scaled against **the stitch so far** (already on window 0's scale), not against raw window *k−1*. So:
+- `applied_factor` is the cumulative factor the stitcher actually applied: `get_scaling_metadata(stitched_so_far, window_k)["f"]`. `sum_a` and `sum_b` are its overlap sums.
+- `pair_factor` is the plain neighbour ratio Σraw_{k−1}/Σraw_k over their overlap. It is `null` when either sum is ≤ 1e-9, because the ratio is undefined there. It is shown to teach the idea of "how much louder this window is than its neighbour".
+- `rescaled_windows[k] = raw_k × applied_factor_k`.
+- The walk must call `get_scaling_metadata` and `stitch_intervals` themselves, never re-derive the formula, so the numbers are the pipeline's.
+
+**Recompute check.** Re-stitch the batch's raw windows and compare with the persisted series. `matches` means the date sets are identical and `max_abs_diff < 1e-9`. A mismatch is shown as an integrity warning, never hidden.
+
+**ASVI.** `compute_asvi` on the persisted series. Its `latest` must equal `_apply_google_trends_asvi`'s dashboard value; test this with `abs=0`. The lookback is read from `compute_asvi`'s signature (84 days), never a literal.
+
+**Tests: `tests/test_data_api_trends_svi.py`.**
+- Fixture: a real in-memory `TrendsStore` shared by monkeypatching `data.trends_store.TrendsStore` to return it. Patch `data_api.get_universe` and `settings.STATE_API_TOKEN=None`.
+- Fill the store the way the daemon does: `record_batch` plus a real stitch saved with `stitched_at == finished_at`.
+- **Spike lesson:** the patched factory must also be used for the `readonly=True` constructor. A bare in-memory readonly engine is a *separate, empty* DB, and 9 of the spike's 16 tests failed with "no such table" until that is wired correctly. Assert the fixture is actually hit.
+- Cases:
+  - every status branch;
+  - seam 1 and seam 2 factors against `get_scaling_metadata` (seam 2 against the chained stitch);
+  - a degenerate-guard seam (zeroed overlap gives `applied_factor 1.0` and `pair_factor null`);
+  - a recompute mismatch after tampering with one stored value;
+  - latest ASVI equal to the dashboard value;
+  - warm-up point `null`;
+  - stored data still shown when disabled;
+  - 422 tag;
+  - store-open failure giving 200 `error`;
+  - auth 401 on both endpoints;
+  - terms coverage and stale flags;
+  - coverage `null` when the universe lookup raises.
+
+### Phase C — Webapp screen *(freeze exception needed; same PR as B)*
+
+Follow the `new-pwa-screen` skill order: **types → client + mock → screen → route → test**.
+
+- **`webapp/src/api/types.ts`:** `TrendsTermsResponse` and `TrendsSviResponse`, with the status unions above (`ok | stitched_only | partial_only | no_data | disabled | error`). Every field the backend can omit is `| null`.
+- **`client.ts`:** `getTrendsTerms()` → `http<TrendsTermsResponse>("/data/trends/terms")`, and `getTrendsSvi(term)` → `http<TrendsSviResponse>(`/data/trends/svi?term=${encodeURIComponent(term)}`)`. `baseFor` already routes `/data/*` to :8603.
+- **`mock.ts`:** in parity. Build the mock raw windows by normalizing **one fixed underlying series** per window, so the mock seams are mathematically consistent, unlike #953's random curves. Fixtures, one per honesty branch:
+  - `ok`
+  - `ok` + stale
+  - `ok` + recompute mismatch
+  - a degenerate-guard seam
+  - `stitched_only`
+  - `partial_only`
+  - `no_data`
+  - `disabled`
+  - `error`
+- **Screen `webapp/src/screens/TrendsAttention.tsx`** at `/research/trends`:
+  - A term picker fed by `/data/trends/terms`, defaulting to the freshest term with `ok`.
+  - Honesty strip: last download time and age, batch status, stale badge, coverage "N of M tracked symbols", and refresh on/off.
+  - Then, in order:
+    1. raw windows chart;
+    2. seams table;
+    3. rescaled + stitched chart with the overlaps shaded;
+    4. ASVI chart with a zero line and a marker on the latest value.
+  - A recompute mismatch renders a visible warning.
+  - Reuse `Loading`, `EmptyState`, `ErrorState`, `StaleDataNotice` and `useApi`. **No polling**: the data changes at most once per refresh interval.
+- **Chart components in `webapp/src/components/charts/`:** `TrendsRawWindowsChart`, `TrendsStitchChart` (rebuilt; #953's version is in git at `9cdcde6^`, and its `formatUtcDate` UTC-date fix and fixed-pixel `ResponsiveContainer` height are worth keeping), `TrendsAsviChart`, `TrendsSeamsTable`. Load the `dataviz` skill before writing chart code.
+- **Navigation:** a "Search Attention" card in `ResearchHub.tsx` (order mirrors `NAV_ITEMS`), a `NAV_ITEMS` research entry so the desktop sidebar reaches it, and a Marketplace "Explore" tile if mobile reach is wanted (BottomNav shows only the first 3 items).
+- **Help:** a `TAB_HELP.trends` entry plus `GLOSSARY` entries for SVI, ASVI, overlap stitching, applied vs pair factor, partial day and sampling noise. Window and overlap days come from the API response, not literals. Add a `docs/HOW_TO_GUIDE.md` section for the anchor.
+- **MCP:** add `/research/trends` to `investyo_mcp_server.py::audit_all_pwa_screens`'s fixed route list.
+- **Tests:**
+  - screen vitest for every fixture branch: null renders "—", never 0; each reason is shown; a 404/error renders the honest state;
+  - chart components render with empty and degenerate data;
+  - the ResearchHub card-order invariant test.
 
 ### Phase D — On-demand "Refresh now" *(optional; separate explicit OK; PR 3)*
 
@@ -143,13 +213,13 @@ A command-tier endpoint (`FOLLOW_API_TOKEN`) asks the **daemon** to refresh one 
 | File | Change |
 |---|---|
 | `docs/signals/google_trends_asvi.md` | Replace §D "removed" with the live viewer. Document batches, partial-day handling, retention, the warm-up NaN rule, and a "Sampling noise" note. Fix the overlap description (setting vs function default). |
-| `docs/known_issues/google_trends_raw_window_accumulation_2026_10.md` (new) + `docs/known_issues/README.md` | The measured defects from §1.2/§1.3: root cause, fix, status. |
-| `docs/architecture/data-layer.md` | `trends_download_batches`, the `window_id` convention, retention. |
+| `docs/known_issues/google_trends_stale_scale_and_partial_day_2026_10.md` + `docs/known_issues/README.md` | **Done in Phase A.** Measured defects, root cause, fix, rollout SQL. |
+| `docs/architecture/data-layer.md` | **Done in Phase A** (batches, `window_id` convention, retention). B adds `data/trends_view.py`. |
 | `docs/architecture/webapp-and-gui.md` | `/research/trends` screen and the two `/data/trends/*` endpoints. |
 | `docs/architecture/testing.md` | New/extended test files. |
 | `docs/HOW_TO_GUIDE.md` | "Reading the Search Attention screen" (help anchor target). |
 | `CLAUDE.md` / `AGENTS.md` | No change expected (no new rule). Update only if Decision 2 changes a universe rule. |
-| `.claude/google_trends_svi_live_task.md`, `.claude/google_trends_svi_live_walkthrough.md` | Task tracker and walkthrough, written at PR time. |
+| `.claude/google_trends_svi_live_phase_a_walkthrough.md` | **Done** for Phase A. B/C get `.claude/google_trends_svi_live_phase_bc_walkthrough.md` and `..._phase_bc_task.md`. |
 
 ---
 
@@ -157,25 +227,35 @@ A command-tier endpoint (`FOLLOW_API_TOKEN`) asks the **daemon** to refresh one 
 
 - **Phase A:** targeted `pytest tests/test_trends_store.py tests/test_google_trends_client.py tests/test_google_trends_daemon.py tests/test_trends_stitcher.py tests/test_production_steps_google_trends.py`, then `make ci` (zero failures). After merge and a daemon restart: read-only DB queries confirming one complete batch per term per refresh interval, zero orphan stitched rows, and latest stored date < today (no partial day).
 - **Phase B/C:**
-  - `pytest tests/test_data_api_trends_svi.py tests/test_data_api.py` + `make ci`
+  - `pytest tests/test_data_api_trends_svi.py tests/test_data_api.py` + `make ci`. First confirm the test fixture's shared store is really the one the endpoint reads (see the Phase B spike lesson).
   - `npm run --prefix webapp typecheck`, `npm run --prefix webapp test`, and the `api-parity-reviewer` agent
   - `npm run dev` browser check in **mock** mode for every status shape (console clean)
   - **Live check** against the operator's backend (`VITE_USE_MOCK=false`), which the cloud container cannot reach. Either the operator does it, or it runs via the investyo MCP's `inspect_webapp_screen` / `trace_webapp_network`. A typecheck alone has missed live field mismatches before.
 
 ---
 
-## 6. Decisions needed from the operator
+## 6. Decisions
 
-1. **Freeze exception for Phases B/C** (the new screen). Phase A proceeds either way as bug fixes.
-2. **Universe (A8):** keep `DEFAULT_TICKERS` (6 terms today), or switch to the tracked universe with a per-pass cap + round-robin. *Recommendation: switch, cap 10/pass.*
-3. **Partial-day fix (A3)** changes today's dashboard ASVI value. *Recommendation: accept; the current value is computed from a partial day.*
-4. **ASVI warm-up NaN (A7).** *Recommendation: accept; it only affects the first 7 rows of the series.*
-5. **Raw retention K (A6).** *Recommendation: 14 batches.*
-6. **Phase D on-demand refresh.** *Recommendation: not now.*
-7. **Orphan cleanup:** run the one-off purge script, or let the first `replace=True` re-stitch clean it. *Recommendation: let the re-stitch do it; the script is only for the dry-run report.*
+**Answered 2026-10-11:** Decisions 2–7 below were accepted as recommended and are implemented in Phase A. That means: switch the universe with a cap of 10, the partial-day fix, NaN warm-up, K = 14, no Phase D, and the re-stitch cleans up orphans (no purge script).
+
+**Still open:**
+1. **Freeze exception for Phases B/C** (the new screen). On 2026-10-11 the operator first asked to "merge Phase A with Phases B and C", then asked for the plan only. So B/C remain unbuilt, pending a go-ahead.
+2. **When to merge Phase A.** Options: on its own, since it is freeze-allowed and CI is green, or held until B/C are built so the screen ships with the data fixes. It changes the dashboard `Google_Trends_ASVI` values (partial day dropped), so the operator should pick the timing.
+3. **Mobile reach for the screen:** a Marketplace "Explore" tile as well, or the desktop sidebar plus Research hub only. *Recommendation: the Research hub card and sidebar only. This is a research page, not a daily-use one.*
+4. **Sampling-noise band (§2 item 6):** in the first B/C PR, or later. *Recommendation: later. It needs ≥ 2 retained complete batches per term, which Phase A's retention now provides, but it adds a chart and an API field.*
+
+Original decision list (kept for the record):
+
+1. Freeze exception for Phases B/C.
+2. Universe (A8): switch to the tracked universe, cap 10/pass. **Accepted.**
+3. Partial-day fix (A3). **Accepted.**
+4. ASVI warm-up NaN (A7). **Accepted.**
+5. Raw retention K (A6): 14. **Accepted.**
+6. Phase D on-demand refresh: not now. **Accepted.**
+7. Orphan cleanup by re-stitch, no script. **Accepted.**
 
 ## 7. PR split
 
-1. **PR 1: Phase A** (+ known-issue doc). Freeze-allowed.
-2. **PR 2: Phases B + C** after Decision 1.
-3. **PR 3: Phase D** only if Decision 6 is yes.
+1. **Phase A:** draft PR #1114 on this branch (data fixes + docs). CI is green, and it is not merged (open Decision 2).
+2. **Phases B + C:** one PR, after open Decision 1. They can go on this branch, so all three ship together, or on a new branch after Phase A merges.
+3. **Phase D:** not planned (Decision 6).
