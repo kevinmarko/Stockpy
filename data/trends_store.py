@@ -150,6 +150,14 @@ class TrendsStore:
         """
         if self._readonly:
             raise RuntimeError("TrendsStore is read-only")
+        if replace and not series:
+            # Replacing with nothing would wipe the term's stored series.
+            # Refuse rather than leave the dashboard with no data at all.
+            logger.warning(
+                "TrendsStore.save_stitched_series: refusing replace=True with an "
+                "empty series for %s; stored series left unchanged", query_term,
+            )
+            return
         with session_scope(self.Session) as session:
             if replace:
                 session.query(StitchedGoogleTrends).filter_by(query_term=query_term).delete(
@@ -330,40 +338,38 @@ class TrendsStore:
             logger.warning("TrendsStore.list_terms_with_batches: %s", exc)
             return []
 
-    def prune_raw_batches(self, query_term: str, keep_complete: int) -> int:
-        """Keep the newest ``keep_complete`` complete batches for a term and
-        delete everything older: older complete batches, every partial or
-        failed batch older than the oldest one kept, and their raw rows.
+    def prune_raw_batches(self, query_term: str, keep: int) -> int:
+        """Bound a term's raw data to its newest ``keep`` batches of each kind.
 
-        Also deletes the term's legacy raw rows, the ones written before
-        batches existed (their ``window_id`` is a bare ``uuid4`` with no
-        ``/``), but only once at least one complete batch exists, so a term
-        is never left with no raw data. ``keep_complete < 1`` is treated as 1.
-        Returns the number of raw rows deleted.
+        - Complete batches: the newest ``keep`` are kept.
+        - Partial/failed batches: the newest ``keep`` are kept, and once a
+          complete batch exists, any older than the oldest kept complete one
+          are dropped too. This bounds growth for a term that never completes
+          (Google has no data for it), which an earlier version missed.
+        - Legacy raw rows written before batches existed (``window_id`` a bare
+          ``uuid4`` with no ``/``) are deleted only once at least one complete
+          batch exists, so a term is never left with no raw data.
+
+        ``keep < 1`` is treated as 1. Returns the number of raw rows deleted.
         """
         if self._readonly:
             raise RuntimeError("TrendsStore is read-only")
-        keep_complete = max(1, int(keep_complete))
+        keep = max(1, int(keep))
         with session_scope(self.Session) as session:
-            kept = (
+            batches = (
                 session.query(TrendsDownloadBatch)
-                .filter_by(query_term=query_term, status=BATCH_COMPLETE)
+                .filter_by(query_term=query_term)
                 .order_by(TrendsDownloadBatch.started_at.desc())
-                .limit(keep_complete)
                 .all()
             )
-            if not kept:
-                return 0
-            cutoff = kept[-1].started_at
-            kept_ids = {b.batch_id for b in kept}
-            doomed = [
-                b.batch_id
-                for b in session.query(TrendsDownloadBatch)
-                .filter(TrendsDownloadBatch.query_term == query_term)
-                .filter(TrendsDownloadBatch.started_at <= cutoff)
-                .all()
-                if b.batch_id not in kept_ids
-            ]
+            complete = [b for b in batches if b.status == BATCH_COMPLETE]
+            other = [b for b in batches if b.status != BATCH_COMPLETE]
+            doomed = [b.batch_id for b in complete[keep:]]
+            cutoff = complete[: keep][-1].started_at if complete else None
+            for i, b in enumerate(other):
+                if i >= keep or (cutoff is not None and b.started_at < cutoff):
+                    doomed.append(b.batch_id)
+
             deleted = 0
             for batch_id in doomed:
                 deleted += (
@@ -376,12 +382,13 @@ class TrendsStore:
                 session.query(TrendsDownloadBatch).filter(
                     TrendsDownloadBatch.batch_id.in_(doomed)
                 ).delete(synchronize_session=False)
-            deleted += (
-                session.query(RawTrendsDownload)
-                .filter(RawTrendsDownload.query_term == query_term)
-                .filter(~RawTrendsDownload.window_id.like("%/%"))
-                .delete(synchronize_session=False)
-            )
+            if complete:
+                deleted += (
+                    session.query(RawTrendsDownload)
+                    .filter(RawTrendsDownload.query_term == query_term)
+                    .filter(~RawTrendsDownload.window_id.like("%/%"))
+                    .delete(synchronize_session=False)
+                )
             return deleted
 
 

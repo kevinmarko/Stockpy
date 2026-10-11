@@ -48,8 +48,10 @@ why.
 - New table `trends_download_batches`: one row per term per download, with `status`
   (`complete`/`partial`/`failed`) and a `reason`. Raw `window_id` is now
   `"<batch_id>/<start>/<end>"` (no schema change to `raw_trends_downloads`).
-- Only a complete batch is stitched. The stitch replaces the term's series in one
-  transaction (`save_stitched_series(..., replace=True)`).
+- Only a complete batch is stitched, and a batch is recorded `complete` only after its stitch
+  produced rows. The stitch replaces the term's series in one transaction
+  (`save_stitched_series(..., replace=True)`, which refuses an empty series). A cooldown that
+  is already open stops the pass before any fetch.
 - `fetch_overlapping_windows` drops `isPartial` rows.
 - The schedule is per term and comes from the batch table (`TrendsStore.last_attempts()`),
   so it survives restarts. A term waits the full refresh interval after any attempt, including
@@ -58,7 +60,8 @@ why.
 - Window settings are passed through. The universe is `compute_tracked_universe()` (cached
   broker snapshot only), capped by `GOOGLE_TRENDS_MAX_TERMS_PER_PASS` (default 10) per pass,
   oldest attempt first (round-robin).
-- Raw retention: `GOOGLE_TRENDS_RAW_RETENTION_BATCHES` (default 14) complete batches per term.
+- Raw retention: `GOOGLE_TRENDS_RAW_RETENTION_BATCHES` (default 14) batches per term of each
+  kind (complete; partial/failed), pruned after every batch.
   Pre-fix `uuid4` rows are pruned once a term has its first complete batch.
 - ASVI warm-up rows are NaN.
 
@@ -88,6 +91,11 @@ SELECT query_term, COUNT(*) FROM raw_trends_downloads WHERE window_id NOT LIKE '
 -- latest stored day is before today (no partial day)
 SELECT query_term, MAX(date), COUNT(*) FROM stitched_google_trends GROUP BY 1;
 ```
+
+## Still open
+
+- No maximum-age check on the dashboard ASVI. If downloads keep failing, the last stored
+  value is shown as current. The planned viewer (Phase B/C) will show batch age.
 
 ## Tests
 

@@ -1031,6 +1031,16 @@ class OrchestratorDaemon:
             # never aborts the remaining symbols in this pass -- matching this
             # repo's convention for per-ticker loops (see CLAUDE.md).
             for sym in due:
+                # A cooldown left open by an earlier pass makes the client
+                # return [] without sending anything. Stop before fetching so
+                # the term is not recorded as a failed attempt it never made.
+                if is_in_cooldown():
+                    logger.warning(
+                        "maybe_refresh_google_trends: rate-limit cooldown open; "
+                        "stopping this pass before %s. Remaining terms stay due.",
+                        sym,
+                    )
+                    break
                 try:
                     batch_id = uuid.uuid4().hex
                     started_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -1056,18 +1066,41 @@ class OrchestratorDaemon:
                         clean_series.append(series)
 
                     cooling_down = is_in_cooldown()
+                    stitched_rows: list[dict] = []
                     if windows_expected and len(windows) == windows_expected:
-                        status, reason = BATCH_COMPLETE, None
+                        # Stitch before recording, so a batch is only marked
+                        # complete once its stitch exists. A stitch that
+                        # raises (e.g. adjacent windows with no shared dates)
+                        # or comes back empty marks the batch failed instead.
+                        try:
+                            stitched = GoogleTrendsStitcher.stitch_multiple_intervals(clean_series)
+                            stitched_rows = [
+                                {"date": d.date(), "value": float(v)}
+                                for d, v in stitched.dropna().items()
+                            ]
+                            if stitched_rows:
+                                status, reason = BATCH_COMPLETE, None
+                            else:
+                                status, reason = BATCH_FAILED, "stitch produced no rows"
+                        except Exception as stitch_exc:  # noqa: BLE001
+                            status = BATCH_FAILED
+                            reason = f"stitch failed: {type(stitch_exc).__name__}: {stitch_exc}"[:500]
                     elif windows:
                         status = BATCH_PARTIAL
                         reason = f"{len(windows)} of {windows_expected} windows returned"
                         if cooling_down:
                             reason += "; rate-limit cooldown opened"
+                    elif not windows_expected:
+                        status = BATCH_FAILED
+                        reason = (
+                            "no windows planned: GOOGLE_TRENDS_WINDOW_DAYS must be "
+                            "greater than GOOGLE_TRENDS_OVERLAP_DAYS"
+                        )
                     else:
                         status = BATCH_FAILED
                         reason = (
                             "rate-limit cooldown" if cooling_down
-                            else "no data returned for any window"
+                            else "no data returned (or pytrends unavailable; see log)"
                         )
 
                     store.record_batch(
@@ -1082,23 +1115,18 @@ class OrchestratorDaemon:
                     )
 
                     if status == BATCH_COMPLETE:
-                        stitched = GoogleTrendsStitcher.stitch_multiple_intervals(clean_series)
-                        if not stitched.empty:
-                            store.save_stitched_series(
-                                sym,
-                                [{"date": d.date(), "value": float(v)} for d, v in stitched.items()],
-                                finished_at,
-                                replace=True,
-                            )
-                        store.prune_raw_batches(
-                            sym, int(settings.GOOGLE_TRENDS_RAW_RETENTION_BATCHES)
-                        )
+                        store.save_stitched_series(sym, stitched_rows, finished_at, replace=True)
                     else:
                         logger.warning(
                             "maybe_refresh_google_trends: %s batch for %s (%s); "
                             "stored series left unchanged",
                             status, sym, reason,
                         )
+                    # After every batch, so a term that never completes does
+                    # not accumulate partial/failed raw rows forever.
+                    store.prune_raw_batches(
+                        sym, int(settings.GOOGLE_TRENDS_RAW_RETENTION_BATCHES)
+                    )
 
                     if cooling_down:
                         logger.warning(

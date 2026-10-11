@@ -203,7 +203,7 @@ def test_prune_raw_batches_keeps_exactly_k_complete_batches():
     # Another term is untouched.
     _record(store, "ABR", "x0", t0)
 
-    deleted = store.prune_raw_batches("AAL", keep_complete=2)
+    deleted = store.prune_raw_batches("AAL", keep=2)
     assert deleted == 3 * 6  # b0, b1, b2: 2 windows x 3 rows each
 
     remaining = {r.window_id.split("/")[0] for r in store.load_raw_windows("AAL")}
@@ -217,11 +217,11 @@ def test_prune_raw_batches_removes_legacy_uuid_rows_only_once_a_batch_exists():
     store.insert_raw_window("AAL", "3f2b6c1e-0000-4000-8000-000000000000",
                             [{"date": date(2026, 1, 1), "value": 1.0}], datetime(2026, 1, 2))
     # No complete batch yet: legacy rows are the only raw data, so keep them.
-    assert store.prune_raw_batches("AAL", keep_complete=14) == 0
+    assert store.prune_raw_batches("AAL", keep=14) == 0
     assert len(store.load_raw_windows("AAL")) == 1
 
     _record(store, "AAL", "b0", datetime(2026, 10, 1))
-    assert store.prune_raw_batches("AAL", keep_complete=14) == 1
+    assert store.prune_raw_batches("AAL", keep=14) == 1
     assert all("/" in r.window_id for r in store.load_raw_windows("AAL"))
 
 
@@ -250,3 +250,21 @@ def test_default_store_is_in_memory_under_tests():
     never write to the operator's live database (it covers the batch table
     too, which shares the same engine)."""
     assert str(TrendsStore().engine.url) == "sqlite:///:memory:"
+
+
+def test_prune_bounds_a_term_that_never_completes():
+    """Partial/failed batches must not pile up for a term Google has no
+    complete data for (audit finding on the first version)."""
+    store = TrendsStore()
+    t0 = datetime(2026, 10, 1, 6, 0)
+    for i in range(5):
+        _record(store, "DEAD", f"p{i}", t0 + timedelta(days=i), status=BATCH_PARTIAL, n_windows=1)
+    store.prune_raw_batches("DEAD", keep=2)
+    assert {r.window_id.split("/")[0] for r in store.load_raw_windows("DEAD")} == {"p3", "p4"}
+
+
+def test_replace_with_empty_series_is_refused():
+    store = TrendsStore()
+    store.save_stitched_series("AAL", [{"date": date(2026, 1, 1), "value": 5.0}], datetime(2026, 1, 2))
+    store.save_stitched_series("AAL", [], datetime(2026, 2, 2), replace=True)
+    assert store.get_stitched_series("AAL") == [{"date": date(2026, 1, 1), "value": 5.0}]

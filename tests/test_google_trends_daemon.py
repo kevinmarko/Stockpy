@@ -123,8 +123,9 @@ def test_per_pass_cap_takes_stalest_terms_first(trends_settings, store, monkeypa
 
 
 def test_cooldown_stops_the_pass_and_leaves_the_rest_due(trends_settings, store):
+    # Closed before AAL's fetch, opened by it (the 429s happen inside the fetch).
     with patch("data.google_trends_client.fetch_overlapping_windows", return_value=[]) as fetch, \
-         patch("data.google_trends_client.is_in_cooldown", return_value=True):
+         patch("data.google_trends_client.is_in_cooldown", side_effect=[False, True]):
         _daemon(["AAL", "ABR"]).maybe_refresh_google_trends()
     assert [c.args[0] for c in fetch.call_args_list] == ["AAL"]
     failed = store.latest_batch("AAL", complete_only=False)
@@ -231,3 +232,36 @@ def test_due_terms_waits_the_interval_after_a_failed_attempt():
 def test_due_terms_cap_is_at_least_one():
     got = _google_trends_due_terms(["A", "B"], {}, NOW, interval_hours=24, max_terms=0)
     assert got == ["A"]
+
+
+def test_cooldown_open_before_the_pass_records_nothing(trends_settings, store):
+    """A cooldown left open by an earlier pass must not burn a term that was
+    never actually requested."""
+    with patch("data.google_trends_client.fetch_overlapping_windows") as fetch, \
+         patch("data.google_trends_client.is_in_cooldown", return_value=True):
+        _daemon(["AAL", "ABR"]).maybe_refresh_google_trends()
+    fetch.assert_not_called()
+    assert store.last_attempts() == {}
+
+
+def test_stitch_failure_marks_batch_failed_and_keeps_series(trends_settings, store):
+    """A batch is only marked complete once its stitch succeeded."""
+    seeded = [{"date": datetime(2026, 1, 1).date(), "value": 33.0}]
+    store.save_stitched_series("AAL", seeded, datetime(2026, 1, 2))
+    with patch("data.google_trends_client.fetch_overlapping_windows", side_effect=_complete_fetch), \
+         patch("data.trends_stitcher.GoogleTrendsStitcher.stitch_multiple_intervals",
+               side_effect=ValueError("No overlapping dates")):
+        _daemon(["AAL"]).maybe_refresh_google_trends()
+    batch = store.latest_batch("AAL", complete_only=False)
+    assert batch["status"] == BATCH_FAILED
+    assert batch["reason"].startswith("stitch failed: ValueError")
+    assert store.latest_batch("AAL") is None
+    assert store.get_stitched_series("AAL") == seeded
+
+
+def test_no_planned_windows_gives_an_accurate_reason(trends_settings, store, monkeypatch):
+    monkeypatch.setattr(settings, "GOOGLE_TRENDS_WINDOW_DAYS", 30)
+    with patch("data.google_trends_client.fetch_overlapping_windows", return_value=[]), \
+         patch("data.google_trends_client.is_in_cooldown", return_value=False):
+        _daemon(["AAL"]).maybe_refresh_google_trends()
+    assert "no windows planned" in store.latest_batch("AAL", complete_only=False)["reason"]

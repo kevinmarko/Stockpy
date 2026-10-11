@@ -30,7 +30,7 @@ This module implements the end-to-end data ingestion, overlapping stitching, and
 - **Only complete batches are stitched.** The new stitch *replaces* the term's stored series in one transaction (`save_stitched_series(..., replace=True)`), so no days from an older stitch, on an older scale, are left behind. A partial or failed batch leaves the stored series unchanged.
 - **Partial current day dropped.** `fetch_overlapping_windows` drops rows pytrends flags `isPartial`. The current day's value climbs while the day is in progress, so the dashboard ASVI (the last stored day) is now computed from the last *complete* day.
 - **Rate-limit cooldown stops the pass.** The terms not reached stay due for a later wake.
-- **Retention.** After a complete batch, raw rows older than the newest `GOOGLE_TRENDS_RAW_RETENTION_BATCHES` complete batches are pruned, including pre-2026-10 rows with bare `uuid4` window ids.
+- **Retention.** After every batch, raw rows beyond the newest `GOOGLE_TRENDS_RAW_RETENTION_BATCHES` batches of each kind (complete; partial/failed) are pruned. Pre-2026-10 rows with bare `uuid4` window ids go once the term has a complete batch.
 - Write-up: [`docs/known_issues/google_trends_stale_scale_and_partial_day_2026_10.md`](../known_issues/google_trends_stale_scale_and_partial_day_2026_10.md).
 
 

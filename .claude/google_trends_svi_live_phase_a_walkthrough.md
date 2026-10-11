@@ -43,11 +43,37 @@ Known-issue write-up: `docs/known_issues/google_trends_stale_scale_and_partial_d
 - **Naive UTC datetimes.** SQLite `DateTime` drops the time zone, so the daemon stores and
   compares naive UTC throughout.
 
+## Honesty-audit follow-ups (fixed before merge)
+
+An `honesty-auditor` pass over the first version found these, now fixed and tested:
+
+1. A batch was recorded `complete` before its stitch ran, so a stitch failure left a
+   "complete" batch next to the old series. The daemon now stitches first and records
+   `complete` only if the stitch produced rows. Otherwise the batch is `failed` with
+   `reason="stitch failed: ..."`.
+2. A cooldown still open from an earlier pass made the first due term a `failed` attempt it
+   never made, pushing it back 24 h. The daemon now checks `is_in_cooldown()` *before* each
+   fetch and stops the pass without recording anything.
+3. Raw rows of partial/failed batches were never pruned for a term that never completes.
+   `prune_raw_batches(term, keep)` now runs after every batch and keeps the newest `keep`
+   batches of each kind.
+4. The failure reason said "no data" for `window_days <= overlap_days`. It now says so
+   explicitly.
+5. `save_stitched_series(replace=True, series=[])` would wipe a term. It is now refused
+   in the store itself.
+
+Not fixed here (they predate this change, so they are reported to the operator instead):
+- The dashboard ASVI has no maximum-age check. If downloads keep failing, an old value
+  shows as current. Phase B's viewer will expose batch age; a dashboard max-age rule needs
+  its own decision.
+- The LSTM endpoint reads a sector-proxy term (`api/pilots_api.py`) that the daemon only
+  downloads if it is in the tracked universe. The result is honestly empty, not fabricated.
+
 ## Verification run this session
 
 - Targeted: `pytest tests/test_trends_store.py tests/test_google_trends_client.py
   tests/test_google_trends_daemon.py tests/test_trends_stitcher.py
-  tests/test_production_steps_google_trends.py` → all green (15 + 17 + 14 + 26 + 6).
+  tests/test_production_steps_google_trends.py` → 83 passed.
 - The new warm-up perturbation test was run against the **pre-change** `compute_asvi`: it
   leaks at cutoffs 3, 7, 10 and 40 and is identical at 83, so the test catches the bug it
   is meant to.
