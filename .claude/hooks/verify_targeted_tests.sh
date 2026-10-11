@@ -39,8 +39,17 @@ test_file="tests/test_${base}.py"
 [ -f "$test_file" ] || exit 0
 
 # Locate a usable python interpreter; if none, don't block silently.
+# Order: this checkout's .venv -> the main checkout's .venv (a git worktree
+# under .claude/worktrees/<name>/ has none of its own; --git-common-dir points
+# at the main checkout's .git, so its parent holds the shared .venv) ->
+# system python3 last (may not be the project's pinned 3.12).
+common_dir="$(git rev-parse --git-common-dir 2>/dev/null)" || common_dir=""
+main_root=""
+[ -n "$common_dir" ] && main_root="$(cd "$common_dir/.." 2>/dev/null && pwd)"
 if [ -x ".venv/bin/python3" ]; then
   python_bin=".venv/bin/python3"
+elif [ -n "$main_root" ] && [ -x "$main_root/.venv/bin/python3" ]; then
+  python_bin="$main_root/.venv/bin/python3"
 elif command -v python3 >/dev/null 2>&1; then
   python_bin="python3"
 else
