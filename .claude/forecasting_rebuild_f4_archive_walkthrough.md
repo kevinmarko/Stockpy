@@ -33,6 +33,7 @@ The operator can safely delete the following keys from their live `.env` file, a
 *   `SECTOR_FORECAST_CONFIGS`
 
 ## Verification
+*   Archive import smoke test: added `tests/test_forecasting_f4_archive_import_smoke.py` verifying that all 12 production entry points import cleanly when the 8 archived forecasting modules are poisoned via `sys.modules[name]=None`, and that none of the 8 archived modules are importable from their old paths (mutation-verified).
 *   Targeted tests: zero failures.
 *   Webapp tests: clean typecheck, zero vitest failures.
 *   Webapp UI: verified no console errors on `/forecast` and `/symbol/AAPL`.

@@ -247,8 +247,8 @@ function ForecastView({
               </div>
             )}
             <ForecastCandleChart bars={bars} forecast={forecast} />
-              </>
-            )}
+          </>
+        )}
               </div>
             </section>
           </div>
