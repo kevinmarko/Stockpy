@@ -7,11 +7,25 @@
 #                     -m "not network and not slow" --dist loadgroup)
 #   make smoke       smoke tests only
 #
+#   make lint        ruff genuine-bug rules only (mirrors CI's Lint step)
+#
 # All targets assume Python 3.12 lives in .venv; run ./setup.sh first.
+# A git worktree under .claude/worktrees/<name>/ has no .venv of its own, so
+# PYTHON resolves: this checkout's .venv -> the main checkout's .venv (parent
+# of `git rev-parse --git-common-dir`) -> see below. `make ci PYTHON=...`
+# still overrides all of it.
 
-PYTHON := .venv/bin/python3
+_MAIN_ROOT := $(shell d=$$(git rev-parse --git-common-dir 2>/dev/null) && cd "$$d/.." && pwd)
+_VENV_PYTHON := $(firstword $(wildcard .venv/bin/python3 $(if $(_MAIN_ROOT),$(_MAIN_ROOT)/.venv/bin/python3)))
 
-.PHONY: verify test ci smoke
+# No .venv anywhere: fall back to system python3 but say so loudly -- this is
+# the gate, and a silent fallback is how a run ends up under the wrong Python.
+PYTHON := $(or $(_VENV_PYTHON),python3)
+ifeq ($(_VENV_PYTHON),)
+$(warning No .venv found here or in the main checkout; using system python3 ($(shell python3 -V 2>&1)). Run ./setup.sh or pass PYTHON=...)
+endif
+
+.PHONY: verify test ci smoke lint
 
 # ── Main gate ─────────────────────────────────────────────────────────────────
 verify: _check_env test _live_run
@@ -46,6 +60,9 @@ smoke:
 	@echo ""
 	@echo "=== Pipeline smoke tests ==="
 	@$(PYTHON) -m pytest tests/test_pipeline_smoke.py -v --tb=short
+
+lint:
+	@$(PYTHON) -m ruff check . --select=F821,F822,F823,E9
 
 _live_run:
 	@echo ""

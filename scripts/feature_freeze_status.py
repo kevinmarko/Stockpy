@@ -40,6 +40,18 @@ PIPELINE_STRATEGY_ID = "main_pipeline"  # == main_orchestrator.PIPELINE_STRATEGY
 FREEZE_MIN_TRADES = 30
 FREEZE_TARGET_TRADES = 50
 
+# Pipeline-tagged trades the operator ruled out of the freeze count, keyed by
+# (paper_closed_trades.trade_id, symbol, entry_ts in UTC ISO) -- symbol and
+# entry time guard against a reused id in another DB (a fresh test DB seeds
+# SPY rows with low ids too). Each needs a dated reason; they stay in the
+# ledger and are reported as excluded, never silently dropped.
+EXCLUDED_TRADES: Dict[tuple, str] = {
+    (2, "SPY", "2026-09-30T14:34:25.398092+00:00"): (
+        "2026-10-11 operator: SPY was only fetched as the benchmark and leaked into "
+        "the daemon universe (docs/known_issues/daemon_benchmark_spy_leak.md)"
+    ),
+}
+
 _ET = ZoneInfo("America/New_York")
 _STALE_MARK_DAYS = 4  # shown, never hidden: an older mark is flagged in the text output
 _LOW_SAMPLE_N = 10
@@ -48,16 +60,37 @@ _UNAVAILABLE = "unavailable"
 logger = logging.getLogger(__name__)
 
 
+def _exclusion_reason(trade: Dict[str, Any]) -> Optional[str]:
+    symbol = str(trade.get("symbol") or "").upper()
+    entry = _parse_ts(trade.get("entry_ts"))
+    for (trade_id, ex_symbol, ex_entry), reason in EXCLUDED_TRADES.items():
+        if (trade.get("trade_id") == trade_id and symbol == ex_symbol
+                and entry is not None and entry == _parse_ts(ex_entry)):
+            return reason
+    return None
+
+
+def pipeline_owned(closed: List[Dict[str, Any]]) -> tuple:
+    """Split closed trades into (counted pipeline trades, excluded pipeline trades)."""
+    own = [t for t in closed if t.get("strategy_id") == PIPELINE_STRATEGY_ID]
+    excluded = [t for t in own if _exclusion_reason(t) is not None]
+    return [t for t in own if _exclusion_reason(t) is None], excluded
+
+
 def summarize(closed: List[Dict[str, Any]], open_positions: List[Any],
               *, min_trades: int = FREEZE_MIN_TRADES,
               target_trades: int = FREEZE_TARGET_TRADES) -> Dict[str, Any]:
     """Pure summary of pipeline-owned closed trades and open positions."""
-    own = [t for t in closed if t.get("strategy_id") == PIPELINE_STRATEGY_ID]
+    own, excluded = pipeline_owned(closed)
     pnls = [t["realized_pnl"] for t in own if t.get("realized_pnl") is not None]
     wins = sum(1 for p in pnls if p > 0)
     n = len(own)
     return {
         "closed_pipeline_trades": n,
+        "excluded_pipeline_trades": [
+            {"trade_id": t.get("trade_id"), "symbol": t.get("symbol"), "reason": _exclusion_reason(t)}
+            for t in excluded
+        ],
         "min_trades": min_trades,
         "target_trades": target_trades,
         "freeze_can_end": n >= min_trades,
@@ -425,7 +458,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Quality report: informational only. A failure here must never change the
     # gate result or the exit code, both of which are fixed by ``s`` above.
     try:
-        own_closed = [t for t in closed if t.get("strategy_id") == PIPELINE_STRATEGY_ID]
+        own_closed, _excluded = pipeline_owned(closed)
         s["quality"] = collect_quality(store, own_closed, live_quotes=args.live_quotes)
     except Exception as exc:  # noqa: BLE001
         s["quality"] = {"error": f"{type(exc).__name__}: {exc}"}
@@ -440,6 +473,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         pnl = "n/a" if s["total_realized_pnl"] is None else f"${s['total_realized_pnl']:,.2f}"
         print(f"Win rate {wr}; realized P&L {pnl}; open pipeline positions: "
               f"{', '.join(s['open_pipeline_positions']) or 'none'}")
+        for ex in s["excluded_pipeline_trades"]:
+            print(f"Excluded from the count: trade {ex['trade_id']} {ex['symbol']} -- {ex['reason']}")
         for line in format_quality(s["quality"]):
             print(line)
     return 0 if s["freeze_can_end"] else 2
