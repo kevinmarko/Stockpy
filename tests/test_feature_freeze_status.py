@@ -23,6 +23,38 @@ def test_only_pipeline_trades_count():
     assert s["freeze_can_end"] is False
 
 
+def test_excluded_trade_is_not_counted_but_is_reported():
+    spy_leak = {"trade_id": 2, "symbol": "SPY", "strategy_id": "main_pipeline", "realized_pnl": -4.87,
+                "entry_ts": "2026-09-30 14:34:25.398092"}  # naive DB form == the UTC key
+    closed = [spy_leak, _t("main_pipeline", 5.0), _t("main_pipeline", -2.0)]
+    s = ffs.summarize(closed, [])
+    assert s["closed_pipeline_trades"] == 2
+    assert s["total_realized_pnl"] == 3.0  # the excluded P&L doesn't leak into totals
+    assert s["win_rate"] == 0.5
+    assert [(e["trade_id"], e["symbol"]) for e in s["excluded_pipeline_trades"]] == [(2, "SPY")]
+    assert s["excluded_pipeline_trades"][0]["reason"]
+
+
+def test_exclusion_needs_id_symbol_and_entry_time():
+    # A fresh DB can reuse id 2 for another symbol or another SPY trade: still counted.
+    base = {"trade_id": 2, "strategy_id": "main_pipeline", "realized_pnl": 1.0}
+    others = [
+        {**base, "symbol": "AAPL", "entry_ts": "2026-09-30T14:34:25.398092+00:00"},
+        {**base, "symbol": "SPY", "entry_ts": "2026-09-30 14:00:00"},
+        {**base, "symbol": "SPY"},  # no entry time: can't prove it's the excluded trade
+    ]
+    s = ffs.summarize(others, [])
+    assert s["closed_pipeline_trades"] == 3
+    assert s["excluded_pipeline_trades"] == []
+
+
+def test_every_exclusion_has_a_reason():
+    assert ffs.EXCLUDED_TRADES
+    for (trade_id, symbol, entry_ts), reason in ffs.EXCLUDED_TRADES.items():
+        assert isinstance(trade_id, int) and symbol == symbol.upper() and reason.strip()
+        assert ffs._parse_ts(entry_ts) is not None
+
+
 def test_threshold_reached():
     s = ffs.summarize([_t("main_pipeline", 1.0)] * 30, [])
     assert s["freeze_can_end"] is True
