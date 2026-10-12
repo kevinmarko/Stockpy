@@ -299,7 +299,7 @@ CREATE INDEX IF NOT EXISTS idx_news_history_symbol
 """
 
 # Timezone used by resolve_trading_day() -- same ZoneInfo pattern already used
-# by execution/risk_gate.py and engine/advisory_agent.py for RTH detection.
+# by execution/risk_gate.py and shared/market_hours.py for RTH detection.
 _SENTIMENT_ET = ZoneInfo("America/New_York")
 _SENTIMENT_MARKET_CLOSE_HOUR = 16  # 4:00 PM ET
 
@@ -3028,7 +3028,7 @@ class HistoricalStore:
         Weekend timestamps (and the weekend a post-close Friday roll lands on)
         also roll forward to the following Monday. No holiday calendar is
         applied (same documented limitation as
-        ``engine.advisory_agent.is_us_market_open`` -- would require
+        ``shared.market_hours.is_us_market_open`` -- would require
         ``pandas_market_calendars``, not a project dependency).
 
         Parameters
@@ -3666,7 +3666,7 @@ class HistoricalStore:
         # top-up's write always fails ("attempt to write a readonly database"),
         # which get_bars()'s except then silently converts into a real,
         # unmocked live-provider fetch. Same ZoneInfo already used by
-        # resolve_trading_day()/execution/risk_gate.py/engine/advisory_agent.py
+        # resolve_trading_day()/execution/risk_gate.py/shared/market_hours.py
         # for RTH detection -- tz-naive midnight-normalized to match the
         # tz-naive normalized bar dates returned by latest_bar_date().
         today = pd.Timestamp(datetime.now(_SENTIMENT_ET).date())

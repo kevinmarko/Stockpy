@@ -290,6 +290,8 @@ Each PR merges with the suite green. Every equivalence gate runs a **frozen-inpu
 
 _Status (2026-10-12): 5.4 done — 5.4a #1117, 5.4b-i #1121, 5.4b-ii (deletes `launch.command`; daily-advisory plist kept for rollback, installed only with `install_schedule.command --with-daily-advisory`, which refuses unless the mode is `off`/`shadow`)._
 
+_Status (2026-10-12): 5.5 built on branch `step5-5-archive-main-py` (plan `.claude/shrink_step5_5_archive_main_py_implementation_plan.md`); merge held until the daemon has run `primary` cleanly through 2026-10-16 (operator)._
+
 **5.5: Archive `main.py` to `legacy/`**
 - Move `main.py`, `pipeline/steps.py`, and the advisory snapshot writer (keep `_safe_float_or_none` and the `_rating_*` helpers in a small module).
 - Move `html_publisher` unless decision 5 keeps it.

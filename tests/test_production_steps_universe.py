@@ -19,11 +19,11 @@ data.portfolio_sync.compute_tracked_universe()/load_env_watchlist() pair.
 
 Step 5.1 (2026-09) goes one step further: AsyncDataFetchStep now calls
 pipeline.advisory_inputs.build_universe_detailed() -- the exact function
-main.py's _build_universe() wraps -- so the daemon also gains main.py's
-held-in-fallback rule (DEFAULT_TICKERS fires only when held, watchlist AND
+build_universe() (formerly main.py's _build_universe()) wraps -- so the daemon
+also gains the advisory path's held-in-fallback rule (DEFAULT_TICKERS fires only when held, watchlist AND
 discovered are all empty) and closed-position retention. The
-TestDaemonMatchesMainUniverse class pins that the two produce the identical
-universe for the same inputs.
+TestDaemonMatchesAdvisoryInputsUniverse class pins that the two produce the
+identical universe for the same inputs.
 These tests exercise AsyncDataFetchStep.run() directly with a hand-built
 RunContext (ctx.market pre-set so the function skips straight past the
 credentials.json/DataEngine-construction branch into
@@ -375,16 +375,16 @@ _PARITY_SCENARIOS = {
 }
 
 
-class TestDaemonMatchesMainUniverse:
+class TestDaemonMatchesAdvisoryInputsUniverse:
     """The step 5.1 equivalence gate at the unit level: for identical inputs
     (held, WATCHLIST env, watchlist.txt, discovered, retention,
     DEFAULT_TICKERS fallback, rating auto-drop) the daemon's
-    AsyncDataFetchStep and main.py's _build_universe() produce the same
-    universe."""
+    AsyncDataFetchStep and pipeline.advisory_inputs.build_universe() (the
+    function main.py's _build_universe() was, until step 5.5 archived
+    main.py) produce the same universe."""
 
     @pytest.mark.parametrize("scenario", sorted(_PARITY_SCENARIOS))
     def test_same_universe(self, scenario, tmp_path, monkeypatch):
-        import main
         import pipeline.advisory_inputs as ai
 
         inputs = dict(_PARITY_SCENARIOS[scenario])
@@ -392,8 +392,8 @@ class TestDaemonMatchesMainUniverse:
 
         ctx = _run_step(_make_ctx(), held=held, tmp_path=tmp_path, monkeypatch=monkeypatch, **inputs)
 
-        # main.py reads WATCHLIST_FILE; point it at the same file the daemon read.
+        # build_universe() reads WATCHLIST_FILE; point it at the same file the daemon read.
         monkeypatch.setattr(ai, "WATCHLIST_FILE", ctx.watchlist_file)
-        main_universe = main._build_universe(_snapshot(held))
+        advisory_universe = ai.build_universe(_snapshot(held))
 
-        assert ctx.symbols == main_universe
+        assert ctx.symbols == advisory_universe

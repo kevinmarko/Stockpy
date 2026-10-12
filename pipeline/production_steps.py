@@ -779,7 +779,7 @@ def _daemon_should_record_ratings(now_utc: datetime) -> bool:
     try:
         from zoneinfo import ZoneInfo
 
-        from engine.advisory_agent import is_us_market_open_now
+        from shared.market_hours import is_us_market_open_now
         from rating.symbol_rating_store import SymbolRatingStore
 
         if not is_us_market_open_now(now_utc):

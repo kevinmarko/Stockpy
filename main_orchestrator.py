@@ -588,7 +588,7 @@ async def _execute_broker_orders(
         # daemon cycle at 06:00 or 19:00 ET would otherwise fill at thin
         # pre/after-market quotes no real market order would get.
         # Holiday/early-close aware (FMP market hours, NYSE-calendar fallback).
-        from engine.advisory_agent import is_us_market_open_now
+        from shared.market_hours import is_us_market_open_now
         if not is_us_market_open_now(datetime.now(timezone.utc)):
             telemetry.info(
                 "fmp_paper: US market closed (outside hours or holiday); skipping "

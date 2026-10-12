@@ -1,1 +1,1 @@
-"""Reporting & publishing layer (Google Sheets + HTML report + state snapshot)."""
+"""Reporting & publishing layer (dashboards, progress, snapshot helpers)."""

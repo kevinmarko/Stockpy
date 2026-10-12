@@ -39,7 +39,7 @@ Design principles
     - Broker-dependent checks (3): paper_trading_mode, dry_run_disabled,
       paper_trading_duration.
     - Advisory false-positives (3): heartbeat_fresh (the orchestrator daemon
-      and main.py do not write the heartbeat file — only a standalone
+      does not write the heartbeat file — only a standalone
       main_orchestrator.py run does), validation_reports
       (strategy validation reports are a go-live gate, not advisory health),
       no_unexpected_risk_blocks (risk-gate blocks only occur on order submission,
@@ -105,8 +105,8 @@ Checks (numbered subset; see the note below)
  9. kill_switch_inactive        — The KILL_SWITCH sentinel file does not exist.
 10. state_snapshot_fresh        — output/state_snapshot.json exists and its
                                   embedded timestamp is < 2 hours old.  The
-                                  orchestrator daemon, main_orchestrator.py and
-                                  (until it is archived) main.py all write this
+                                  orchestrator daemon and a standalone
+                                  main_orchestrator.py run both write this
                                   file, making it the cross-mode liveness
                                   indicator.  NOT auto-skipped in
                                   advisory mode (it IS the advisory liveness
@@ -857,7 +857,7 @@ def _paused_for_market_hours() -> bool:
     failure here must never turn a real staleness failure into a falsely-
     reassuring pass, so it degrades to False on any error."""
     try:
-        from engine.advisory_agent import is_extended_hours
+        from shared.market_hours import is_extended_hours
 
         return bool(settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY) and not is_extended_hours(
             datetime.now(timezone.utc)
@@ -869,8 +869,8 @@ def _paused_for_market_hours() -> bool:
 def check_state_snapshot_fresh(max_age_hours: float = 2.0) -> CheckResult:
     """Verify that the pipeline state snapshot was written recently.
 
-    The orchestrator daemon, ``main_orchestrator.py`` (full pipeline) and,
-    until it is archived, ``main.py`` (advisory) write
+    The orchestrator daemon and a standalone ``main_orchestrator.py`` run
+    (main.py, the old advisory writer, was archived in step 5.5) write
     ``OUTPUT_DIR/state_snapshot.json`` at the end of every run.  The file
     carries an ISO 8601 UTC ``timestamp`` field that this check reads to compute
     the snapshot age.  File mtime is used as a fallback when the ``timestamp``
@@ -2006,7 +2006,7 @@ ALL_CHECKS = [
 #       in advisory mode they would always fail even on a healthy platform.
 #
 #       - heartbeat_fresh: written by a standalone main_orchestrator.py run only;
-#         neither the daemon nor main.py writes heartbeat.txt, so this always
+#         the daemon does not write heartbeat.txt, so this always
 #         fails in advisory mode.
 #       - validation_reports: strategy validation reports are a pre-live deployment
 #         gate, not an advisory health signal.

@@ -71,7 +71,7 @@ VALID_MODES = ("off", "review", "live")
 # Single source of truth for builder thresholds (no magic numbers below).
 CONFIG: Dict[str, Any] = {
     # A recommendation becomes a queued intent only at/above this conviction.
-    # Mirrors the autonomous backlog siren (engine/advisory_agent.py).
+    # Mirrors the autonomous backlog siren (archived: legacy/engine/advisory_agent.py).
     "min_conviction": 0.85,
     # strategy_id stamped on every intent (drives the deterministic order id).
     "strategy_id": "advisory",

@@ -3,7 +3,7 @@ symbol visible to the advisory pipeline for a bounded window after its most
 recent real Robinhood SELL fill.
 
 Covers:
-  * main.py::_build_universe -- retention unioned AFTER the auto-drop
+  * pipeline/advisory_inputs.py::build_universe -- retention unioned AFTER the auto-drop
     subtraction (survives SYMBOL_RATING_AUTO_DROP_ENABLED) and AFTER the
     empty-universe fallback decision (doesn't suppress DEFAULT_TICKERS).
   * MAX_SYMBOLS cap and CLOSED_POSITION_RETENTION_DAYS=0 restoring the exact
@@ -25,21 +25,21 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import main as m
-from main import _build_universe, _recently_closed_universe_symbols
+from pipeline.advisory_inputs import build_universe, recently_closed_universe_symbols
 
 
 @pytest.fixture(autouse=True)
 def _isolate_scan_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Neutralize discovery() on pipeline.advisory_inputs -- see tests/test_run_once.py's identical
-    fixture for the full rationale (a real ~/.stockpy_local/output/
+    """Neutralize discovery() on pipeline.advisory_inputs -- see
+    tests/test_advisory_inputs_watchlist_macro.py's identical fixture for the
+    full rationale (a real ~/.stockpy_local/output/
     scan_candidates.json on the machine running the suite would otherwise
     pollute every universe-building assertion here)."""
     monkeypatch.setattr("pipeline.advisory_inputs.discovery", lambda *a, **kw: {"candidates": []})
 
 
 # ---------------------------------------------------------------------------
-# main.py::_build_universe
+# pipeline/advisory_inputs.py::build_universe
 # ---------------------------------------------------------------------------
 
 
@@ -62,7 +62,7 @@ class TestBuildUniverseRetention:
         monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: {"CMCL"})
 
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
-        result = _build_universe(snap)
+        result = build_universe(snap)
         assert "CMCL" in result
         assert "AAPL" in result
 
@@ -70,7 +70,7 @@ class TestBuildUniverseRetention:
         """The trap: a retained symbol has held=False, so unioning it BEFORE
         the auto-drop subtraction would let it be immediately re-subtracted.
         Retention must be applied AFTER, so it survives regardless."""
-        monkeypatch.setattr("main.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.setattr("pipeline.advisory_inputs.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: {"CMCL"})
@@ -81,7 +81,7 @@ class TestBuildUniverseRetention:
             return_value={"CMCL"},
         ):
             snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
-            result = _build_universe(snap)
+            result = build_universe(snap)
         assert "CMCL" in result
 
     def test_retention_does_not_suppress_default_tickers_fallback(self, monkeypatch, tmp_path):
@@ -91,21 +91,21 @@ class TestBuildUniverseRetention:
         retention alone would have made `combined` non-empty."""
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", ["SPY"])
+        monkeypatch.setattr("pipeline.advisory_inputs.settings.DEFAULT_TICKERS", ["SPY"])
         monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: {"CMCL"})
 
         snap = _make_snapshot(positions={})
-        result = _build_universe(snap)
+        result = build_universe(snap)
         assert "SPY" in result  # fallback still fired
         assert "CMCL" in result  # retention still unioned in after
 
     def test_zero_retention_days_byte_identical_to_disabled(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("main.settings.CLOSED_POSITION_RETENTION_DAYS", 0)
+        monkeypatch.setattr("pipeline.advisory_inputs.settings.CLOSED_POSITION_RETENTION_DAYS", 0)
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
 
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
-        result = _build_universe(snap)
+        result = build_universe(snap)
         assert set(result) == {"AAPL"}
 
     def test_retained_held_symbol_not_double_added(self, monkeypatch, tmp_path):
@@ -114,11 +114,11 @@ class TestBuildUniverseRetention:
         monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: set())
 
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
-        result = _build_universe(snap)
+        result = build_universe(snap)
         assert result.count("AAPL") == 1
 
     def test_store_failure_degrades_to_empty_universe_unaffected(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("main.settings.CLOSED_POSITION_RETENTION_DAYS", 180)
+        monkeypatch.setattr("pipeline.advisory_inputs.settings.CLOSED_POSITION_RETENTION_DAYS", 180)
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
 
@@ -130,28 +130,28 @@ class TestBuildUniverseRetention:
         monkeypatch.setattr(bfs, "BrokerFillsStore", _boom)
 
         snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
-        result = _build_universe(snap)  # must not raise
+        result = build_universe(snap)  # must not raise
         assert set(result) == {"AAPL"}
 
 
 class TestRecentlyClosedUniverseSymbols:
     def test_excludes_held(self, monkeypatch):
-        monkeypatch.setattr("main.settings.CLOSED_POSITION_RETENTION_DAYS", 180)
+        monkeypatch.setattr("pipeline.advisory_inputs.settings.CLOSED_POSITION_RETENTION_DAYS", 180)
         import data.broker_fills_store as bfs
 
         monkeypatch.setattr(bfs, "recently_closed_symbols", lambda **kw: ["AAPL", "CMCL"])
-        result = _recently_closed_universe_symbols(held={"AAPL"})
+        result = recently_closed_universe_symbols(held={"AAPL"})
         assert result == {"CMCL"}
 
     def test_zero_days_never_calls_store(self, monkeypatch):
-        monkeypatch.setattr("main.settings.CLOSED_POSITION_RETENTION_DAYS", 0)
+        monkeypatch.setattr("pipeline.advisory_inputs.settings.CLOSED_POSITION_RETENTION_DAYS", 0)
         import data.broker_fills_store as bfs
 
         def _boom(**kw):
             raise AssertionError("must not be called when retention is 0")
 
         monkeypatch.setattr(bfs, "recently_closed_symbols", _boom)
-        assert _recently_closed_universe_symbols(held=set()) == set()
+        assert recently_closed_universe_symbols(held=set()) == set()
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +288,7 @@ class TestOpenPipelinePaperPositionsStayInUniverse:
     receive its exit signal and never closes (the step-7 freeze count stalls)."""
 
     def test_open_pipeline_symbol_is_kept_even_when_rating_excluded(self, monkeypatch, tmp_path):
-        monkeypatch.setattr("main.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
+        monkeypatch.setattr("pipeline.advisory_inputs.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", True)
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: set())
@@ -297,17 +297,17 @@ class TestOpenPipelinePaperPositionsStayInUniverse:
             "rating.symbol_rating_store.SymbolRatingStore.get_excluded_symbols",
             return_value={"ZYX"},
         ):
-            result = _build_universe(_make_snapshot(positions={"AAPL": _make_position("AAPL")}))
+            result = build_universe(_make_snapshot(positions={"AAPL": _make_position("AAPL")}))
         assert "ZYX" in result
         assert "AAPL" in result
 
     def test_does_not_suppress_default_tickers_fallback(self, monkeypatch, tmp_path):
         monkeypatch.delenv("WATCHLIST", raising=False)
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("main.settings.DEFAULT_TICKERS", ["SPY"])
+        monkeypatch.setattr("pipeline.advisory_inputs.settings.DEFAULT_TICKERS", ["SPY"])
         monkeypatch.setattr("pipeline.advisory_inputs.recently_closed_universe_symbols", lambda held: set())
         monkeypatch.setattr("pipeline.advisory_inputs._open_pipeline_paper_symbols", lambda: {"ZYX"})
-        result = _build_universe(_make_snapshot())
+        result = build_universe(_make_snapshot())
         assert "SPY" in result and "ZYX" in result
 
     def test_held_set_stays_robinhood_only(self, monkeypatch, tmp_path):

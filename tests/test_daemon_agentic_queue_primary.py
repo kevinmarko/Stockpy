@@ -5,26 +5,16 @@ tests/test_daemon_agentic_queue_primary.py -- step 5.3 gate and primary-mode saf
 Step 5.3 of ``.claude/shrink_step5_retire_main_py_implementation_plan.md``:
 with ``DAEMON_AGENTIC_QUEUE_MODE=primary`` the daemon's ``AgenticQueueStep``
 writes the REAL ``queue_sources/advisory.json`` + ``execution_queue.json``,
-sends main.py's summary push, and runs main.py's watch engine; main.py's
-``_run_cycle`` skips all of that.
+sends the cycle summary push, and runs the watch engine (all formerly done by
+main.py's ``_run_cycle``).
 
-The gate (``TestGatePrimaryEqualsMainPy``) reuses 5.2's frozen-input harness
-(``tests/test_run_once_advisory_golden.py`` + the daemon-side helpers in
-``tests/test_daemon_advisory_shadow_equivalence.py``) and drives the REAL
-``main.main()`` single-run cycle, not a copy of its queue block:
-
-1. ``main.main()`` with the mode ``off`` into ``OUTPUT_DIR`` A: the pre-5.3
-   writer, with its pushes recorded;
-2. the daemon's ``AsyncDataFetchStep`` -> ``AdvisoryOverlayStep`` ->
-   ``AgenticQueueStep`` with the mode ``primary`` into ``OUTPUT_DIR`` B;
-3. B's ``advisory.json``, ``execution_queue.json``,
-   ``execution_queue_notified.json`` and ``watch_state.json`` must equal A's
-   byte for byte, and the pushes (summary, watch alerts, new-intent) must be
-   the same;
-4. then both writers run with the mode ``primary`` against one fresh
-   ``OUTPUT_DIR`` C: main.py writes nothing and pushes nothing, the daemon
-   writes everything once, and the pushes equal step 1's -- so the side
-   effects fire once, not twice.
+The step 5.3 gate (``TestGatePrimaryEqualsMainPy``: the daemon in ``primary``
+writes the same real files and pushes as ``main.main()`` in ``off``, and with
+both writers in ``primary`` the side effects fire once) and main.py's
+double-writer guard (``TestMainPyPrimarySkip``) passed before the 2026-10-12
+cutover and were archived to ``legacy/tests/`` with ``main.py`` (step 5.5).
+``TestPrimaryMatchesGolden`` now pins the daemon's primary output on the frozen
+inputs (``tests/advisory_frozen_inputs.py``) against the committed goldens.
 
 Time is frozen (``_NOW``) in compose, queue_builder and watch_engine so the
 ``generated_at``/``timestamp`` fields match.
@@ -34,9 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-import sys
 import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List
@@ -52,13 +40,12 @@ from tests.test_daemon_advisory_shadow_equivalence import (
     _run_daemon_fetch,
     queue_env,  # noqa: F401  (fixture)
 )
-from tests.test_run_once_advisory_golden import (
+from tests.advisory_frozen_inputs import (
     _BARS,
     _NOW,
     _QUEUE_GOLDEN,
     _SOURCE_GOLDEN,
     _install_frozen_inputs,
-    _recommendation_bytes,
 )
 
 
@@ -127,23 +114,23 @@ def _normalise_pushes(pushes: List[tuple]) -> List[tuple]:
 
 
 @pytest.fixture
-def primary_env(tmp_path, monkeypatch):
-    """5.2's frozen inputs plus frozen time, a real watch-rules file, recorded
-    pushes and a main.py whose run result is captured."""
-    import main
+def daemon_primary_env(tmp_path, monkeypatch):
+    """The frozen advisory inputs plus frozen time, a real watch-rules file,
+    recorded pushes and a prior watch state, for the daemon in ``primary``."""
     from pipeline import agentic_queue
     from settings import settings
 
-    out_a = _install_frozen_inputs(tmp_path, monkeypatch)
+    out = _install_frozen_inputs(tmp_path, monkeypatch)
     rules = tmp_path / "watch_rules.yaml"
     rules.write_text(_WATCH_RULES, encoding="utf-8")
     monkeypatch.setattr(settings, "WATCH_RULES_FILE", str(rules), raising=False)
     monkeypatch.setattr(settings, "NTFY_DASHBOARD_URL", None, raising=False)
     monkeypatch.setattr(settings, "ADVISORY_REUSE_PIPELINE_COMPUTE", False, raising=False)
     monkeypatch.setattr(settings, "LLM_COMMENTARY_ENABLED", False, raising=False)
+    monkeypatch.setattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "primary", raising=False)
     for mod in ("execution.compose", "execution.queue_builder", "watch_engine"):
         monkeypatch.setattr(f"{mod}.datetime", _FrozenDatetime)
-    _prepare_output_dir(out_a, out_a)
+    _prepare_output_dir(out, out)
 
     pushes: List[tuple] = []
 
@@ -152,35 +139,18 @@ def primary_env(tmp_path, monkeypatch):
         return True
 
     monkeypatch.setattr("alerting.notify", _notify)
-    monkeypatch.setattr(main, "notify", _notify)  # main.py binds it at import
-    captured: dict = {"html_report_calls": 0}
-    real_run_once = main.run_once
-
-    def _run_once(force_account=False):
-        try:
-            captured["result"] = real_run_once(force_account=force_account)
-        finally:
-            main._reset_macro_engine_cache()
-        return captured["result"]
-
-    def _html_report(result, macro_dto=None):
-        captured["html_report_calls"] += 1
-
-    monkeypatch.setattr(main, "run_once", _run_once)
-    monkeypatch.setattr(main, "_write_html_report", _html_report)
-    monkeypatch.setattr(main, "setup_logging", lambda: None)
-    monkeypatch.setattr(main, "_load_dotenv", lambda *a, **k: None)
-    monkeypatch.setattr(sys, "argv", ["main.py"])
     agentic_queue.reset_clean_push_memory()
-    yield out_a, pushes, captured
+    yield out, pushes
     agentic_queue.reset_clean_push_memory()
 
 
-def _run_main_main() -> None:
-    import main
+def _frozen_macro():
+    from pipeline.advisory_inputs import build_macro_dto, reset_macro_engine_cache
 
-    with pytest.raises(SystemExit):
-        main.main()
+    try:
+        return build_macro_dto()
+    finally:
+        reset_macro_engine_cache()
 
 
 def _run_daemon_primary(monkeypatch, macro_dto) -> Any:
@@ -201,105 +171,41 @@ def _run_daemon_primary(monkeypatch, macro_dto) -> Any:
     return ctx
 
 
-class TestGatePrimaryEqualsMainPy:
-    def test_primary_real_files_and_side_effects_equal_main_py(self, tmp_path, monkeypatch, primary_env):
-        from pipeline import agentic_queue
-        from settings import settings
+class TestPrimaryMatchesGolden:
+    """The daemon in ``primary`` on the frozen inputs writes the REAL
+    ``advisory.json`` / ``execution_queue.json`` equal to the committed goldens
+    and sends the summary, watch and new-intent pushes. The side-by-side gate
+    against ``main.main()`` (step 5.3) is archived in ``legacy/tests/``."""
 
-        out_a, pushes, captured = primary_env
+    def test_primary_real_files_match_golden_with_side_effects(self, daemon_primary_env, monkeypatch):
+        out, pushes = daemon_primary_env
+        ctx = _run_daemon_primary(monkeypatch, _frozen_macro())
 
-        # 1. main.py, mode off (today's writer).
-        monkeypatch.setattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "off", raising=False)
-        _run_main_main()
-        main_result = captured["result"]
-        assert not main_result.errors
-        assert captured["html_report_calls"] == 1
-        main_files = _files(out_a)
-        main_pushes = list(pushes)
-        # Fixture sanity: every side effect actually happened on main.py's side.
-        assert main_files["queue_sources/advisory.json"] == _SOURCE_GOLDEN.read_bytes()
-        assert main_files["execution_queue.json"] == _QUEUE_GOLDEN.read_bytes()
-        assert main_files["execution_queue_notified.json"] != b"<absent>"
-        titles = [p[0] for p in main_pushes]
+        assert not ctx.errors, ctx.errors
+        files = _files(out)
+        assert files["queue_sources/advisory.json"] == _SOURCE_GOLDEN.read_bytes()
+        assert files["execution_queue.json"] == _QUEUE_GOLDEN.read_bytes()
+        assert files["execution_queue_notified.json"] != b"<absent>"
+        assert not (out / "shadow").exists(), "primary must not write the shadow queue"
+        titles = [p[0] for p in pushes]
         assert titles[0] == "InvestYo ✓ Refresh Complete"
         assert any("Conviction" in t for t in titles), titles
+        # INTC (BUY -> SELL) and JNJ (HOLD -> BUY) flip against the prior state.
         assert any("INTC" in t for t in titles) and any("JNJ" in t for t in titles), titles
-        assert any(t.startswith("InvestYo — ") for t in titles), titles
+        assert sum(t.startswith("InvestYo ✓") for t in titles) == 1
+        assert sum(t.startswith("InvestYo — ") for t in titles) == 1
 
-        # 2. the daemon, mode primary, into a separate OUTPUT_DIR B.
-        out_b = _prepare_output_dir(tmp_path / "output_b", out_a)
-        monkeypatch.setattr(settings, "OUTPUT_DIR", out_b, raising=False)
-        monkeypatch.setattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "primary", raising=False)
-        agentic_queue.reset_clean_push_memory()
-        pushes.clear()
-        ctx = _run_daemon_primary(monkeypatch, main_result.macro_dto)
-
-        # 3. same recommendations, same real files byte for byte, same pushes.
-        assert _recommendation_bytes(ctx.recommendations) == \
-            _recommendation_bytes(main_result.recommendations)
-        assert _files(out_b) == main_files
-        assert _normalise_pushes(pushes) == _normalise_pushes(main_pushes)
-        assert not (out_b / "shadow").exists(), "primary must not write the shadow queue"
-
-    def test_side_effects_fire_once_when_both_writers_run(self, tmp_path, monkeypatch, primary_env):
-        from pipeline import agentic_queue
-        from settings import settings
-
-        out_a, pushes, captured = primary_env
-        monkeypatch.setattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "off", raising=False)
-        _run_main_main()
-        expected_files = _files(out_a)
-        expected_pushes = _normalise_pushes(pushes)
-        main_result = captured["result"]
-
-        # Both writers, mode primary, ONE shared OUTPUT_DIR C.
-        out_c = _prepare_output_dir(tmp_path / "output_c", out_a)
-        monkeypatch.setattr(settings, "OUTPUT_DIR", out_c, raising=False)
-        monkeypatch.setattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "primary", raising=False)
-        agentic_queue.reset_clean_push_memory()
-        pushes.clear()
-        before = _files(out_c)
-
-        _run_main_main()
-        assert pushes == [], "main.py must push nothing in primary"
-        assert _files(out_c) == before, "main.py must write no queue/watch file in primary"
-        assert captured["html_report_calls"] == 1, "no daily_report.html/snapshot in primary"
-
-        _run_daemon_primary(monkeypatch, main_result.macro_dto)
-        assert _files(out_c) == expected_files
-        assert _normalise_pushes(pushes) == expected_pushes
-        # Exactly one summary push and one new-intent push, not two of each.
-        assert sum(t.startswith("InvestYo ✓") for t, _, _ in pushes) == 1
-        assert sum(t.startswith("InvestYo — ") for t, _, _ in pushes) == 1
-
-    def test_watch_state_diff_is_empty(self, tmp_path, monkeypatch, primary_env):
-        """The plan's watch gate, stated on its own: for the same inputs the
-        daemon's watch_state.json and alerts equal main.py's."""
-        from pipeline import agentic_queue
-        from settings import settings
-
-        out_a, pushes, captured = primary_env
-        monkeypatch.setattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "off", raising=False)
-        _run_main_main()
-        main_state = json.loads((out_a / "watch_state.json").read_text())
-        main_watch = [p for p in pushes if _is_watch_push(p)]
-
-        out_b = _prepare_output_dir(tmp_path / "output_b", out_a)
-        monkeypatch.setattr(settings, "OUTPUT_DIR", out_b, raising=False)
-        monkeypatch.setattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "primary", raising=False)
-        agentic_queue.reset_clean_push_memory()
-        pushes.clear()
-        _run_daemon_primary(monkeypatch, captured["result"].macro_dto)
-        daemon_state = json.loads((out_b / "watch_state.json").read_text())
-        daemon_watch = [p for p in pushes if _is_watch_push(p)]
-
-        assert daemon_state == main_state
-        assert sorted(daemon_state) == sorted(r.symbol for r in captured["result"].recommendations)
-        assert daemon_watch == main_watch and len(main_watch) >= 3
+    def test_watch_state_covers_the_universe(self, daemon_primary_env, monkeypatch):
+        out, pushes = daemon_primary_env
+        ctx = _run_daemon_primary(monkeypatch, _frozen_macro())
+        state = json.loads((out / "watch_state.json").read_text())
+        assert sorted(state) == sorted(r.symbol for r in ctx.recommendations)
+        assert state["INTC"]["action"] == "SELL" and state["JNJ"]["action"] == "BUY"
+        assert len([p for p in pushes if _is_watch_push(p)]) >= 3
 
 
 # ---------------------------------------------------------------------------
-# AgenticQueueStep primary behaviour (no main.py run needed)
+# AgenticQueueStep primary behaviour
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
@@ -528,54 +434,6 @@ class TestRunOwnership:
                                      commit_guard=guard_for(token)) is None
         assert not (tmp_path / "queue_sources" / "advisory.json").exists()
         assert not (tmp_path / "queue_sources" / "advisory.tmp").exists()
-
-
-# ---------------------------------------------------------------------------
-# main.py's double-writer guard and the retired report
-# ---------------------------------------------------------------------------
-
-class TestMainPyPrimarySkip:
-    def _result(self):
-        import main
-        from data.robinhood_portfolio import AccountSnapshot
-
-        now = datetime.now(timezone.utc)
-        return main.RunResult(
-            snapshot=AccountSnapshot(positions={}, buying_power=0.0, total_equity=1000.0,
-                                     total_dividends=0.0, fetched_at=now),
-            recommendations=[_rec("AAPL")], errors=[{"symbol": "X", "stage": "s"}],
-            started_at=now, finished_at=now, duration_seconds=0.0, macro_dto=None,
-        )
-
-    @pytest.mark.parametrize("mode, skipped", [("primary", True), ("shadow", False), ("off", False)])
-    def test_run_cycle_skips_queue_watch_push_and_report_only_in_primary(
-        self, monkeypatch, tmp_path, caplog, mode, skipped,
-    ):
-        import main
-        from settings import settings
-
-        calls: List[str] = []
-        monkeypatch.setattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", mode, raising=False)
-        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path, raising=False)
-        monkeypatch.setattr(sys, "argv", ["main.py"])
-        monkeypatch.setattr(main, "run_once", lambda force_account=False: self._result())
-        monkeypatch.setattr(main, "_write_html_report", lambda *a, **k: calls.append("report"))
-        monkeypatch.setattr(main, "notify", lambda *a, **k: calls.append("push"))
-        monkeypatch.setattr(main, "setup_logging", lambda: None)
-        monkeypatch.setattr(main, "_load_dotenv", lambda *a, **k: None)
-        monkeypatch.setattr("watch_engine.evaluate_watch_rules",
-                            lambda *a, **k: (calls.append("watch"), ([], {}))[1])
-        monkeypatch.setattr("execution.compose.write_advisory_source",
-                            lambda *a, **k: calls.append("source"))
-        monkeypatch.setattr("execution.compose.compose_and_emit",
-                            lambda *a, **k: calls.append("compose"))
-        with caplog.at_level("WARNING"), pytest.raises(SystemExit):
-            main.main()
-        if skipped:
-            assert calls == []
-            assert "the orchestrator daemon owns the execution queue" in caplog.text
-        else:
-            assert calls == ["push", "watch", "source", "compose", "report"]
 
 
 class TestMcpReportUnderPrimary:

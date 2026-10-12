@@ -596,9 +596,10 @@ def _isolate_symbol_rating_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     Same risk class as ``_isolate_symbol_view_db_in_tests`` above, but worse:
     ``settings.SYMBOL_RATING_ENABLED`` defaults to **True**, and the store is
-    written from ``pipeline/steps.py`` / ``pipeline/production_steps.py``, so
-    any test that drives ``run_once`` / ``StrategyEvalStep`` reaches it without
-    naming it. Before this fixture, ``tests/test_run_once.py``,
+    written from ``pipeline/production_steps.py`` (and, until shrink step 5.5
+    archived it, ``pipeline/steps.py``), so any test that drives
+    ``StrategyEvalStep`` reaches it without naming it. Before this fixture,
+    ``tests/test_run_once.py`` (now in ``legacy/tests/``),
     ``tests/test_pipeline_smoke.py`` and ``tests/test_progress_emission.py``
     wrote ~26.5k fixture rows (constant score 55.0 or 1.0) into the live
     ``symbol_rating_events`` table, which reset real BAD streaks and delayed

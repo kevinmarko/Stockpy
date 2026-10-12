@@ -1461,7 +1461,7 @@ class Settings(BaseSettings):
     # long enough that a follow set once doesn't need re-confirming daily,
     # short enough that month-old Pilot rankings can never silently drive an
     # order. Applies uniformly to every source, including the advisory one
-    # (freshly written every main.py cycle in normal operation, so this only
+    # (freshly written every daemon cycle in normal operation, so this only
     # ever bites the advisory source when the pipeline itself hasn't run in
     # a week).
     QUEUE_SOURCE_MAX_AGE_SECONDS: float = Field(
@@ -1832,7 +1832,7 @@ class Settings(BaseSettings):
     # Opt-in (default False): when True, a non-held symbol rated BAD for
     # SYMBOL_RATING_DROP_THRESHOLD_CYCLES consecutive cycles is subtracted
     # from the resolved tracked universe (data/portfolio_sync.py::resolve_universe,
-    # main.py::_build_universe) -- stops being fetched, scored, or bought.
+    # pipeline/advisory_inputs.py::build_universe) -- stops being fetched, scored, or bought.
     # Defaults False like every other live-trading-behavior flag in this
     # codebase (e.g. SIZING_CAP_ESCALATION_ENABLED)
     # so nothing changes silently on a git pull for a live capital account.
@@ -2416,32 +2416,32 @@ class Settings(BaseSettings):
     # whether (and how) the orchestrator daemon's AgenticQueueStep writes the
     # Robinhood execution queue from its own advisory recommendations. All three
     # modes are implemented (pipeline/production_steps.py::AgenticQueueStep).
-    #   off     = (default) the step does nothing. main.py stays the only queue
-    #             writer, exactly as before this setting existed.
+    #   off     = (default) the step does nothing, so nothing writes the queue
+    #             (main.py, the writer before this setting, was archived in 5.5).
     #   shadow  = writes queue_sources/advisory.json + execution_queue.json under
     #             OUTPUT_DIR/shadow/ ONLY, never the real queue, and sends no
     #             push notification / risk-gate alert / block-log entry. For
-    #             comparing against main.py's queue (scripts/compare_shadow_queue.py).
+    #             comparing queues (scripts/compare_shadow_queue.py).
     #   primary = the daemon is the real queue writer: it sends the run-summary
     #             push, runs the symbol watch engine, and writes the REAL
     #             queue_sources/advisory.json + execution_queue.json under
     #             OUTPUT_DIR with their side effects (new-intent push, risk-gate
-    #             alerts, block log). main.py skips all of those in this mode.
+    #             alerts, block log). The only queue writer since step 5.5.
     # Unknown values collapse to "off" via the validator below.
     DAEMON_AGENTIC_QUEUE_MODE: str = Field(
         default="off",
         description=(
             "Daemon agentic-queue writer mode: off | shadow | primary (default off). "
-            "off = the daemon writes no queue (only the legacy main.py cycle, until it "
-            "is archived, writes one). shadow = the daemon writes "
+            "off = nothing writes the execution queue (main.py, the old writer, was "
+            "archived in step 5.5; live runs primary). shadow = the daemon writes "
             "queue_sources/advisory.json and execution_queue.json under "
             "OUTPUT_DIR/shadow/ only, with no push notification, risk-gate alert or "
-            "block-log write, for comparison with main.py's queue "
-            "(scripts/compare_shadow_queue.py). primary = the daemon is the real queue "
+            "block-log write (scripts/compare_shadow_queue.py compared it with the "
+            "retired main.py queue). primary = the daemon is the real queue "
             "writer: each cycle it sends the run-summary push, runs the symbol watch "
             "engine, and writes the real queue_sources/advisory.json and "
             "execution_queue.json under OUTPUT_DIR with their side effects (new-intent "
-            "push, risk-gate alerts, block log); main.py then skips all of those. In "
+            "push, risk-gate alerts, block log). In "
             "every mode a cycle on synthetic (MockDataEngine) data, or one whose "
             "advisory overlay did not finish, writes nothing. Unknown values collapse "
             "to off."
@@ -2667,7 +2667,7 @@ class Settings(BaseSettings):
         description=(
             "Skip automatic interval-triggered pipeline cycles (the daemon's "
             "timer) outside the 4am-8pm ET weekday window "
-            "(engine.advisory_agent.is_extended_hours) -- not strict 9:30-16:00 RTH. "
+            "(shared.market_hours.is_extended_hours) -- not strict 9:30-16:00 RTH. "
             "Manual/on-demand triggers (webapp buttons, API calls) are never gated. "
             "No holiday calendar is applied (same known limitation as "
             "is_us_market_open); default True fixes previously-unconditional 24/7 "

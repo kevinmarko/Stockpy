@@ -1,16 +1,19 @@
 """
-tests/test_main_multifactor_precompute.py
-==========================================
-Offline unit tests for main.py's multifactor raw-input pre-compute wiring:
+tests/test_advisory_inputs_multifactor_precompute.py
+====================================================
+Offline unit tests for ``pipeline/advisory_inputs.py``'s multifactor raw-input
+pre-compute wiring (the daemon's advisory overlay inputs; this file tested the
+same helpers through ``main.py``'s re-exports as
+``tests/test_main_multifactor_precompute.py`` until shrink step 5.5):
 
-  - _fetch_fundamentals_for_universe()  — universe-wide fundamentals fetch,
+  - fetch_fundamentals_for_universe()  — universe-wide fundamentals fetch,
     dead-lettered per symbol.
-  - _build_realized_vol_60d_map()       — per-ticker 60-day realized vol via
+  - build_realized_vol_60d_map()       — per-ticker 60-day realized vol via
     ProcessingEngine.calculate_momentum_metrics().
-  - _build_context_extras()             — end-to-end: with real bars +
+  - build_context_extras()             — end-to-end: with real bars +
     fundamentals, signals/multifactor.py's pre_compute() must actually
     populate context.multifactor_scores instead of silently scoring 0
-    (the gap main.py's advisory path had before this wiring was added).
+    (the gap the advisory path had before this wiring was added).
 
 All network I/O is monkeypatched; settings.HISTORICAL_STORE_ENABLED is
 disabled per-test (see tests/conftest.py::disable_historical_store) so
@@ -25,7 +28,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import main as m
+import pipeline.advisory_inputs as ai
 from dto_models import FundamentalDataDTO, MacroEconomicDTO
 from processing_engine import ProcessingEngine
 
@@ -102,7 +105,7 @@ def _neutral_macro_dto() -> MacroEconomicDTO:
 
 
 # ---------------------------------------------------------------------------
-# _fetch_bars_for_universe
+# fetch_bars_for_universe
 # ---------------------------------------------------------------------------
 
 class TestFetchBarsForUniverse:
@@ -117,10 +120,10 @@ class TestFetchBarsForUniverse:
         mock_df.empty = False
         market.get_intraday_bars.return_value = mock_df
 
-        with mock.patch("main.settings.HISTORICAL_STORE_ENABLED", True):
+        with mock.patch("pipeline.advisory_inputs.settings.HISTORICAL_STORE_ENABLED", True):
             with mock.patch.dict("sys.modules", {"data.historical_store": None}):
-                with mock.patch("main.logger.warning") as mock_logger:
-                    result = m._fetch_bars_for_universe(["AAPL"], market)
+                with mock.patch("pipeline.advisory_inputs.logger.warning") as mock_logger:
+                    result = ai.fetch_bars_for_universe(["AAPL"], market)
 
                     assert "AAPL" in result
                     assert result["AAPL"] is mock_df
@@ -134,14 +137,14 @@ class TestFetchBarsForUniverse:
 
 
 # ---------------------------------------------------------------------------
-# _fetch_fundamentals_for_universe
+# fetch_fundamentals_for_universe
 # ---------------------------------------------------------------------------
 
 class TestFetchFundamentalsForUniverse:
     def test_happy_path_builds_dto_per_symbol(self, disable_historical_store) -> None:
         market = _FakeMarket({"AAPL": _make_fund_info(), "MSFT": _make_fund_info(market_cap=2e9)})
 
-        result = m._fetch_fundamentals_for_universe(["AAPL", "MSFT"], market)
+        result = ai.fetch_fundamentals_for_universe(["AAPL", "MSFT"], market)
 
         assert set(result.keys()) == {"AAPL", "MSFT"}
         assert isinstance(result["AAPL"], FundamentalDataDTO)
@@ -154,7 +157,7 @@ class TestFetchFundamentalsForUniverse:
             fail_symbols={"BAD"},
         )
 
-        result = m._fetch_fundamentals_for_universe(["AAPL", "BAD"], market)
+        result = ai.fetch_fundamentals_for_universe(["AAPL", "BAD"], market)
 
         assert "AAPL" in result
         assert "BAD" not in result
@@ -162,7 +165,7 @@ class TestFetchFundamentalsForUniverse:
     def test_empty_fundamentals_dict_is_skipped(self, disable_historical_store) -> None:
         market = _FakeMarket({"AAPL": _make_fund_info(), "NODATA": {}})
 
-        result = m._fetch_fundamentals_for_universe(["AAPL", "NODATA"], market)
+        result = ai.fetch_fundamentals_for_universe(["AAPL", "NODATA"], market)
 
         assert "AAPL" in result
         assert "NODATA" not in result
@@ -176,10 +179,10 @@ class TestFetchFundamentalsForUniverse:
         market = mock.MagicMock()
         market.get_fundamentals.return_value = _make_fund_info()
 
-        with mock.patch("main.settings.HISTORICAL_STORE_ENABLED", True):
+        with mock.patch("pipeline.advisory_inputs.settings.HISTORICAL_STORE_ENABLED", True):
             with mock.patch.dict("sys.modules", {"data.historical_store": None}):
-                with mock.patch("main.logger.warning") as mock_logger:
-                    result = m._fetch_fundamentals_for_universe(["AAPL"], market)
+                with mock.patch("pipeline.advisory_inputs.logger.warning") as mock_logger:
+                    result = ai.fetch_fundamentals_for_universe(["AAPL"], market)
 
                     assert "AAPL" in result
                     market.get_fundamentals.assert_called_once_with("AAPL")
@@ -193,7 +196,7 @@ class TestFetchFundamentalsForUniverse:
 
 
 # ---------------------------------------------------------------------------
-# _build_realized_vol_60d_map
+# build_realized_vol_60d_map
 # ---------------------------------------------------------------------------
 
 class TestBuildRealizedVol60dMap:
@@ -201,7 +204,7 @@ class TestBuildRealizedVol60dMap:
         bars = {"AAPL": _make_bars_df(n=320, seed=1)}
         pe = ProcessingEngine()
 
-        result = m._build_realized_vol_60d_map(bars, pe)
+        result = ai.build_realized_vol_60d_map(bars, pe)
 
         assert "AAPL" in result
         assert result["AAPL"] > 0.0
@@ -211,7 +214,7 @@ class TestBuildRealizedVol60dMap:
         bars = {"NEWCO": _make_bars_df(n=100, seed=2)}  # < 253-row floor
         pe = ProcessingEngine()
 
-        result = m._build_realized_vol_60d_map(bars, pe)
+        result = ai.build_realized_vol_60d_map(bars, pe)
 
         assert "NEWCO" not in result
 
@@ -225,7 +228,7 @@ class TestBuildRealizedVol60dMap:
         bars = {"NEWCO": df}
         pe = ProcessingEngine()
 
-        m._build_realized_vol_60d_map(bars, pe)
+        ai.build_realized_vol_60d_map(bars, pe)
 
         assert list(df.columns) == original_columns
 
@@ -248,7 +251,7 @@ class TestBuildContextExtrasMultifactor:
         bars_dict = {s: _make_bars_df(n=320, seed=i) for i, s in enumerate(symbols)}
         market = _FakeMarket({s: _make_fund_info(market_cap=5e9 + i * 1e9) for i, s in enumerate(symbols)})
 
-        extras = m._build_context_extras(symbols, bars_dict, _neutral_macro_dto(), market)
+        extras = ai.build_context_extras(symbols, bars_dict, _neutral_macro_dto(), market)
 
         assert "multifactor_scores" in extras
         assert len(extras["multifactor_scores"]) == len(symbols)
@@ -272,7 +275,7 @@ class TestBuildContextExtrasMultifactor:
         bars_dict = {s: _make_bars_df(n=320, seed=i) for i, s in enumerate(symbols)}
         market = _FakeMarket({}, fail_symbols=set(symbols))  # every symbol raises
 
-        extras = m._build_context_extras(symbols, bars_dict, _neutral_macro_dto(), market)
+        extras = ai.build_context_extras(symbols, bars_dict, _neutral_macro_dto(), market)
 
         scores = extras.get("multifactor_scores", {})
         assert set(scores.keys()) == set(symbols)
@@ -302,7 +305,7 @@ class TestBuildContextExtrasMultifactor:
         bars_dict = {s: _make_bars_df(n=320, seed=i) for i, s in enumerate(symbols)}
         market = _FakeMarket({"AAPL": _make_fund_info(), "MSFT": _make_fund_info(market_cap=3e9)})
 
-        extras = m._build_context_extras(symbols, bars_dict, _neutral_macro_dto(), market)
+        extras = ai.build_context_extras(symbols, bars_dict, _neutral_macro_dto(), market)
 
         scores = extras.get("multifactor_scores", {})
         assert np.isfinite(scores["AAPL"]["Multifactor_Composite"])

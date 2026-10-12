@@ -39,7 +39,7 @@ Exit code
 Where it runs
 -------------
 This is an EXPENSIVE, standalone, scheduled job. It must NEVER run inside
-``main.py`` / ``main_orchestrator.py`` advisory cycles. It is scheduled monthly
+``main_orchestrator.py`` / daemon pipeline cycles. It is scheduled monthly
 via the launchd plist ``scripts/com.investyo.monthly-retrain.plist``
 (``python -m scripts.retrain_models``).
 

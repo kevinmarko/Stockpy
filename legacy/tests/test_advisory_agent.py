@@ -3,13 +3,16 @@ tests/test_advisory_agent.py — Advisory Agent policy tests
 ==========================================================
 Covers ``engine/advisory_agent.py``:
 
-* market-hours detection (RTH / extended hours / weekend)
 * adaptive cadence (RTH normal / vol-spike / open-close boost / extended /
   off-hours / error back-off)
 * actionable-backlog lifecycle (insert / actioned / expired)
 * reminder escalation tiers (1 h / 4 h / 24 h)
 * state round-trip (load_agent_state / save_agent_state) and tolerance
 * dispatch helper (no-op on empty, never raises on broken notify)
+
+The market-hours tests moved to ``tests/test_shared_market_hours.py`` with
+the helpers (``shared/market_hours.py``) when this module was archived in shrink
+step 5.5; keeps its original imports (restore ``engine/advisory_agent.py`` to run).
 
 All tests are fully offline — no network calls, no filesystem side-effects
 outside tmp_path.
@@ -85,73 +88,6 @@ class _DecisionEntry:
 class _RunResult:
     """Duck-typed main.RunResult — only the .errors attribute is read."""
     errors: List[Any]
-
-
-# ---------------------------------------------------------------------------
-# Market-hours detection
-# ---------------------------------------------------------------------------
-
-
-class TestMarketHours:
-    def test_rth_open_at_0930_et(self):
-        # Pick a known weekday: 2025-06-30 is a Monday.
-        # 09:30 ET = 13:30 UTC during DST.
-        assert is_us_market_open(_et(2025, 6, 30, 9, 30)) is True
-
-    def test_rth_close_at_1600_et(self):
-        assert is_us_market_open(_et(2025, 6, 30, 16, 0)) is True
-
-    def test_rth_just_before_open(self):
-        assert is_us_market_open(_et(2025, 6, 30, 9, 29)) is False
-
-    def test_rth_just_after_close(self):
-        assert is_us_market_open(_et(2025, 6, 30, 16, 1)) is False
-
-    def test_weekend_is_closed(self):
-        # 2025-06-28 is a Saturday.
-        assert is_us_market_open(_et(2025, 6, 28, 12, 0)) is False
-
-    def test_sunday_is_closed(self):
-        # 2025-06-29 is a Sunday.
-        assert is_us_market_open(_et(2025, 6, 29, 12, 0)) is False
-
-    def test_naive_datetime_is_promoted_to_utc(self):
-        # A naive datetime at 14:00 UTC = 10:00 ET on a Monday → open.
-        naive = datetime(2025, 6, 30, 14, 0)
-        assert is_us_market_open(naive) is True
-
-    def test_extended_hours_includes_premarket(self):
-        # 07:00 ET on a Monday → extended hours yes, RTH no.
-        t = _et(2025, 6, 30, 7, 0)
-        assert is_extended_hours(t) is True
-        assert is_us_market_open(t) is False
-
-    def test_extended_hours_excludes_overnight(self):
-        # 03:00 ET on a Monday → before extended hours window.
-        t = _et(2025, 6, 30, 3, 0)
-        assert is_extended_hours(t) is False
-
-    def test_extended_hours_excludes_weekend(self):
-        t = _et(2025, 6, 28, 12, 0)
-        assert is_extended_hours(t) is False
-
-
-class TestIsAutomaticRunGated:
-    """is_automatic_run_gated -- the single shared predicate main.py and
-    desktop/daemon_runtime.py both call instead of independently
-    re-deriving `extended_hours_only and not is_extended_hours(now)`."""
-
-    def test_gated_when_enabled_and_outside_window(self):
-        t = _et(2025, 6, 30, 3, 0)  # 3am ET Monday -- outside the window
-        assert is_automatic_run_gated(t, extended_hours_only=True) is True
-
-    def test_not_gated_when_enabled_and_inside_window(self):
-        t = _et(2025, 6, 30, 12, 0)  # noon ET Monday -- inside the window
-        assert is_automatic_run_gated(t, extended_hours_only=True) is False
-
-    def test_never_gated_when_disabled(self):
-        t = _et(2025, 6, 30, 3, 0)  # outside the window, but the flag is off
-        assert is_automatic_run_gated(t, extended_hours_only=False) is False
 
 
 # ---------------------------------------------------------------------------
@@ -687,63 +623,3 @@ class TestModuleSurface:
 
 def _iso_to_dt(iso: str) -> datetime:
     return datetime.fromisoformat(iso.replace("Z", "+00:00"))
-
-
-# ---------------------------------------------------------------------------
-# is_us_market_open_now -- holiday/early-close aware gate for order submission
-# ---------------------------------------------------------------------------
-
-
-class TestIsUsMarketOpenNow:
-    @staticmethod
-    def _utc(y, mo, d, h, mi):
-        from zoneinfo import ZoneInfo
-        return datetime(y, mo, d, h, mi, tzinfo=ZoneInfo("America/New_York")).astimezone(timezone.utc)
-
-    @pytest.fixture(autouse=True)
-    def _fresh_cache(self):
-        import engine.advisory_agent as aa
-        aa.reset_market_open_cache()
-        yield
-        aa.reset_market_open_cache()
-
-    def test_fmp_closed_on_a_weekday_counts_as_closed(self, monkeypatch):
-        import engine.advisory_agent as aa
-        monkeypatch.setattr(aa, "_fmp_market_is_open", lambda: False)
-        assert aa.is_us_market_open_now(self._utc(2026, 10, 2, 11, 0)) is False
-
-    def test_fmp_open_counts_as_open(self, monkeypatch):
-        import engine.advisory_agent as aa
-        monkeypatch.setattr(aa, "_fmp_market_is_open", lambda: True)
-        assert aa.is_us_market_open_now(self._utc(2026, 10, 2, 11, 0)) is True
-
-    @pytest.mark.parametrize("day", [(2026, 11, 26), (2026, 12, 25)])
-    def test_fallback_is_closed_on_nyse_holidays(self, monkeypatch, day):
-        import engine.advisory_agent as aa
-        monkeypatch.setattr(aa, "_fmp_market_is_open", lambda: None)
-        assert aa.is_us_market_open_now(self._utc(*day, 11, 0)) is False
-
-    def test_fallback_open_on_a_normal_weekday_in_hours(self, monkeypatch):
-        import engine.advisory_agent as aa
-        monkeypatch.setattr(aa, "_fmp_market_is_open", lambda: None)
-        assert aa.is_us_market_open_now(self._utc(2026, 10, 2, 11, 0)) is True
-
-    def test_answer_is_cached_for_sixty_seconds(self, monkeypatch):
-        import engine.advisory_agent as aa
-        calls = []
-        monkeypatch.setattr(aa, "_fmp_market_is_open", lambda: calls.append(1) or True)
-        t0 = self._utc(2026, 10, 2, 11, 0)
-        aa.is_us_market_open_now(t0)
-        aa.is_us_market_open_now(t0 + timedelta(seconds=30))
-        assert len(calls) == 1
-        aa.is_us_market_open_now(t0 + timedelta(seconds=61))
-        assert len(calls) == 2
-
-    def test_fmp_payload_parsing(self, monkeypatch):
-        import engine.advisory_agent as aa
-        monkeypatch.setattr("data.fmp_client.exchange_market_hours",
-                            lambda exchange="NASDAQ": [{"exchange": "NASDAQ", "isMarketOpen": False}])
-        assert aa._fmp_market_is_open() is False
-        monkeypatch.setattr("data.fmp_client.exchange_market_hours",
-                            lambda exchange="NASDAQ": [{"exchange": "NASDAQ"}])
-        assert aa._fmp_market_is_open() is None

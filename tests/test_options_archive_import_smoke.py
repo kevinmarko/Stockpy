@@ -92,7 +92,6 @@ _ARCHIVED_DOTTED_MODULES = [
 
 # The entry points the plan names as must-still-import-cleanly.
 _ENTRY_POINTS = [
-    "main",
     "main_orchestrator",
     "investyo_mcp_server",
     "broker_live_execution_mcp",

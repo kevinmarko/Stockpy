@@ -10,12 +10,10 @@
 #   • com.investyo.weekly-edgar    — runs `python -m scripts.backfill_edgar_
 #                                    fundamentals --tickers all` each Sunday 02:00 local
 #
-# NOT installed by default: com.investyo.daily-advisory (`main.py` each weekday
-# 08:45). The orchestrator daemon (com.investyo.stack) has been the advisory
-# runtime and execution-queue writer since the 2026-10-12 cutover; reloading the
-# old job would bring back a second writer. It is kept for rollback only
-# (docs/RUNBOOK.md §3.15):
-#   ./scripts/install_schedule.command --with-daily-advisory
+# The old com.investyo.daily-advisory job (`main.py` each weekday 08:45) was
+# archived with main.py in shrink step 5.5 (legacy/scripts/). The orchestrator
+# daemon (com.investyo.stack, scripts/install_stack_service.command) is the
+# advisory runtime and execution-queue writer.
 #
 # These are OS timers ONLY — they invoke the scripts on a schedule. They do
 # NOT create any autonomous self-invoking agent loop. Retraining deliberately
@@ -49,15 +47,11 @@ LABELS=(
     "com.investyo.monthly-retrain"
     "com.investyo.weekly-edgar"
 )
-ROLLBACK_LABEL="com.investyo.daily-advisory"
 
-WITH_DAILY_ADVISORY=0
-for _arg in "$@"; do
-    case "$_arg" in
-        --with-daily-advisory) WITH_DAILY_ADVISORY=1 ;;
-        *) echo "Unknown argument: $_arg (only --with-daily-advisory is accepted)"; exit 2 ;;
-    esac
-done
+if [[ $# -gt 0 ]]; then
+    echo "Unknown argument(s): $* (this installer takes none)"
+    exit 2
+fi
 
 # ── Always pause before the window auto-closes so errors are visible ─────────
 _on_exit() {
@@ -99,25 +93,6 @@ if [[ "$PY_VER" != *"3.12."* ]]; then
     exit 1
 fi
 echo "Using $PY_VER"
-
-if [[ "$WITH_DAILY_ADVISORY" == "1" ]]; then
-    # Rollback path (docs/RUNBOOK.md §3.15). Only safe once the daemon is no
-    # longer the queue writer, or main.py and the daemon both write the queue.
-    QUEUE_MODE="$(cd "$REPO_ROOT" && NO_VENV_REEXEC=1 "$PYTHON" -c \
-        'from settings import settings; print(settings.DAEMON_AGENTIC_QUEUE_MODE)' 2>/dev/null)"
-    # Fail closed: anything but off/shadow (incl. primary, or empty when
-    # settings could not be read) refuses.
-    case "$QUEUE_MODE" in
-        off|shadow)
-            echo "DAEMON_AGENTIC_QUEUE_MODE=$QUEUE_MODE: installing $ROLLBACK_LABEL (rollback)."
-            LABELS+=("$ROLLBACK_LABEL") ;;
-        *)
-            echo "REFUSED: --with-daily-advisory needs DAEMON_AGENTIC_QUEUE_MODE=off or shadow"
-            echo "(read: '${QUEUE_MODE:-<could not read settings>}'). Set the mode first so the"
-            echo "daemon stops writing the queue (docs/RUNBOOK.md §3.15), then re-run this."
-            exit 1 ;;
-    esac
-fi
 
 mkdir -p "$LAUNCH_AGENTS_DIR"
 mkdir -p "$REPO_ROOT/output"
@@ -162,16 +137,10 @@ done
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "Installed. Schedules:"
-if [[ "$WITH_DAILY_ADVISORY" == "1" ]]; then
-    echo "  • daily-advisory  — each weekday 08:45 local time (ROLLBACK: main.py writes the queue)"
-fi
 echo "  • monthly-retrain — 1st of the month, 04:00 local time"
 echo "  • weekly-edgar    — each Sunday, 02:00 local time"
 echo ""
 echo "Logs:"
-if [[ "$WITH_DAILY_ADVISORY" == "1" ]]; then
-    echo "  $REPO_ROOT/output/scheduled_advisory.out (and .err)"
-fi
 echo "  $REPO_ROOT/output/scheduled_retrain.out (and .err)"
 echo "  $REPO_ROOT/output/scheduled_edgar.out (and .err)"
 echo ""

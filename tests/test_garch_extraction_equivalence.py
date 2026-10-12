@@ -97,7 +97,7 @@ def test_equity_path_modules_do_not_import_the_options_engine():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    for rel in ("main_orchestrator.py", "main.py", "engine/advisory.py", "forecasting_engine.py",
+    for rel in ("main_orchestrator.py", "engine/advisory.py", "forecasting_engine.py",
                 "strategy_engine.py", "pipeline/production_steps.py", "desktop/daemon_runtime.py",
                 "volatility/garch.py", "trend_indicators.py"):
         src = (root / rel).read_text(encoding="utf-8")

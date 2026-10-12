@@ -3381,275 +3381,157 @@ class GravityAIAuditor:
         self.report["step_27_advisory_engine_audit"] = audit
 
     # =========================================================================
-    # Step 28 — Clean Advisory Orchestrator (main.py refactor)
+    # Step 28 — Advisory orchestration (daemon AdvisoryOverlayStep +
+    # pipeline.advisory_inputs). Originally audited main.py's run_once();
+    # main.py was archived to legacy/ in shrink step 5.5, so the run_once-only
+    # checks are retired and the rest now audit the daemon equivalents.
     # =========================================================================
 
     def run_run_once_orchestrator_audit(self) -> None:
-        """Verify the refactored main.py advisory orchestrator.
+        """Verify the daemon's advisory orchestration (ex-main.py run_once()).
 
         Checks
         ------
-        a. RunResult is a frozen dataclass with all required fields.
-        b. run_once() is importable and callable without network (mocked).
-        c. Dead-letter pattern: one failing symbol → error in RunResult.errors,
-           not an exception propagated to caller.
-        d. Empty universe → RunResult with empty lists (no crash).
-        e. force_account=True threads force=True to fetch_account_snapshot.
-        f. RunResult.errors dict has required keys: symbol, stage, error_type,
+        a/b/e. RunResult frozen dataclass, run_once() importable, force_account
+           threading — RETIRED: main.py's run_once()/RunResult were archived to
+           legacy/ in step 5.5 (the daemon fetches the account snapshot in
+           AsyncDataFetchStep, not here).
+        c. Dead-letter pattern: one failing symbol in
+           ``pipeline.production_steps.AdvisoryOverlayStep`` → an entry in
+           ``ctx.errors``, not an exception; the other symbols still score.
+        d. Empty dashboard/universe → AdvisoryOverlayStep returns without a
+           crash and with no recommendations.
+        f. Each ``ctx.errors`` entry has the keys symbol, stage, error_type,
            message, timestamp.
-        g. _load_watchlist() reads WATCHLIST env var (comma-sep) and watchlist.txt.
-        h. _build_universe() produces held ∪ watchlist, deduped, sorted.
-        i. _build_context_extras() returns dict with xsec_percentile_ranks and
-           multifactor_scores keys (or {} on error — never raises).
-        j. No direct DataEngine / ProcessingEngine / ForecastingEngine /
-           StrategyEngine / TechnicalOptionsEngine imports at module top level
-           (all orchestration delegated to engine.advisory.evaluate()).
+        g. ``pipeline.advisory_inputs.load_watchlist()`` reads the WATCHLIST
+           setting (comma-sep).
+        h. ``pipeline.advisory_inputs.build_universe_detailed()`` produces
+           held ∪ watchlist, deduped, sorted.
+        i. ``pipeline.advisory_inputs.build_context_extras()`` returns a dict
+           (or {} on error — never raises).
+        j. ``pipeline/advisory_inputs.py`` has no direct DataEngine-era engine
+           imports at module top level (scoring delegated to
+           engine.advisory.evaluate()).
         """
         audit: dict = {
-            "description": "Refactored main.py clean advisory orchestrator",
+            "description": "Daemon advisory orchestration (AdvisoryOverlayStep + pipeline.advisory_inputs)",
             "checks": {},
         }
         try:
-            import importlib
             import os
-            import ast
-            import tempfile
-            from dataclasses import fields
             from datetime import datetime, timezone
             from unittest.mock import patch, MagicMock
 
-            def _make_run_once_market_provider(price: float = 100.0) -> MagicMock:
-                """MagicMock MarketDataProvider with get_latest_quote configured.
+            _retired = "archived to legacy/ in step 5.5"
+            audit["checks"]["a_run_result_frozen"] = {"status": "SKIPPED", "passed": True, "skipped": _retired}
+            audit["checks"]["b_run_once_importable"] = {"status": "SKIPPED", "passed": True, "skipped": _retired}
+            audit["checks"]["e_force_account_threading"] = {"status": "SKIPPED", "passed": True, "skipped": _retired}
 
-                A bare `MagicMock()` auto-generates a MagicMock (not a float) for
-                any unconfigured attribute, so `market.get_latest_quote(sym).price`
-                would return a MagicMock — and engine.advisory.evaluate()'s
-                `current_price <= 0.0` check then raises
-                `TypeError: '<=' not supported between instances of 'MagicMock'
-                and 'float'` for every symbol, dead-lettering the whole universe.
-                Mirrors tests/test_advisory.py::_make_market_provider.
-                """
-                from data.market_data import Quote
-                provider = MagicMock()
-                provider.get_latest_quote.return_value = Quote(
-                    symbol="TEST", price=price, bid=price - 0.01, ask=price + 0.01,
-                    timestamp=datetime.now(timezone.utc), is_stale=False, source="test",
+            def _overlay_ctx(symbols):
+                import pandas as _pd
+                from pipeline.context import RunContext
+                ctx = RunContext(
+                    force_account=False,
+                    started_at=datetime.now(timezone.utc),
+                    watchlist_file="watchlist.txt",
+                    fetch_account_snapshot_fn=lambda *a, **kw: None,
+                    build_universe_fn=lambda *a: [],
+                    build_macro_dto_fn=lambda: None,
+                    get_provider_fn=lambda: None,
+                    fetch_bars_fn=lambda *a: {},
+                    build_context_extras_fn=lambda *a: {},
+                    advisory_evaluate_fn=lambda *a, **kw: None,
                 )
-                provider.get_intraday_bars.return_value = None
-                provider.get_fundamentals.return_value = {}
-                return provider
+                snap = MagicMock()
+                snap.positions = {}
+                ctx.snapshot = snap
+                ctx.symbols = list(symbols)
+                ctx.dashboard_df = _pd.DataFrame({"Symbol": list(symbols)})
+                return ctx
 
-            def _run_once_in_empty_universe_sandbox(
-                macro_mock: MagicMock, snap_mock: MagicMock, *, force_account: bool = False,
-            ):
-                """Shared by checks d/e: run main.run_once() in an isolated
-                tempdir with a deterministically empty universe.
+            def _fake_evaluate(**kw):
+                if kw["symbol"] == "FAILSYM":
+                    raise RuntimeError("deliberate test failure")
+                rec = MagicMock()
+                rec.symbol = kw["symbol"]
+                rec.action = "HOLD"
+                rec.conviction = 0.5
+                rec.rationale = "test"
+                rec.suggested_position_pct = 0.0
+                rec.data_quality = "full"
+                return rec
 
-                Patches main.settings.DEFAULT_TICKERS AND main.discovery --
-                _build_universe() unions discovery()'s scan candidates in
-                BEFORE it ever consults DEFAULT_TICKERS, and discovery() reads
-                settings.OUTPUT_DIR / "scan_candidates.json", a machine-global
-                LOCAL_DATA_ROOT path that os.chdir(tmp) below does NOT
-                isolate. Without also patching discovery, a machine with a
-                real prior agentic-discovery run would make the universe
-                non-empty here and these "empty universe" checks would flake.
+            def _overlay_patches():
+                return (
+                    patch("engine.advisory.evaluate", _fake_evaluate),
+                    patch("pipeline.advisory_inputs.fetch_bars_for_universe", lambda s, m: {}),
+                    patch("pipeline.advisory_inputs.build_context_extras", lambda s, b, mc, m: {}),
+                    patch("data.market_data.get_provider", lambda: MagicMock()),
+                    patch("settings.settings.ADVISORY_REUSE_PIPELINE_COMPUTE", False),
+                )
 
-                Returns (result, mock_fetch) so callers can assert on either.
-                """
-                with tempfile.TemporaryDirectory() as tmp:
-                    orig_dir = os.getcwd()
-                    os.chdir(tmp)
-                    try:
-                        with patch("main.fetch_account_snapshot", return_value=snap_mock) as mock_fetch, \
-                             patch("main.get_provider", return_value=_make_run_once_market_provider()), \
-                             patch("main._build_macro_dto", return_value=macro_mock), \
-                             patch("main._fetch_bars_for_universe", return_value={}), \
-                             patch("main._build_context_extras", return_value={}), \
-                             patch("main.settings.DEFAULT_TICKERS", []), \
-                             patch("main.discovery", return_value={"candidates": []}):
-                            _env_bak = os.environ.pop("WATCHLIST", None)
-                            try:
-                                result = run_once(force_account=force_account)
-                            finally:
-                                if _env_bak is not None:
-                                    os.environ["WATCHLIST"] = _env_bak
-                    finally:
-                        os.chdir(orig_dir)
-                return result, mock_fetch
-
-            # ── a. RunResult is a frozen dataclass with required fields ───────
-            check_a = {"status": "PASS"}
-            try:
-                import main as _main
-                from main import RunResult
-                rf = {f.name for f in fields(RunResult)}
-                required = {"snapshot", "recommendations", "errors",
-                            "started_at", "finished_at", "duration_seconds"}
-                if not required.issubset(rf):
-                    check_a = {"status": "FAIL",
-                               "error": f"Missing fields: {required - rf}"}
-                else:
-                    # Test immutability
-                    snap = MagicMock()
-                    snap.age_hours.return_value = 0.0
-                    snap.is_stale.return_value = False
-                    snap.total_equity = 0.0
-                    snap.buying_power = 0.0
-                    snap.positions = {}
-                    r = RunResult(
-                        snapshot=snap, recommendations=[], errors=[],
-                        started_at=datetime.now(timezone.utc),
-                        finished_at=datetime.now(timezone.utc),
-                        duration_seconds=0.0,
-                    )
-                    try:
-                        r.recommendations = []  # type: ignore
-                        check_a = {"status": "FAIL",
-                                   "error": "RunResult is NOT frozen"}
-                    except (AttributeError, TypeError):
-                        pass  # expected — frozen OK
-            except Exception as exc:
-                check_a = {"status": "ERROR", "error": str(exc)}
-            audit["checks"]["a_run_result_frozen"] = check_a
-
-            # ── b. run_once importable ────────────────────────────────────────
-            check_b = {"status": "PASS"}
-            try:
-                from main import run_once
-            except Exception as exc:
-                check_b = {"status": "FAIL", "error": str(exc)}
-            audit["checks"]["b_run_once_importable"] = check_b
-
-            # ── c. Dead-letter per symbol ─────────────────────────────────────
+            # ── c/f. Dead-letter per symbol + error dict keys ─────────────────
             check_c = {"status": "PASS"}
+            check_f = {"status": "PASS"}
             try:
-                snap_mock = MagicMock()
-                snap_mock.positions = {}
-                snap_mock.buying_power = 0.0
-                snap_mock.total_equity = 0.0
-                snap_mock.total_dividends = 0.0
-                snap_mock.fetched_at = datetime.now(timezone.utc)
-                snap_mock.age_hours.return_value = 0.0
-                snap_mock.is_stale.return_value = False
-
-                macro_mock = MagicMock()
-                macro_mock.market_regime = "NEUTRAL"
-                macro_mock.vix_value = 18.0
-
-                with patch("main.fetch_account_snapshot", return_value=snap_mock), \
-                     patch("main.get_provider", return_value=_make_run_once_market_provider()), \
-                     patch("main._build_macro_dto", return_value=macro_mock), \
-                     patch("main._fetch_bars_for_universe", return_value={}), \
-                     patch("main._build_context_extras", return_value={}), \
-                     patch.dict(os.environ, {"WATCHLIST": "FAILSYM"}, clear=False), \
-                     patch("main.advisory_evaluate",
-                           side_effect=RuntimeError("deliberate test failure")):
-                    result = run_once()
-                assert len(result.errors) == 1, "Expected 1 error entry"
-                assert result.errors[0]["symbol"] == "FAILSYM"
-                assert len(result.recommendations) == 0
+                from pipeline.production_steps import AdvisoryOverlayStep
+                p1, p2, p3, p4, p5 = _overlay_patches()
+                ctx_c = _overlay_ctx(["AAPL", "FAILSYM", "MSFT"])
+                with p1, p2, p3, p4, p5:
+                    AdvisoryOverlayStep().run(ctx_c)
+                assert [r.symbol for r in ctx_c.recommendations] == ["AAPL", "MSFT"], \
+                    f"recommendations={[r.symbol for r in ctx_c.recommendations]}"
+                assert [e["symbol"] for e in ctx_c.errors] == ["FAILSYM"], f"errors={ctx_c.errors}"
+                required_err_keys = {"symbol", "stage", "error_type", "message", "timestamp"}
+                missing = required_err_keys - set(ctx_c.errors[0].keys())
+                if missing:
+                    check_f = {"status": "FAIL", "error": f"Error dict missing keys: {missing}"}
             except Exception as exc:
                 check_c = {"status": "FAIL", "error": str(exc)}
+                check_f = {"status": "FAIL", "error": f"not evaluated: {exc}"}
             audit["checks"]["c_dead_letter_per_symbol"] = check_c
+            audit["checks"]["f_error_dict_keys"] = check_f
 
             # ── d. Empty universe → empty result, no crash ────────────────────
             check_d = {"status": "PASS"}
             try:
-                snap_mock2 = MagicMock()
-                snap_mock2.positions = {}
-                snap_mock2.buying_power = 0.0
-                snap_mock2.total_equity = 0.0
-                snap_mock2.total_dividends = 0.0
-                snap_mock2.fetched_at = datetime.now(timezone.utc)
-                snap_mock2.age_hours.return_value = 0.0
-                snap_mock2.is_stale.return_value = False
-                macro_mock2 = MagicMock()
-                macro_mock2.market_regime = "NEUTRAL"
-                macro_mock2.vix_value = 18.0
-
-                result, _ = _run_once_in_empty_universe_sandbox(macro_mock2, snap_mock2)
-                assert len(result.recommendations) == 0
-                assert len(result.errors) == 0
+                from pipeline.production_steps import AdvisoryOverlayStep
+                p1, p2, p3, p4, p5 = _overlay_patches()
+                ctx_d = _overlay_ctx([])
+                with p1, p2, p3, p4, p5:
+                    AdvisoryOverlayStep().run(ctx_d)
+                assert len(ctx_d.recommendations) == 0
+                assert len(ctx_d.errors) == 0
             except Exception as exc:
                 check_d = {"status": "FAIL", "error": str(exc)}
             audit["checks"]["d_empty_universe_no_crash"] = check_d
 
-            # ── e. force_account threads to fetch_account_snapshot ────────────
-            check_e = {"status": "PASS"}
-            try:
-                snap_mock3 = MagicMock()
-                snap_mock3.positions = {}
-                snap_mock3.buying_power = 0.0
-                snap_mock3.total_equity = 0.0
-                snap_mock3.total_dividends = 0.0
-                snap_mock3.fetched_at = datetime.now(timezone.utc)
-                snap_mock3.age_hours.return_value = 0.0
-                snap_mock3.is_stale.return_value = False
-                macro_mock3 = MagicMock()
-                macro_mock3.market_regime = "NEUTRAL"
-                macro_mock3.vix_value = 18.0
-
-                _, mock_fetch = _run_once_in_empty_universe_sandbox(
-                    macro_mock3, snap_mock3, force_account=True,
-                )
-                mock_fetch.assert_called_once_with(max_age_hours=20.0, force=True)
-                mock_fetch.assert_called_once_with(max_age_hours=20.0, force=True)
-            except Exception as exc:
-                check_e = {"status": "FAIL", "error": str(exc)}
-            audit["checks"]["e_force_account_threading"] = check_e
-
-            # ── f. Error dict has required keys ───────────────────────────────
-            check_f = {"status": "PASS"}
-            try:
-                required_err_keys = {"symbol", "stage", "error_type", "message", "timestamp"}
-                from main import RunResult as _RR
-                import dataclasses
-                _snap = MagicMock()
-                _snap.age_hours.return_value = 0.0
-                _snap.is_stale.return_value = False
-                _snap.total_equity = 0.0
-                _snap.buying_power = 0.0
-                _snap.positions = {}
-                err_entry = {
-                    "symbol": "X", "stage": "advisory_evaluate",
-                    "error_type": "RuntimeError", "message": "test",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-                r2 = _RR(
-                    snapshot=_snap, recommendations=[], errors=[err_entry],
-                    started_at=datetime.now(timezone.utc),
-                    finished_at=datetime.now(timezone.utc),
-                    duration_seconds=0.0,
-                )
-                if not required_err_keys.issubset(r2.errors[0].keys()):
-                    check_f = {"status": "FAIL",
-                               "error": f"Error dict missing keys: "
-                                        f"{required_err_keys - r2.errors[0].keys()}"}
-            except Exception as exc:
-                check_f = {"status": "FAIL", "error": str(exc)}
-            audit["checks"]["f_error_dict_keys"] = check_f
-
-            # ── g. _load_watchlist reads env var ──────────────────────────────
+            # ── g. load_watchlist reads the WATCHLIST setting ─────────────────
             check_g = {"status": "PASS"}
             try:
-                from main import _load_watchlist
-                with patch.dict(os.environ, {"WATCHLIST": "AAPL,MSFT,GOOG"}, clear=False):
-                    wl = _load_watchlist()
+                from pipeline.advisory_inputs import load_watchlist
+                with patch("settings.settings.WATCHLIST", "AAPL,MSFT,GOOG"):
+                    wl = load_watchlist("__gravity_nonexistent_watchlist__.txt")
                 assert set(wl) == {"AAPL", "MSFT", "GOOG"}, f"Got {wl}"
             except Exception as exc:
                 check_g = {"status": "FAIL", "error": str(exc)}
             audit["checks"]["g_load_watchlist_env"] = check_g
 
-            # ── h. _build_universe unions held + watchlist, deduped ───────────
+            # ── h. build_universe_detailed unions held + watchlist, deduped ───
             check_h = {"status": "PASS"}
             try:
-                from main import _build_universe
+                import pipeline.advisory_inputs as _ai
                 _snap_h = MagicMock()
-                _pos_aapl = MagicMock()
-                _pos_aapl.symbol = "AAPL"
-                _snap_h.positions = {"AAPL": _pos_aapl}
-                with patch.dict(os.environ, {"WATCHLIST": "AAPL,NVDA"}, clear=False):
-                    universe = _build_universe(_snap_h)
+                _snap_h.positions = {"AAPL": MagicMock()}
+                with patch("settings.settings.WATCHLIST", "AAPL,NVDA"), \
+                     patch("settings.settings.DEFAULT_TICKERS", []), \
+                     patch("settings.settings.SYMBOL_RATING_AUTO_DROP_ENABLED", False), \
+                     patch.object(_ai, "discovery", return_value={"candidates": []}), \
+                     patch.object(_ai, "recently_closed_universe_symbols", return_value=set()), \
+                     patch.object(_ai, "_open_pipeline_paper_symbols", return_value=set()):
+                    universe = _ai.build_universe_detailed(
+                        _snap_h, watchlist_file="__gravity_nonexistent_watchlist__.txt",
+                    ).symbols
                 assert set(universe) == {"AAPL", "NVDA"}, f"Got {universe}"
                 assert universe == sorted(universe), "Universe not sorted"
                 assert universe.count("AAPL") == 1, "AAPL duplicated"
@@ -3657,36 +3539,23 @@ class GravityAIAuditor:
                 check_h = {"status": "FAIL", "error": str(exc)}
             audit["checks"]["h_build_universe_union_dedup"] = check_h
 
-            # ── i. _build_context_extras returns dict or {} on error ──────────
+            # ── i. build_context_extras returns dict or {} on error ───────────
             check_i = {"status": "PASS"}
             try:
-                from main import _build_context_extras
-                # _build_context_extras gained a required 4th positional
-                # `market: MarketDataProvider` param after this check was
-                # written -- a MagicMock stand-in exercises the same
-                # graceful-degradation path (any internal failure -> {}).
-                result_ctx = _build_context_extras([], {}, MagicMock(), MagicMock())
+                from pipeline.advisory_inputs import build_context_extras
+                result_ctx = build_context_extras([], {}, MagicMock(), MagicMock())
                 assert isinstance(result_ctx, dict), "Must return dict"
-                # Also check valid keys when non-empty input provided
-                if result_ctx:
-                    assert "xsec_percentile_ranks" in result_ctx or len(result_ctx) == 0
             except Exception as exc:
                 check_i = {"status": "FAIL", "error": str(exc)}
             audit["checks"]["i_context_extras_returns_dict"] = check_i
 
             # ── j. Module-level top imports do NOT include old engine direct calls
-            # "Top-level" means MODULE SCOPE (column 0, no leading whitespace)
-            # -- this codebase's own convention (see CLAUDE.md / db_config.py's
-            # "lazy import to avoid circular imports" pattern) is to import
-            # heavy engines LOCALLY inside a function body precisely so a
-            # legitimate, scoped use doesn't trip this guard. A naive
-            # whole-file substring search matches those lazy imports too
-            # (false positive); only match lines with zero leading whitespace.
+            # "Top-level" means MODULE SCOPE (column 0) -- lazy imports inside a
+            # function body are this codebase's sanctioned pattern.
             check_j = {"status": "PASS"}
             try:
-                import main as _m_src
-                import inspect
-                src = inspect.getsource(_m_src)
+                from pathlib import Path as _P28
+                src = _P28("pipeline/advisory_inputs.py").read_text(encoding="utf-8")
                 top_level_lines = {
                     line.strip() for line in src.split("\n")
                     if line and not line[0].isspace()
@@ -3711,9 +3580,9 @@ class GravityAIAuditor:
                 check_j = {"status": "FAIL", "error": str(exc)}
             audit["checks"]["j_no_direct_engine_imports"] = check_j
 
-            # Final status
+            # Final status (retired checks report SKIPPED and do not fail the step)
             failed = [k for k, v in audit["checks"].items()
-                      if v.get("status") not in ("PASS",)]
+                      if v.get("status") not in ("PASS", "SKIPPED")]
             audit["status"] = "FAILED" if failed else "PASSED"
             if failed:
                 audit["failed_checks"] = failed
@@ -3888,8 +3757,8 @@ class GravityAIAuditor:
 
         Checks:
           1. test_pipeline_smoke.py is importable.
-          2. TestRunOncePipeline, TestAdvisoryTailoringRules, TestNoOrderFunctions exist.
-          3. TestRunOncePipeline has dead-letter and all-failure test methods.
+          2. TestAdvisoryOverlayPipeline, TestAdvisoryTailoringRules, TestNoOrderFunctions exist.
+          3. TestAdvisoryOverlayPipeline has dead-letter and all-failure test methods.
           4. TestAdvisoryTailoringRules has all three tailoring-rule methods.
           5. TestNoOrderFunctions._ORDER_NAMES is non-empty.
           6. TestNoOrderFunctions._EXCLUDED_PATH_PARTS includes "execution".
@@ -3925,17 +3794,19 @@ class GravityAIAuditor:
 
             if smoke:
                 # 2. Three test classes exist
-                for cls_name in ("TestRunOncePipeline", "TestAdvisoryTailoringRules", "TestNoOrderFunctions"):
+                for cls_name in ("TestAdvisoryOverlayPipeline", "TestAdvisoryTailoringRules", "TestNoOrderFunctions"):
                     _chk(f"class_{cls_name}_exists", hasattr(smoke, cls_name))
 
                 # 3. Dead-letter and all-failure test methods
-                run_once_cls = getattr(smoke, "TestRunOncePipeline", None)
+                # Step 5.5: main.py's TestRunOncePipeline became the daemon's
+                # TestAdvisoryOverlayPipeline (AdvisoryOverlayStep).
+                run_once_cls = getattr(smoke, "TestAdvisoryOverlayPipeline", None)
                 if run_once_cls:
                     _chk("has_dead_letter_test", hasattr(run_once_cls, "test_dead_letter_on_symbol_failure"))
-                    _chk("has_all_failures_test", hasattr(run_once_cls, "test_all_failures_still_returns_runresult"))
+                    _chk("has_all_failures_test", hasattr(run_once_cls, "test_all_failures_never_raise"))
                 else:
-                    _chk("has_dead_letter_test", False, "TestRunOncePipeline missing")
-                    _chk("has_all_failures_test", False, "TestRunOncePipeline missing")
+                    _chk("has_dead_letter_test", False, "TestAdvisoryOverlayPipeline missing")
+                    _chk("has_all_failures_test", False, "TestAdvisoryOverlayPipeline missing")
 
                 # 4. Three tailoring-rule test methods
                 tailoring_cls = getattr(smoke, "TestAdvisoryTailoringRules", None)
@@ -4009,8 +3880,8 @@ class GravityAIAuditor:
         when .env is fully populated.
 
         Checks:
-          1. main.py imports load_dotenv from dotenv.
-          2. main.py calls load_dotenv() at module top (AST walk).
+          1-2. main.py load_dotenv import/call — RETIRED: main.py was archived
+             to legacy/ in step 5.5 (reported as a skipped entry).
           3. main_orchestrator.py imports load_dotenv from dotenv.
           4. main_orchestrator.py calls load_dotenv() at module top.
           5. tests/test_env_loading.py exists (regression coverage).
@@ -4062,7 +3933,12 @@ class GravityAIAuditor:
         try:
             repo_root = Path(__file__).parent
 
-            for entry in ("main.py", "main_orchestrator.py"):
+            audit["checks"].append({
+                "check": "main.py_imports_and_calls_load_dotenv",
+                "status": "SKIPPED", "passed": True,
+                "skipped": "archived to legacy/ in step 5.5",
+            })
+            for entry in ("main_orchestrator.py",):
                 path = repo_root / entry
                 if not path.exists():
                     _chk(f"{entry}_exists", False, "file not found")
@@ -7049,8 +6925,8 @@ class GravityAIAuditor:
         5.  ``main_orchestrator._write_state_snapshot`` writes a
             ``holdings`` field and calls ``rotate_snapshot`` (AST scan
             so we don't have to execute the orchestrator).
-        6.  ``main._write_state_snapshot`` exists and also calls
-            ``rotate_snapshot``.
+        6.  RETIRED (skipped entry): ``main.py``'s snapshot/HTML-report
+            wiring was archived to legacy/ in step 5.5.
         7.  ``rotate_snapshot`` round-trips: writing a snapshot, then
             reading it back via ``list_rotated_snapshots`` returns the
             written file (no on-disk state pollution — uses ``tmp_path``).
@@ -7143,28 +7019,15 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c5
 
-            # Check 6: main.py advisory wiring
-            # ``_write_state_snapshot``/``rotate_snapshot``/``snapshot_diff=``
-            # no longer live inline in main.py -- they were extracted into
-            # reporting/html_publisher.py (write_html_report, imported by
-            # main.py as ``_write_html_report``) and reporting/state_snapshot.py
-            # (write_state_snapshot, which itself calls rotate_snapshot). Check
-            # main.py wires the extracted function, and that the extracted
-            # modules actually carry the rotate/diff plumbing.
-            main_src = Path("main.py").read_text(encoding="utf-8")
-            html_publisher_src = Path("reporting/html_publisher.py").read_text(encoding="utf-8")
-            state_snapshot_src = Path("reporting/state_snapshot.py").read_text(encoding="utf-8")
-            c6 = (
-                'write_html_report' in main_src
-                and 'write_state_snapshot' in html_publisher_src
-                and 'rotate_snapshot' in state_snapshot_src
-                and 'snapshot_diff=' in html_publisher_src
-            )
+            # Check 6: main.py advisory wiring -- RETIRED. main.py's
+            # ``write_html_report`` (reporting/html_publisher.py) +
+            # ``write_state_snapshot`` path was archived to legacy/ in shrink
+            # step 5.5; the daemon's snapshot rotation/diff wiring is check 5.
             audit["checks"].append({
                 "check": "main.py _write_state_snapshot + rotate_snapshot + snapshot_diff= wired",
-                "passed": c6,
+                "passed": True,
+                "skipped": "archived to legacy/ in step 5.5",
             })
-            all_pass = all_pass and c6
 
             # Check 7: rotation round-trip (sandboxed)
             # `now=` must be pinned to the snapshot's own embedded timestamp:
@@ -7562,8 +7425,8 @@ class GravityAIAuditor:
 
         The kill-switch sentinel (``output/KILL_SWITCH``) is repurposed in
         advisory mode as a "Pause Recommendations" gate.  When the file
-        exists, ``main.run_once()`` and ``main_orchestrator._main_body``
-        must skip the evaluation pipeline entirely and return/exit cleanly.
+        exists, the daemon pipeline (``main_orchestrator`` /
+        ``pipeline.production_steps``) must skip the evaluation pipeline entirely and return/exit cleanly.
 
         Macro-triggered gating is also verified: systemic macro conditions
         apply conservative overrides to individual security signals BEFORE
@@ -7579,8 +7442,10 @@ class GravityAIAuditor:
             (case-insensitive substring match).
         5.  Source of ``engine/advisory.py`` references Step 8b macro gate
             comment and the macro_gate_reason variable.
-        6.  Source of ``main.py`` references "kill-switch sentinel" pause log
-            and the "kill_switch_gate" stage string.
+        6.  Source of ``pipeline/production_steps.py`` (the daemon's
+            AsyncDataFetchStep) logs the "kill-switch sentinel" pause and stops
+            the cycle with stop_reason "kill_switch" (main.py's
+            KillSwitchGateStep was archived to legacy/ in step 5.5).
         7.  Source of ``main_orchestrator.py`` references the same pause log
             sentinel string.
         8.  ``tests/test_advisory_pause_gate.py`` exists.
@@ -7667,21 +7532,20 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c5
 
-            # Check 6: main.py wires the kill-switch pause gate
-            # The pause sentinel log line and "kill_switch_gate" stage name
-            # were extracted out of main.py into pipeline/steps.py's
-            # KillSwitchGateStep -- main.py now just imports and wires that
-            # step, so check the extraction target for the literal strings
-            # and main.py for the import/wiring.
-            main_src = Path("main.py").read_text(encoding="utf-8")
-            steps_src = Path("pipeline/steps.py").read_text(encoding="utf-8")
+            # Check 6: the daemon wires the kill-switch pause gate.
+            # main.py's KillSwitchGateStep (pipeline/steps.py) was archived to
+            # legacy/ in shrink step 5.5; the daemon's gate lives in
+            # pipeline/production_steps.py's AsyncDataFetchStep, which logs
+            # the pause sentinel and stops the cycle with stop_reason
+            # "kill_switch".
+            prod_steps_src55 = Path("pipeline/production_steps.py").read_text(encoding="utf-8")
             c6 = (
-                "KillSwitchGateStep" in main_src
-                and "Advisory paused by kill-switch sentinel" in steps_src
-                and "kill_switch_gate" in steps_src
+                "Advisory paused by kill-switch sentinel" in prod_steps_src55
+                and "GlobalKillSwitch()" in prod_steps_src55
+                and 'ctx.stop_reason = "kill_switch"' in prod_steps_src55
             )
             audit["checks"].append({
-                "check": "main.py references advisory pause log and kill_switch_gate stage",
+                "check": "pipeline/production_steps.py logs the advisory pause and stops the cycle on the kill switch",
                 "passed": c6,
             })
             all_pass = all_pass and c6
@@ -8263,8 +8127,10 @@ class GravityAIAuditor:
             (no-lookahead structural check via monkeypatching get_provider).
         11. ``settings.WATCH_RULES_FILE`` exists with a default of
             ``"watch_rules.yaml"``.
-        12. ``main.py`` source references ``watch_engine``, ``evaluate_watch_rules``,
-            and ``save_watch_state``.
+        12. ``pipeline/agentic_queue.py`` references ``watch_engine``,
+            ``evaluate_watch_rules`` and ``save_watch_state``, and
+            ``pipeline/production_steps.py`` calls ``run_watch_engine`` (the
+            daemon's port of main.py's watch block, archived in step 5.5).
         13. ``watch_rules.yaml`` exists at the project root.
         14. ``tests/test_watch_alerts.py`` exists.
         """
@@ -8490,17 +8356,24 @@ class GravityAIAuditor:
                 "detail": getattr(_sett, "WATCH_RULES_FILE", "MISSING"),
             })
 
-            # ── Check 12: main.py references watch_engine ─────────────────────
-            _main_src = _P("main.py").read_text(encoding="utf-8")
+            # ── Check 12: the daemon wires watch_engine ───────────────────────
+            # main.py's _run_cycle watch block was archived to legacy/ in
+            # shrink step 5.5; the daemon runs it via
+            # pipeline/agentic_queue.py::run_watch_engine, called from
+            # pipeline/production_steps.py's AgenticQueueStep.
+            _aq_src = _P("pipeline/agentic_queue.py").read_text(encoding="utf-8")
+            _ps_src = _P("pipeline/production_steps.py").read_text(encoding="utf-8")
             _main_watch_pass = (
-                "watch_engine" in _main_src
-                and "evaluate_watch_rules" in _main_src
-                and "save_watch_state" in _main_src
+                "watch_engine" in _aq_src
+                and "evaluate_watch_rules" in _aq_src
+                and "save_watch_state" in _aq_src
+                and "run_watch_engine(" in _ps_src
             )
             if not _main_watch_pass:
                 all_pass = False
             audit["checks"].append({
-                "check": "main.py references watch_engine, evaluate_watch_rules, save_watch_state",
+                "check": "pipeline/agentic_queue.py references watch_engine, evaluate_watch_rules, "
+                         "save_watch_state; production_steps calls run_watch_engine",
                 "passed": _main_watch_pass,
             })
 
@@ -9243,29 +9116,45 @@ class GravityAIAuditor:
                     fallback_ok = False
                 _chk("db_error_fallback_no_raise", fallback_ok)
 
-            # ── Check 7: main.py references HistoricalStore ──────────────────
-            with open("main.py", "r", encoding="utf-8") as fh:
-                main_src = fh.read()
+            # ── Check 7: the daemon's advisory bars fetch references HistoricalStore
+            # main.py was archived to legacy/ in shrink step 5.5; the daemon's
+            # AdvisoryOverlayStep fetches bars via
+            # pipeline/advisory_inputs.py::fetch_bars_for_universe.
+            with open("pipeline/advisory_inputs.py", "r", encoding="utf-8") as fh:
+                inputs_src = fh.read()
+            _fb_start = inputs_src.find("def fetch_bars_for_universe")
+            _fb_end = inputs_src.find("\ndef ", _fb_start + 1) if _fb_start != -1 else -1
+            _fb_src = inputs_src[_fb_start:_fb_end] if _fb_start != -1 and _fb_end != -1 else ""
             main_ok = (
-                "HistoricalStore" in main_src
-                and "HISTORICAL_STORE_ENABLED" in main_src
+                "HistoricalStore" in _fb_src
+                and "HISTORICAL_STORE_ENABLED" in _fb_src
             )
-            _chk("main_py_references_historical_store", main_ok)
+            _chk("advisory_inputs_fetch_bars_references_historical_store", main_ok)
 
-            # ── Check 7b: _build_macro_dto's SPY fetch specifically references
-            #              HistoricalStore (not just somewhere else in main.py).
-            #              This whole-file Check 7 above trivially passes via
-            #              _fetch_bars_for_universe alone and would NOT have
-            #              caught the original bug where _build_macro_dto's own
-            #              SPY-history fetch bypassed the store every cycle.
-            _fn_start = main_src.find("def _build_macro_dto")
-            _fn_end = main_src.find("\ndef ", _fn_start + 1) if _fn_start != -1 else -1
-            _fn_src = main_src[_fn_start:_fn_end] if _fn_start != -1 and _fn_end != -1 else ""
-            spy_fetch_ok = _fn_start != -1 and "HistoricalStore" in _fn_src and "get_bars" in _fn_src
+            # ── Check 7b: the daemon's HMM SPY history goes through HistoricalStore.
+            #              The original check pinned main.py's _build_macro_dto
+            #              SPY fetch. The daemon's HMM reads SPY from
+            #              ctx.tech_raw (RunPipelineStep), which main_orchestrator
+            #              fills via DataEngine.fetch_technical_raw_cached over
+            #              tickers + BENCHMARK_SYMBOLS -- and that method routes
+            #              through HistoricalStore.get_bars_bulk().
+            with open("main_orchestrator.py", "r", encoding="utf-8") as fh:
+                orch_src60 = fh.read()
+            with open("data_engine.py", "r", encoding="utf-8") as fh:
+                de_src60 = fh.read()
+            _de_start = de_src60.find("def fetch_technical_raw_cached")
+            _de_end = de_src60.find("\n    def ", _de_start + 1) if _de_start != -1 else -1
+            _de_fn = de_src60[_de_start:_de_end] if _de_start != -1 and _de_end != -1 else ""
+            spy_fetch_ok = (
+                "fetch_technical_raw_cached" in orch_src60
+                and 'BENCHMARK_SYMBOLS = ("SPY"' in orch_src60
+                and "HistoricalStore" in _de_fn
+                and "get_bars" in _de_fn
+            )
             _chk(
-                "build_macro_dto_spy_fetch_references_historical_store",
+                "daemon_spy_fetch_references_historical_store",
                 spy_fetch_ok,
-                f"found _build_macro_dto={_fn_start != -1}, len(fn_src)={len(_fn_src)}",
+                f"found fetch_technical_raw_cached={_de_start != -1}, len(fn_src)={len(_de_fn)}",
             )
 
             # ── Check 8: test file exists ────────────────────────────────────
@@ -12119,48 +12008,31 @@ class GravityAIAuditor:
         self.report["step_77_help_explainers_audit"] = audit
 
     def step_78_advisory_agent_audit(self) -> None:
-        """Step 78 — Autonomous Advisory Agent (engine/advisory_agent.py) audit.
+        """Step 78 — Autonomous Advisory Agent audit (retired) + market hours.
 
         Background
         ----------
-        The Robinhood agent trader option 2: a self-pacing loop that wraps
-        ``main.run_once()`` with:
-          * adaptive cadence (RTH-aware + VIX/regime-adaptive + error back-off)
-          * actionable-backlog reminders that re-ping high-conviction signals
-            the operator has NOT yet logged a decision for, on 1h/4h/24h tiers
-          * persistent state at ``output/agent_state.json``
-
-        ADVISORY-ONLY invariant: the module contains NO order-submission code
-        and never imports any broker.  All side effects route through the
-        existing ``alerting.notify()`` ntfy channel and ``main.run_once()``.
+        ``engine/advisory_agent.py`` was the ``main.py --agent`` self-pacing
+        loop (adaptive cadence, actionable-backlog reminders,
+        ``output/agent_state.json``). In shrink step 5.5 it was archived to
+        ``legacy/engine/advisory_agent.py`` together with ``main.py``; its
+        market-hours helpers, which the daemon, pipeline and preflight still
+        use, moved verbatim to ``shared/market_hours.py``.
 
         Checks
         ------
-        1.  ``engine.advisory_agent`` module is importable.
-        2.  ``CONFIG`` dict carries every required threshold (no magic numbers
-            in the logic functions).
-        3.  ``AgentState`` / ``BacklogEntry`` / ``BacklogReminder`` are
-            dataclasses with the expected fields.
-        4.  ``compute_next_run_delay`` returns the RTH-normal delay during
-            midday RTH with low VIX and clean error history.
-        5.  ``compute_next_run_delay`` tightens cadence inside RTH when
-            VIX ≥ ``vol_spike_vix_threshold``.
-        6.  ``compute_next_run_delay`` returns the off-hours delay on a
-            weekend.
-        7.  Error back-off short-circuits the RTH path.
-        8.  ``update_backlog`` adds a high-conviction BUY signal.
-        9.  ``update_backlog`` drops a backlog item once a matching "acted"
-            decision-log entry exists.
-        10. ``compute_backlog_reminders`` does not fire until tier 1 (1 h) has
-            elapsed, and ``apply_reminder_dispatch`` advances the counter.
-        11. ``load_agent_state`` / ``save_agent_state`` round-trip.
-        12. ``load_agent_state`` returns a fresh state on corrupt JSON
-            (CONSTRAINT #6 — never raises).
-        13. ``engine/advisory_agent.py`` source contains NO order-submission
-            keywords (``submit_order``, ``place_order``, etc.) — ADVISORY ONLY.
-        14. ``main.py`` registers the ``--agent`` flag and defines
-            ``_run_agent_loop``.
-        15. ``tests/test_advisory_agent.py`` exists.
+        1.  RETIRED (skipped entry): the ``--agent`` cadence / backlog /
+            agent-state checks and the ``main.py --agent`` wiring check
+            (former checks 1-12 and 14).
+        2.  ``shared.market_hours`` is importable and exports
+            ``is_us_market_open``, ``is_us_market_open_now``,
+            ``reset_market_open_cache``, ``is_extended_hours`` and
+            ``is_automatic_run_gated``.
+        3.  ``is_us_market_open`` is True at midday ET on a weekday and False
+            on a Saturday and before the 09:30 ET open.
+        4.  ``shared/market_hours.py`` source contains NO order-submission
+            keywords — ADVISORY ONLY (former check 13, retargeted).
+        5.  ``tests/test_shared_market_hours.py`` exists (former check 15).
         """
         audit: dict = {
             "step": "step_78_advisory_agent_audit",
@@ -12170,213 +12042,66 @@ class GravityAIAuditor:
         all_pass = True
 
         try:
-            from datetime import datetime, timedelta, timezone
+            from datetime import datetime, timezone
             from pathlib import Path
             from zoneinfo import ZoneInfo
             import importlib
-            import inspect
 
-            # ── 1: importable ─────────────────────────────────────────────
-            mod = importlib.import_module("engine.advisory_agent")
-            audit["checks"].append({"check": "engine.advisory_agent importable", "passed": True})
-
-            # ── 2: CONFIG has every required key ──────────────────────────
-            required_cfg = {
-                "rth_normal_delay_s", "rth_high_vol_delay_s",
-                "rth_open_close_delay_s", "rth_open_close_window_minutes",
-                "extended_hours_delay_s", "off_hours_delay_s",
-                "error_backoff_base_s", "error_backoff_max_s",
-                "vol_spike_vix_threshold", "high_vol_regimes", "min_delay_s",
-                "backlog_conviction_threshold", "backlog_tier_hours",
-                "backlog_tier_priorities", "backlog_max_reminders",
-                "backlog_expiry_hours",
-                "decision_log_match_window_hours",
-            }
-            cfg_ok = required_cfg.issubset(set(mod.CONFIG.keys()))
-            all_pass = all_pass and cfg_ok
+            # ── 1: retired --agent loop checks ───────────────────────────
             audit["checks"].append({
-                "check": "CONFIG dict contains all required thresholds",
-                "passed": bool(cfg_ok),
-                "detail": f"missing={sorted(required_cfg - set(mod.CONFIG.keys()))}",
+                "check": "advisory agent --agent cadence/backlog/state + main.py --agent wiring",
+                "passed": True,
+                "skipped": "archived to legacy/ in step 5.5",
             })
 
-            # ── 3: dataclasses with expected fields ──────────────────────
-            dc_ok = (
-                hasattr(mod.AgentState, "__dataclass_fields__")
-                and {"cycle_count", "backlog", "consecutive_error_cycles"}.issubset(
-                    mod.AgentState.__dataclass_fields__)
-                and hasattr(mod.BacklogEntry, "__dataclass_fields__")
-                and {"symbol", "action", "conviction", "first_seen_iso",
-                     "last_pinged_iso", "reminders_sent"}.issubset(
-                    mod.BacklogEntry.__dataclass_fields__)
-                and hasattr(mod.BacklogReminder, "__dataclass_fields__")
-            )
-            all_pass = all_pass and dc_ok
+            # ── 2: shared.market_hours importable with its public API ────
+            mh = importlib.import_module("shared.market_hours")
+            required_fns = ["is_us_market_open", "is_us_market_open_now",
+                            "reset_market_open_cache", "is_extended_hours",
+                            "is_automatic_run_gated"]
+            missing_fns = [fn for fn in required_fns if not callable(getattr(mh, fn, None))]
+            c2 = (missing_fns == [])
+            all_pass = all_pass and c2
             audit["checks"].append({
-                "check": "AgentState / BacklogEntry / BacklogReminder dataclass fields",
-                "passed": bool(dc_ok),
+                "check": "shared.market_hours importable and exports the market-hours API",
+                "passed": bool(c2),
+                "detail": f"missing={missing_fns}",
             })
 
-            # ── helpers for cadence tests ───────────────────────────────
+            # ── 3: RTH clock check ───────────────────────────────────────
             _ET = ZoneInfo("America/New_York")
             def _et(y, m, d, h, mi=0):
                 return datetime(y, m, d, h, mi, tzinfo=_ET).astimezone(timezone.utc)
-
-            state = mod.AgentState()
-
-            # ── 4: RTH normal delay (midday Monday, low VIX) ─────────────
-            d_normal = mod.compute_next_run_delay(
-                _et(2025, 6, 30, 12, 0),
-                state=state, vix=15.0, market_regime="RISK ON",
+            c3 = (
+                mh.is_us_market_open(_et(2025, 6, 30, 12, 0)) is True    # Monday midday
+                and mh.is_us_market_open(_et(2025, 6, 28, 12, 0)) is False  # Saturday
+                and mh.is_us_market_open(_et(2025, 6, 30, 9, 0)) is False   # pre-open
             )
-            c4 = (d_normal == mod.CONFIG["rth_normal_delay_s"])
-            all_pass = all_pass and c4
+            all_pass = all_pass and c3
             audit["checks"].append({
-                "check": "RTH-normal cadence applies midday with low VIX",
-                "passed": bool(c4), "detail": f"delay={d_normal}",
+                "check": "is_us_market_open: weekday midday open, Saturday/pre-open closed",
+                "passed": bool(c3),
             })
 
-            # ── 5: high-VIX tightens cadence in RTH ──────────────────────
-            d_high = mod.compute_next_run_delay(
-                _et(2025, 6, 30, 12, 0),
-                state=state, vix=35.0, market_regime="RISK ON",
-            )
-            c5 = (d_high == mod.CONFIG["rth_high_vol_delay_s"])
-            all_pass = all_pass and c5
-            audit["checks"].append({
-                "check": "High-VIX (>=vol_spike_vix_threshold) tightens RTH cadence",
-                "passed": bool(c5), "detail": f"delay={d_high}",
-            })
-
-            # ── 6: off-hours delay on a weekend ──────────────────────────
-            d_weekend = mod.compute_next_run_delay(
-                _et(2025, 6, 28, 12, 0),  # Saturday
-                state=state, vix=15.0, market_regime="RISK ON",
-            )
-            c6 = (d_weekend == mod.CONFIG["off_hours_delay_s"])
-            all_pass = all_pass and c6
-            audit["checks"].append({
-                "check": "Off-hours cadence applies on weekend",
-                "passed": bool(c6), "detail": f"delay={d_weekend}",
-            })
-
-            # ── 7: error back-off short-circuits ─────────────────────────
-            err_state = mod.AgentState(consecutive_error_cycles=2)
-            d_err = mod.compute_next_run_delay(
-                _et(2025, 6, 30, 12, 0),
-                state=err_state, vix=15.0, market_regime="RISK ON",
-            )
-            c7 = (d_err != mod.CONFIG["rth_normal_delay_s"] and d_err >= mod.CONFIG["min_delay_s"])
-            all_pass = all_pass and c7
-            audit["checks"].append({
-                "check": "Error back-off short-circuits the RTH path",
-                "passed": bool(c7), "detail": f"delay={d_err}",
-            })
-
-            # ── 8: high-conviction BUY enters backlog ────────────────────
-            from dataclasses import dataclass as _dc
-            @_dc
-            class _R:
-                symbol: str; action: str; conviction: float
-            now = datetime(2025, 6, 30, 14, 0, tzinfo=timezone.utc)
-            st2 = mod.AgentState()
-            mod.update_backlog(st2, [_R("AAPL", "BUY", 0.90)], [], now)
-            c8 = ("AAPL:BUY" in st2.backlog)
-            all_pass = all_pass and c8
-            audit["checks"].append({
-                "check": "update_backlog inserts high-conviction BUY",
-                "passed": bool(c8),
-            })
-
-            # ── 9: acted decision drops backlog entry ────────────────────
-            @_dc
-            class _DE:
-                symbol: str; action_taken: str; timestamp: str
-            entry = _DE(
-                symbol="AAPL", action_taken="acted",
-                timestamp=(now + timedelta(hours=1)).isoformat(),
-            )
-            mod.update_backlog(st2, [_R("AAPL", "BUY", 0.90)], [entry], now + timedelta(hours=2))
-            c9 = ("AAPL:BUY" not in st2.backlog)
-            all_pass = all_pass and c9
-            audit["checks"].append({
-                "check": "update_backlog clears entry after matching 'acted' decision",
-                "passed": bool(c9),
-            })
-
-            # ── 10: tier-1 reminder fires after 1 h ──────────────────────
-            st3 = mod.AgentState(backlog={
-                "AAPL:BUY": mod.BacklogEntry(
-                    symbol="AAPL", action="BUY", conviction=0.90,
-                    first_seen_iso=now.isoformat(),
-                    last_pinged_iso="", reminders_sent=0,
-                )
-            })
-            no_reminders = mod.compute_backlog_reminders(st3, now + timedelta(minutes=30))
-            yes_reminders = mod.compute_backlog_reminders(st3, now + timedelta(hours=1, minutes=1))
-            c10a = (no_reminders == [] and len(yes_reminders) == 1 and yes_reminders[0].tier == 1)
-            mod.apply_reminder_dispatch(st3, yes_reminders, now + timedelta(hours=1, minutes=1))
-            c10b = (st3.backlog["AAPL:BUY"].reminders_sent == 1)
-            c10 = c10a and c10b
-            all_pass = all_pass and c10
-            audit["checks"].append({
-                "check": "Tier-1 reminder fires after 1 h; counter advances on dispatch",
-                "passed": bool(c10),
-            })
-
-            # ── 11: state round-trip ─────────────────────────────────────
-            import tempfile
-            with tempfile.TemporaryDirectory() as tmpdir:
-                p = Path(tmpdir) / "agent_state.json"
-                mod.save_agent_state(st3, p)
-                loaded = mod.load_agent_state(p)
-                c11 = (loaded.backlog["AAPL:BUY"].symbol == "AAPL"
-                       and loaded.backlog["AAPL:BUY"].reminders_sent == 1)
-                all_pass = all_pass and c11
-                audit["checks"].append({
-                    "check": "AgentState save/load round-trip",
-                    "passed": bool(c11),
-                })
-
-                # ── 12: corrupt JSON degrades to fresh state ─────────────
-                p2 = Path(tmpdir) / "corrupt.json"
-                p2.write_text("not json {", encoding="utf-8")
-                fresh = mod.load_agent_state(p2)
-                c12 = (fresh.cycle_count == 0 and fresh.backlog == {})
-                all_pass = all_pass and c12
-                audit["checks"].append({
-                    "check": "load_agent_state degrades to fresh state on corrupt JSON",
-                    "passed": bool(c12),
-                })
-
-            # ── 13: ADVISORY-ONLY — no order-submission keywords in source
-            src = Path("engine/advisory_agent.py").read_text(encoding="utf-8")
+            # ── 4: ADVISORY-ONLY — no order-submission keywords in source
+            src = Path("shared/market_hours.py").read_text(encoding="utf-8")
             forbidden = ["submit_order", "place_order", "place_equity_order",
                          "place_option_order", "buy_order", "sell_order"]
             present = [kw for kw in forbidden if kw in src]
-            c13 = (present == [])
-            all_pass = all_pass and c13
+            c4 = (present == [])
+            all_pass = all_pass and c4
             audit["checks"].append({
-                "check": "ADVISORY-ONLY — engine/advisory_agent.py contains no order-submission keywords",
-                "passed": bool(c13),
+                "check": "ADVISORY-ONLY — shared/market_hours.py contains no order-submission keywords",
+                "passed": bool(c4),
                 "detail": f"forbidden_kws_found={present}",
             })
 
-            # ── 14: main.py wires --agent flag and _run_agent_loop ───────
-            main_src = Path("main.py").read_text(encoding="utf-8")
-            c14 = ("'--agent'" in main_src or '"--agent"' in main_src) and ("_run_agent_loop" in main_src)
-            all_pass = all_pass and c14
+            # ── 5: test file exists ──────────────────────────────────────
+            c5 = Path("tests/test_shared_market_hours.py").exists()
+            all_pass = all_pass and c5
             audit["checks"].append({
-                "check": "main.py declares --agent flag and _run_agent_loop helper",
-                "passed": bool(c14),
-            })
-
-            # ── 15: test file exists ─────────────────────────────────────
-            c15 = Path("tests/test_advisory_agent.py").exists()
-            all_pass = all_pass and c15
-            audit["checks"].append({
-                "check": "tests/test_advisory_agent.py exists",
-                "passed": bool(c15),
+                "check": "tests/test_shared_market_hours.py exists",
+                "passed": bool(c5),
             })
 
             audit["overall_pass"] = all_pass
@@ -12390,205 +12115,24 @@ class GravityAIAuditor:
         self.report["step_78_advisory_agent_audit"] = audit
 
     def step_79_trade_signals_audit(self) -> None:
-        """Step 79 — Trade-signal abilities (engine/trade_signals.py) audit.
+        """Step 79 — Trade-signal abilities (engine/trade_signals.py) audit — RETIRED.
 
-        Background
-        ----------
-        Two advisory trading abilities layered on the autonomous agent, both
-        derived purely from the per-cycle ``RunResult`` (recommendations +
-        account snapshot):
-          * Ability A — CONVICTION MOMENTUM: cross-cycle conviction trajectory;
-            "building" (early entry heads-up below the 0.85 backlog siren) and
-            "fading" (early exit warning) edge-triggered alerts.
-          * Ability B — STOP / TARGET PROXIMITY: ATR-scaled stop below cost and
-            forecast/ATR take-profit target for HELD positions.
-
-        ADVISORY-ONLY invariant: no order code, no broker import; every output
-        is a ``TradeAlert`` pushed through ``alerting.notify()``.
-
-        Checks
-        ------
-        1.  ``engine.trade_signals`` importable.
-        2.  ``CONFIG`` carries every momentum + price-trigger threshold.
-        3.  ``update_conviction_history`` appends, trims to lookback, prunes the
-            universe, and does not mutate its input.
-        4.  ``detect_conviction_momentum`` flags a steady "building" climb once
-            and debounces the repeat.
-        5.  "building" is suppressed at/above the backlog ceiling (0.85).
-        6.  ``detect_conviction_momentum`` flags a "fading" decline (HIGH) on a
-            non-BUY name.
-        7.  ``detect_price_triggers`` fires an ATR-scaled stop alert (HIGH) when
-            price approaches the stop.
-        8.  ``detect_price_triggers`` fires a forecast-based target alert when
-            price reaches the take-profit zone, and debounces the repeat.
-        9.  Dust positions (< min_position_value_usd) are ignored — no
-            fabricated alert (CONSTRAINT #4).
-        10. ADVISORY-ONLY — no order-submission keywords in the source; main.py
-            wires both detectors; tests/test_trade_signals.py exists.
+        ``engine/trade_signals.py`` (conviction-momentum and stop/target
+        proximity alerts) was only ever wired into ``main.py``'s ``--agent``
+        loop. Both were archived to ``legacy/`` in shrink step 5.5 and nothing
+        in the daemon runtime imports it, so this step records a single
+        skipped entry instead of auditing archived code.
         """
         audit: dict = {
             "step": "step_79_trade_signals_audit",
-            "checks": [],
-            "status": "PENDING",
+            "checks": [{
+                "check": "engine.trade_signals conviction-momentum + price-trigger abilities",
+                "passed": True,
+                "skipped": "archived to legacy/ in step 5.5",
+            }],
+            "status": "SKIPPED",
+            "overall_pass": True,
         }
-        all_pass = True
-
-        try:
-            import importlib
-            from dataclasses import dataclass as _dc, field as _field
-            from pathlib import Path
-            from typing import Dict as _Dict, Optional as _Opt
-
-            mod = importlib.import_module("engine.trade_signals")
-            audit["checks"].append({"check": "engine.trade_signals importable", "passed": True})
-
-            # ── 2: CONFIG keys ───────────────────────────────────────────
-            required_cfg = {
-                "momentum_lookback_cycles", "momentum_min_cycles",
-                "momentum_rising_delta", "momentum_building_floor",
-                "momentum_building_ceiling", "momentum_falling_delta",
-                "stop_atr_multiple", "stop_fallback_pct", "stop_proximity_pct",
-                "target_atr_multiple", "target_proximity_pct",
-                "min_position_value_usd",
-            }
-            cfg_ok = required_cfg.issubset(set(mod.CONFIG.keys()))
-            all_pass = all_pass and cfg_ok
-            audit["checks"].append({
-                "check": "CONFIG dict contains all required thresholds",
-                "passed": bool(cfg_ok),
-                "detail": f"missing={sorted(required_cfg - set(mod.CONFIG.keys()))}",
-            })
-
-            # ── duck-typed fixtures ──────────────────────────────────────
-            @_dc
-            class _R:
-                symbol: str; action: str; conviction: float
-                forecast: _Opt[float] = None
-                key_indicators: dict = _field(default_factory=dict)
-
-            @_dc
-            class _P:
-                symbol: str; quantity: float; average_cost: float
-                current_price: float; market_value: float
-                unrealized_pl_pct: float = 0.0
-
-            @_dc
-            class _S:
-                positions: dict
-
-            def _hist(series, sym="AAPL", act="BUY"):
-                h = {}
-                for c in series:
-                    h = mod.update_conviction_history(h, [_R(sym, act, c)])
-                return h
-
-            # ── 3: history append + trim + prune + immutability ──────────
-            lookback = int(mod.CONFIG["momentum_lookback_cycles"])
-            long_hist = _hist([0.1 * i for i in range(lookback + 5)])
-            original = {"OLD": [0.5]}
-            pruned = mod.update_conviction_history(original, [_R("NEW", "BUY", 0.7)])
-            c3 = (
-                len(long_hist["AAPL"]) == lookback
-                and "OLD" not in pruned and pruned["NEW"] == [0.7]
-                and original == {"OLD": [0.5]}  # input not mutated
-            )
-            all_pass = all_pass and c3
-            audit["checks"].append({
-                "check": "update_conviction_history appends/trims/prunes; input immutable",
-                "passed": bool(c3),
-            })
-
-            # ── 4: building fires once + debounce ────────────────────────
-            hb = _hist([0.55, 0.63, 0.72, 0.80])
-            a1, flag1 = mod.detect_conviction_momentum(hb, [_R("AAPL", "BUY", 0.80)], {})
-            a2, _ = mod.detect_conviction_momentum(hb, [_R("AAPL", "BUY", 0.80)], flag1)
-            c4 = (len(a1) == 1 and a1[0].kind == "momentum_building" and a2 == [])
-            all_pass = all_pass and c4
-            audit["checks"].append({
-                "check": "detect_conviction_momentum flags 'building' once and debounces",
-                "passed": bool(c4),
-            })
-
-            # ── 5: building suppressed at/above ceiling ──────────────────
-            hc = _hist([0.70, 0.80, 0.88])
-            a5, _ = mod.detect_conviction_momentum(hc, [_R("AAPL", "BUY", 0.88)], {})
-            c5 = (a5 == [])
-            all_pass = all_pass and c5
-            audit["checks"].append({
-                "check": "'building' suppressed at/above backlog ceiling (0.85)",
-                "passed": bool(c5),
-            })
-
-            # ── 6: fading fires HIGH on non-BUY ──────────────────────────
-            hf = _hist([0.80, 0.65, 0.50], act="SELL")
-            a6, _ = mod.detect_conviction_momentum(hf, [_R("AAPL", "SELL", 0.50)], {})
-            c6 = (len(a6) == 1 and a6[0].kind == "momentum_fading" and a6[0].priority == "high")
-            all_pass = all_pass and c6
-            audit["checks"].append({
-                "check": "detect_conviction_momentum flags 'fading' (HIGH) on non-BUY name",
-                "passed": bool(c6),
-            })
-
-            # ── 7: ATR stop approach (HIGH) ──────────────────────────────
-            rec = _R("NVDA", "HOLD", 0.5, forecast=130.0, key_indicators={"atr": 3.0})
-            snap_stop = _S({"NVDA": _P("NVDA", 10, 100.0, 92.5, 925.0, -7.5)})
-            a7, _ = mod.detect_price_triggers(snap_stop, [rec], {})
-            c7 = (len(a7) == 1 and a7[0].kind == "approaching_stop"
-                  and a7[0].priority == "high"
-                  and abs(a7[0].detail["stop_level"] - 92.5) < 1e-6)
-            all_pass = all_pass and c7
-            audit["checks"].append({
-                "check": "detect_price_triggers fires ATR-scaled stop alert (HIGH)",
-                "passed": bool(c7),
-            })
-
-            # ── 8: forecast target approach + debounce ───────────────────
-            snap_tgt = _S({"NVDA": _P("NVDA", 10, 100.0, 129.0, 1290.0, 29.0)})
-            a8, flag8 = mod.detect_price_triggers(snap_tgt, [rec], {})
-            a8b, _ = mod.detect_price_triggers(snap_tgt, [rec], flag8)
-            c8 = (len(a8) == 1 and a8[0].kind == "approaching_target"
-                  and abs(a8[0].detail["target_level"] - 130.0) < 1e-6 and a8b == [])
-            all_pass = all_pass and c8
-            audit["checks"].append({
-                "check": "detect_price_triggers fires forecast target alert and debounces",
-                "passed": bool(c8),
-            })
-
-            # ── 9: dust position ignored (no fabrication) ────────────────
-            dust = _S({"NVDA": _P("NVDA", 0.5, 100.0, 92.0, 46.0, -8.0)})
-            a9, flag9 = mod.detect_price_triggers(dust, [rec], {})
-            c9 = (a9 == [] and flag9 == {})
-            all_pass = all_pass and c9
-            audit["checks"].append({
-                "check": "dust position (< min_position_value_usd) yields no alert (CONSTRAINT #4)",
-                "passed": bool(c9),
-            })
-
-            # ── 10: ADVISORY-ONLY source + wiring + test file ────────────
-            src = Path("engine/trade_signals.py").read_text(encoding="utf-8").lower()
-            forbidden = ["submit_order", "place_order", "place_equity_order",
-                         "place_option_order", "buy_order", "sell_order"]
-            present = [kw for kw in forbidden if kw in src]
-            main_src = Path("main.py").read_text(encoding="utf-8")
-            wired = ("detect_conviction_momentum" in main_src
-                     and "detect_price_triggers" in main_src)
-            test_exists = Path("tests/test_trade_signals.py").exists()
-            c10 = (present == [] and wired and test_exists)
-            all_pass = all_pass and c10
-            audit["checks"].append({
-                "check": "ADVISORY-ONLY source; main.py wires both detectors; test file exists",
-                "passed": bool(c10),
-                "detail": f"forbidden={present} wired={wired} test={test_exists}",
-            })
-
-            audit["overall_pass"] = all_pass
-            audit["status"] = "PASSED" if all_pass else "FAILED"
-
-        except Exception as exc:
-            audit["status"] = f"Execution Error: {exc}"
-            audit["error"] = str(exc)
-            audit["overall_pass"] = False
-
         self.report["step_79_trade_signals_audit"] = audit
 
     def step_80_robinhood_orders_audit(self) -> None:
@@ -12822,8 +12366,9 @@ class GravityAIAuditor:
         9.  preflight `check_robinhood_execution_mode`: live without a cap FAILS;
             the check is NOT in `_ADVISORY_AUTO_SKIP`.
         10. ADVISORY-ONLY: no order-submission function names in the bridge
-            source; `.claude` skill + `/rh-execute` command exist; `main.py`
-            wires `emit_execution_queue`.
+            source; `.claude` skill + `/rh-execute` command exist; the daemon's
+            `pipeline/production_steps.py` calls `compose_and_emit`, which wires
+            `emit_execution_queue` (`main.py` archived in step 5.5).
         """
         audit: dict = {
             "step": "step_81_robinhood_execution_bridge_audit",
@@ -13051,14 +12596,23 @@ class GravityAIAuditor:
             forbidden = ["submit_order", "place_order", "place_equity_order",
                          "place_option_order", "buy_order", "sell_order"]
             present = [kw for kw in forbidden if f"def {kw}" in src]
-            main_src = Path("main.py").read_text(encoding="utf-8")
-            wired = "emit_execution_queue" in main_src
+            # main.py was archived to legacy/ in shrink step 5.5; the daemon's
+            # AgenticQueueStep (pipeline/production_steps.py) calls
+            # execution.compose.compose_and_emit, which calls
+            # emit_execution_queue.
+            prod_src81 = Path("pipeline/production_steps.py").read_text(encoding="utf-8")
+            compose_src81 = Path("execution/compose.py").read_text(encoding="utf-8")
+            wired = (
+                "compose_and_emit(" in prod_src81
+                and "write_advisory_source(" in prod_src81
+                and "emit_execution_queue(" in compose_src81
+            )
             skill_ok = Path(".claude/skills/robinhood-execution/SKILL.md").exists()
             cmd_ok = Path(".claude/commands/rh-execute.md").exists()
             c10 = (present == [] and wired and skill_ok and cmd_ok)
             all_pass = all_pass and c10
             audit["checks"].append({
-                "check": "no order-submission defs in bridge; main.py wires emit; agent skill+command exist",
+                "check": "no order-submission defs in bridge; daemon wires compose_and_emit -> emit; agent skill+command exist",
                 "passed": bool(c10),
                 "detail": f"forbidden={present} wired={wired} skill={skill_ok} cmd={cmd_ok}",
             })
@@ -13114,10 +12668,11 @@ class GravityAIAuditor:
             (CONSTRAINT #3).
         4.  ``llm.commentary`` source contains ``try:`` + ``return None`` —
             soft-fail contract (CONSTRAINT #6).
-        5.  Both dispatch sites (``watch_engine.dispatch_watch_alerts`` and
-            ``engine.trade_signals.dispatch_trade_alerts``) preserve the
-            template ``msg`` base before any LLM augmentation
-            (append-never-replace).
+        5.  The dispatch site ``watch_engine.dispatch_watch_alerts`` preserves
+            the template ``msg`` base before any LLM augmentation
+            (append-never-replace). The second site,
+            ``engine.trade_signals.dispatch_trade_alerts``, was archived to
+            legacy/ in step 5.5.
         6.  ``Recommendation.llm_rationale`` exists with default ``None``
             (so LLM output never replaces deterministic ``rationale``).
         7.  No call site assigns LLM output to a numeric pipeline scalar
@@ -13201,21 +12756,18 @@ class GravityAIAuditor:
             all_pass = all_pass and c4
 
             # ── Check 5: dispatch sites preserve template msg as base ────────
+            # engine/trade_signals.py (the second dispatch site) was archived
+            # to legacy/ in shrink step 5.5; watch_engine is the only live one.
             watch_src = (repo_root / "watch_engine.py").read_text(encoding="utf-8")
-            trade_src = (repo_root / "engine" / "trade_signals.py").read_text(encoding="utf-8")
             c5_watch = (
                 "msg = alert.message" in watch_src
                 and 'msg = f"{msg}\\n\\n📝' in watch_src
             )
-            c5_trade = (
-                "msg = a.message" in trade_src
-                and 'msg = f"{msg}\\n\\n📝' in trade_src
-            )
-            c5 = c5_watch and c5_trade
+            c5 = c5_watch
             audit["checks"].append({
-                "check": "Both dispatch sites APPEND (never replace) LLM body to template msg",
+                "check": "watch_engine dispatch site APPENDS (never replaces) LLM body to template msg",
                 "passed": bool(c5),
-                "detail": f"watch_engine_ok={c5_watch} trade_signals_ok={c5_trade}",
+                "detail": f"watch_engine_ok={c5_watch} trade_signals=archived to legacy/ in step 5.5",
             })
             all_pass = all_pass and c5
 

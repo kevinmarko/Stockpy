@@ -121,12 +121,13 @@ reads a gated execution queue the pipeline writes.
   (`api/control_api.py`, port `ORCHESTRATOR_API_PORT`) plus, when `PILOTS_API_ENABLED`, the Pilots
   API. Trigger a cycle with `POST /run` or `shared.daemon_client.trigger_run()` (poll
   `get_run_status`; a 409 means one is already running — attach to it).
-- **`main.py` is being retired** (shrink step 5, plan `.claude/shrink_step5_retire_main_py_implementation_plan.md`).
-  It still runs the advisory cycle but, since the 2026-10-12 cutover, is no longer the real
-  execution-queue writer (the `com.investyo.daily-advisory` launchd job is unloaded; its plist stays
-  for rollback; `scripts/install_schedule.command` installs it only with `--with-daily-advisory`).
-  Step 5.4 (switch callers, delete `launch.command`) is done; 5.5 (archive `main.py` to `legacy/`)
-  and 5.6 (retire `ORCHESTRATOR_DAEMON_ENABLED`) are pending. Don't build new features on `main.py`.
+- **`main.py` is archived** (shrink step 5.5, plan `.claude/shrink_step5_retire_main_py_implementation_plan.md`):
+  `legacy/main.py`, with `pipeline/steps.py`, `reporting/html_publisher.py` (`daily_report.html`),
+  `engine/trade_signals.py`, the `--agent` loop (`engine/advisory_agent.py`) and the
+  `com.investyo.daily-advisory` plist. The market-hours helpers it shared with the daemon live in
+  `shared/market_hours.py`; `tests/test_main_py_archive_import_smoke.py` proves no entry point needs
+  an archived module. Rolling the 2026-10-12 cutover back now means reverting the 5.5 PR
+  (`docs/RUNBOOK.md` §3.15). Step 5.6 (retire `ORCHESTRATOR_DAEMON_ENABLED`) is pending.
 - **Daemon pipeline steps** (`pipeline/production_steps.py`, assembled in `main_orchestrator.py`):
   `AsyncDataFetchStep` → `RunPipelineStep` (inner `MacroStep` → `TrendVolatilityStep` →
   `ProcessingStep` → `ForecastingStep` → `StrategyEvalStep`) → `AdvisoryOverlayStep` (runs
@@ -140,14 +141,14 @@ reads a gated execution queue the pipeline writes.
   `DANGEROUS_KEYS` member) controls `AgenticQueueStep`. `shadow` writes the advisory source and
   `execution_queue.json` under `OUTPUT_DIR/shadow/` with no side effects; `primary` makes the daemon
   the real queue writer (summary push, watch engine, real queue files, with a run-ownership guard so
-  a timed-out cycle cannot write late) and `main.py` then skips those side effects. **The live
+  a timed-out cycle cannot write late); `off` means nothing writes the queue. **The live
   deployment has run `primary` since 2026-10-12** (flag in the runtime flags store, with
   `ROBINHOOD_SCHEDULED_LOGIN_ENABLED=true`; the operator cut over without waiting for the extended
   10-12..10-16 review, accepting the forecast-reuse advisory diffs; review criterion and rollback:
   `docs/RUNBOOK.md` §3.15). `scripts/compare_shadow_queue.py` is only meaningful while the mode is
   `shadow`. Walkthroughs: `.claude/shrink_step5_*_walkthrough.md`.
 - **Symbol universe** — one builder, `pipeline/advisory_inputs.py::build_universe_detailed()`, used
-  by both `main.py` and the daemon: held positions ∪ `WATCHLIST` env var ∪ `watchlist.txt` ∪
+  by the daemon: held positions ∪ `WATCHLIST` env var ∪ `watchlist.txt` ∪
   discovered scan candidates, minus rating auto-drops; `settings.DEFAULT_TICKERS` only when that
   union is empty (via `data/portfolio_sync.py::compute_tracked_universe()`); recently-closed
   positions (`CLOSED_POSITION_RETENTION_DAYS`) unioned last. Anything needing "the full tracked
@@ -205,7 +206,7 @@ imports from it, pytest does not collect it, and you add to it only when archivi
 in `legacy/README.md`).
 
 **`shared/` is a normal, maintained package** of backend logic (`env_io.py`, `orchestrator_runner.py`,
-`daemon_client.py`, `strategy_registry.py`, …) used by `api/*`, `pilots/*`, `main.py` and `scripts/*`.
+`daemon_client.py`, `strategy_registry.py`, `market_hours.py`, …) used by `api/*`, `pilots/*` and `scripts/*`.
 
 ## Commands
 
@@ -223,8 +224,7 @@ uvicorn api.pilots_api:app --port 8602    # backend the PWA talks to (+ api.data
 python -m desktop.orchestrator_daemon    # the daemon (Control API + Pilots API + pipeline timer)
 python3 main_orchestrator.py         # one async pipeline run without the daemon
 python -m execution.kill_switch --status # check / activate / deactivate the global kill switch
-# Being retired (step 5) — prefer POST /run or shared.daemon_client.trigger_run():
-python3 main.py                      # one advisory cycle (writes no queue in primary); --refresh-account forces a Robinhood login
+python -c "from shared import daemon_client as d; print(d.trigger_run())"   # one daemon cycle (POST /run)
 
 # ── Tests & gates ─────────────────────────────────────────────────────────────
 pytest tests/test_<module>.py        # targeted tests; add ::test_name for one test
@@ -240,7 +240,7 @@ python scripts/verify_fmp_bars.py    # hard gate before changing FMP_BARS_ADJUST
 python scripts/verify_fmp_profile.py # FMP /profile check (exit 0 pass, 1 fail, 2 unconfigured)
 ```
 
-`main.py`, `main_orchestrator.py` and every `scripts/*.py` entry point (via `scripts/_bootstrap.py`)
+`main_orchestrator.py` and every `scripts/*.py` entry point (via `scripts/_bootstrap.py`)
 re-exec themselves under `.venv`'s interpreter when started from another Python, and load `.env` from
 `settings.ENV_PATH`. `scripts/_bootstrap.py` also honors `NO_VENV_REEXEC=1` to skip its re-exec.
 
@@ -262,7 +262,7 @@ load the file(s) for what you're touching.
 | [`docs/architecture/validation-and-signals.md`](docs/architecture/validation-and-signals.md) | `validation/` (purged CV, metrics, harness, stress scenarios), `signals/` (registry, aggregator, modules) |
 | [`docs/architecture/ml-and-reports.md`](docs/architecture/ml-and-reports.md) | `ml/` pipeline, `reports/*.html.j2`, `ai_verification_prompts.py` |
 | [`docs/architecture/testing.md`](docs/architecture/testing.md) | Index of `tests/` and what each file covers |
-| [`docs/architecture/orchestration-entrypoints.md`](docs/architecture/orchestration-entrypoints.md) | `engine/advisory.py`, `.env` loading, `alerting.py`, `Makefile`, `main.py`, `main_orchestrator.py` |
+| [`docs/architecture/orchestration-entrypoints.md`](docs/architecture/orchestration-entrypoints.md) | `engine/advisory.py`, `.env` loading, `alerting.py`, `Makefile`, `main_orchestrator.py`, `shared/market_hours.py` |
 
 **Gravity** — three different things share the name: `Gravity AI Review Suite.py` (the
 `GravityAIAuditor` structural audit launcher, no LLM calls, not importable because of the space in its
@@ -452,6 +452,10 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
 ## Archived subsystems (in `legacy/`, not active)
 
 Don't build on these or cite them as live. `legacy/README.md` lists every moved file.
+
+- **`main.py` and its advisory path** (step 5.5): `legacy/main.py`, `legacy/pipeline/steps.py`,
+  `legacy/reporting/{html_publisher,state_snapshot}.py`, `legacy/engine/{trade_signals,advisory_agent}.py`,
+  `legacy/scripts/com.investyo.daily-advisory.plist`, and their tests in `legacy/tests/`.
 
 - **Options desk** (steps 3d–4b): `legacy/technical_options_engine.py`, `legacy/pilots/options*.py`,
   dispersion/copula/earnings-crush/vol-mispricing/GEX/LOB/0DTE (`legacy/pilots/zero_dte_engine.py`),

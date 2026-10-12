@@ -163,13 +163,14 @@ Or override programmatically in `settings.py` by changing the `DEFAULT_TICKERS` 
 - The multifactor signal (`multifactor`) excludes tickers with market cap below $300M (`MULTIFACTOR_MICROCAP_THRESHOLD`) from cross-sectional z-scoring — microcaps still get analyzed but receive a neutral 0.0 multifactor score
 - SPY is always fetched automatically (it's needed for the HMM regime detector), even if it's not in your ticker list
 
-### How `main.py` builds its universe (held ∪ watchlist ∪ discovered ∪ DEFAULT_TICKERS fallback)
+### How the daemon builds its universe (held ∪ watchlist ∪ discovered ∪ DEFAULT_TICKERS fallback)
 
-The advisory orchestrator `main.py` assembles its universe from held positions, the
+The orchestrator daemon assembles its universe from held positions, the
 watchlist, and discovered scan candidates, falling back to `DEFAULT_TICKERS` only when
-that whole union is empty (`_build_universe()`, delegating most of the logic to
-`data.portfolio_sync.compute_tracked_universe()` so `main.py` and the persistent daemon
-can't silently diverge on what counts as "the tracked universe"):
+that whole union is empty. There is one builder,
+`pipeline/advisory_inputs.py::build_universe_detailed()` (delegating most of the logic to
+`data.portfolio_sync.compute_tracked_universe()`), so nothing can
+silently diverge on what counts as "the tracked universe" (the retired `main.py` used the same builder):
 
 1. **Robinhood held positions** — every symbol in your account snapshot is always included when the snapshot is available.
 2. **`WATCHLIST` env var or `watchlist.txt`** — merged in whenever present. The env var (comma-separated) takes precedence over the file; the file is one ticker per line with `#` for comments.
@@ -177,7 +178,7 @@ can't silently diverge on what counts as "the tracked universe"):
 4. **`settings.DEFAULT_TICKERS`** — used **only as a fallback** when sources 1-3 are all empty (or rating-exclusion emptied them).
 5. **Recently-closed positions** (`settings.CLOSED_POSITION_RETENTION_DAYS`) — a symbol you recently sold stays in the universe for a bounded window; unioned in last.
 
-If the whole union (including the `DEFAULT_TICKERS` fallback) is still empty, `main.py`
+If the whole union (including the `DEFAULT_TICKERS` fallback) is still empty, the daemon
 logs a warning naming the remediation paths (RH_* env vars, `WATCHLIST`, `watchlist.txt`)
 and exits the cycle cleanly. SPY is still fetched automatically by the macro/HMM layer
 regardless.
@@ -190,7 +191,7 @@ Sheet output sink — see [Section 18](#18-google-sheets-integration-legacy).
 
 The Pilots PWA's Settings → Tracked Universe screen includes a coverage
 panel with three honest counts. Note this reads a narrower universe than
-`main.py`'s own three-tier assembly described above — held positions plus
+the daemon's own assembly described above — held positions plus
 Robinhood/file-backed watchlists only, not the Sheet2 fallback or
 scan-discovered candidates:
 
@@ -240,7 +241,7 @@ The old Streamlit desktop app (`launch_app.command`, `launch_gui.command`,
 ### The headless way — no web app
 
 The orchestrator daemon is the one runtime (`launch.command` and its `main.py` loop were removed in
-step 5.4b-ii). For a backend with no Terminal window, install the always-on stack service
+step 5.4b-ii, and `main.py` was archived to `legacy/main.py` in step 5.5). For a backend with no Terminal window, install the always-on stack service
 (`docs/RUNBOOK.md` §0.1). To run it in a Terminal instead:
 
 ```bash
@@ -311,15 +312,20 @@ This is expected in development.
 
 **Note (2026-09):** this gate used to key off `os.path.exists("credentials.json")` (the Google Sheets service-account file). It was switched to a FRED-key check in step 4 prep, ahead of the Google Sheet publisher's retirement in step 4e (see [Section 18](#18-google-sheets-integration-legacy)) — deleting `credentials.json` no longer silently switches the daemon to fabricated data.
 
-### The advisory orchestrator (being retired)
+### The advisory orchestrator (archived)
+
+`main.py`, the original synchronous advisory pipeline (with its `--interval` loop, `--agent` loop and
+`--refresh-account`), was archived to `legacy/main.py` in step 5.5 (2026-10). The orchestrator daemon
+replaced it and has been the execution-queue writer since the 2026-10-12 cutover. Run one cycle with
+`POST /run` (Pipeline screen) or:
 
 ```bash
-python3 main.py
+python -c "from shared import daemon_client as d; print(d.trigger_run())"
 ```
 
-This is the original synchronous, clean advisory pipeline. It is being retired (step 5): since the
-2026-10-12 cutover the daemon writes the execution queue, watch state and pushes, and `main.py` run by
-hand skips all of them and says so in a WARNING. Prefer a daemon cycle (`POST /run`). Use `main_orchestrator.py` for everything that needs the full 50+ dashboard column set. `main.py` no longer writes to Google Sheets — that sink was retired in step 4e (2026-09); see [Section 18](#18-google-sheets-integration-legacy).
+To force a Robinhood login, use Settings → Brokers → Refresh or the daemon's 08:40 ET scheduled login
+(`docs/RUNBOOK.md` §5.1a). `python3 main_orchestrator.py` still runs one pipeline pass without the daemon.
+The Google Sheets sink was retired in step 4e (2026-09); see [Section 18](#18-google-sheets-integration-legacy).
 
 ---
 
@@ -350,14 +356,11 @@ The pipeline prints a JSON payload at the end:
 
 ### HTML report
 
-Two entry points write a daily report via the same renderer
-(`diagnostics_and_visuals.generate_html_report`):
-
-- `python3 main.py` → `output/daily_report.html` (advisory path — the holdings-aware report below)
-- `python3 main_orchestrator.py` → `output/daily_report_dashboard.html` (wide pipeline schema)
-
-Open either in any browser. The advisory report (`daily_report.html`)
-**leads with Holdings & P&L and Action & Rationale**:
+The daemon (and `python3 main_orchestrator.py`) writes the daily report via
+`diagnostics_and_visuals.generate_html_report` to `output/daily_report_dashboard.html` (wide pipeline
+schema). The older holdings-aware `output/daily_report.html` was written only by the archived
+`main.py` and is retired (step 5.5); the web app shows the same holdings, rationale and signal data.
+The holdings-aware layout, which the dashboard report approximates, **leads with Holdings & P&L and Action & Rationale**:
 
 - **Portfolio summary band** (top): total equity, buying power, aggregate
   unrealized P&L (green/red), dividends received, position count, and a
@@ -727,7 +730,7 @@ Runs 27 checks total. Behaviour depends on `ADVISORY_ONLY`:
 | `dry_run_disabled` | **Yes** | `DRY_RUN=false` | Set `DRY_RUN=false` in `.env` |
 | `env_not_committed` | No | `.env` is not tracked by git | Add `.env` to `.gitignore` (already done in this repo) |
 | `kill_switch_inactive` | No | No `output/KILL_SWITCH` file exists | Run `python -m execution.kill_switch --deactivate` |
-| `state_snapshot_fresh` | No | `output/state_snapshot.json` is < 2 hours old (written by BOTH `main.py` and `main_orchestrator.py` — the cross-mode liveness indicator, so never skipped even in advisory mode) | Run `python3 main.py` or `python3 main_orchestrator.py` to regenerate it |
+| `state_snapshot_fresh` | No | `output/state_snapshot.json` is < 2 hours old (written by `main_orchestrator.py` / the daemon — the liveness indicator, so never skipped even in advisory mode) | Trigger a daemon cycle (`POST /run`) or run `python3 main_orchestrator.py` to regenerate it |
 | `heartbeat_fresh` | **Yes** | `output/heartbeat.txt` is < 2 hours old (written by `main_orchestrator.py` only) | Run `python3 main_orchestrator.py` to generate it |
 | `db_exists` | No | `quant_platform.db` exists and is non-empty | Run `python3 database_setup.py` |
 | `paper_trading_duration` | **Yes** | ≥ 90 days since `PAPER_TRADING_START_DATE` | Wait — this is intentional; set your start date when you begin |
@@ -781,7 +784,7 @@ ntfy.sh is a free, open-source push-notification service with native iOS and And
 
 The error notification lists which symbols failed and at which pipeline stage. The "refresh complete" notification includes the full run summary (BUY/SELL/HOLD counts, top 3 recommendations, duration).
 
-**Interval mode** (`python3 main.py --interval 60`): the "refresh complete" notification fires only once per launch, not once per tick. Error notifications fire every cycle where errors occur.
+**Daemon timer** (`ORCHESTRATOR_INTERVAL_SECONDS`): the "refresh complete" notification fires at most once per ET day, not once per cycle. Error notifications fire every cycle where errors occur.
 
 #### Without NTFY_TOPIC
 
@@ -862,8 +865,8 @@ For Gmail: use an App Password (not your main password). Google account → Secu
 ## 15. The Kill Switch / Pause Gate
 
 In **advisory mode** (`ADVISORY_ONLY=true`) the kill switch sentinel (`output/KILL_SWITCH`)
-repurposes as a **pause-recommendations gate**: when the file exists, `main.run_once()`
-logs `"Advisory paused by kill-switch sentinel — skipping evaluation cycle"` and returns
+repurposes as a **pause-recommendations gate**: when the file exists, the daemon cycle
+(`main_orchestrator._main_body()`; formerly also `main.run_once()`) logs `"Advisory paused by kill-switch sentinel — skipping evaluation cycle"` and returns
 an empty RunResult for that cycle.  `main_orchestrator._main_body()` returns immediately
 before `run_pipeline()` so the last written `state_snapshot.json` and HTML report are
 preserved.  No broker interaction exists to halt — this is purely a signal-generation pause.
@@ -1057,8 +1060,8 @@ You must include all modules in the dict (or it falls back to the defaults). The
 ## 18. Google Sheets Integration (Legacy)
 
 **Retired in step 4e (2026-09).** The Pilots PWA (`webapp/`) is the platform's only
-frontend, and nothing reads or writes the Google Sheet anymore. `main.py` no longer has
-a Sheet write path or a Sheet2-column-A universe fallback (see
+frontend, and nothing reads or writes the Google Sheet anymore. `main.py` (now archived) had
+no Sheet write path or a Sheet2-column-A universe fallback (see
 [Section 4](#4-choosing-your-ticker-universe)).
 
 The old code (`reporting/sheet_publisher.py`, `reporting/sheets_client.py`) was moved
@@ -1327,7 +1330,7 @@ The platform can send proactive ntfy push notifications whenever a symbol's advi
 
 ### How it works
 
-At the end of every `run_once()` cycle, `watch_engine.py`:
+At the end of every daemon cycle, `watch_engine.py`:
 1. Loads rules from `watch_rules.yaml` (project root).
 2. Loads the previous run's state from `output/watch_state.json`.
 3. Compares the current advisory output against the previous state.
@@ -1360,14 +1363,14 @@ rules:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `WATCH_RULES_FILE` | `watch_rules.yaml` | Path to the YAML rule file. Relative paths are resolved from the working directory where `main.py` is launched. |
+| `WATCH_RULES_FILE` | `watch_rules.yaml` | Path to the YAML rule file. Relative paths are resolved from the working directory where the daemon is launched (the stack service uses the repo root). |
 | `NTFY_DASHBOARD_URL` | *(empty)* | Optional URL appended to every alert body (e.g. `http://localhost:5173`). Tap the notification to open the web app directly. |
 
 ### Adding or editing rules
 
 1. Open `watch_rules.yaml` in any text editor.
 2. Add, remove, or modify `rules` entries.
-3. The changes take effect on the **next** `run_once()` cycle — no restart needed.
+3. The changes take effect on the **next** daemon cycle — no restart needed.
 
 ### Resetting alert state
 
@@ -1393,7 +1396,7 @@ By default the per-symbol rationale is a single terse paragraph suitable for das
 - No additional dependencies.
 
 ### How it works
-Every time `run_once()` evaluates a symbol it calls `engine.advisory.evaluate()`. When `RATIONALE_VERBOSITY=verbose`:
+Every time a daemon cycle evaluates a symbol it calls `engine.advisory.evaluate()`. When `RATIONALE_VERBOSITY=verbose`:
 
 1. `evaluate()` pre-computes win-rate data from `TransactionsStore` (same database used by Kelly sizing).
 2. It also pulls first-line `__doc__` strings from all signal modules that are active in the current macro regime.
@@ -1461,7 +1464,7 @@ The `[A]–[D]` markers are stable labels — compliance reviewers can cite "sec
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| No verbose sections even after setting `RATIONALE_VERBOSITY=verbose` | `.env` was not reloaded | Restart `main.py` / `main_orchestrator.py` — settings are loaded once at startup. |
+| No verbose sections even after setting `RATIONALE_VERBOSITY=verbose` | `.env` was not reloaded | Restart the daemon (`launchctl kickstart -k`) or `main_orchestrator.py` — settings are loaded once at startup. |
 | `[B]` shows "Insufficient closed-trade history" | Fewer than 30 closed trades in `quant_platform.db` | Expected on fresh installations. Run for several weeks to accumulate trade history. |
 | `[D]` section absent | All signal modules filtered out by `is_active_in_regime()` (e.g. RECESSION regime) | Expected in extreme macro regimes where most signals are suppressed. Check the `[A]` section for the regime name. |
 
@@ -1469,69 +1472,22 @@ The `[A]–[D]` markers are stable labels — compliance reviewers can cite "sec
 
 ## Autonomous Advisory Agent
 
-The autonomous agent (Tier 6) replaces `--interval N`'s fixed timer with a
-self-pacing loop. It still only produces advisory output — it never places an
-order — but it decides *when* to re-run and re-pings you about high-conviction
-signals you have not acted on.
-
-```bash
-python3 main.py --agent          # takes precedence over --interval
-```
-
-### What it does each cycle
-
-1. Runs one full advisory cycle (same as `--interval`): signals, sizing, HTML
-   report, Sheets, and the per-cycle Symbol Watch alerts.
-2. **Adaptive cadence** — picks the next sleep based on US market hours, VIX,
-   macro regime, and recent errors: fast around the open/close and during
-   volatility spikes, slow overnight/weekends, and it backs off after errors.
-3. **Actionable backlog** — a high-conviction BUY/SELL you have not logged a
-   decision for is re-pinged on escalating tiers (≈1 h / 4 h / 24 h) via ntfy,
-   then stops once you act (a matching "acted" entry in the Decision Journal),
-   the signal expires, or the reminder cap is reached.
-4. **Persistent state** — the backlog and conviction history survive restarts
-   in `output/agent_state.json`.
-
-### Stopping it
-
-Press Ctrl-C (or send SIGTERM). The loop finishes the current cycle, dispatches
-any pending reminders, saves state, and exits cleanly.
-
-### Configuration
-
-`NTFY_TOPIC` enables push reminders (unset = silent). `NTFY_DASHBOARD_URL`
-appends a one-click dashboard link to each push. All cadence/backlog thresholds
-live in `engine.advisory_agent.CONFIG`.
+**Archived (step 5.5, 2026-10).** The self-pacing `python3 main.py --agent` loop
+(`engine/advisory_agent.py`) went to `legacy/` with `main.py`. The orchestrator daemon has no
+equivalent: its own timer (`ORCHESTRATOR_INTERVAL_SECONDS`, inside the 04:00-20:00 ET weekday window) and
+`POST /run` pace cycles instead. Its market-hours helpers now live in `shared/market_hours.py`, which the
+daemon, the pipeline and preflight share. The loop never placed an order; it re-ran the analysis on an
+adaptive cadence and re-pinged you about high-conviction signals you had not acted on (backlog reminders,
+persisted in `output/agent_state.json`). To restore it, revert the step 5.5 PR (see `legacy/README.md`).
 
 ---
 
 ## Trade-Signal Alerts
 
-Two advisory trading abilities (Tier 6.1) layer on the autonomous agent. Both
-are derived purely from data the agent already has each cycle (recommendations
-+ your Robinhood snapshot) and both are pushed as ntfy alerts — no order code.
-
-### Conviction momentum
-
-The agent uniquely tracks each symbol's conviction *trajectory* across cycles:
-
-- **Building** — conviction is climbing steadily but has not yet reached the
-  backlog siren, so you get an *early* heads-up before the move matures.
-- **Fading** — conviction is deteriorating on a name no longer rated BUY, an
-  *early* exit warning.
-
-Each trend pings once (debounced); it re-alerts only if the trend breaks and
-re-forms, or flips direction.
-
-### Stop / target proximity
-
-For your held positions, the agent derives a volatility-scaled (ATR) stop below
-your cost basis and a take-profit target from the 30-day forecast, then alerts
-when the live price approaches (or breaches) either level — turning the agent
-into a position-management assistant. Dust positions and rows with bad price
-data are skipped (no fabricated levels).
-
-All thresholds live in `engine.trade_signals.CONFIG`.
+**Archived (step 5.5, 2026-10).** The conviction-momentum ("building" / "fading") and stop/target-proximity
+ntfy alerts were sent by `engine/trade_signals.py`, which only the archived agent loop called; it now lives
+in `legacy/engine/trade_signals.py`. The daemon's per-cycle Symbol Watch alerts
+([Symbol Watch Alerts](#symbol-watch-alerts-tier-14)) remain the active push alerts about individual names.
 
 ---
 

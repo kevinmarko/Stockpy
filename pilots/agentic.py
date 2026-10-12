@@ -11,8 +11,8 @@ stitches together ``shared.daemon_client`` + ``pilots.run_status`` +
 ``execution.kill_switch`` inline rather than through one monolithic helper.
 
 The ONE piece with no existing reader is ``output/agent_state.json``
-(``engine.advisory_agent.AgentState`` — the advisory-only adaptive-cadence
-loop's persisted backlog). This module PORTS the minimal read logic (cycle
+(``AgentState`` from the advisory-only adaptive-cadence loop, archived to
+``legacy/engine/advisory_agent.py`` in step 5.5, so nothing writes it now). This module PORTS the minimal read logic (cycle
 count, last-cycle timestamp, backlog size) rather than importing
 ``engine.advisory_agent`` directly — mirrors ``pilots/run_status.py``'s
 documented reasoning: ``engine.advisory_agent``'s own top-level imports are
@@ -38,8 +38,8 @@ __all__ = ["agent_loop_status"]
 
 _FILENAME = "agent_state.json"
 _MISSING_REASON = (
-    "No agent_state.json yet — the advisory-loop agent (engine/advisory_agent.py) "
-    "hasn't completed a cycle since this file was last cleared."
+    "No agent_state.json — the advisory-loop agent (main.py --agent) was archived "
+    "in step 5.5 and nothing writes this file any more."
 )
 
 

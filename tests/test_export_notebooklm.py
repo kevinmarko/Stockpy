@@ -675,7 +675,7 @@ def _real_options_matrix_payload(directives: list) -> dict:
 
 def _real_state_snapshot_payload(signals: list) -> dict:
     """Wraps ``signals`` in the real persisted top-level shape written by
-    ``reporting/state_snapshot.py::write_state_snapshot``.
+    ``main_orchestrator.py::_write_state_snapshot``.
     """
     return {
         "timestamp": "2026-09-05T12:00:00+00:00",
