@@ -21,11 +21,14 @@ behaviour, no new capability. No new settings flags.
 
 ## Operator decisions (this session + step-5 plan)
 
-- Live is **primary**: delete the daily-advisory launchd plist; rewrite RUNBOOK rollback text. *(History: briefly withdrawn on
-  2026-10-12 when `main` (#1119) showed the live daemon still on `shadow` pending a second review; reinstated the same day when #1120
-  recorded that the operator cut over to `primary` without waiting for it. One part is now in conflict with the operator's own docs:
-  #1120 says the `com.investyo.daily-advisory` plist is **kept for rollback**, whereas this plan deletes it. Deleting it needs the
-  operator's explicit call in 5.4b-ii.)*
+- Live is **primary**. *(History: briefly withdrawn on 2026-10-12 when `main` (#1119) showed the live daemon still on `shadow` pending a
+  second review; reinstated the same day when #1120 recorded that the operator cut over to `primary` without waiting for it.)*
+  **Decision (operator, 2026-10-12): keep `scripts/com.investyo.daily-advisory.plist` for rollback**, as #1120 and RUNBOOK 3.15 say. This
+  replaces the earlier "delete the daily-advisory launchd plist; rewrite RUNBOOK rollback text": 5.4b-ii deletes `launch.command` only,
+  and the RUNBOOK rollback text ("set the mode to `off`/`shadow` and reload `com.investyo.daily-advisory`") stays correct as written.
+  Two consequences are NOT decided yet, flag them in 5.4b-ii: (1) whether `scripts/install_schedule.command` should still install the
+  job by default (that would reload the job #1120 deliberately unloaded) or only on an explicit rollback; (2) the plist runs
+  `main.py`, so it is a rollback path only while `main.py` exists: 5.5 (archive `main.py` to `legacy/`) must move or retire the plist too.
 - `/dead-letter/retry`: **repoint to a daemon cycle** (keep endpoint + `DEAD_LETTER_RETRY_ENABLED`).
 - `launch.command`: **delete**.
 - **Two PRs** (5.4a runtime, 5.4b shell/docs).
@@ -103,10 +106,11 @@ All verification below depends on this. Establish a green baseline for the targe
 > **Re-split 2026-10-12.** When 5.4b was being integrated the live daemon looked to be still on `shadow` (#1119), so 5.4b was split in
 > two. **5.4b-i (cutover-neutral, goes first, PR #1121):** item 1 (`make verify` helper + Makefile + `verify.command`), the corrected
 > `--dry-run` / keyless-run warnings, the `ORCHESTRATOR_DAEMON_ENABLED` description fix and the `weekly-edgar.plist` XML fix.
-> **5.4b-ii (the rest):** deleting `launch.command` and the daily-advisory plist, the installer-script and README changes, the
-> `robinhood-execution`/`rh-execute` rewrite, RUNBOOK 3.15 DONE + rollback + 5.1, the CLAUDE.md/AGENTS.md status lines. #1120 then
-> recorded the operator's cutover to `primary` (2026-10-12), so 5.4b-ii is no longer waiting on the review. It still waits for 5.4a and
-> 5.4b-i to merge, and for the operator's call on the plist (#1120 keeps it for rollback). The full 5.4b change set exists on the local
+> **5.4b-ii (the rest):** deleting `launch.command` (the daily-advisory plist now STAYS, see the decision above), the installer-script
+> and README changes, the `robinhood-execution`/`rh-execute` rewrite, RUNBOOK 3.15 / 5.1 reconciled with #1120's cutover record (the
+> rollback text stays), the CLAUDE.md/AGENTS.md status lines. #1120 recorded the operator's cutover to `primary` (2026-10-12), so
+> 5.4b-ii is no longer waiting on the review. It still waits for 5.4a and 5.4b-i to merge. The full 5.4b change set (written before
+> #1120 and before the keep-the-plist decision, so it still deletes the plist and rewrites the rollback text: undo both) exists on the local
 > branch `step5-4b-ii-cutover-dependent-full` (commit `08f0630`); it must be rebased onto the merged result and every sentence about
 > the live state re-checked against `main`'s RUNBOOK 3.15, which now has the cutover record.
 
@@ -122,8 +126,9 @@ All verification below depends on this. Establish a green baseline for the targe
    `verify` (today "verify complete" echoes unconditionally); add `_live_run` to `.PHONY`. Disclose: the cycle still
    rewrites `state_snapshot.json`/dashboards/`dead_letter.json` (run_once did not). Tests: helper forces off mode,
    dry-run, ordering of logging vs import, non-zero exit on `PipelineFatalError`.
-2. **Delete** `launch.command`, `scripts/com.investyo.daily-advisory.plist`. `scripts/install_schedule.command`: drop the
-   label (44-48) and text (8, 30-31, 45, 134, 139). Keep the unload block in `scripts/install_stack_service.command`
+2. **Delete** `launch.command`. **Keep** `scripts/com.investyo.daily-advisory.plist` (operator decision 2026-10-12: kept for rollback).
+   `scripts/install_schedule.command`: keep the daily-advisory label unless the operator decides otherwise (open consequence (1) above);
+   fix only text that calls the job the live queue writer (8, 30-31, 45, 134, 139). Keep the unload block in `scripts/install_stack_service.command`
    (69-76; cleans old installs), fix its text (17-19, 75, 138-141). Stale comments in `investyo_stack_service.sh`,
    monthly-retrain/weekly-edgar plists. `README.md:164-167,265`, `.github/CODEOWNERS:24`, `ci.yml:7` comment.
 3. **Skills**: `robinhood-execution` (`.claude` + `.agents`: always `trigger_run`/poll; non-primary mode → stop and tell
@@ -131,7 +136,7 @@ All verification below depends on this. Establish a green baseline for the targe
    `rh-execute.md`, `agentic-discovery` (22, 150), `.agents/skills/incident-triage` (104, 113: `POST /run` returns
    423 `kill_switch_active` when the switch is on, so the verification step changes), `.agents/skills/alert-rule-authoring`
    (32-52: daemon `send_run_summary_push` now also notifies). `.claude/commands/verify.md:28-31`.
-4. **Docs**: `docs/RUNBOOK.md` (§3.15 rollback 874-875, §5.1 953-987, §3.15 step list), `CLAUDE.md` + `AGENTS.md`
+4. **Docs**: `docs/RUNBOOK.md` (§3.15 step list and §5.1 953-987 reconciled with #1120's cutover record; the §3.15 rollback text stays as is), `CLAUDE.md` + `AGENTS.md`
    (mirror; mark 5.4 done, drop `launch.command` and `main.py` commands, keep "being retired" until 5.5; run the
    `sync_agent_docs` hook / `test_agent_docs_sync`), `docs/architecture/{orchestration-entrypoints,webapp-and-gui,
    execution}.md`, `docs/HOW_TO_GUIDE.md`, `docs/FEATURE_TIER_HISTORY.md` (one history line).
@@ -175,9 +180,9 @@ fallout, then run `api-parity-reviewer` and `honesty-auditor` (read-only) on the
 | # | Owns (exclusive) | Task |
 |---|---|---|
 | 1 | `scripts/step5_4_verify_cycle.py` (new), `Makefile`, `verify.command`, its new test file | item 1 |
-| 2 | `launch.command` (delete), `scripts/com.investyo.daily-advisory.plist` (delete), `scripts/install_schedule.command`, `scripts/install_stack_service.command`, `scripts/investyo_stack_service.sh`, the retrain/edgar plists, `README.md`, `.github/CODEOWNERS`, `.github/workflows/ci.yml` (comment) | item 2 |
+| 2 | `launch.command` (delete), `scripts/com.investyo.daily-advisory.plist` (KEEP, operator decision 2026-10-12), `scripts/install_schedule.command`, `scripts/install_stack_service.command`, `scripts/investyo_stack_service.sh`, the retrain/edgar plists, `README.md`, `.github/CODEOWNERS`, `.github/workflows/ci.yml` (comment) | item 2 |
 | 3 | `.claude/skills/**`, `.agents/skills/**`, `.claude/commands/**`, `tests/test_robinhood_e2e.py` | item 3 (keep `.claude`/`.agents` copies identical) |
-| 4 | `docs/RUNBOOK.md`, `docs/HOW_TO_GUIDE.md`, `docs/architecture/*.md` | item 4 (RUNBOOK rollback + §3.15/§5.1) |
+| 4 | `docs/RUNBOOK.md`, `docs/HOW_TO_GUIDE.md`, `docs/architecture/*.md` | item 4 (RUNBOOK §3.15/§5.1; rollback text unchanged) |
 | 5 | `docs/FEATURE_TIER_HISTORY.md`, `.claude/shrink_step5_4{a,b}_*` artifacts, `docs/known_issues/*` touched by 5.4 | item 5; drafts history line + walkthroughs from the other agents' reports |
 | 6 | `CLAUDE.md` + `AGENTS.md` (mirror via the sync hook; `test_agent_docs_sync`) | last, after 1-5 report; facts only (5.4 done, `launch.command` gone, commands list) |
 
@@ -215,5 +220,5 @@ that flag is on, and `POST /jobs` is only daemon-hosted then — 5.4a's `launch_
   Button/tool descriptions say so.
 - Daemon-backed jobs: empty SSE log, no cancel, possible `STATE_API_TOKEN` vs `ORCHESTRATOR_DAEMON_TOKEN` mismatch
   (would show an immediately-terminal `unknown` job). Checked against the live tokens by the operator before relying on it.
-- Deleting the plist removes the documented rollback path; RUNBOOK is rewritten to "set mode `off`, run `main.py` by hand
-  until 5.5 archives it".
+- The plist is kept for rollback (operator decision 2026-10-12), so the documented rollback path survives; the remaining risk is that
+  it runs `main.py`, which 5.5 archives (see the decision above).
