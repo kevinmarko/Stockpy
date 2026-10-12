@@ -17,13 +17,16 @@ the 5.4b-ii decisions below.
 
 - **5.4b-i (this PR, cutover-neutral):** the `make verify` helper, the `--dry-run` / keyless-run warnings, skill and settings text
   fixes that are true in any mode, and a plist that did not parse.
-- **5.4b-ii (not started; no longer waiting for the review, still waiting for 5.4a and this PR to merge and for the operator):**
-  deleting `launch.command` and `scripts/com.investyo.daily-advisory.plist`, the `install_*` script and README changes, the
-  `robinhood-execution` / `rh-execute` rewrite (stop when the mode is not `primary`), RUNBOOK 3.15 "DONE" + rollback + 5.1, the
-  CLAUDE.md/AGENTS.md status lines, `.env.example`. **Open question for the operator:** #1120 says the `daily-advisory` plist is
-  *kept for rollback*, while the plan (and the full change set) deletes it. The complete, tested change set exists on the local branch
-  `step5-4b-ii-cutover-dependent-full` (commit `08f0630`, written before #1120); it must be rebased and reconciled with the cutover
-  record and the CLAUDE.md wording #1120 added to `main`. Hunks that landed in 5.4b-i will drop out.
+- **5.4b-ii (not started; no longer waiting for the review, still waiting for 5.4a and this PR to merge):** deleting `launch.command`,
+  the `install_*` script and README changes, the `robinhood-execution` / `rh-execute` rewrite (stop when the mode is not `primary`),
+  RUNBOOK 3.15 / 5.1 reconciled with #1120's cutover record, the CLAUDE.md/AGENTS.md status lines, `.env.example`.
+  **Decided by the operator (2026-10-12): keep `scripts/com.investyo.daily-advisory.plist` for rollback**, as #1120 says, so 5.4b-ii
+  does not delete it and the RUNBOOK rollback text ("set the mode to `off`/`shadow` and reload `com.investyo.daily-advisory`") stays.
+  Two consequences are still open: whether `scripts/install_schedule.command` should keep installing the job by default (that would
+  reload what #1120 unloaded), and that the plist runs `main.py`, so 5.5 (archive `main.py`) has to move or retire it as well. The
+  complete, tested change set exists on the local branch `step5-4b-ii-cutover-dependent-full` (commit `08f0630`, written before #1120
+  and before this decision, so it still deletes the plist and rewrites the rollback text: undo both when rebasing); it must be
+  reconciled with the cutover record and the CLAUDE.md wording #1120 added to `main`. Hunks that landed in 5.4b-i will drop out.
 
 ## What changed
 

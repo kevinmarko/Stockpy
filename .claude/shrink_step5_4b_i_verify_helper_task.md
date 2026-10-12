@@ -18,4 +18,4 @@ against `main` shows both until 5.4a merges.
 - [x] Full offline suite on the final tree (12,060 passed, 37 skipped, 1 known wall-clock flake `TestPerfSmoke::test_tiny_window_completes_quickly`, passes alone)
 - [x] Commit; the operator chose a stacked draft PR on #1117 (base `claude/ecstatic-maxwell-f6ruct`)
 - [ ] CI green on the stacked PR; retarget to `main` once #1117 merges
-- [ ] 5.4b-ii (needs 5.4a and this PR merged, and the operator's call on the `daily-advisory` plist, which #1120 keeps for rollback): see "Why this is 5.4b-i" in the walkthrough
+- [ ] 5.4b-ii (needs 5.4a and this PR merged; the operator decided to KEEP the `daily-advisory` plist for rollback, so it deletes `launch.command` only): see "Why this is 5.4b-i" in the walkthrough
