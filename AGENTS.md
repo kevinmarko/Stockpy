@@ -124,9 +124,9 @@ reads a gated execution queue the pipeline writes.
 - **`main.py` is being retired** (shrink step 5, plan `.claude/shrink_step5_retire_main_py_implementation_plan.md`).
   It still runs the advisory cycle but, since the 2026-10-12 cutover, is no longer the real
   execution-queue writer (the `com.investyo.daily-advisory` launchd job is unloaded; its plist stays
-  for rollback). Steps 5.4–5.6 (switch callers,
-  archive `main.py` to `legacy/`, retire `ORCHESTRATOR_DAEMON_ENABLED`) are pending. Don't build new
-  features on `main.py`.
+  for rollback; `scripts/install_schedule.command` installs it only with `--with-daily-advisory`).
+  Step 5.4 (switch callers, delete `launch.command`) is done; 5.5 (archive `main.py` to `legacy/`)
+  and 5.6 (retire `ORCHESTRATOR_DAEMON_ENABLED`) are pending. Don't build new features on `main.py`.
 - **Daemon pipeline steps** (`pipeline/production_steps.py`, assembled in `main_orchestrator.py`):
   `AsyncDataFetchStep` → `RunPipelineStep` (inner `MacroStep` → `TrendVolatilityStep` →
   `ProcessingStep` → `ForecastingStep` → `StrategyEvalStep`) → `AdvisoryOverlayStep` (runs
@@ -224,8 +224,7 @@ python -m desktop.orchestrator_daemon    # the daemon (Control API + Pilots API 
 python3 main_orchestrator.py         # one async pipeline run without the daemon
 python -m execution.kill_switch --status # check / activate / deactivate the global kill switch
 # Being retired (step 5) — prefer POST /run or shared.daemon_client.trigger_run():
-python3 main.py                      # one advisory cycle; --interval N loops; --refresh-account forces a Robinhood login
-./launch.command                     # runs main.py in a Terminal window (pauses on exit)
+python3 main.py                      # one advisory cycle (writes no queue in primary); --refresh-account forces a Robinhood login
 
 # ── Tests & gates ─────────────────────────────────────────────────────────────
 pytest tests/test_<module>.py        # targeted tests; add ::test_name for one test

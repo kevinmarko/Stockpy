@@ -11,8 +11,8 @@ description: >-
 # Robinhood Execution (paper-first, human-gated)
 
 This skill is the **only** actor permitted to call the Robinhood Trading MCP
-write tools. The headless Stockpy pipeline (`main.py`, or the orchestrator
-daemon when `DAEMON_AGENTIC_QUEUE_MODE=primary`) cannot call MCP tools; it
+write tools. The headless Stockpy pipeline (the orchestrator daemon, the
+queue writer since the 2026-10-12 cutover) cannot call MCP tools; it
 only writes a gated, dry-run proposed-order queue to
 `$OUTPUT_DIR/execution_queue.json` (via `execution/queue_builder.py`) —
 see Prerequisites step 1 below for how to resolve `$OUTPUT_DIR`, the
@@ -75,9 +75,9 @@ not — read them a checklist only if they ask for one.
    python3 -c "from settings import settings; print(settings.DAEMON_AGENTIC_QUEUE_MODE)"
    ```
    (same `.venv/bin/python3` fallback as step 1).
-   - **`primary`** — the orchestrator daemon writes the queue (step 5.3).
-     `main.py` no longer writes it, so never tell the operator to run
-     `python3 main.py` for a fresh queue. Before loading the queue, trigger a
+   - **`primary`** (the live setting since 2026-10-12) — the orchestrator
+     daemon writes the queue. `main.py` no longer writes it, so never tell the
+     operator to run `python3 main.py` for a fresh queue. Before loading the queue, trigger a
      daemon cycle and wait for it to finish:
      ```bash
      python3 - <<'EOF'
@@ -113,15 +113,21 @@ not — read them a checklist only if they ask for one.
      queue's reference prices look implausible next to the live quotes
      `review_equity_order` returns, say so and stop), so still apply the
      freshness hard stop below to the queue you then read.
-   - **`off` or `shadow`** — `main.py` writes the queue (the 08:45 weekday job,
-     or `python3 main.py` by hand). If the queue is stale, offer to re-run
-     `python3 main.py` first.
+   - **`off` or `shadow`** — the daemon is **not** the queue writer. That is
+     either a rollback (`docs/RUNBOOK.md` §3.15: the operator reloaded the
+     08:45 `com.investyo.daily-advisory` job) or a misconfiguration. **Stop
+     and ask the operator which.** Do not trigger `POST /run` (in these modes
+     it does not write the real queue) and do not run `python3 main.py` (it is
+     being retired; a hand run on a non-trading day also advances symbol-rating
+     streaks). If the operator confirms a rollback, you may continue with the
+     queue the 08:45 job last wrote, under every hard stop below; if it is
+     stale, stop and say when the next 08:45 run will refresh it.
 
    Then check that `$OUTPUT_DIR/execution_queue.json` exists. If missing, the
    platform is in `ROBINHOOD_EXECUTION_MODE=off` (or hasn't run). Tell the
    operator to set the mode to `review` or `live` in `.env` and refresh the
-   queue as above (a daemon cycle in `primary`, `python3 main.py` otherwise).
-   Stop.
+   queue as above (a daemon cycle in `primary`; in a rollback, the next 08:45
+   run). Stop.
 4. `$OUTPUT_DIR/execution_placed.jsonl` is the append-only **placed-intent ledger**
    (may not exist yet — that just means nothing has been placed). Each line is
    one JSON record:
@@ -139,8 +145,8 @@ not — read them a checklist only if they ask for one.
 - The queue's `mode` is `off` → nothing to do.
 - The queue's `generated_at` is more than ~30 minutes old → it is STALE. Refuse
   to place; offer to refresh it first (Prerequisites step 3: a daemon cycle via
-  `POST /run` when `DAEMON_AGENTIC_QUEUE_MODE=primary`, otherwise re-run
-  `python3 main.py`). This rule is unchanged in `primary`: a daemon cycle that
+  `POST /run` when `DAEMON_AGENTIC_QUEUE_MODE=primary`; in any other mode there
+  is no refresh you may trigger, so stop). This rule is unchanged in `primary`: a daemon cycle that
   succeeded but left an older queue in place does not make that queue fresh.
 - `get_accounts` does not show a dedicated **Agentic** account, or the operator
   has not confirmed which account is the agentic/execution account → refuse to
