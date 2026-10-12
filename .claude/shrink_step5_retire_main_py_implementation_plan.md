@@ -10,6 +10,11 @@
 7. **Universe change:** accepted, with every moved symbol listed in the PR 5.1 diff.
 8. **`ORCHESTRATOR_DAEMON_ENABLED`:** it becomes the only mode and is retired in PR 5.6.
 
+## Operator decisions (2026-10-11), after the first shadow review wasn't clean
+9. **Benchmark SPY leak:** fixed in #1116 (live from the 2026-10-12 05:35 daemon restart). The leaked `main_pipeline` SPY paper trade is excluded from the freeze count (`scripts/feature_freeze_status.py::EXCLUDED_TRADES`). It is still in the Kelly `trades` ledger; that is an open question for the operator.
+10. **Forecast-reuse diffs accepted:** `ADVISORY_REUSE_PIPELINE_COMPUTE` stays `true`. Advisory differences from the daemon reusing the pipeline's Forecast_30/GARCH (versus main.py refitting) are expected, not cutover blockers.
+11. **Review extended:** a second 5-trading-day shadow review runs 2026-10-12..10-16, via the `stockpy-shadow-queue-compare` scheduled task. Diffs are tagged expected (forecast reuse / quote move) or UNEXPECTED. Cutover happens after day 5 if it shows zero UNEXPECTED diffs and no SPY.
+
 
 Everything below was read at `origin/main` @ `c2968b7c`. Your main checkout is one commit behind, at `8a8f21bf` (step 4f). The live-state checks were read-only: `~/Stockpy-live/.env` (I read mode flags only, never secret values), `~/.stockpy_local/output/`, `~/Library/LaunchAgents`, and the logs.
 

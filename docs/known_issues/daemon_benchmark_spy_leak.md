@@ -35,9 +35,12 @@ A second, separate leak: `StrategyEvalStep` computed cross-sectional 12-1m momen
 - `AdvisoryOverlayStep`'s "evaluated anyway" warning is kept as a tripwire for any future leak path.
 - Tests: `tests/test_benchmark_spy_leak.py`. Both pipeline tests were confirmed to fail against the pre-fix code.
 
-## Leaked paper trade (operator decision)
+## Leaked paper trade
 
-The live `quant_platform.db` has one SPY round trip tagged `strategy_id = "main_pipeline"`: a buy and a sell of 1.301487 shares, closed with realized P&L −$4.87. It was produced by this leak, not by a tracked symbol. Because it is `main_pipeline`, it counts toward the feature-freeze tally (`scripts/feature_freeze_status.py`). It was not edited. Whether to exclude it is the operator's call.
+The live `quant_platform.db` has one SPY round trip tagged `strategy_id = "main_pipeline"`. It is `paper_closed_trades.trade_id` 2: 1.301487 shares, entered 2026-09-30 14:34 UTC, closed 2026-10-01, realized P&L −$4.87. The leak produced it, not a tracked symbol.
+
+- **Feature-freeze count:** excluded. The operator decided this on 2026-10-11. It is listed in `scripts/feature_freeze_status.py::EXCLUDED_TRADES` with its reason, and the script reports it as excluded. The ledger row is unchanged.
+- **Kelly ledger: still included (open).** The row has `bridge_status = 'bridged'` (`bridged_trade_id` 1), so it was copied into the `transactions_store` `trades` ledger. Production Kelly reads that ledger unfiltered by strategy. Taking it out of Kelly stats means a live DB edit, which is the operator's call.
 
 ## Verify after deploy
 
