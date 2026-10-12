@@ -221,3 +221,19 @@ Operator-approved removal of three Pilots PWA tabs that were switched on but nev
 | `pilots/pairs.py` -> `legacy/pilots/pairs.py` | The `GET /pairs` reader for `output/pairs.json`. |
 | `reporting/pairs_snapshot.py` -> `legacy/reporting/pairs_snapshot.py` | The pipeline writer of `output/pairs.json` (called from `StateSnapshotStep`). `pairs_ondemand.py` stays for the MCP pairs tools. |
 | `tests/test_cache_long_short_{api,engine,store}.py` -> `legacy/tests/` | The suites for the modules above. |
+
+## Forecasting rebuild F4 part 1 (2026-10)
+
+Operator-approved archival of the BERT-LLA forecaster, the CNN-LSTM attention diagnostic, the Monte Carlo drift shrinkage setting (`FORECAST_DRIFT_SHRINKAGE`), and the sector-forecast settings loader (`SECTOR_FORECAST_CONFIG_PATH`/`SECTOR_FORECAST_CONFIGS`). The dynamic `forecasting/sector_configs.json` dictionary is now frozen directly inside `forecasting_engine.py` as `SECTOR_FORECAST_CONFIGS_FROZEN`. A frozen-input run showed zero moved predictions. 
+
+The 5 `BERT_LLA_*` and 2 `SECTOR_FORECAST_CONFIG*` settings were removed from `settings.py` and the GUI, and `lstm_baseline`, `lstm_attention`, and `bert_lla` were removed from `ForecastTracker.ALL_MODEL_NAMES`.
+
+| Moved | Why |
+|---|---|
+| `forecasting/bert_lla.py` -> `legacy/forecasting/bert_lla.py` | The BERT-LLA forecaster logic (`_sentiment_daily_for_symbol`, `run_bert_lla_forecast`). |
+| `forecasting/sector_configs.json` -> `legacy/forecasting/sector_configs.json` | The former dynamic sector-model preference map artifact. |
+| `ml/asvi_feature_engineering.py` -> `legacy/ml/asvi_feature_engineering.py` | ASVI feature engineering, unused since the ML pipeline was detached. |
+| `pilots/lstm_diagnostic.py` -> `legacy/pilots/lstm_diagnostic.py` | The attention diagnostic for `run_lstm_attention_forecast`. |
+| `scripts/backtest_sector_configs.py` -> `legacy/scripts/backtest_sector_configs.py` | The CLI tool for generating `sector_configs.json`. |
+| `validation/sector_config_io.py`, `validation/sector_forecast_backtest.py`, `validation/sector_forecast_types.py`, `validation/forecast_accuracy_metrics.py` -> `legacy/validation/` | The validation backtest harness that produced the sector configurations. |
+| `tests/test_bert_lla.py`, `tests/test_bert_lla_lookahead.py`, `tests/test_pilots_lstm_attention_forecast_sector_proxy.py`, `tests/test_asvi_feature_engineering.py`, `tests/test_lstm_attention_lookahead.py`, `tests/test_sector_config_io.py`, `tests/test_sector_forecast_backtest.py`, `tests/test_forecast_accuracy_metrics.py`, `tests/test_sector_backtest_settings.py`, `tests/test_forecasting_engine_config_loader.py`, `tests/test_backtest_sector_configs_cli.py` -> `legacy/tests/` | The suites for the modules above. |

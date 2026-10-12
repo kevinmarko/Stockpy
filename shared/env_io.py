@@ -270,7 +270,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # correction_and_horizon_units.md). Non-secret modelling tunables, no
     # credential material.
     "FORECAST_MC_RANDOM_SEED",    # Optional[int] — run_monte_carlo RNG seed; None = non-deterministic
-    "FORECAST_DRIFT_SHRINKAGE",   # float [0,1] — shrinks MC drift mu toward zero (0.0 = unshrunk, today's behavior)
     "FORECAST_CLAMP_SIGMA_K",     # float — F2 clamp: drop a model whose |log-return| > k*sigma_GARCH*sqrt(h); <=0 disables
     "FORECAST_INPUT_PRICE_TOLERANCE",  # float — F2: drop a model whose anchor price is > this fraction off the last close; <=0 disables
     "FORECAST_NAIVE_GATE_ENABLED",  # bool — F3: publish the naive-gated forecast (default False = shadow-record only)
@@ -313,11 +312,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "NO_VENV_REEXEC",
     "SIGNAL_WEIGHTS",
     "DISABLED_SIGNAL_MODULES",
-    # Sector->model/horizon forecast config (JSON-encoded; see _JSON_KEYS).
-    # GUI-writable. Empty dict/default path preserves today's hardcoded
-    # per-sector forecast heuristic (backward-compatible).
-    "SECTOR_FORECAST_CONFIG_PATH",
-    "SECTOR_FORECAST_CONFIGS",
     # State API CORS policy — non-secret list of allowed browser origins
     # (JSON-encoded; see _JSON_KEYS). GUI-writable.
     "CORS_ALLOWED_ORIGINS",
@@ -553,12 +547,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "SECTOR_SIMILARITY_EMBEDDER",
     "SECTOR_SIMILARITY_MODEL",
     "SECTOR_SIMILARITY_POOLING",
-    # BERT-LLA Neural Forecaster
-    "BERT_LLA_ENABLED",
-    "BERT_LLA_BLEND_ENABLED",
-    "BERT_LLA_ABLATION_ENABLED",
-    "BERT_LLA_WINDOW_SIZE",
-    "BERT_LLA_MIN_SENTIMENT_COVERAGE",
     "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
     # Additional Observability & Dual Momentum controls
     "NTFY_DASHBOARD_URL",
@@ -854,7 +842,6 @@ _JSON_KEYS: frozenset[str] = frozenset(
         "SIGNAL_WEIGHTS",
         "DISABLED_SIGNAL_MODULES",
         "PAPER_TRADES_BRIDGE_EXCLUDED_STRATEGIES",  # list[str] of strategy_ids
-        "SECTOR_FORECAST_CONFIGS",  # dict[str, dict] per-sector forecast overrides
         "CORS_ALLOWED_ORIGINS",  # list[str] of allowed browser origins
         "PROMPT_REGISTRY_PINS",  # dict[str, str] {"prompt_id": "version"}
         # Multi-horizon forecast backfill list

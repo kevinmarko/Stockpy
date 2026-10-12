@@ -1,8 +1,7 @@
 # Sector descriptions for the semantic Related Sector Selection feature
 # (data/sector_selection_heat.py, data/sector_embeddings.py,
 # sector_selection_engine.py). Keys MUST match the yfinance-style sector
-# strings used by forecasting/data/ticker_sectors.csv and
-# forecasting/sector_configs.json's `sector_configs` keys exactly --
+# strings used by forecasting/data/ticker_sectors.csv exactly --
 # tests/test_sector_descriptions.py pins this as a key-superset invariant.
 #
 # Each description is a short, hand-written paragraph summarizing the

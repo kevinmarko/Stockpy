@@ -65,6 +65,7 @@ One forecasting service that:
 - **Shadow mode:** for 2 weeks the gated blend is recorded as `gated_blend` next to the live `blend`, without driving decisions. Then I show you the side-by-side skill and flip `FORECAST_NAIVE_GATE_ENABLED` on. Default off → on only after your review of the shadow numbers.
 
 ### F4: Streamline (archive what the gate or the data rules out)
+*(Status, 2026-10: Part 1 completed: BERT-LLA, LSTM-attention endpoint, FORECAST_DRIFT_SHRINKAGE, and sector_configs.json archived. Sector static-preference blend stays for Part 2 pending the F3 flip.)*
 - Archive to `legacy/`:
   - BERT-LLA (+ its settings)
   - the LSTM-attention endpoint

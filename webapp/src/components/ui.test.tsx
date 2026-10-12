@@ -173,8 +173,8 @@ describe("InfoTip", () => {
   });
 
   it("a trigger with no visible children still has an accessible name via ariaLabel", () => {
-    render(<InfoTip content="2024-01-05: alpha 0.482" ariaLabel="2024-01-05 attention weight" />);
-    expect(screen.getByRole("button", { name: "2024-01-05 attention weight" })).toBeInTheDocument();
+    render(<InfoTip content="2024-01-05: value 0.482" ariaLabel="2024-01-05 detail" />);
+    expect(screen.getByRole("button", { name: "2024-01-05 detail" })).toBeInTheDocument();
   });
 });
 

@@ -173,17 +173,9 @@ def get_forecast(symbol: str) -> Dict[str, Any]:
     sector/symbol lookup) plus ``current_price`` and the OHLCV ``history_df``;
     it internally derives the Close series, so a minimal ``row`` suffices.
 
-    ``attention``: the BERT-LLA "bert_lla" ablation's per-day attention
-    weights over its lookback window (``forecasting/bert_lla.py``'s
-    ``LLAAttention``), read from ``engine.last_bert_lla_attention`` after
-    the call -- a live inference artifact of THIS request's most recent
-    window, not persisted state, so it belongs here rather than behind a
-    ``pilots/*.py`` reader (this endpoint already imports the heavy engine
-    directly; see the module docstring). ``null`` (with no ``attention``
-    key omitted) whenever ``BERT_LLA_ENABLED`` is off, torch isn't
-    installed, the sentiment-coverage gate blocked training, or the model
-    otherwise didn't run this request -- never a fabricated weight series
-    (CONSTRAINT #4).
+    (The former ``attention`` key -- the BERT-LLA attention-weight overlay --
+    was removed with BERT-LLA in forecasting rebuild F4 part 1; it was always
+    ``null`` in the live deployment.)
     """
     symbol = symbol.upper()
     bars = _fetch_bars(symbol, 504)
@@ -202,9 +194,7 @@ def get_forecast(symbol: str) -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("metrics_api: forecast failed for %s: %s", symbol, exc)
         raise HTTPException(status_code=404, detail="Forecast calculation failed")
-    payload = dict(result)
-    payload["attention"] = engine.last_bert_lla_attention
-    return _clean_nan(payload)
+    return _clean_nan(dict(result))
 
 
 @app.get("/metrics/sentiment/{symbol}", dependencies=[Depends(require_token)])

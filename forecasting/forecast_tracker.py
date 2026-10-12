@@ -43,8 +43,7 @@ Database table: ``forecast_errors``
 | id             | INTEGER PK | Auto-increment.                                  |
 | symbol         | TEXT       | Ticker (e.g. "AAPL").                           |
 | model_name     | TEXT       | One of: arima, monte_carlo, holt_winters,        |
-|                |            | cnn_lstm, prophet, lstm_baseline,                |
-|                |            | lstm_attention, bert_lla, naive (a zero-cost      |
+|                |            | cnn_lstm, prophet, naive (a zero-cost            |
 |                |            | flat/random-walk baseline, never blend-eligible), |
 |                |            | blend (the PUBLISHED Forecast_{h}, F1; never      |
 |                |            | blend-eligible).                                  |
@@ -112,15 +111,6 @@ MODEL_ARIMA = "arima"
 MODEL_MONTE_CARLO = "monte_carlo"
 MODEL_HOLT_WINTERS = "holt_winters"
 MODEL_CNN_LSTM = "cnn_lstm"
-# BERT-LLA ablations (forecasting/bert_lla.py) -- three genuine ablations of
-# ONE PyTorch architecture, not three unrelated models: lstm_baseline (no
-# attention, no sentiment), lstm_attention (+ LLA attention, no sentiment),
-# bert_lla (+ LLA attention + the composite sentiment index). All gated
-# behind settings.BERT_LLA_ENABLED (default False) -- these names appear in
-# forecast_errors only once an operator opts in.
-MODEL_LSTM_BASELINE = "lstm_baseline"
-MODEL_LSTM_ATTENTION = "lstm_attention"
-MODEL_BERT_LLA = "bert_lla"
 # Zero-cost persistence-forecast baseline ("price stays flat"): recorded
 # alongside every real model's forecast at every horizon, purely for
 # measurement -- forecasting_engine.py never includes it in model_forecasts,
@@ -146,8 +136,7 @@ MODEL_BLEND = "blend"
 MODEL_GATED_BLEND = "gated_blend"
 ALL_MODEL_NAMES = (
     MODEL_ARIMA, MODEL_MONTE_CARLO, MODEL_HOLT_WINTERS, MODEL_CNN_LSTM,
-    MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION, MODEL_BERT_LLA, MODEL_NAIVE,
-    MODEL_BLEND, MODEL_GATED_BLEND,
+    MODEL_NAIVE, MODEL_BLEND, MODEL_GATED_BLEND,
 )
 
 # Names that are recorded to ``forecast_errors`` for measurement but can
@@ -162,7 +151,6 @@ ALL_MODEL_NAMES = (
 # on 2026-09-27, so closing it changed no published value.)
 NON_BLEND_MODEL_NAMES = frozenset({
     MODEL_NAIVE, MODEL_BLEND, MODEL_GATED_BLEND,
-    MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION,
 })
 
 # The subset dropped from the skill-weight ARITHMETIC altogether. ``naive``
@@ -170,10 +158,12 @@ NON_BLEND_MODEL_NAMES = frozenset({
 # the normalization (a common scale factor _blend_with_skill renormalizes
 # away), and removing it would move published Forecast_* values by a
 # floating-point ulp. F1 is measurement only, so the pre-F1 arithmetic is
-# kept exactly; ``blend`` (new in F1) and the never-run BERT-LLA ablations
-# (no rows exist) are dropped, which leaves every pre-F1 result unchanged.
+# kept exactly; ``blend`` (new in F1) is dropped, which leaves every pre-F1
+# result unchanged. (The never-run BERT-LLA ablation names that used to sit
+# here and in NON_BLEND_MODEL_NAMES were removed with BERT-LLA itself in
+# forecasting rebuild F4 part 1; the ledger never held a row for them.)
 _SKILL_ARITHMETIC_EXCLUDED = frozenset({
-    MODEL_BLEND, MODEL_GATED_BLEND, MODEL_LSTM_BASELINE, MODEL_LSTM_ATTENTION,
+    MODEL_BLEND, MODEL_GATED_BLEND,
 })
 
 # US/Eastern calendar date is the "trading day" key for the one-row-per-day
@@ -214,8 +204,8 @@ def compute_skill_weights_from_stats(
        from the returned dict (not weight 0.0) -- one cold model no longer
        drags N-1 warm models back to uniform.
 
-    Measurement-only names (forecasting rebuild F1): ``blend`` and the
-    BERT-LLA ablations are dropped from ``model_stats`` entirely, and no
+    Measurement-only names (forecasting rebuild F1/F3): ``blend`` and
+    ``gated_blend`` are dropped from ``model_stats`` entirely, and no
     NON_BLEND_MODEL_NAMES entry (``naive`` included) can end the cold start
     on its own -- case 1 applies unless at least one blend-eligible model is
     mature. ``naive`` otherwise stays in the arithmetic exactly as before F1

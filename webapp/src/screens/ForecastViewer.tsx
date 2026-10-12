@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import type { Bar, ForecastResult } from "../api/types";
 import { useApi } from "../hooks/useApi";
 import { ErrorState, Loading, Tile } from "../components/ui";
-import { AttentionHeatmapStrip, ForecastCandleChart } from "../components/charts";
+import { ForecastCandleChart } from "../components/charts";
 import { SymbolInput } from "../components/SymbolInput";
 import { TabGuide } from "../components/TabGuide";
 import toast from "react-hot-toast";
@@ -247,16 +247,8 @@ function ForecastView({
               </div>
             )}
             <ForecastCandleChart bars={bars} forecast={forecast} />
-            <AttentionHeatmapStrip attention={d.attention} />
-            {d.attention && (
-              <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-2)", lineHeight: 1.5 }}>
-                Darker cells show which days the BERT-LLA model weighted most
-                heavily when forming this forecast — not a stronger buy/sell
-                signal.
-              </p>
-                )}
-              </>
-            )}
+          </>
+        )}
               </div>
             </section>
           </div>

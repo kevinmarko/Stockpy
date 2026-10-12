@@ -642,8 +642,8 @@ function defaultLabel(f: TunableField): string {
 
 /**
  * Wire type "string" covers two very different widgets: a plain scalar
- * (SECTOR_FORECAST_CONFIG_PATH, PROMPT_REGISTRY_BACKEND, DEFAULT_TICKERS) and
- * a JSON blob (SECTOR_FORECAST_CONFIGS, CORS_ALLOWED_ORIGINS) — the backend
+ * (PROMPT_REGISTRY_BACKEND, DEFAULT_TICKERS) and
+ * a JSON blob (CORS_ALLOWED_ORIGINS) — the backend
  * deliberately does NOT add a 5th TunableFieldType for the latter ("a JSON
  * blob is still a string on the wire"), so the frontend tells them apart by
  * content: a "string" field whose value/default parses as a JSON object or

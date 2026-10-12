@@ -66,7 +66,6 @@ def _fast_deterministic_engine(monkeypatch):
     monkeypatch.setattr(settings, "FORECAST_USE_GARCH_SIGMA", True)
     monkeypatch.setattr(settings, "FORECAST_MC_RANDOM_SEED", 42)
     monkeypatch.setattr(settings, "FORECAST_SKILL_WEIGHTING_ENABLED", False)
-    monkeypatch.setattr(settings, "BERT_LLA_ENABLED", False)
 
 
 class _CapturingTracker(ForecastTracker):

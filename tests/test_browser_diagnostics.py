@@ -19,8 +19,7 @@ tiers of coverage:
    `sync_playwright` (deterministic, no real browser launch, exercises the
    success/exception/degradation code paths) plus ONE real end-to-end test
    against a `data:` URL (skipped via @pytest.mark.skipif when Playwright
-   isn't installed, matching tests/test_bert_lla.py's TORCH_AVAILABLE
-   precedent) that proves the vitals-collector script and screenshot
+   isn't installed) that proves the vitals-collector script and screenshot
    capture genuinely work against a real headless Chromium.
 """
 from __future__ import annotations

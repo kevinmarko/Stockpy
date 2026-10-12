@@ -259,7 +259,8 @@ class TestExistingEditorsAreNotBootstrap:
             # DUAL_MOMENTUM_SAFE_ASSET/DUAL_MOMENTUM_RISKY_ASSETS; "Risk Gate"
             # gained EXECUTION_PRIORITY_QUEUE_ENABLED/
             # EXECUTION_QUEUE_LEAK_RATE_PER_SEC/FLATTEN_ON_KILL; "Forecasting"
-            # gained the 5 BERT_LLA_* keys, the 3 CNN_LSTM_* subprocess-isolation
+            # gained the 5 BERT_LLA_* keys (retired in forecasting rebuild F4
+            # part 1), the 3 CNN_LSTM_* subprocess-isolation
             # keys, FORECAST_CNN_LSTM_WALKFORWARD_SCALING, and
             # LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED; "Market Data" gained
             # MARKET_DATA_WS_ENABLED (retired 2026-09-30)/HISTORICAL_STORE_ENABLED; "Runtime & Ops"
@@ -309,7 +310,10 @@ class TestExistingEditorsAreNotBootstrap:
             # ("Market Data") retired with the Alpaca WebSocket streamer.
             # 91 -> 90 (2026-10 dead-tab cleanup): PAIRS_SNAPSHOT_ENABLED
             # ("Pairs Snapshot") retired with the Pairs radar screen.
-            "_TUNABLE_INDEX": 90,
+            # 90 -> 83 (2026-10, forecasting rebuild F4 part 1): the 5
+            # BERT_LLA_* keys ("Forecasting") and SECTOR_FORECAST_CONFIG_PATH/
+            # SECTOR_FORECAST_CONFIGS ("Advanced / Config") retired.
+            "_TUNABLE_INDEX": 83,
             # 33 -> 31 (2026-09 vendor removal): REDDIT_BACKFILL_MAX_PAGES and
             # FINNHUB_RATE_LIMIT_PER_MIN retired with Reddit/Finnhub.
             "_SENTIMENT_INDEX": 31,
@@ -324,7 +328,8 @@ class TestExistingEditorsAreNotBootstrap:
         # 166 -> 164 (2026-09 vendor removal): the 2 sentiment keys above.
         # 164 -> 163 (2026-09-30 Alpaca removal): MARKET_DATA_WS_ENABLED.
         # 163 -> 162 (2026-10 dead-tab cleanup): PAIRS_SNAPSHOT_ENABLED.
-        assert len(ALL_EDITOR_KEYS) == 162
+        # 162 -> 155 (forecasting rebuild F4 part 1): the 7 tunables above.
+        assert len(ALL_EDITOR_KEYS) == 155
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

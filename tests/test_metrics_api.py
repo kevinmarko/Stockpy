@@ -144,11 +144,6 @@ def test_forecast_shape_and_call_signature(monkeypatch):
     captured = {}
 
     class _FakeFE:
-        # Mirrors the real ForecastingEngine's __init__-set attribute the
-        # endpoint reads after generate_forecast() -- see
-        # api/metrics_api.py::get_forecast's "attention" field.
-        last_bert_lla_attention = None
-
         def generate_forecast(self, row, current_price, history_series=None, history_df=None, **kw):
             captured["row"] = row
             captured["current_price"] = current_price
@@ -175,17 +170,15 @@ def test_forecast_404_no_bars(monkeypatch):
     assert resp.status_code == 404
 
 
-def test_forecast_attention_null_by_default(monkeypatch):
-    """CONSTRAINT #4: BERT_LLA_ENABLED defaults False, so 'attention' must
-    be present-but-null, never omitted (a frontend reading it unconditionally
-    would otherwise get undefined) and never a fabricated series."""
+def test_forecast_has_no_attention_key(monkeypatch):
+    """The BERT-LLA attention overlay was archived (forecasting rebuild F4
+    part 1): the response is exactly the engine's result dict, with no
+    leftover ``attention`` key."""
     bars = _synthetic_bars()
     monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
     monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider(quote=_quote()))
 
     class _FakeFE:
-        last_bert_lla_attention = None
-
         def generate_forecast(self, row, current_price, history_series=None, history_df=None, **kw):
             return {"Forecast_30": 110.0}
 
@@ -193,40 +186,7 @@ def test_forecast_attention_null_by_default(monkeypatch):
     with mock.patch.object(settings, "STATE_API_TOKEN", None):
         resp = client.get("/metrics/forecast/AAPL")
     assert resp.status_code == 200
-    body = resp.json()
-    assert "attention" in body
-    assert body["attention"] is None
-
-
-def test_forecast_attention_surfaced_when_populated(monkeypatch):
-    """When ForecastingEngine.run_bert_lla_forecast actually ran the
-    'bert_lla' ablation this request, its attention payload (set on the
-    engine instance by generate_forecast) must be read back and surfaced
-    verbatim in the response."""
-    bars = _synthetic_bars()
-    monkeypatch.setattr(metrics_api, "_fetch_bars", lambda sym, lb: bars)
-    monkeypatch.setattr(metrics_api, "get_provider", lambda: _FakeProvider(quote=_quote()))
-
-    attention_payload = {
-        "model": "bert_lla",
-        "window_size": 22,
-        "weights": [{"date": "2026-07-21", "alpha": 0.09}],
-    }
-
-    class _FakeFE:
-        def __init__(self):
-            self.last_bert_lla_attention = None
-
-        def generate_forecast(self, row, current_price, history_series=None, history_df=None, **kw):
-            self.last_bert_lla_attention = attention_payload
-            return {"Forecast_30": 110.0}
-
-    monkeypatch.setattr(metrics_api, "ForecastingEngine", _FakeFE)
-    with mock.patch.object(settings, "STATE_API_TOKEN", None):
-        resp = client.get("/metrics/forecast/AAPL")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["attention"] == attention_payload
+    assert resp.json() == {"Forecast_30": 110.0}
 
 
 # (GET /metrics/options/{symbol} and GET /metrics/options/analytics/{symbol}
