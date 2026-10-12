@@ -139,7 +139,6 @@ def _deterministic_engine(monkeypatch):
     monkeypatch.setattr(settings, "FORECAST_SKILL_WINDOW_DAYS", 365)
     monkeypatch.setattr(settings, "FORECAST_SKILL_MIN_OBS", 30)
     monkeypatch.setattr(settings, "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED", False)
-    monkeypatch.setattr(settings, "BERT_LLA_ENABLED", False)
     monkeypatch.setattr(settings, "FORECAST_NAIVE_GATE_ENABLED", False)
     monkeypatch.setattr(settings, "FORECAST_NAIVE_GATE_MIN_IMPROVEMENT", 0.005)
     monkeypatch.setattr(settings, "FORECAST_NAIVE_GATE_MIN_OBS", 60)

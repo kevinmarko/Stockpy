@@ -37,7 +37,7 @@ free to add audit metadata (``updated_at``, ``updated_by``, a reason string,
 a prior value) without a schema change here.
 
 The envelope is required rather than merely allowed because the bare-scalar
-form is genuinely ambiguous for this settings model: ``SECTOR_FORECAST_CONFIGS``
+form is genuinely ambiguous for this settings model: ``SIGNAL_WEIGHTS``
 is a ``dict``-typed field, so a permissive reader could not tell an envelope
 from a dict-typed field's real value that happened to carry a ``"value"`` key.
 One unambiguous shape is worth more than the convenience of hand-writing a

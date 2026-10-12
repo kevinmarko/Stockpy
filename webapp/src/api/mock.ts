@@ -172,7 +172,6 @@ import type { StrategyReportCardSnapshot,
   SignalImportance,
   SignalImportanceRow,
   SignalModuleScore,
-  ForecastAttention,
   ForecastResult,
   SentimentDynamics,
   SentimentHistory,
@@ -1987,7 +1986,7 @@ function mockStrategyMatrix(): StrategyMatrix {
 // (a real .env write does not reach the running process until restart --
 // mirrors mockStrategyMatrix's STRATEGY_DRIFT_KEY convention above). A value
 // out of its declared bounds is rejected with a reason rather than silently
-// written. `kind: "json"` fields (SECTOR_FORECAST_CONFIGS, CORS_ALLOWED_ORIGINS)
+// written. `kind: "json"` fields (e.g. CORS_ALLOWED_ORIGINS)
 // surface as TunableFieldType "string" (a JSON blob is still a string on the
 // wire) -- the screen's own content-sniffing renders them as a textarea.
 const TUNABLES_KEY = "stockpy.mock.tunables";
@@ -2040,8 +2039,6 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
   ],
   FUNDAMENTALS_SOURCE: ["data/market_data.py:1892"],
   DASHBOARD_REFRESH_SECONDS: ["api/pilots_api.py:4194", "pilots/settings_domains.py:132"],
-  SECTOR_FORECAST_CONFIG_PATH: ["forecasting_engine.py:165"],
-  SECTOR_FORECAST_CONFIGS: ["forecasting_engine.py:167"],
   CORS_ALLOWED_ORIGINS: ["api/control_api.py:169", "api/data_api.py:131", "api/metrics_api.py:74", "api/pilots_api.py:342", "api/state_api.py:87"],
   SENTIMENT_SOURCES: ["data/sentiment_sources.py:1932"],
   SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: ["data/sentiment_sources.py:1962"],
@@ -2633,31 +2630,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
       "Trailing calendar days of daily returns used to compute beta in the Yahoo-derived fundamentals engine (Cov(stock,SPY)/Var(SPY)). ~2 years.",
   },
   {
-    group: "Forecasting", key: "BERT_LLA_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Master switch for the BERT-LLA multi-horizon forecaster (forecasting/bert_lla.py -- PyTorch dual-LSTM + self-attention, three registered ablations: lstm_baseline, lstm_attention, bert_lla). False (the default) is a complete no-op: ForecastingEngine.run_bert_lla_forecast() returns the zero sentinel without ever touching torch. Requires the optional torch package (already in requirements-optional.txt for local FinBERT inference) -- absent, the same zero-sentinel behavior applies regardless of this flag.",
-  },
-  {
-    group: "Forecasting", key: "BERT_LLA_WINDOW_SIZE", type: "number",
-    value: 22, default: 22, min: 1, max: 1000, step: 1,
-    description: "Lookback window (trading days) BERT-LLA's LSTM layers consume, replacing the CNN-LSTM path's hardcoded LSTM_LOOKBACK=60 -- matches the source methodology's 22-trading-day window. Only consulted once BERT_LLA_ENABLED is True.",
-  },
-  {
-    group: "Forecasting", key: "BERT_LLA_MIN_SENTIMENT_COVERAGE", type: "number",
-    value: 0.5, default: 0.5, min: 0.0, max: 1.0, step: 0.05,
-    description: "Hard gate for the 'bert_lla' ablation specifically (not lstm_baseline/lstm_attention, which consume no sentiment): the minimum fraction of rows in the feature window that must have an OBSERVED composite-sentiment-index reading (signals.sentiment_index) before training proceeds. Below this threshold, run_bert_lla_forecast returns the zero sentinel rather than training on a mostly mask-zeroed sentiment channel (CONSTRAINT #4) -- SENTIMENT_INGESTION_ENABLED defaults False and SENTIMENT_PIT_MIN_MONTHS=6 is this platform's own bar for trusting sentiment history, so this gate will bind for months after an operator first enables sentiment ingestion, by design. Only consulted once BERT_LLA_ENABLED is True.",
-  },
-  {
-    group: "Forecasting", key: "BERT_LLA_BLEND_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "Whether the 'bert_lla' ablation's price (not lstm_baseline/lstm_attention -- those are comparison-only and NEVER blend-eligible regardless of this flag) is added to ForecastingEngine's model_forecasts dict and therefore influences the live skill-weighted blended forecast. False (the default): bert_lla still RECORDS to forecast_errors for the webapp's model-comparison chart, but its error history accrues honestly before it can ever move a recommendation -- mirrors FORECAST_SKILL_WEIGHTING_ENABLED's 'measure first, act later' posture. Only consulted once BERT_LLA_ENABLED is True.",
-  },
-  {
-    group: "Forecasting", key: "BERT_LLA_ABLATION_ENABLED", type: "boolean",
-    value: false, default: false,
-    description: "When True, generate_forecast() runs all three BERT-LLA ablations (lstm_baseline, lstm_attention, bert_lla) instead of just 'bert_lla' alone -- three PyTorch trainings per ticker per cycle instead of one. False (the default) keeps the marginal compute cost to a single model. Only consulted once BERT_LLA_ENABLED is True.",
-  },
-  {
     group: "Forecasting", key: "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", type: "boolean",
     value: true, default: true,
     description: "Fix for the CNN-LSTM/TensorFlow deadlock documented in docs/known_issues/cnn_lstm_tf_deadlock.md (issue #381) -- TensorFlow and pyarrow each ship an independently-compiled copy of the same Abseil sync primitive, and if pandas/pyarrow initialize first in a process, the first real multi-threaded TF eager op (a Conv1D/LSTM .fit()) deadlocks forever. When True (the default), ForecastingEngine.run_cnn_lstm_forecast runs the actual TF-touching work (model fit+predict, cached-model load+predict) in a persistent worker pool (repo-root cnn_lstm_process_pool.py / cnn_lstm_worker.py) launched via subprocess.Popen, so a fresh interpreter's import order can no longer matter -- protects every caller, not just the entry points with their own guarded import-order defense. Any subprocess failure degrades to the zero-result sentinel rather than crashing the pipeline (CONSTRAINT #6). Set False only to restore the legacy in-process path, which re-exposes the process-scope import-order hazard.",
@@ -2823,26 +2795,8 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     max: 86400,
     step: 60,
   },
-  // ---- Advanced / Config (the 7 keys the real Streamlit tab's own
+  // ---- Advanced / Config (the keys the retired Streamlit tab's own
   // _SETTINGS_LAYOUT, gui/panels/settings_manager.py:36-77, already served) ----
-  {
-    group: "Advanced / Config",
-    key: "SECTOR_FORECAST_CONFIG_PATH",
-    type: "string",
-    value: "forecasting/sector_configs.json",
-    default: "forecasting/sector_configs.json",
-    description:
-      "Path to the committed per-sector forecast config artifact (model+horizon per sector, derived from an offline walk-forward backtest). Loaded once at ForecastingEngine init; the hardcoded default dict is used as fallback when the file is missing or invalid.",
-  },
-  {
-    group: "Advanced / Config",
-    key: "SECTOR_FORECAST_CONFIGS",
-    type: "string",
-    value: "{}",
-    default: "{}",
-    description:
-      'Optional per-sector override merged OVER the artifact/hardcoded default. JSON dict in .env, e.g. {"Technology": {"days": 30, "model": "MC"}}. Empty dict (the default) leaves the artifact/hardcoded default unchanged (fully backward-compatible).',
-  },
   {
     group: "Advanced / Config",
     key: "PROMPT_REGISTRY_ENABLED",
@@ -2943,51 +2897,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     description:
       "Log CRITICAL position-flatten reminder when kill switch activates.",
     group: "Risk Gate",
-  },
-  {
-    key: "BERT_LLA_ENABLED",
-    value: true,
-    default: true,
-    type: "boolean",
-    description:
-      "Master switch for the BERT-LLA multi-horizon forecaster (forecasting/bert_lla.py -- PyTorch dual-LSTM + self-attention, three registered ablations: lstm_baseline, lstm_attention, bert_lla). False (the default) is a complete no-op: ForecastingEngine.run_bert_lla_forecast() returns the zero sentinel without ever touching torch. Requires the optional torch package (already in requirements-optional.txt for local FinBERT inference) -- absent, the same zero-sentinel behavior applies regardless of this flag.",
-    group: "Forecasting",
-  },
-  {
-    key: "BERT_LLA_WINDOW_SIZE",
-    value: 22,
-    default: 22,
-    type: "number",
-    description:
-      "Lookback window (trading days) BERT-LLA's LSTM layers consume, replacing the CNN-LSTM path's hardcoded LSTM_LOOKBACK=60 -- matches the source methodology's 22-trading-day window. Only consulted once BERT_LLA_ENABLED is True.",
-    group: "Forecasting",
-  },
-  {
-    key: "BERT_LLA_MIN_SENTIMENT_COVERAGE",
-    value: 0.5,
-    default: 0.5,
-    type: "number",
-    description:
-      "Hard gate for the 'bert_lla' ablation specifically (not lstm_baseline/lstm_attention, which consume no sentiment): the minimum fraction of rows in the feature window that must have an OBSERVED composite-sentiment-index reading (signals.sentiment_index) before training proceeds. Below this threshold, run_bert_lla_forecast returns the zero sentinel rather than training on a mostly mask-zeroed sentiment channel (CONSTRAINT #4) -- SENTIMENT_INGESTION_ENABLED defaults False and SENTIMENT_PIT_MIN_MONTHS=6 is this platform's own bar for trusting sentiment history, so this gate will bind for months after an operator first enables sentiment ingestion, by design. Only consulted once BERT_LLA_ENABLED is True.",
-    group: "Forecasting",
-  },
-  {
-    key: "BERT_LLA_BLEND_ENABLED",
-    value: true,
-    default: true,
-    type: "boolean",
-    description:
-      "Whether the 'bert_lla' ablation's price (not lstm_baseline/lstm_attention -- those are comparison-only and NEVER blend-eligible regardless of this flag) is added to ForecastingEngine's model_forecasts dict and therefore influences the live skill-weighted blended forecast. False (the default): bert_lla still RECORDS to forecast_errors for the webapp's model-comparison chart, but its error history accrues honestly before it can ever move a recommendation -- mirrors FORECAST_SKILL_WEIGHTING_ENABLED's 'measure first, act later' posture. Only consulted once BERT_LLA_ENABLED is True.",
-    group: "Forecasting",
-  },
-  {
-    key: "BERT_LLA_ABLATION_ENABLED",
-    value: true,
-    default: true,
-    type: "boolean",
-    description:
-      "When True, generate_forecast() runs all three BERT-LLA ablations (lstm_baseline, lstm_attention, bert_lla) instead of just 'bert_lla' alone -- three PyTorch trainings per ticker per cycle instead of one. False (the default) keeps the marginal compute cost to a single model. Only consulted once BERT_LLA_ENABLED is True.",
-    group: "Forecasting",
   },
   {
     key: "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
@@ -5171,22 +5080,8 @@ function mockForecast(ticker: string, horizon = 30): ForecastSkill {
   const rng = seeded(
     [...sym].reduce((a, c) => a + c.charCodeAt(0), 0) + horizon,
   );
-  // BERT-LLA's three ablations only show up for AAPL in this fixture --
-  // BERT_LLA_ENABLED defaults False in production (matching the attention
-  // overlay fixture's own symbol choice above), so every OTHER symbol
-  // honestly shows just the four models that are always potentially active.
-  const models =
-    sym === "AAPL"
-      ? [
-          "arima",
-          "monte_carlo",
-          "holt_winters",
-          "cnn_lstm",
-          "lstm_baseline",
-          "lstm_attention",
-          "bert_lla",
-        ]
-      : ["arima", "monte_carlo", "holt_winters", "cnn_lstm"];
+  // The four forecast-ledger models that are always potentially active.
+  const models = ["arima", "monte_carlo", "holt_winters", "cnn_lstm"];
   const curve = models.flatMap((m) =>
     [-0.3, -0.1, 0.1, 0.3].map((center) => ({
       model_name: m,
@@ -5351,35 +5246,6 @@ function mockSectorSelection(target: string, n = 3): SectorSelectionView {
     pooling: "max",
     reason: null,
   };
-}
-
-// ---- BERT-LLA attention-weight overlay fixture ----
-// Attention concentrated around a couple of "event" days (earnings-like
-// spikes) rather than uniform across the window -- a flat/uniform alpha
-// series would look like a bug (the whole point of attention is that it
-// ISN'T uniform), so the fixture deliberately peaks at two days.
-function mockBertLlaAttention(symbol: string): ForecastAttention {
-  const windowSize = 22;
-  const rng = seeded([...symbol].reduce((a, c) => a + c.charCodeAt(0), 0));
-  const eventDay1 = 5 + Math.floor(rng() * 5); // early-window spike
-  const eventDay2 = 14 + Math.floor(rng() * 5); // late-window spike
-  const raw: number[] = [];
-  for (let i = 0; i < windowSize; i++) {
-    const distTo1 = Math.abs(i - eventDay1);
-    const distTo2 = Math.abs(i - eventDay2);
-    const base = 0.3 + rng() * 0.2;
-    const spike = 4.0 * Math.exp(-0.5 * Math.min(distTo1, distTo2));
-    raw.push(base + spike);
-  }
-  const total = raw.reduce((a, b) => a + b, 0);
-  const now = Date.now();
-  const weights = raw.map((v, i) => ({
-    date: new Date(now - (windowSize - 1 - i) * 86_400_000)
-      .toISOString()
-      .slice(0, 10),
-    alpha: +(v / total).toFixed(4),
-  }));
-  return { model: "bert_lla", window_size: windowSize, weights };
 }
 
 // ---- Rolling beta vs SPY fixture ----
@@ -11308,17 +11174,10 @@ export const mockApi = {
 
   async getForecastResult(symbol: string): Promise<ForecastResult> {
     if (symbol.toUpperCase() === "ZZZZ") throw notFoundSymbol(symbol); // 404 branch
-    const sym = symbol.toUpperCase();
     const base = 100 + symbol.charCodeAt(0);
     const mid10 = base * 1.01;
     const mid30 = base * 1.03;
     const mid60 = base * 1.05;
-    // HONEST fixture: BERT_LLA_ENABLED defaults False in production, so
-    // `attention` is null for every symbol EXCEPT one deliberately-
-    // populated case (AAPL) -- lets the heatmap overlay be visually
-    // verified/tested without misrepresenting the actual default state.
-    const attention: ForecastAttention | null =
-      sym === "AAPL" ? mockBertLlaAttention(sym) : null;
     return delay<ForecastResult>({
       Forecast_10: round2(mid10),
       Forecast_30: round2(mid30),
@@ -11339,7 +11198,6 @@ export const mockApi = {
       // null horizon → null band (never a fabricated 0 — CONSTRAINT #4)
       Forecast_90_Lower: null,
       Forecast_90_Upper: null,
-      attention,
     });
   },
 

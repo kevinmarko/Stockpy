@@ -86,22 +86,6 @@ describe("SymbolDetail screen (real mock API)", () => {
     expect(screen.queryByTestId("forecast-error-chart")).not.toBeInTheDocument();
   });
 
-  it("shows the BERT-LLA ablation caption for AAPL (the mock's populated fixture)", async () => {
-    renderSymbol("AAPL");
-    await screen.findByTestId("forecast-error-chart");
-    expect(
-      await screen.findByText(/three ablations of one architecture/)
-    ).toBeInTheDocument();
-  });
-
-  it("omits the ablation caption for a symbol with only the four baseline models", async () => {
-    renderSymbol("NVDA");
-    await screen.findByTestId("forecast-error-chart");
-    expect(
-      screen.queryByText(/three ablations of one architecture/)
-    ).not.toBeInTheDocument();
-  });
-
   it("clicking a horizon tab re-fetches the forecast at that horizon", async () => {
     const user = userEvent.setup();
     const spy = vi.spyOn(api, "getForecast");
