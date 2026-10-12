@@ -53,5 +53,8 @@ went to `legacy/tests/` (not collected: `pytest.ini testpaths = tests`).
 ## Not verified / disclosed
 - No live daemon run on this branch (no runtime behavior change: only import paths of the three
   market-hours helpers moved). The soak check before merge covers the live side.
-- HOW_TO_GUIDE §6's "Δ Since Last Run" band text may describe the archived `load_snapshot_diff`; not
-  re-checked against the daemon.
+- HOW_TO_GUIDE §6's "Δ Since Last Run" band: re-checked after the PR opened and still accurate. The
+  daemon's `StateSnapshotStep` (`pipeline/production_steps.py`) builds the band itself via
+  `scripts.snapshot_diff.compute_diff_from_history` and passes it to
+  `diagnostics_and_visuals.generate_html_report` (`daily_report_dashboard.html`); it never used the
+  archived `load_snapshot_diff`.
