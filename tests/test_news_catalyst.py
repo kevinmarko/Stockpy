@@ -1975,3 +1975,40 @@ class TestGetSymbolNewsCatalystDetails:
                 with patch("signals.news_catalyst.score_headlines", return_value=distributions):
                     result = get_symbol_news_catalyst_details("AAPL")
         assert result["provider_used"] == "none"
+
+
+class TestFinbertOpenMPCoexistence:
+    """Regression coverage for docs/known_issues/pytorch_lightgbm_libomp_collision.md."""
+
+    def test_get_finbert_pipeline_caps_torch_threads_and_coexists_with_lightgbm(
+        self, monkeypatch
+    ):
+        import numpy as np
+        import signals.news_catalyst as nc
+
+        pytest.importorskip("torch")
+        import lightgbm as lgb
+        import torch
+        import torch.nn as nn
+
+        monkeypatch.setattr(nc, "_FINBERT_LOAD_ATTEMPTED", False)
+        monkeypatch.setattr(nc, "_FINBERT_PIPELINE", None)
+        with patch("transformers.pipeline", return_value=MagicMock()):
+            pipe = nc._get_finbert_pipeline()
+            assert pipe is not None
+
+        assert torch.get_num_threads() == 1
+
+        # LightGBM train + predict after FinBERT loader must not SIGSEGV
+        X = np.random.randn(40, 5).astype(np.float32)
+        y = np.random.randn(40).astype(np.float32)
+        ds = lgb.Dataset(X, label=y)
+        booster = lgb.train({"verbosity": -1, "num_threads": 2}, ds, num_boost_round=3)
+        preds = booster.predict(X)
+        assert preds.shape == (40,)
+
+        # PyTorch multi-op forward pass after LightGBM must not deadlock
+        layer = nn.Linear(5, 3)
+        out = torch.softmax(layer(torch.randn(4, 5)), dim=-1)
+        assert out.shape == (4, 3)
+

@@ -39,6 +39,15 @@ from settings import settings
 logger = logging.getLogger(__name__)
 
 try:
+    try:
+        import lightgbm  # noqa: F401
+    except ImportError:
+        pass
+    try:
+        import torch
+        torch.set_num_threads(1)
+    except Exception:
+        pass
     from sentence_transformers import SentenceTransformer, models  # noqa: F401
     SBERT_AVAILABLE = True
 except ImportError:
