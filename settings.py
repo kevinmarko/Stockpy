@@ -5066,6 +5066,27 @@ class Settings(BaseSettings):
             "GOOGLE_TRENDS_ENABLED is True."
         ),
     )
+    GOOGLE_TRENDS_RAW_RETENTION_BATCHES: int = Field(
+        default=14,
+        ge=1,
+        description=(
+            "Complete Google Trends download batches kept per term in "
+            "raw_trends_downloads. Older batches and their raw rows are pruned "
+            "after each successful download. Keeping more than one lets you "
+            "compare repeated downloads of the same days (Trends values are "
+            "sampled, so they differ by a few points)."
+        ),
+    )
+    GOOGLE_TRENDS_MAX_TERMS_PER_PASS: int = Field(
+        default=10,
+        ge=1,
+        description=(
+            "Most terms the daemon downloads from Google Trends in one refresh "
+            "pass. Due terms are taken stalest first; the rest are picked up "
+            "on later timer wakes. Bounds how long one pass holds the timer "
+            "thread and how many requests hit Google at once."
+        ),
+    )
 
     @property
     def fred_key_is_leaked(self) -> bool:

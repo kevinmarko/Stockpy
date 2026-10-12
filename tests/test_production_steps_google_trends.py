@@ -70,3 +70,45 @@ def test_normal_success_writes_values(monkeypatch):
     
     assert df.loc[df["Symbol"] == "AAPL", "Google_Trends_ASVI"].iloc[0] == 1.5
     assert pd.isna(df.loc[df["Symbol"] == "TSLA", "Google_Trends_ASVI"].iloc[0])
+
+
+def _store_returning(rows_by_sym):
+    class _Store:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_stitched_series(self, sym):
+            return rows_by_sym.get(sym, [])
+
+    return _Store
+
+
+def test_dashboard_value_is_last_row_of_real_asvi(monkeypatch):
+    """With the real ASVICalculator, the dashboard value is the ASVI of the
+    last stored day (the daemon no longer stores the partial current day, so
+    that is the last complete day)."""
+    from data.trends_stitcher import ASVICalculator
+
+    monkeypatch.setattr(settings, "GOOGLE_TRENDS_ENABLED", True)
+    dates = pd.date_range("2026-06-01", periods=120, freq="D")
+    values = [40.0 + (i % 9) for i in range(120)]
+    rows = [{"date": d.date(), "value": v} for d, v in zip(dates, values)]
+    monkeypatch.setattr("data.trends_store.TrendsStore", _store_returning({"AAL": rows}))
+
+    df = pd.DataFrame({"Symbol": ["AAL"]})
+    _apply_google_trends_asvi(df)
+
+    expected = ASVICalculator.compute_asvi(pd.Series(values, index=[r["date"] for r in rows])).iloc[-1]
+    assert df["Google_Trends_ASVI"].iloc[0] == pytest.approx(expected, abs=0)
+
+
+def test_series_shorter_than_warmup_yields_nan_not_a_made_up_value(monkeypatch):
+    """ASVI warm-up rows are NaN, so a term with only a few stored days has
+    no ASVI rather than one computed from a forward-looking baseline."""
+    monkeypatch.setattr(settings, "GOOGLE_TRENDS_ENABLED", True)
+    rows = [{"date": d.date(), "value": 50.0} for d in pd.date_range("2026-06-01", periods=5, freq="D")]
+    monkeypatch.setattr("data.trends_store.TrendsStore", _store_returning({"AAL": rows}))
+
+    df = pd.DataFrame({"Symbol": ["AAL"]})
+    _apply_google_trends_asvi(df)
+    assert pd.isna(df["Google_Trends_ASVI"].iloc[0])

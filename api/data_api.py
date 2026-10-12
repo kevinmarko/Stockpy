@@ -730,6 +730,66 @@ def get_universe() -> Dict[str, Any]:
     }
 
 
+@app.get("/data/trends/terms", dependencies=[Depends(require_token)])
+def get_trends_terms() -> Dict[str, Any]:
+    """Google Trends terms the daemon has stored, plus tracked-universe coverage.
+
+    Read-only: opens the Trends store read-only and never calls Google (the
+    daemon's pytrends client is the only one). An unknown universe yields
+    ``null`` coverage rather than a guess.
+    """
+    from data.trends_store import TrendsStore
+    from data.trends_view import build_terms_view, config_echo
+
+    try:
+        universe = get_universe().get("effective_symbols")
+    except Exception as exc:
+        logger.warning("data_api: trends universe lookup failed: %s", type(exc).__name__)
+        universe = None
+    try:
+        store = TrendsStore(readonly=True)
+    except Exception as exc:
+        logger.warning("data_api: trends store open failed: %s", type(exc).__name__)
+        return _clean_nan(
+            {
+                **config_echo(),
+                "status": "error",
+                "reason": "The Trends store could not be opened.",
+                "terms": [],
+                "tracked_universe_size": None,
+                "tracked_with_data": None,
+            }
+        )
+    return _clean_nan(build_terms_view(store, universe))
+
+
+@app.get("/data/trends/svi", dependencies=[Depends(require_token)])
+def get_trends_svi(term: str = Query(..., min_length=1, max_length=12)) -> Dict[str, Any]:
+    """Raw windows, seams, stitched series and ASVI for one search term.
+
+    Read-only: never calls Google (the daemon's pytrends client is the only
+    one). The term is stripped and upper-cased; a malformed term is a 422.
+    A valid term with no stored data is a 200 with a ``no_data`` /
+    ``disabled`` status, never a 404: any tracked symbol is a legitimate
+    term the daemon may simply not have reached yet.
+    """
+    from data.trends_store import TrendsStore
+    from data.trends_view import TERM_RE, build_svi_view, empty_svi
+
+    norm = term.strip().upper()
+    if not TERM_RE.match(norm):
+        raise HTTPException(
+            status_code=422,
+            detail="invalid_term: use letters, digits, '.' or '-' (max 12)",
+        )
+    try:
+        store = TrendsStore(readonly=True)
+    except Exception as exc:
+        logger.warning("data_api: trends store open failed: %s", type(exc).__name__)
+        return _clean_nan(empty_svi(norm, "error", "The Trends store could not be opened."))
+    return _clean_nan(build_svi_view(store, norm))
+
+
 @app.put("/data/universe", dependencies=[Depends(require_write_token)])
 def update_universe(watchlist: List[str] = Body(...)) -> Dict[str, Any]:
     """Replace the configured universe.

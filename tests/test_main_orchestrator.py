@@ -489,8 +489,12 @@ class TestExecuteBrokerOrders:
         monkeypatch.setattr(mo.settings, "ADVISORY_ONLY", False, raising=False)
         monkeypatch.setattr(mo.settings, "PAPER_TRADING", True, raising=False)
 
+        # Patch the gate _execute_broker_orders actually calls. Patching only the
+        # plain-clock fallback left the FMP / NYSE-holiday layers live, so the
+        # test failed on weekends/holidays when FMP answered, or wherever the
+        # `holidays` package is missing (that layer fails closed).
         with mock.patch(
-            "engine.advisory_agent.is_us_market_open", return_value=True,
+            "engine.advisory_agent.is_us_market_open_now", return_value=True,
         ), mock.patch(
             "execution.fmp_paper_broker.FMPPaperBroker",
             side_effect=RuntimeError("simulated broker connectivity failure"),

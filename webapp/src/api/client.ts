@@ -91,6 +91,8 @@ import type { StrategyReportCardSnapshot,
   ScreenerFilterOptions,
   SymbolBackfillResult,
   SyncReportResponse,
+  TrendsSviResponse,
+  TrendsTermsResponse,
   SymbolReincludeResult,
   RecommendationsResponse,
   RestartDaemonResult,
@@ -581,6 +583,11 @@ const liveApi = {
   // base, :8603). Distinct from getDataUniverse's plain add/remove list:
   // this is the FULL/EQUITY_ONLY/UNCOVERED market-data coverage breakdown.
   getSyncReport: () => http<SyncReportResponse>("/data/sync-report"),
+  // Google Trends search-attention viewer (data base, :8603): per-term coverage
+  // table and the full raw-windows -> seams -> stitched -> ASVI breakdown.
+  getTrendsTerms: () => http<TrendsTermsResponse>("/data/trends/terms"),
+  getTrendsSvi: (term: string) =>
+    http<TrendsSviResponse>(`/data/trends/svi?term=${encodeURIComponent(term)}`),
   // Reusable multi-factor, provenance, company profile, and price history
   // summary for a single symbol (data base, :8603).
   getExplainTicker: (symbol: string) =>

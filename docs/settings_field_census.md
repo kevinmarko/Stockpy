@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `2f539313264a3b7ef788f1474ea9407ca4c4bb13`
+- Measured at commit: `86f7ea0a72148f45f76316f81d89c2fe9f691b66`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -14,12 +14,12 @@ a key-partition design) can build on measured numbers instead of re-deriving the
 
 ## 1. Field-type breakdown
 
-`len(Settings.model_fields)` = **398**
+`len(Settings.model_fields)` = **400**
 
 | Annotation | Count |
 |---|---|
 | `bool` | 115 |
-| `int` | 102 |
+| `int` | 104 |
 | `float` | 78 |
 | `Optional[str]` | 44 |
 | `str` | 43 |
@@ -61,7 +61,7 @@ A future kind-derivation switch needs an explicit branch for each of these:
 
 | Name | len() | len(set()) | Note |
 |---|---|---|---|
-| `ALLOWED_KEYS` | 353 | 353 | 0 duplicate entries (clean) |
+| `ALLOWED_KEYS` | 355 | 355 | 0 duplicate entries (clean) |
 | `SECRET_KEYS` | 42 | 41 | 1 duplicate entries |
 | `_JSON_KEYS` | 12 | 12 | frozenset |
 | `EXCLUDED_FROM_GUI` | 9 | 9 | frozenset; third classification bucket |
@@ -75,7 +75,7 @@ Every `Settings.model_fields` name classified into exactly one bucket.
 | Bucket | Count | Definition |
 |---|---|---|
 | `SECRET` | 36 | in `env_io.SECRET_KEYS` |
-| `IN_ALLOWED_KEYS` | 353 | in `env_io.ALLOWED_KEYS` |
+| `IN_ALLOWED_KEYS` | 355 | in `env_io.ALLOWED_KEYS` |
 | `UNCLASSIFIED` | 9 | in neither |
 
 Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_FROM_GUI` bucket and **0** are accounted for nowhere.
@@ -85,7 +85,7 @@ Of the 9 `UNCLASSIFIED` fields, **9** are accounted for by the third `EXCLUDED_F
 | Field | settings.py | In `EXCLUDED_FROM_GUI` | What it is |
 |---|---|---|---|
 | `ALERT_FILE_PATH` | L1603 | yes | Absolute path for JSON-lines alert log file. None = disabled. |
-| `GCLOUD_BIN` | L5112 | yes | Path to the gcloud binary for environment integrations. NOTE: the LIVE read of this value (mcp_remote_adapter.py, a standalone stdio-proxy script) is deliberately a raw os.environ.get('GCLOUD_BIN')... |
+| `GCLOUD_BIN` | L5133 | yes | Path to the gcloud binary for environment integrations. NOTE: the LIVE read of this value (mcp_remote_adapter.py, a standalone stdio-proxy script) is deliberately a raw os.environ.get('GCLOUD_BIN')... |
 | `GRAVITY_AI_RUNNER_OUTPUT_PATH` | L4416 | yes | Where the runner writes the per-step Claude + Gemini verdicts. Lives under output/ which is gitignored. |
 | `LLM_COMMENTARY_CACHE_PATH` | L4217 | yes | JSON cache for LLM commentary results. Day-bucketed; safe to delete manually. Lives under output/ which is gitignored. |
 | `LOCAL_DATA_ROOT` | L1854 | yes | Machine-global root for ALL locally-generated model/data artifacts (trained models, SQLite DBs, caches, logs) -- lives OUTSIDE every git worktree/checkout on purpose. This repo runs many worktrees ... |
@@ -224,7 +224,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **377** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **378** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -237,14 +237,14 @@ _S.settings, _bl_settings, _dsr_settings, _gravity_settings, _guard_settings, _m
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 708 | 246 |
-| (b) `getattr(settings, "KEY", default)` | 308 | 182 |
+| (a) `settings.KEY` | 725 | 251 |
+| (b) `getattr(settings, "KEY", default)` | 306 | 180 |
 | (c) `getattr(settings, <var>)` (dynamic) | 13 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
-Fields reached by at least one form: **386** of 398.
+Fields reached by at least one form: **390** of 400.
 
-### Fields with NO statically-attributable read — **12**
+### Fields with NO statically-attributable read — **10**
 
 **These are not necessarily dead.** A field whose name is passed as a *string literal* to a
 factory that then does a dynamic `getattr` is read at runtime while being invisible to every
@@ -259,14 +259,12 @@ referenced by name somewhere and is probably read dynamically.
 | `EDGAR_FULLTEXT_CHUNK_TOKENS` | `api/pilots_api.py:4784` | likely read dynamically |
 | `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4783` | likely read dynamically |
 | `FMP_ECON_INDICATORS` | `api/pilots_api.py:4904` | likely read dynamically |
-| `GOOGLE_TRENDS_OVERLAP_DAYS` | _none_ | no read and no name reference found |
-| `GOOGLE_TRENDS_WINDOW_DAYS` | _none_ | no read and no name reference found |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
 | `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:10750` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
-| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1564`, `pilots/feature_flags.py:49` | likely read dynamically |
+| `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1624`, `pilots/feature_flags.py:49` | likely read dynamically |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **140**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **139**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -368,7 +366,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `GEMINI_LIVE_CHAT_ENABLED` | b | 1 | 0 |
 | `GEMINI_LIVE_CHAT_MODEL` | b | 1 | 0 |
 | `GEMINI_LIVE_VOICE_NAME` | b | 1 | 0 |
-| `GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS` | b | 1 | 0 |
 | `GRAVITY_AI_RUNNER_ENABLED` | b | 4 | 0 |
 | `HMM_INFLATION_FEATURE_ENABLED` | b | 2 | 0 |
 | `HMM_RISK_OFF_AGREEMENT_THRESHOLD` | b | 1 | 0 |

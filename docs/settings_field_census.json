@@ -1,10 +1,10 @@
 {
   "meta": {
-    "git_commit": "2f539313264a3b7ef788f1474ea9407ca4c4bb13",
+    "git_commit": "86f7ea0a72148f45f76316f81d89c2fe9f691b66",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
-    "total_fields": 398,
+    "total_fields": 400,
     "label_by_field": {
       "FRED_API_KEY": "str",
       "FRED_REQUEST_TIMEOUT_SECONDS": "float",
@@ -397,6 +397,8 @@
       "GOOGLE_TRENDS_COOLDOWN_THRESHOLD": "int",
       "GOOGLE_TRENDS_COOLDOWN_SECONDS": "float",
       "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE": "float",
+      "GOOGLE_TRENDS_RAW_RETENTION_BATCHES": "int",
+      "GOOGLE_TRENDS_MAX_TERMS_PER_PASS": "int",
       "WATCHLIST": "str",
       "GCLOUD_BIN": "str",
       "GRAVITY_REQUIRE_NATIVE": "bool",
@@ -407,7 +409,7 @@
     },
     "counts_by_label": {
       "bool": 115,
-      "int": 102,
+      "int": 104,
       "float": 78,
       "Optional[str]": 44,
       "str": 43,
@@ -936,18 +938,20 @@
       "GOOGLE_TRENDS_COOLDOWN_THRESHOLD": 5047,
       "GOOGLE_TRENDS_COOLDOWN_SECONDS": 5051,
       "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE": 5055,
-      "WATCHLIST": 5108,
-      "GCLOUD_BIN": 5112,
-      "GRAVITY_REQUIRE_NATIVE": 5128,
-      "QDRANT_COLLECTION": 5132,
-      "QDRANT_URL": 5136,
-      "WEEKLY_DIGEST_ENABLED": 5141,
-      "WEEKLY_DIGEST_INTERVAL_HOURS": 5152
+      "GOOGLE_TRENDS_RAW_RETENTION_BATCHES": 5069,
+      "GOOGLE_TRENDS_MAX_TERMS_PER_PASS": 5080,
+      "WATCHLIST": 5129,
+      "GCLOUD_BIN": 5133,
+      "GRAVITY_REQUIRE_NATIVE": 5149,
+      "QDRANT_COLLECTION": 5153,
+      "QDRANT_URL": 5157,
+      "WEEKLY_DIGEST_ENABLED": 5162,
+      "WEEKLY_DIGEST_INTERVAL_HOURS": 5173
     }
   },
   "env_io_lists": {
-    "allowed_keys_len": 353,
-    "allowed_keys_unique_len": 353,
+    "allowed_keys_len": 355,
+    "allowed_keys_unique_len": 355,
     "allowed_keys_duplicates": {},
     "allowed_keys_duplicate_total_extra": 0,
     "secret_keys_len": 42,
@@ -1009,7 +1013,7 @@
   "partition": {
     "counts": {
       "SECRET": 36,
-      "IN_ALLOWED_KEYS": 353,
+      "IN_ALLOWED_KEYS": 355,
       "UNCLASSIFIED": 9
     },
     "secret": [
@@ -1208,8 +1212,10 @@
       "GOOGLE_TRENDS_ENABLED",
       "GOOGLE_TRENDS_MAX_RETRIES",
       "GOOGLE_TRENDS_MAX_SECONDS_PER_CYCLE",
+      "GOOGLE_TRENDS_MAX_TERMS_PER_PASS",
       "GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS",
       "GOOGLE_TRENDS_OVERLAP_DAYS",
+      "GOOGLE_TRENDS_RAW_RETENTION_BATCHES",
       "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS",
       "GOOGLE_TRENDS_WINDOW_DAYS",
       "GRAVITY_AI_RUNNER_ENABLED",
@@ -1426,7 +1432,7 @@
       {
         "field": "GCLOUD_BIN",
         "in_excluded_from_gui": true,
-        "settings_py_line": 5112,
+        "settings_py_line": 5133,
         "description": "Path to the gcloud binary for environment integrations. NOTE: the LIVE read of this value (mcp_remote_adapter.py, a standalone stdio-proxy script) is deliberately a raw os.environ.get('GCLOUD_BIN')..."
       },
       {
@@ -2864,7 +2870,7 @@
           "route": "/data/universe",
           "method": "PUT",
           "function": "update_universe",
-          "line": 734,
+          "line": 794,
           "writes_env": true,
           "env_write_calls_direct": [
             "write_setting"
@@ -2883,7 +2889,7 @@
           "route": "/data/ai/commentary/{symbol}",
           "method": "POST",
           "function": "generate_commentary",
-          "line": 1281,
+          "line": 1341,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2900,7 +2906,7 @@
           "route": "/data/ai/chart/{symbol}",
           "method": "POST",
           "function": "generate_chart_insight",
-          "line": 1324,
+          "line": 1384,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2917,7 +2923,7 @@
           "route": "/data/ai/research/{symbol}",
           "method": "POST",
           "function": "generate_research",
-          "line": 1426,
+          "line": 1486,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2934,7 +2940,7 @@
           "route": "/data/sync",
           "method": "POST",
           "function": "post_data_sync",
-          "line": 1575,
+          "line": 1635,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2955,7 +2961,7 @@
           "route": "/api/chat",
           "method": "POST",
           "function": "chat_endpoint",
-          "line": 2149,
+          "line": 2209,
           "writes_env": false,
           "env_write_calls_direct": [],
           "env_write_calls_via_helper": [],
@@ -2984,7 +2990,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 377,
+    "files_scanned": 378,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3013,15 +3019,15 @@
     ],
     "distinct_settings_alias_count": 22,
     "form_a_attribute": {
-      "total_reads": 708,
-      "distinct_fields": 246,
+      "total_reads": 725,
+      "distinct_fields": 251,
       "counts": {
         "OUTPUT_DIR": 110,
         "LOCAL_DATA_ROOT": 24,
         "SIGNAL_WEIGHTS": 18,
         "FRED_API_KEY": 13,
+        "DEFAULT_TICKERS": 11,
         "DISABLED_SIGNAL_MODULES": 11,
-        "DEFAULT_TICKERS": 10,
         "FORECAST_SKILL_WINDOW_DAYS": 10,
         "REGIME_SIGNAL_WEIGHTS": 9,
         "FORECAST_SKILL_MIN_OBS": 8,
@@ -3029,6 +3035,7 @@
         "MAX_LEVERAGE": 7,
         "MAX_POSITION_WEIGHT": 7,
         "DRY_RUN": 6,
+        "GOOGLE_TRENDS_COOLDOWN_THRESHOLD": 6,
         "HISTORICAL_STORE_ENABLED": 6,
         "ORCHESTRATOR_API_PORT": 6,
         "STATE_API_TOKEN": 6,
@@ -3036,6 +3043,7 @@
         "AI_CHAT_TIMEOUT_SECONDS": 5,
         "CORS_ALLOWED_ORIGINS": 5,
         "FINBERT_ENABLED": 5,
+        "GOOGLE_TRENDS_ENABLED": 5,
         "KELLY_FRACTION": 5,
         "PAPER_TRADING": 5,
         "RATIONALE_VERBOSITY": 5,
@@ -3043,7 +3051,6 @@
         "SYMBOL_RATING_DROP_THRESHOLD_CYCLES": 5,
         "ADVISORY_ONLY": 4,
         "BARS_BACKFILL_DAYS": 4,
-        "GOOGLE_TRENDS_COOLDOWN_THRESHOLD": 4,
         "HMM_N_ITER": 4,
         "HMM_RETRAIN_FREQ_DAYS": 4,
         "JULES_API_KEY": 4,
@@ -3069,6 +3076,7 @@
         "FUNDAMENTALS_REFRESH_DAYS": 3,
         "GEMINI_API_KEY": 3,
         "GOOGLE_TRENDS_MIN_REQUEST_INTERVAL_SECONDS": 3,
+        "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS": 3,
         "HMM_CREDIT_SPREAD_FEATURE_ENABLED": 3,
         "HMM_TOL": 3,
         "MAX_PORTFOLIO_HEAT": 3,
@@ -3110,7 +3118,10 @@
         "FORECAST_USE_GARCH_SIGMA": 2,
         "FRED_REQUEST_TIMEOUT_SECONDS": 2,
         "FUNDAMENTALS_CACHE_TTL_SECONDS": 2,
-        "GOOGLE_TRENDS_ENABLED": 2,
+        "GOOGLE_TRENDS_MAX_TERMS_PER_PASS": 2,
+        "GOOGLE_TRENDS_OVERLAP_DAYS": 2,
+        "GOOGLE_TRENDS_RAW_RETENTION_BATCHES": 2,
+        "GOOGLE_TRENDS_WINDOW_DAYS": 2,
         "GRAVITY_AI_RUNNER_OUTPUT_PATH": 2,
         "HMM_COVARIANCE_TYPE": 2,
         "HMM_N_STATES": 2,
@@ -3265,8 +3276,8 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 308,
-      "distinct_fields": 182,
+      "total_reads": 306,
+      "distinct_fields": 180,
       "counts": {
         "FMP_API_KEY": 13,
         "GEMINI_API_KEY": 9,
@@ -3338,7 +3349,6 @@
         "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED": 1,
         "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS": 1,
         "DATABASE_URL": 1,
-        "DEFAULT_TICKERS": 1,
         "DUAL_MOMENTUM_RISKY_ASSETS": 1,
         "DUAL_MOMENTUM_SAFE_ASSET": 1,
         "EDGAR_COOLDOWN_SECONDS": 1,
@@ -3406,7 +3416,6 @@
         "GEMINI_LIVE_CHAT_ENABLED": 1,
         "GEMINI_LIVE_CHAT_MODEL": 1,
         "GEMINI_LIVE_VOICE_NAME": 1,
-        "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS": 1,
         "HMM_RISK_OFF_AGREEMENT_THRESHOLD": 1,
         "HMM_RISK_ON_DOWNGRADE_THRESHOLD": 1,
         "JULES_APPROVAL_TTL_SECONDS": 1,
@@ -3533,7 +3542,7 @@
         "os.environ.get()": 2
       }
     },
-    "fields_reached_by_any_form": 386,
+    "fields_reached_by_any_form": 390,
     "fields_only_via_b_or_d": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -3631,7 +3640,6 @@
       "GEMINI_LIVE_CHAT_ENABLED",
       "GEMINI_LIVE_CHAT_MODEL",
       "GEMINI_LIVE_VOICE_NAME",
-      "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS",
       "GRAVITY_AI_RUNNER_ENABLED",
       "HMM_INFLATION_FEATURE_ENABLED",
       "HMM_RISK_OFF_AGREEMENT_THRESHOLD",
@@ -3676,7 +3684,7 @@
       "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
       "VALIDATION_HARNESS_OOS_GATE_ENABLED"
     ],
-    "fields_only_via_b_or_d_count": 140,
+    "fields_only_via_b_or_d_count": 139,
     "fields_only_via_b": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -3773,7 +3781,6 @@
       "GEMINI_LIVE_CHAT_ENABLED",
       "GEMINI_LIVE_CHAT_MODEL",
       "GEMINI_LIVE_VOICE_NAME",
-      "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS",
       "GRAVITY_AI_RUNNER_ENABLED",
       "HMM_INFLATION_FEATURE_ENABLED",
       "HMM_RISK_OFF_AGREEMENT_THRESHOLD",
@@ -3828,14 +3835,12 @@
       "EDGAR_FULLTEXT_CHUNK_TOKENS",
       "EDGAR_FULLTEXT_FORMS",
       "FMP_ECON_INDICATORS",
-      "GOOGLE_TRENDS_OVERLAP_DAYS",
-      "GOOGLE_TRENDS_WINDOW_DAYS",
       "PROMPT_MAX_CHARS",
       "PROMPT_REGISTRY_REFRESH_SECONDS",
       "SENTIMENT_PIT_MIN_MONTHS",
       "UNIVERSE_SYNC_ENABLED"
     ],
-    "fields_no_static_read_count": 12,
+    "fields_no_static_read_count": 10,
     "fields_no_static_read_detail": [
       {
         "field": "BROKER_BACKEND",
@@ -3888,18 +3893,6 @@
         "likely_dynamic_read": true
       },
       {
-        "field": "GOOGLE_TRENDS_OVERLAP_DAYS",
-        "name_literal_sites": [],
-        "name_literal_site_count": 0,
-        "likely_dynamic_read": false
-      },
-      {
-        "field": "GOOGLE_TRENDS_WINDOW_DAYS",
-        "name_literal_sites": [],
-        "name_literal_site_count": 0,
-        "likely_dynamic_read": false
-      },
-      {
         "field": "PROMPT_MAX_CHARS",
         "name_literal_sites": [],
         "name_literal_site_count": 0,
@@ -3922,7 +3915,7 @@
       {
         "field": "UNIVERSE_SYNC_ENABLED",
         "name_literal_sites": [
-          "api/data_api.py:1564",
+          "api/data_api.py:1624",
           "pilots/feature_flags.py:49"
         ],
         "name_literal_site_count": 2,
