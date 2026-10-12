@@ -4184,7 +4184,6 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("SECTOR_FORECAST_CONFIGS", "json", {}),
             ("PROMPT_REGISTRY_ENABLED", "bool", {}),
             ("PROMPT_REGISTRY_BACKEND", "str", {}),
-            ("ORCHESTRATOR_DAEMON_ENABLED", "bool", {}),
             ("ORCHESTRATOR_EXTENDED_HOURS_ONLY", "bool", {}),
             ("CORS_ALLOWED_ORIGINS", "json", {}),
             ("GRAVITY_REQUIRE_NATIVE", "bool", {}),

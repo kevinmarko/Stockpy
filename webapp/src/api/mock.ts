@@ -2863,15 +2863,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   },
   {
     group: "Advanced / Config",
-    key: "ORCHESTRATOR_DAEMON_ENABLED",
-    type: "boolean",
-    value: false,
-    default: false,
-    description:
-      "Legacy flag (shrink step 5.6 retires it). When true, ./launch_webapp.command starts the real orchestrator daemon (python -m desktop.orchestrator_daemon) instead of only the bare APIs, and the 'orchestrator' job launcher triggers a cycle over the Control API against an already-running daemon instead of spawning a subprocess (it falls back to the subprocess if the daemon is unreachable; dry-run runs always use the subprocess). False (default) keeps the subprocess behaviour. The Console 'Advisory Pipeline' job always uses the daemon and ignores this flag.",
-  },
-  {
-    group: "Advanced / Config",
     key: "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
     type: "boolean",
     value: true,
@@ -4767,18 +4758,6 @@ function mockSettingsReference(): SettingsReferenceResponse {
       dangerous: false,
       liveness: mockLiveness("LLM_COMMENTARY_ENABLED"),
       editable_at: null,
-    },
-    {
-      key: "ORCHESTRATOR_DAEMON_ENABLED",
-      category: "allowed",
-      value: true,
-      default: true,
-      type: "boolean",
-      description: "Run the continuous background pipeline timer daemon.",
-      domain: "Orchestrator/Daemon/Jobs",
-      dangerous: false,
-      liveness: mockLiveness("ORCHESTRATOR_DAEMON_ENABLED"),
-      editable_at: "/settings/tunables",
     },
     {
       key: "ALERT_EMAIL_ENABLED",

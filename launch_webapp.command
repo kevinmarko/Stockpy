@@ -12,15 +12,13 @@
 #   * metrics_api  :8604  — started here if not already up
 #   * control_api  :8601  — the daemon's own status/trigger API
 #   * pilots_api   :8602  — the daemon's own Pilots API
-# control_api and pilots_api are normally hosted by ONE process: when .env has
-# ORCHESTRATOR_DAEMON_ENABLED=true and neither port is already up, this script
-# starts the real persistent orchestrator daemon (desktop/orchestrator_daemon.py,
-# which hosts both) instead of two disconnected standalone stubs — a bare
+# control_api and pilots_api are hosted by ONE process: when neither port is
+# already up, this script starts the real persistent orchestrator daemon
+# (desktop/orchestrator_daemon.py, which hosts both) — a bare
 # `uvicorn api.control_api:app` has no OrchestratorDaemon attached, so the
-# webapp's Pipeline status page reads "daemon not reachable" even though a
-# healthy process answers /health. Falls back to today's exact standalone-stub
-# behavior when that flag is off, or when either port is already up (whatever
-# is already there is reused as-is, never fought with).
+# webapp's Pipeline status page would read "daemon not reachable". When either
+# port is already up (normally the com.investyo.stack launchd service), whatever
+# is there is reused as-is, never fought with.
 # and writes webapp/.env.local (token + base URLs) so the app points at them.
 # Only backends THIS script starts are stopped on exit — a running daemon is
 # left untouched — and this script WAITS for its own backends to actually exit
@@ -493,17 +491,7 @@ _bring_up_control_and_pilots_api() {
         return 0
     fi
 
-    local daemon_flag
-    daemon_flag="$(_read_env_value ORCHESTRATOR_DAEMON_ENABLED)"
-    daemon_flag="$(printf '%s' "$daemon_flag" | tr '[:upper:]' '[:lower:]')"
-    if [ "$daemon_flag" != "true" ] && [ "$daemon_flag" != "1" ]; then
-        # Flag is off — today's exact behavior, unchanged.
-        _start_api "api.pilots_api:app"   8602 "pilots_api"
-        _start_api "api.control_api:app"  8601 "control_api"
-        return 0
-    fi
-
-    echo "  ▶  ORCHESTRATOR_DAEMON_ENABLED=true — starting the real orchestrator daemon…"
+    echo "  ▶  starting the real orchestrator daemon…"
     local daemon_timeout
     daemon_timeout="$(_read_env_value DAEMON_SHUTDOWN_TIMEOUT_SECONDS)"
     [[ "$daemon_timeout" =~ ^[0-9]+$ ]] || daemon_timeout=25
@@ -548,8 +536,8 @@ _verify_live_backends() {
         if [[ "$health" == *'"daemon_alive":false'* ]]; then
             echo "  ℹ  control_api is up but no orchestrator daemon is attached (daemon_alive: false)."
             echo "     The webapp's Pipeline status will show \"not reachable\" until a real daemon"
-            echo "     is running — set ORCHESTRATOR_DAEMON_ENABLED=true in .env, or start one"
-            echo "     yourself: python -m desktop.orchestrator_daemon"
+            echo "     is running — stop whatever holds :8601 and start one yourself:"
+            echo "     python -m desktop.orchestrator_daemon"
         fi
     fi
     if [ "$all_ok" = false ]; then

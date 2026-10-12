@@ -535,11 +535,10 @@ def restart_daemon() -> Dict[str, Any]:
     Honesty note: whether anything actually respawns this process depends
     entirely on how it's being run. ``deploy/investyo-daemon.service``
     (``Restart=always``) and ``scripts/com.investyo.stack.plist``
-    (``KeepAlive``) both respawn on exit. The plain desktop-shell path
-    (``app_shell.py`` spawning ``desktop/orchestrator_daemon.py`` via
-    ``shared.orchestrator_runner.launch_daemon_engine`` — a bare
-    ``subprocess.Popen`` with no restart-on-death watchdog) does NOT: this
-    call simply stops the daemon until the operator relaunches the app. This
+    (``KeepAlive``) both respawn on exit. A daemon started by hand or by
+    ``./launch_webapp.command`` (a bare background process with no
+    restart-on-death watchdog) does NOT: this call simply stops the daemon
+    until the operator relaunches it. This
     endpoint has no way to know which case it's in, so it cannot promise a
     respawn — only an honest, clean exit.
     """

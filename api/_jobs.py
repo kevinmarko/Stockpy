@@ -91,8 +91,8 @@ class JobRecord:
     @property
     def cancellable(self) -> bool:
         # Only a genuine local subprocess can be signaled. A daemon-hosted
-        # cycle (launch_daemon_cycle, or launch_orchestrator's
-        # ORCHESTRATOR_DAEMON_ENABLED fast path) has no local PID —
+        # cycle (launch_daemon_cycle, or launch_orchestrator's daemon
+        # fast path) has no local PID —
         # stop_run() itself refuses to touch it (returns False rather than
         # raising), so don't offer Cancel for it at all.
         if self.handle is None:

@@ -80,13 +80,6 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # Orchestrator (async) launch log — written by ``main_orchestrator.py``.
 RUN_LOG_PATH = settings.OUTPUT_DIR / "gui_run.log"
 
-# Log written by ``launch_daemon_engine`` — the always-on desktop-shell
-# refresh loop when settings.ORCHESTRATOR_DAEMON_ENABLED is True (spawns
-# `python -m desktop.orchestrator_daemon --interval N` instead of
-# `main.py --interval N`). Kept distinct for the same reason as the other
-# per-launcher log paths in this module.
-DAEMON_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_daemon.log"
-
 # ``log_path`` of a handle from ``launch_daemon_cycle``. NOTHING writes this
 # file: a cycle triggered on the daemon runs in the daemon's own process and
 # leaves no per-run log. It is a distinct, never-written path (not RUN_LOG_PATH)
@@ -175,9 +168,6 @@ class RunHandle:
     *   ``"daemon_cycle"`` — a full pipeline cycle triggered on the running
         orchestrator daemon (:func:`launch_daemon_cycle`; always
         ``backend="daemon"``).
-    *   ``"daemon"``       — the always-on desktop-shell refresh loop backed
-        by ``python -m desktop.orchestrator_daemon`` (still a supervised
-        subprocess — see :func:`launch_daemon_engine`).
 
     The ``backend`` field distinguishes HOW a run is tracked/controlled:
 
@@ -187,12 +177,10 @@ class RunHandle:
     *   ``"daemon"`` — a cycle TRIGGERED over HTTP against an
         already-running persistent orchestrator daemon
         (:func:`launch_daemon_cycle`, and :func:`launch_orchestrator`'s
-        flag-gated fast path). There is no
+        fast path). There is no
         local process for the cycle itself — ``daemon_run_id`` identifies it
         to the daemon's Control API, and ``is_running``/``returncode`` poll
-        :mod:`shared.daemon_client` instead of a ``Popen`` handle. Do not
-        confuse this with ``mode="daemon"`` above, which is the (ordinary
-        subprocess-backed) always-on refresh loop itself.
+        :mod:`shared.daemon_client` instead of a ``Popen`` handle.
     """
 
     pid: int
@@ -292,12 +280,12 @@ def launch_orchestrator(dry_run: bool = False) -> RunHandle:
 
     Notes
     -----
-    Daemon fast path (``settings.ORCHESTRATOR_DAEMON_ENABLED=True``, an
-    already-running daemon reachable, and ``dry_run=False``): triggers a
+    Daemon fast path (an already-running daemon reachable and
+    ``dry_run=False``): triggers a
     cycle over HTTP via :mod:`shared.daemon_client` against the running daemon
     instead of spawning a new process, returning a ``backend="daemon"``
     ``RunHandle``. Falls back to the subprocess path below (unchanged) when
-    the flag is off, the daemon is unreachable, ``trigger_run()`` itself
+    the daemon is unreachable, ``trigger_run()`` itself
     fails, or ``dry_run=True`` — CONSTRAINT #6, this fast path degrades
     silently rather than ever blocking a manual run.
 
@@ -314,7 +302,7 @@ def launch_orchestrator(dry_run: bool = False) -> RunHandle:
     Robinhood account refresh is ``POST /brokerage/refresh`` (Settings →
     Brokers → Refresh).
     """
-    if settings.ORCHESTRATOR_DAEMON_ENABLED and not dry_run:
+    if not dry_run:
         try:
             from shared.daemon_client import daemon_available, trigger_run
 
@@ -533,78 +521,6 @@ def launch_daemon_cycle() -> RunHandle:
         mode="daemon_cycle",
         backend="daemon",
         daemon_run_id=run_id,
-    )
-
-
-def launch_daemon_engine(interval_seconds: int = 300, *, refresh_account: bool = False) -> RunHandle:
-    """Spawn the persistent orchestrator daemon as the always-on background
-    refresh loop, replacing ``main.py --interval N`` when
-    ``settings.ORCHESTRATOR_DAEMON_ENABLED`` is True.
-
-    This is ``desktop/engine_supervisor.py``'s cutover target for
-    ``start_engine``. It uses the same ``Popen``/``RunHandle``/``stop_run``
-    mechanics as the other subprocess launchers — the daemon is just a
-    different command being supervised as a child process, not a
-    different handle shape or control mechanism. The daemon's warm-engine
-    benefit (engines constructed once, reused across cycles) is entirely
-    internal to that process; the GUI still just spawns-and-supervises one
-    subprocess exactly as before, so ``stop_run`` (SIGTERM→SIGKILL) works
-    completely unchanged.
-
-    Parameters
-    ----------
-    interval_seconds:
-        Cadence in seconds for the daemon's internal timer thread. Clamped
-        to ``>= 30`` so the operator cannot hot-loop the market-data API.
-    refresh_account:
-        Accepted for call-site symmetry with the other launchers but has
-        no daemon-entrypoint equivalent — ``desktop/
-        orchestrator_daemon.py`` drives ``main_orchestrator._main_body``,
-        which has no ``--refresh-account`` concept (that flag only exists on
-        ``main.py``'s advisory path). Silently ignored.
-
-    Returns
-    -------
-    RunHandle
-        Handle (``mode="daemon"``, ``backend="subprocess"``,
-        ``log_path=DAEMON_LOG_PATH``) for polling status, tailing the log,
-        and stopping via :func:`stop_run` — identical mechanics to every
-        other subprocess-backed launcher in this module.
-    """
-    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    safe_interval = max(30, int(interval_seconds or 0))
-    cmd: List[str] = [
-        sys.executable, "-m", "desktop.orchestrator_daemon",
-        "--interval", str(safe_interval),
-    ]
-
-    log_file = open(DAEMON_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for the child
-    log_file.write(
-        f"# InvestYo persistent orchestrator daemon launch @ "
-        f"{time.strftime('%Y-%m-%d %H:%M:%S')} (interval={safe_interval}s)\n"
-    )
-    log_file.flush()
-
-    popen = subprocess.Popen(
-        cmd,
-        cwd=str(_REPO_ROOT),
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
-        bufsize=1,
-        text=True,
-    )
-    logger.info("Launched persistent orchestrator daemon pid=%s cmd=%s", popen.pid, " ".join(cmd))
-
-    return RunHandle(
-        pid=popen.pid,
-        started_at=time.time(),
-        dry_run=False,
-        refresh_account=False,
-        log_path=DAEMON_LOG_PATH,
-        mode="daemon",
-        _popen=popen,
     )
 
 

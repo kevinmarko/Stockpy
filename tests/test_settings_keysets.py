@@ -309,7 +309,9 @@ class TestExistingEditorsAreNotBootstrap:
             # ("Market Data") retired with the Alpaca WebSocket streamer.
             # 91 -> 90 (2026-10 dead-tab cleanup): PAIRS_SNAPSHOT_ENABLED
             # ("Pairs Snapshot") retired with the Pairs radar screen.
-            "_TUNABLE_INDEX": 90,
+            # 90 -> 89 (step 5.6): ORCHESTRATOR_DAEMON_ENABLED ("Advanced /
+            # Config") retired; the daemon is the only runtime.
+            "_TUNABLE_INDEX": 89,
             # 33 -> 31 (2026-09 vendor removal): REDDIT_BACKFILL_MAX_PAGES and
             # FINNHUB_RATE_LIMIT_PER_MIN retired with Reddit/Finnhub.
             "_SENTIMENT_INDEX": 31,
@@ -324,7 +326,8 @@ class TestExistingEditorsAreNotBootstrap:
         # 166 -> 164 (2026-09 vendor removal): the 2 sentiment keys above.
         # 164 -> 163 (2026-09-30 Alpaca removal): MARKET_DATA_WS_ENABLED.
         # 163 -> 162 (2026-10 dead-tab cleanup): PAIRS_SNAPSHOT_ENABLED.
-        assert len(ALL_EDITOR_KEYS) == 162
+        # 162 -> 161 (step 5.6): ORCHESTRATOR_DAEMON_ENABLED.
+        assert len(ALL_EDITOR_KEYS) == 161
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

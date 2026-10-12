@@ -186,10 +186,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "OVERNIGHT_LIQUIDITY_DEPTH_HEURISTIC",
     "LOG_LEVEL",
     "DRY_RUN",
-    # Persistent orchestrator daemon cutover flag. Non-secret (no credential
-    # material); the command token that actually guards the daemon's
-    # POST /run is ORCHESTRATOR_DAEMON_TOKEN, which stays in SECRET_KEYS.
-    "ORCHESTRATOR_DAEMON_ENABLED",
     # Total seconds budgeted for the daemon's graceful teardown (see
     # settings.py's own field docstring for the full shutdown-budget ladder).
     # Non-secret; a GUI bug here can only make shutdown less graceful, never
@@ -687,7 +683,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # --- Weekly Digest (pilots/weekly_digest.py, desktop/daemon_runtime.py::
     # maybe_dispatch_weekly_digest) --- Both non-secret tunables; no
     # credential material. WEEKLY_DIGEST_ENABLED only takes effect while the
-    # persistent orchestrator daemon (ORCHESTRATOR_DAEMON_ENABLED) is
+    # persistent orchestrator daemon is
     # running -- see that field's own settings.py description.
     "WEEKLY_DIGEST_ENABLED",
     "WEEKLY_DIGEST_INTERVAL_HOURS",

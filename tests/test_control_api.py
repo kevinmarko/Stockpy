@@ -1034,7 +1034,7 @@ class TestJobsApi:
         assert resp.status_code == 404
 
     def test_cancel_daemon_backed_job_is_400_not_cancellable(self, monkeypatch):
-        # backend="daemon" -- launch_orchestrator's ORCHESTRATOR_DAEMON_ENABLED
+        # backend="daemon" -- launch_orchestrator's daemon
         # fast path. No local PID to signal; stop_run() itself refuses this.
         monkeypatch.setattr(
             jobs_module, "launch_orchestrator",
