@@ -122,8 +122,9 @@ reads a gated execution queue the pipeline writes.
   API. Trigger a cycle with `POST /run` or `shared.daemon_client.trigger_run()` (poll
   `get_run_status`; a 409 means one is already running — attach to it).
 - **`main.py` is being retired** (shrink step 5, plan `.claude/shrink_step5_retire_main_py_implementation_plan.md`).
-  It still runs the advisory cycle and, until cutover, is the real execution-queue writer (the
-  `com.investyo.daily-advisory` launchd job, weekdays 08:45). Steps 5.4–5.6 (switch callers,
+  It still runs the advisory cycle but, since the 2026-10-12 cutover, is no longer the real
+  execution-queue writer (the `com.investyo.daily-advisory` launchd job is unloaded; its plist stays
+  for rollback). Steps 5.4–5.6 (switch callers,
   archive `main.py` to `legacy/`, retire `ORCHESTRATOR_DAEMON_ENABLED`) are pending. Don't build new
   features on `main.py`.
 - **Daemon pipeline steps** (`pipeline/production_steps.py`, assembled in `main_orchestrator.py`):
@@ -140,9 +141,10 @@ reads a gated execution queue the pipeline writes.
   `execution_queue.json` under `OUTPUT_DIR/shadow/` with no side effects; `primary` makes the daemon
   the real queue writer (summary push, watch engine, real queue files, with a run-ownership guard so
   a timed-out cycle cannot write late) and `main.py` then skips those side effects. **The live
-  deployment runs `shadow` until the operator cuts over after a 5-trading-day review ending
-  2026-10-05** (`scripts/compare_shadow_queue.py` diffs the real queue against the shadow one;
-  cutover steps: `docs/RUNBOOK.md` §3.15). Walkthroughs: `.claude/shrink_step5_*_walkthrough.md`.
+  deployment has run `primary` since 2026-10-12** (flag in the runtime flags store, with
+  `ROBINHOOD_SCHEDULED_LOGIN_ENABLED=true`; rollback in `docs/RUNBOOK.md` §3.15). The shadow compare
+  (`scripts/compare_shadow_queue.py`) is only meaningful while the mode is `shadow`. Walkthroughs:
+  `.claude/shrink_step5_*_walkthrough.md`.
 - **Symbol universe** — one builder, `pipeline/advisory_inputs.py::build_universe_detailed()`, used
   by both `main.py` and the daemon: held positions ∪ `WATCHLIST` env var ∪ `watchlist.txt` ∪
   discovered scan candidates, minus rating auto-drops; `settings.DEFAULT_TICKERS` only when that
