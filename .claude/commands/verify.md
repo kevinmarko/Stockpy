@@ -7,8 +7,10 @@ Run the same offline gate CI runs on every PR (`.github/workflows/ci.yml`'s
 
 1. **Lint (ruff, genuine-bug rules only):**
    ```
-   python -m ruff check . --select=F821,F822,F823,E9
+   make lint
    ```
+   (`python -m ruff check . --select=F821,F822,F823,E9` under the resolved
+   project interpreter -- the main checkout's `.venv` when run from a worktree.)
    This is scoped to undefined-name/syntax-error classes of bug, not the
    full default ruleset (the codebase has ~1200 pre-existing style
    violations against that this gate deliberately does not enforce).
