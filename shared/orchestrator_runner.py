@@ -80,15 +80,6 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 # Orchestrator (async) launch log — written by ``main_orchestrator.py``.
 RUN_LOG_PATH = settings.OUTPUT_DIR / "gui_run.log"
 
-# Advisory (synchronous main.py) launch log — written when the operator picks
-# the "Refresh Data (Advisory main.py)" button on the Launcher tab. Kept in a
-# distinct file so the orchestrator's stage-marker scan in ``compute_stage_status``
-# is not confused by main.py's lighter-weight progress lines.
-ADVISORY_LOG_PATH = settings.OUTPUT_DIR / "gui_advisory.log"
-
-# Log written by ``launch_symbol_retry`` for per-symbol dead-letter retries.
-RETRY_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_retry.log"
-
 # Log written by ``launch_daemon_engine`` — the always-on desktop-shell
 # refresh loop when settings.ORCHESTRATOR_DAEMON_ENABLED is True (spawns
 # `python -m desktop.orchestrator_daemon --interval N` instead of
@@ -96,10 +87,12 @@ RETRY_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_retry.log"
 # per-launcher log paths in this module.
 DAEMON_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_daemon.log"
 
-# Log written by ``launch_scheduled_advisory`` — the AI Control Center's
-# operator-started recurring run (main.py --interval N / --agent).  Kept
-# distinct so the Control Center tails only its own scheduled run.
-SCHEDULED_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_scheduled.log"
+# ``log_path`` of a handle from ``launch_daemon_cycle``. NOTHING writes this
+# file: a cycle triggered on the daemon runs in the daemon's own process and
+# leaves no per-run log. It is a distinct, never-written path (not RUN_LOG_PATH)
+# so ``GET /jobs/{id}/stream`` can never replay a stale ``gui_run.log`` left by
+# an earlier subprocess orchestrator run as if it were this cycle's output.
+DAEMON_CYCLE_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_daemon_cycle.log"
 
 # Log written by ``launch_pytest`` — the Maintenance tab's "Run test suite"
 # button.  Kept distinct so the long-running pytest tail never collides with a
@@ -179,11 +172,9 @@ class RunHandle:
 
     *   ``"orchestrator"`` — async ``main_orchestrator.py`` (full pipeline,
         broker execution, schema validation, HTML report).
-    *   ``"advisory"``     — synchronous ``main.py`` (advisory-only, no broker,
-        primary entry point for environment loading + global constraint
-        validation per the project's ``.env`` convention).
-    *   ``"scheduled"``    — the AI Control Center's recurring ``main.py
-        --interval``/``--agent`` loop.
+    *   ``"daemon_cycle"`` — a full pipeline cycle triggered on the running
+        orchestrator daemon (:func:`launch_daemon_cycle`; always
+        ``backend="daemon"``).
     *   ``"daemon"``       — the always-on desktop-shell refresh loop backed
         by ``python -m desktop.orchestrator_daemon`` (still a supervised
         subprocess — see :func:`launch_daemon_engine`).
@@ -192,10 +183,11 @@ class RunHandle:
 
     *   ``"subprocess"`` (default) — a local ``Popen`` child; ``is_running``/
         ``returncode``/``stop_run`` use the process-level mechanics below.
-        This is what every launcher in this module produces except one case.
+        This is what every launcher in this module produces except two cases.
     *   ``"daemon"`` — a cycle TRIGGERED over HTTP against an
         already-running persistent orchestrator daemon
-        (:func:`launch_orchestrator`'s flag-gated fast path). There is no
+        (:func:`launch_daemon_cycle`, and :func:`launch_orchestrator`'s
+        flag-gated fast path). There is no
         local process for the cycle itself — ``daemon_run_id`` identifies it
         to the daemon's Control API, and ``is_running``/``returncode`` poll
         :mod:`shared.daemon_client` instead of a ``Popen`` handle. Do not
@@ -277,7 +269,7 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def launch_orchestrator(dry_run: bool = False, refresh_account: bool = False) -> RunHandle:
+def launch_orchestrator(dry_run: bool = False) -> RunHandle:
     """Trigger a pipeline cycle — via the persistent orchestrator daemon's
     Control API when available, else by spawning ``main_orchestrator.py`` as
     a non-blocking subprocess (today's behavior).
@@ -292,10 +284,6 @@ def launch_orchestrator(dry_run: bool = False, refresh_account: bool = False) ->
         at process launch and has no per-trigger override, so honoring an
         explicit dry-run request safely means falling back to a real
         subprocess rather than silently ignoring it.
-    refresh_account:
-        When True, pass ``--refresh-account`` to force a fresh Robinhood
-        account fetch on this launch (the flag is ignored gracefully by the
-        orchestrator if unsupported).
 
     Returns
     -------
@@ -319,6 +307,12 @@ def launch_orchestrator(dry_run: bool = False, refresh_account: bool = False) ->
     truncated at launch so the UI tails only the current run.  We use
     ``sys.executable`` to guarantee the ``.venv`` interpreter is used rather
     than a stray system Python.
+
+    There is deliberately no ``refresh_account`` parameter:
+    ``main_orchestrator.py``'s argparse only accepts ``--dry-run``/``--strict``,
+    so forwarding ``--refresh-account`` made the subprocess exit 2. A forced
+    Robinhood account refresh is ``POST /brokerage/refresh`` (Settings →
+    Brokers → Refresh).
     """
     if settings.ORCHESTRATOR_DAEMON_ENABLED and not dry_run:
         try:
@@ -335,7 +329,7 @@ def launch_orchestrator(dry_run: bool = False, refresh_account: bool = False) ->
                         pid=-1,  # no local process — the daemon owns this run
                         started_at=time.time(),
                         dry_run=dry_run,
-                        refresh_account=refresh_account,
+                        refresh_account=False,
                         log_path=RUN_LOG_PATH,
                         mode="orchestrator",
                         backend="daemon",
@@ -353,14 +347,12 @@ def launch_orchestrator(dry_run: bool = False, refresh_account: bool = False) ->
     cmd: List[str] = [sys.executable, "main_orchestrator.py"]
     if dry_run:
         cmd.append("--dry-run")
-    if refresh_account:
-        cmd.append("--refresh-account")
 
     # Truncate the log for a clean per-run tail.
     log_file = open(RUN_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for the child
     log_file.write(
         f"# InvestYo orchestrator launch @ {time.strftime('%Y-%m-%d %H:%M:%S')} "
-        f"(dry_run={dry_run}, refresh_account={refresh_account})\n"
+        f"(dry_run={dry_run})\n"
     )
     log_file.flush()
 
@@ -379,168 +371,168 @@ def launch_orchestrator(dry_run: bool = False, refresh_account: bool = False) ->
         pid=popen.pid,
         started_at=time.time(),
         dry_run=dry_run,
-        refresh_account=refresh_account,
+        refresh_account=False,
         log_path=RUN_LOG_PATH,
         mode="orchestrator",
         _popen=popen,
     )
 
 
-def launch_advisory_main(refresh_account: bool = False) -> RunHandle:
-    """Spawn ``main.py`` (the advisory, synchronous entry point) as a subprocess.
+def _daemon_trigger_failure_message(result) -> str:
+    """Operator-readable reason a ``POST /run`` against the daemon failed.
 
-    This is the path the project's ``.env`` convention says is canonical for
-    environment loading and global-constraint validation (the entry-point-level
-    ``load_dotenv()`` call lives in ``main.py``).  Surfacing it from the
-    Launcher tab gives the operator a fast, one-shot refresh that:
+    ``result`` is a :class:`shared.daemon_client.TriggerResponse`; its
+    ``error`` tag is the stable code documented there. Messages name the
+    setting or command that fixes the problem and never echo a token value.
+    """
+    err = result.error
+    if err == "kill_switch_active":
+        msg = "The global kill switch is active, so the daemon will not start a pipeline cycle."
+        if result.kill_switch_reason:
+            msg += f" Reason: {result.kill_switch_reason}."
+        return msg + " Deactivate the kill switch to run a cycle."
+    if err == "command_disabled":
+        return (
+            "The orchestrator daemon's Control API has its command endpoints "
+            "disabled (HTTP 403) because ORCHESTRATOR_DAEMON_TOKEN is not set "
+            "for the daemon. Set it in .env and restart the daemon."
+        )
+    if err == "unauthorized":
+        return (
+            "The orchestrator daemon rejected this request's credentials "
+            "(HTTP 401). ORCHESTRATOR_DAEMON_TOKEN must be identical for the "
+            "daemon and this API process."
+        )
+    if err == "unavailable":
+        return (
+            "The orchestrator daemon's Control API answered 503 (daemon not "
+            "available): daemon not running (python -m desktop.orchestrator_daemon)."
+        )
+    if err == "network_error":
+        # A client-side timeout can fire AFTER the daemon accepted the run, so
+        # this must not claim the daemon is down or that nothing started.
+        return (
+            f"The cycle trigger could not be confirmed: the orchestrator "
+            f"daemon's Control API on 127.0.0.1:{settings.ORCHESTRATOR_API_PORT} "
+            "gave no usable reply (connection refused, timeout or unreadable "
+            "reply). A cycle may or may not have started: check the Pipeline "
+            "Dashboard or GET /run/latest before retrying. If nothing is "
+            "running, the likely cause is that the daemon is down "
+            "(python -m desktop.orchestrator_daemon)."
+        )
+    if err == "already_running":
+        return (
+            "A cycle is already running on the orchestrator daemon but it did "
+            "not report its run id, so it cannot be tracked."
+        )
+    return (
+        f"The orchestrator daemon gave an unexpected reply to the cycle "
+        f"trigger (error={err!r}); check the daemon's log."
+    )
 
-    * loads ``.env`` into ``os.environ`` (modules using ``os.environ.get``
-      directly — notably ``data.robinhood_portfolio`` — depend on this);
-    * runs the structured-logging + push-notification ``alerting.setup_logging``
-      flow, so the ``logs/investyo.log`` telemetry tail in the UI populates;
-    * writes ``output/state_snapshot.json`` so all observability panels
-      refresh their data without restarting the async orchestrator.
 
-    Parameters
-    ----------
-    refresh_account:
-        Pass ``--refresh-account`` to bypass the daily Robinhood cache for
-        this launch.
+def _inflight_daemon_run_id() -> Optional[str]:
+    """Run id of the cycle verifiably in flight on the daemon, else ``None``.
+
+    Reads ``GET /run/latest`` and accepts it only when its state is
+    queued/running — never guesses. Used when a 409 ``POST /run`` reply did
+    not yield ``existing_run_id`` (e.g. an unparseable error body).
+    """
+    from shared.daemon_client import get_latest_run
+
+    latest = get_latest_run()
+    if (
+        isinstance(latest, dict)
+        and latest.get("state") in ("queued", "running")
+        and latest.get("run_id")
+    ):
+        return str(latest["run_id"])
+    return None
+
+
+def launch_daemon_cycle() -> RunHandle:
+    """Trigger one full pipeline cycle on the running orchestrator daemon.
+
+    This backs the Console's "Advisory Pipeline" job (``api/_jobs.py``
+    ``JobType.ADVISORY``), replacing the retired ``main.py`` subprocess. A
+    daemon cycle is the full pipeline: it writes the state snapshot, the
+    execution queue (when ``DAEMON_AGENTIC_QUEUE_MODE`` is ``primary``) and
+    places paper orders if the daemon's own settings allow.
+
+    Unlike :func:`launch_orchestrator`'s fast path there is NO subprocess
+    fallback. A cycle spawned outside the daemon would not be the one that
+    owns the queue / watch state, so when the daemon cannot take the trigger
+    this raises rather than quietly running something else. If a cycle is
+    already in flight (HTTP 409) the handle attaches to it instead (its run id
+    from the 409 body, else from ``GET /run/latest`` while that run is
+    queued/running) -- but only if it is a full cycle: the daemon is
+    single-flight across modes, so a ``data``/``metrics`` sub-run in flight is
+    refused (``RuntimeError``) rather than reported as this job's result. When
+    the in-flight run's mode cannot be verified (status unreadable, or no
+    ``mode`` field) the handle attaches anyway.
 
     Returns
     -------
     RunHandle
-        Handle for polling status and tailing :data:`ADVISORY_LOG_PATH`.
+        ``backend="daemon"``, ``mode="daemon_cycle"``, ``daemon_run_id`` set.
+        Not cancellable (:func:`stop_run` refuses a daemon-backed handle);
+        ``log_path`` is :data:`DAEMON_CYCLE_LOG_PATH`, which nothing writes —
+        use :func:`read_log_tail` for the synthesized status summary.
+
+    Raises
+    ------
+    RuntimeError
+        The daemon did not accept or expose a run: kill switch active,
+        ``ORCHESTRATOR_DAEMON_TOKEN`` missing/mismatched, the daemon is not
+        running / unreachable (a timeout is reported as "could not be
+        confirmed": a cycle may have started), or a non-full run is already in
+        flight. The message is operator-readable; ``api/_jobs.py`` callers
+        surface it as HTTP 409.
     """
-    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    from shared.daemon_client import trigger_run
 
-    cmd: List[str] = [sys.executable, "main.py"]
-    if refresh_account:
-        cmd.append("--refresh-account")
-
-    log_file = open(ADVISORY_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
-    log_file.write(
-        f"# InvestYo advisory (main.py) launch @ {time.strftime('%Y-%m-%d %H:%M:%S')} "
-        f"(refresh_account={refresh_account})\n"
-    )
-    log_file.flush()
-
-    popen = subprocess.Popen(
-        cmd,
-        cwd=str(_REPO_ROOT),
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
-        bufsize=1,
-        text=True,
-    )
-    logger.info("Launched advisory main.py pid=%s cmd=%s", popen.pid, " ".join(cmd))
-
-    return RunHandle(
-        pid=popen.pid,
-        started_at=time.time(),
-        dry_run=False,  # main.py is advisory-only — no orders submitted
-        refresh_account=refresh_account,
-        log_path=ADVISORY_LOG_PATH,
-        mode="advisory",
-        _popen=popen,
-    )
-
-
-def launch_scheduled_advisory(
-    mode: str = "interval",
-    interval_seconds: int = 300,
-    *,
-    refresh_account: bool = False,
-) -> RunHandle:
-    """Spawn ``main.py`` as an OPERATOR-STARTED recurring advisory run.
-
-    This backs the AI Control Center's "Start scheduled run" / "Start agent
-    loop" buttons.  It is the ONLY scheduling mechanism the platform exposes
-    from the AI Control Center's tab and it is strictly operator-initiated
-    and operator-stoppable — there is no cron and nothing autonomous.  The
-    operator presses Start; the child keeps refreshing on the requested
-    cadence until the operator presses Stop (:func:`stop_run`) or the GUI
-    process ends.  (This module also has a SEPARATE, deliberately-scoped
-    long-lived process now: :func:`launch_daemon_engine`, which backs the
-    desktop shell's always-on refresh loop when
-    ``settings.ORCHESTRATOR_DAEMON_ENABLED=True`` — still strictly
-    operator-started via the desktop shell opening, still advisory-only, and
-    still fully stoppable via :func:`stop_run`/closing the window; it is not
-    autonomous or self-scheduling beyond the interval the operator
-    configured, so the "no cron, nothing autonomous" guarantee here is
-    unaffected.)
-
-    Parameters
-    ----------
-    mode:
-        ``"interval"`` → ``python main.py --interval N`` (fixed-cadence refresh
-        loop).  ``"agent"`` → ``python main.py --agent`` (the autonomous
-        *advisory* agent loop from Tier 6 — still advisory-only, no orders,
-        still operator-started/stoppable).  Any other value is treated as
-        ``"interval"``.
-    interval_seconds:
-        Cadence in seconds for ``--interval`` mode.  Ignored for ``--agent``
-        (the agent sets its own adaptive cadence).  Clamped to ``>= 30`` so the
-        operator cannot hot-loop the market-data API.
-    refresh_account:
-        Pass ``--refresh-account`` on the first launch to bypass the daily
-        Robinhood cache.
-
-    Returns
-    -------
-    RunHandle
-        Handle (``mode="scheduled"``, ``log_path=SCHEDULED_LOG_PATH``) for
-        polling status, tailing the log, and stopping via :func:`stop_run`.
-
-    Notes
-    -----
-    During a scheduled run, only the ALREADY-WIRED automatic AI path fires —
-    Gemini alert-commentary appended to watch/trade alerts when
-    ``LLM_COMMENTARY_ENABLED`` is set.  The per-symbol Claude / Gemini-vision /
-    Opal actions remain on-demand GUI buttons; they are NOT invoked by the
-    scheduled loop.
-    """
-    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    cmd: List[str] = [sys.executable, "main.py"]
-    if str(mode).lower() == "agent":
-        cmd.append("--agent")
-        cadence_desc = "agent-adaptive"
+    result = trigger_run()
+    if result.ok:
+        run_id = result.run_id
+        if not run_id:
+            raise RuntimeError(
+                "The orchestrator daemon accepted the cycle trigger but did not "
+                "return a run id, so the run cannot be tracked."
+            )
+        logger.info("Triggered daemon cycle via Control API: run_id=%s", run_id)
+    elif result.error == "already_running":
+        run_id = result.existing_run_id or _inflight_daemon_run_id()
+        if not run_id:
+            raise RuntimeError(_daemon_trigger_failure_message(result))
+        # The daemon is single-flight ACROSS modes, so the in-flight run may be
+        # a data-only / metrics-only sub-run (POST /pipeline/data|metrics) that
+        # never runs the advisory overlay, broker, queue or snapshot steps.
+        # Attaching would report that as this job's success.
+        status = _daemon_run_status(run_id)
+        run_mode = status.get("mode") if isinstance(status, dict) else None
+        if run_mode is not None and run_mode != "full":
+            raise RuntimeError(
+                f"A '{run_mode}' run ({run_id}) is in flight on the orchestrator "
+                "daemon. It does not run the advisory/broker/queue/snapshot "
+                "steps, so this job was not attached to it. Wait for it to "
+                "finish and retry."
+            )
+        logger.info("Daemon cycle already in flight; attaching to run_id=%s", run_id)
     else:
-        safe_interval = max(30, int(interval_seconds or 0))
-        cmd.extend(["--interval", str(safe_interval)])
-        cadence_desc = f"{safe_interval}s"
-    if refresh_account:
-        cmd.append("--refresh-account")
-
-    log_file = open(SCHEDULED_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115 - kept open for child
-    log_file.write(
-        f"# InvestYo scheduled advisory (main.py) launch @ "
-        f"{time.strftime('%Y-%m-%d %H:%M:%S')} (mode={mode}, cadence={cadence_desc}, "
-        f"refresh_account={refresh_account})\n"
-    )
-    log_file.flush()
-
-    popen = subprocess.Popen(
-        cmd,
-        cwd=str(_REPO_ROOT),
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        env=os.environ.copy(),
-        bufsize=1,
-        text=True,
-    )
-    logger.info("Launched scheduled advisory pid=%s cmd=%s", popen.pid, " ".join(cmd))
+        raise RuntimeError(_daemon_trigger_failure_message(result))
 
     return RunHandle(
-        pid=popen.pid,
+        pid=-1,  # no local process — the daemon owns this run
         started_at=time.time(),
-        dry_run=False,  # advisory-only — no orders submitted
-        refresh_account=refresh_account,
-        log_path=SCHEDULED_LOG_PATH,
-        mode="scheduled",
-        _popen=popen,
+        # The daemon applies its own DRY_RUN/ADVISORY_ONLY posture; this flag
+        # only drives the subprocess-log stage display, which a daemon handle
+        # never uses.
+        dry_run=False,
+        refresh_account=False,
+        log_path=DAEMON_CYCLE_LOG_PATH,
+        mode="daemon_cycle",
+        backend="daemon",
+        daemon_run_id=run_id,
     )
 
 
@@ -550,9 +542,9 @@ def launch_daemon_engine(interval_seconds: int = 300, *, refresh_account: bool =
     ``settings.ORCHESTRATOR_DAEMON_ENABLED`` is True.
 
     This is ``desktop/engine_supervisor.py``'s cutover target for
-    ``start_engine``. It reuses the EXACT SAME ``Popen``/``RunHandle``/
-    ``stop_run`` mechanics as :func:`launch_scheduled_advisory` — the daemon
-    is just a different command being supervised as a child process, not a
+    ``start_engine``. It uses the same ``Popen``/``RunHandle``/``stop_run``
+    mechanics as the other subprocess launchers — the daemon is just a
+    different command being supervised as a child process, not a
     different handle shape or control mechanism. The daemon's warm-engine
     benefit (engines constructed once, reused across cycles) is entirely
     internal to that process; the GUI still just spawns-and-supervises one
@@ -563,11 +555,10 @@ def launch_daemon_engine(interval_seconds: int = 300, *, refresh_account: bool =
     ----------
     interval_seconds:
         Cadence in seconds for the daemon's internal timer thread. Clamped
-        to ``>= 30`` (mirrors :func:`launch_scheduled_advisory`) so the
-        operator cannot hot-loop the market-data API.
+        to ``>= 30`` so the operator cannot hot-loop the market-data API.
     refresh_account:
-        Accepted for call-site symmetry with :func:`launch_scheduled_advisory`
-        but has no daemon-entrypoint equivalent — ``desktop/
+        Accepted for call-site symmetry with the other launchers but has
+        no daemon-entrypoint equivalent — ``desktop/
         orchestrator_daemon.py`` drives ``main_orchestrator._main_body``,
         which has no ``--refresh-account`` concept (that flag only exists on
         ``main.py``'s advisory path). Silently ignored.
@@ -1103,18 +1094,13 @@ def launch_verify() -> RunHandle:
 
 COMMAND_LOG_DIR: Path = settings.OUTPUT_DIR / "gui_commands"
 
-# Executed via python -m execution.kill_switch / python main.py -- see
-# execution/kill_switch.py's real argparse and main.py's --refresh-account
-# flag. NOT main_orchestrator.py: it has no --refresh-account flag in its
-# real argparse (only --dry-run/--strict), so the manifest (built by real
-# introspection) can never surface that flag for that target anyway.
+# Executed via python -m execution.kill_switch -- see execution/kill_switch.py's
+# real argparse. A forced Robinhood login is POST /brokerage/refresh (its own
+# gate), not a manifest command.
 HIGH_STAKES_COMMANDS: Dict[str, Dict[frozenset, str]] = {
     "execution.kill_switch": {
         frozenset({"--activate"}): "This activates the platform's global kill switch -- it immediately blocks ALL order submission.",
         frozenset({"--deactivate"}): "This deactivates the platform's global kill switch -- order submission resumes.",
-    },
-    "main.py": {
-        frozenset({"--refresh-account"}): "This forces a fresh Robinhood login, bypassing the daily account-snapshot cache.",
     },
     # database_setup.py takes NO argv (see its own trivial argparse -- added
     # only so cli_introspect can capture a real parser instead of dead-
@@ -1171,8 +1157,9 @@ def launch_manifest_command(
     ValueError
         Unknown command/subcommand, a disallowed target (app_shell.py), or a
         high-stakes command/flag combination (kill switch activate/
-        deactivate, main.py --refresh-account) attempted without
-        `confirm=True`. The caller (api/_jobs.py) maps this to HTTP 400.
+        deactivate, database_setup.py, repair_price_bars_adjustment.py)
+        attempted without `confirm=True`. The caller (api/_jobs.py) maps
+        this to HTTP 400.
     """
     from pilots.commands import resolve_command  # lazy import -- matches this codebase's lazy-import-to-avoid-coupling convention (see e.g. HistoricalStore)
 
@@ -1461,75 +1448,6 @@ def state_snapshot_age_seconds() -> Optional[float]:
         return max(0.0, time.time() - snap.stat().st_mtime)
     except Exception:
         return None
-
-
-def launch_symbol_retry(
-    symbol: str,
-    refresh_account: bool = False,
-) -> "RunHandle":
-    """Spawn ``main.py`` targeting a single symbol for a dead-letter retry.
-
-    The symbol is injected via the ``WATCHLIST`` environment variable so
-    the advisory run contains only that ticker.  Held positions are always
-    included by ``main.run_once()``'s ``_build_universe`` — the operator
-    can confirm the single-symbol result on the Paper Monitor tab.
-
-    The retry is a best-effort diagnosis run, not a production execution:
-    ``main.py`` is advisory-only and submits no orders.
-
-    Parameters
-    ----------
-    symbol:
-        Ticker to retry (case-insensitive; forced to upper-case for the env).
-    refresh_account:
-        Pass ``--refresh-account`` to bypass the daily Robinhood cache.
-
-    Returns
-    -------
-    RunHandle
-        Handle with ``mode="retry"`` and ``log_path=RETRY_LOG_PATH``.
-    """
-    settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    cmd: List[str] = [sys.executable, "main.py"]
-    if refresh_account:
-        cmd.append("--refresh-account")
-
-    # Inject the single target symbol via WATCHLIST so no code in main.py
-    # needs to change — it already reads WATCHLIST from os.environ.
-    env = os.environ.copy()
-    env["WATCHLIST"] = symbol.upper()
-
-    log_file = open(RETRY_LOG_PATH, "w", encoding="utf-8")  # noqa: SIM115
-    log_file.write(
-        f"# InvestYo dead-letter retry: {symbol.upper()} "
-        f"@ {time.strftime('%Y-%m-%d %H:%M:%S')} "
-        f"(refresh_account={refresh_account})\n"
-    )
-    log_file.flush()
-
-    popen = subprocess.Popen(
-        cmd,
-        cwd=str(_REPO_ROOT),
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-        env=env,
-        bufsize=1,
-        text=True,
-    )
-    logger.info(
-        "Launched dead-letter retry pid=%s symbol=%s", popen.pid, symbol.upper()
-    )
-
-    return RunHandle(
-        pid=popen.pid,
-        started_at=time.time(),
-        dry_run=False,
-        refresh_account=refresh_account,
-        log_path=RETRY_LOG_PATH,
-        mode="retry",
-        _popen=popen,
-    )
 
 
 def compute_stage_status(

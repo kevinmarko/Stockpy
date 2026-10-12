@@ -7,11 +7,19 @@ import { theme } from "../theme";
 interface LogStreamProps {
   jobId?: string;
   isStreaming?: boolean;
+  /**
+   * Explains WHY no lines will appear (e.g. a job hosted on the orchestrator
+   * daemon, whose cycle never writes the log file the SSE stream tails). When
+   * set, it replaces the generic "No logs received yet..." / mock-mode
+   * placeholder in the empty state, so a silent stream isn't read as "still
+   * loading". Lines that do arrive are still rendered.
+   */
+  emptyMessage?: React.ReactNode;
 }
 
 export const MAX_LOG_LINES = 2000;
 
-export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
+export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming, emptyMessage }) => {
   const [logs, setLogs] = useState<string[]>([]);
   const [filter, setFilter] = useState("");
   const [autoScroll, setAutoScroll] = useState(true);
@@ -125,14 +133,19 @@ export const LogStream: React.FC<LogStreamProps> = ({ jobId, isStreaming }) => {
           scrollBehavior: "smooth",
         }}
       >
-        {USE_MOCK ? (
-          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", fontStyle: "italic" }}>
-            Log streaming is only available in live mode.
-          </div>
-        ) : filteredLogs.length === 0 ? (
-          <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", fontStyle: "italic" }}>
-            No logs received yet...
-          </div>
+        {USE_MOCK || filteredLogs.length === 0 ? (
+          emptyMessage ? (
+            <div
+              data-testid="log-stream-empty-message"
+              style={{ color: theme.textMuted, fontSize: "var(--t-caption)", fontStyle: "italic" }}
+            >
+              {emptyMessage}
+            </div>
+          ) : (
+            <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", fontStyle: "italic" }}>
+              {USE_MOCK ? "Log streaming is only available in live mode." : "No logs received yet..."}
+            </div>
+          )
         ) : (
           filteredLogs.map((line, idx) => (
             <div key={idx} style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", lineHeight: 1.4 }}>

@@ -76,8 +76,10 @@ describe("TradeHistory screen (real mock API)", () => {
     renderScreen();
     expect(await screen.findByText("No trade history ingested yet")).toBeInTheDocument();
     expect(
-      screen.getByText(/Run `python3 main.py --refresh-account`/)
+      screen.getByText(/Open Settings → Brokers and press Refresh/)
     ).toBeInTheDocument();
+    // The retired CLI instruction must not come back.
+    expect(screen.queryByText(/main\.py/)).not.toBeInTheDocument();
   });
 
   it("a null quantity/return_pct/holding_days renders —, never 0 or NaN", async () => {

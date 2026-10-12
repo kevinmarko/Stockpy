@@ -65,7 +65,8 @@ const HEALTHY_STATUS: AutomationStatus = {
     snapshot_age_seconds: 300,
     snapshot_age_source: "timestamp",
     heartbeat_age_seconds: null,
-    heartbeat_note: "heartbeat.txt is written only by main_orchestrator.py; null here does not mean the engine is down.",
+    heartbeat_note:
+      "heartbeat.txt is written only by a standalone main_orchestrator.py run; the orchestrator daemon never writes it, so null here does not mean the engine is down — see pipeline.snapshot_age_seconds for the cross-mode liveness signal.",
   },
   progress: null,
   kill_switch: { active: false, reason: null },

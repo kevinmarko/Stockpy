@@ -407,7 +407,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   "trade-history": {
     title: "Trade history",
     description:
-      "Your full, real Robinhood closed-trade ledger — every FIFO round-trip reconstructed from your actual filled orders, paginated and filterable by symbol. Ingested during a device-approval login (`python3 main.py --refresh-account`) and persisted durably, so it survives across sessions. Equities only — options and crypto activity aren't covered. This is a read-only record of what already happened; it never feeds position sizing.",
+      "Your full, real Robinhood closed-trade ledger — every FIFO round-trip reconstructed from your actual filled orders, paginated and filterable by symbol. Ingested during a device-approval Robinhood login (Settings → Brokers → Refresh, or the daemon's weekday-morning scheduled login when ROBINHOOD_SCHEDULED_LOGIN_ENABLED is on) and persisted durably, so it survives across sessions. Equities only — options and crypto activity aren't covered. This is a read-only record of what already happened; it never feeds position sizing.",
     keyConcepts: ["fifo round-trip", "realized p&l", "win rate", "profit factor", "advisory only"],
   },
   retrospective: {
@@ -443,7 +443,7 @@ export const TAB_HELP: Record<string, TabHelp> = {
   console: {
     title: "Console",
     description:
-      "One-click launchers for the platform's background jobs — a preflight check, the pytest suite, an advisory pipeline cycle, full verification, a Gravity AI Review Suite audit, and the validation harness backtest — each streamed live via the log panel below. Runs the same gated job-execution infrastructure Commands' Run control uses; nothing here places an order with a broker.",
+      "One-click launchers for the platform's background jobs — a preflight check, the pytest suite, an advisory pipeline cycle, full verification, a Gravity AI Review Suite audit, and the validation harness backtest. Most stream live via the log panel below; the advisory pipeline launcher instead triggers a full orchestrator-daemon cycle, which streams no log lines here, cannot be cancelled from this screen, and — per the daemon's own settings — can place paper orders and write the Robinhood execution queue (follow it on the Pipeline Dashboard). Runs the same gated job-execution infrastructure Commands' Run control uses; no launcher here places a live order.",
     keyConcepts: ["advisory only", "deployable"],
   },
   reports: {

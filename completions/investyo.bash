@@ -9,7 +9,6 @@ _investyo_complete() {
     prevw="${COMP_WORDS[i-1]}"
     if [[ -z "$cmd" ]]; then
       case "$w" in
-        main.py|*/main.py) cmd='main.py' ;;
         main_orchestrator.py|*/main_orchestrator.py) cmd='main_orchestrator.py' ;;
         universe_engine.py|*/universe_engine.py) cmd='universe_engine.py' ;;
         execution.kill_switch) [[ "$prevw" == "-m" ]] && cmd='execution.kill_switch' ;;
@@ -52,7 +51,6 @@ _investyo_complete() {
   ctx="$cmd"; [[ -n "$sub" ]] && ctx="$cmd/$sub"
   cands=()
   case "$ctx" in
-    main.py) kind='opts'; cands=(--interval --refresh-account --agent) ;;
     main_orchestrator.py) kind='opts'; cands=(--dry-run --strict) ;;
     universe_engine.py) kind='opts'; cands=(--date --report) ;;
     execution.kill_switch) kind='opts'; cands=(--activate --deactivate --activate-soft-halt --deactivate-soft-halt --status --reason) ;;

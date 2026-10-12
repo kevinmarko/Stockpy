@@ -7,6 +7,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 
 logger = logging.getLogger(__name__)
 from functools import cache
@@ -1071,60 +1072,339 @@ def trigger_data_engine(symbol: str, timeframe: str = "1D") -> str:
         return f"Data ingestion failed for {symbol}: {e!s}"
 
 
+# --- generate_html_report: daemon-cycle polling knobs -----------------------
+# Module-level so tests can patch them (and the clock/sleep) without really
+# waiting. The deadline matches the old ``main.py`` subprocess timeout.
+_REPORT_CYCLE_POLL_INTERVAL_SECONDS = 5.0
+_REPORT_CYCLE_DEADLINE_SECONDS = 900.0
+# Consecutive polls that return nothing usable (get_run_status() is None on ANY
+# failure: daemon down, 404, or a STATE_API_TOKEN / ORCHESTRATOR_DAEMON_TOKEN
+# mismatch on the read endpoint) before we stop waiting. ~60 s at the default
+# poll interval, so one slow status call never aborts a healthy cycle but a
+# permanently unreadable run does not block the caller for the full deadline.
+_REPORT_CYCLE_MAX_UNREADABLE_POLLS = 12
+# What the daemon's StateSnapshotStep writes each full cycle
+# (pipeline/production_steps.py). daily_report.html is retired.
+_REPORT_DASHBOARD_FILENAME = "daily_report_dashboard.html"
+# Why a cycle recorded as "succeeded" can still leave the dashboard untouched
+# (all verified against the pipeline code): the kill-switch sentinel (or any
+# ctx.stopped) skips StateSnapshotStep; an automatic interval cycle returns
+# CYCLE_SKIPPED when the data is still fresh; the render itself can fail and is
+# only logged ("Failed to generate daily HTML report"). Synthetic-data cycles are
+# deliberately NOT listed: StateSnapshotStep does not honour data_is_synthetic, so
+# they DO render the report (see _SYNTHETIC_DATA_CAUTION).
+_REPORT_NOT_REFRESHED_CAUSES = (
+    "kill switch, stopped cycle, interval cycle skipped on fresh data, or report render failure"
+)
+_REPORT_NOT_REFRESHED_LOG_HINT = (
+    "Check the daemon log (e.g. 'Advisory paused by kill-switch sentinel' or "
+    "'Failed to generate daily HTML report')."
+)
+# pipeline/production_steps.py sets ctx.context_extras['data_is_synthetic'] on a
+# market-data outage, but only AgenticQueueStep and BrokerExecutionStep honour it.
+# With no FRED_API_KEY the step picks MockDataEngine up front and never sets the
+# marker, so a keyless cycle is synthetic AND is not skipped by those two steps.
+_SYNTHETIC_DATA_CAUTION = (
+    "Caution: a cycle that ran on synthetic MockDataEngine data (a market-data outage, "
+    "or no FRED_API_KEY configured) still renders this report and is still recorded as "
+    "succeeded; this tool cannot detect that. Check the daemon log for 'Synthetic "
+    "(MockDataEngine) data detected' (outage) or 'FRED_API_KEY not configured' (no key)."
+)
+_cycle_sleep = time.sleep
+_cycle_clock = time.monotonic
+
+
+def _describe_report_trigger_failure(trig: Any, port: Any) -> str:
+    """Honest, specific message for a refused/failed ``daemon_client.trigger_run()``."""
+    err = getattr(trig, "error", None)
+    if err == "kill_switch_active":
+        reason = (getattr(trig, "kill_switch_reason", None) or "").strip()
+        return (
+            "Report NOT generated: the global kill switch is active, so the orchestrator "
+            "daemon refused to start a cycle (HTTP 423). Kill-switch reason: "
+            f"{reason or 'not reported by the daemon'}. Check it with "
+            "`python -m execution.kill_switch --status`. No cycle ran and no report was refreshed."
+        )
+    if err == "unauthorized":
+        return (
+            "Report NOT generated: the orchestrator daemon rejected the trigger (HTTP 401) — "
+            "ORCHESTRATOR_DAEMON_TOKEN in this server's settings is missing or does not match "
+            "the daemon's. Set the same ORCHESTRATOR_DAEMON_TOKEN in .env for both and restart "
+            "the daemon. No cycle ran."
+        )
+    if err == "command_disabled":
+        return (
+            "Report NOT generated: the daemon's command endpoints are disabled (HTTP 403) — "
+            "ORCHESTRATOR_DAEMON_TOKEN is not configured on the daemon. Set it in .env and "
+            "restart the daemon (`python -m desktop.orchestrator_daemon`). No cycle ran."
+        )
+    if err == "unavailable":
+        return (
+            "Report NOT generated: the Control API answered (HTTP 503) but the orchestrator "
+            "daemon is not available. Start or restart it with "
+            "`python -m desktop.orchestrator_daemon`. No cycle ran."
+        )
+    if err == "network_error":
+        return (
+            "Report NOT generated: no cycle was confirmed started - could not reach the "
+            f"orchestrator daemon's Control API at 127.0.0.1:{port} (connection refused, "
+            "timeout or unreadable reply). The most likely cause is that the daemon is not "
+            "running; it is the only runtime that can produce the report, so start it with "
+            "`python -m desktop.orchestrator_daemon` and retry. (If the daemon IS running, a "
+            "timed-out trigger may still have started a cycle - check GET /run/latest before "
+            "retrying.)"
+        )
+    return (
+        "Report NOT generated: the orchestrator daemon returned an unexpected response to the "
+        f"cycle trigger ({err or 'unknown error'}). No cycle was confirmed started; check the "
+        "daemon logs."
+    )
+
+
+def _inflight_daemon_run_id(dc: Any) -> str | None:
+    """Run id of the cycle currently in flight, from ``GET /run/latest``.
+
+    Fallback for a 409 whose body did not yield ``existing_run_id``. Returns None
+    unless the latest run is verifiably queued/running — never guesses.
+    """
+    latest = dc.get_latest_run()
+    if (
+        isinstance(latest, dict)
+        and latest.get("state") in ("queued", "running")
+        and latest.get("run_id")
+    ):
+        return str(latest["run_id"])
+    return None
+
+
+def _wait_for_daemon_run(dc: Any, run_id: str) -> tuple[str, dict | None, str | None]:
+    """Poll ``get_run_status`` until the run is terminal, unreadable, or past the deadline.
+
+    Returns ``(outcome, last_status, last_state)`` where outcome is ``"terminal"``,
+    ``"unreadable"``, ``"unrecognised"`` or ``"deadline"``. ``last_state`` is the state
+    the status reported (for ``"terminal"``: ``succeeded``/``failed``; for
+    ``"unrecognised"``: the unexpected state value itself); for the other outcomes it
+    is the last queued/running state seen, or None if none was ever readable.
+
+    ``"unreadable"`` means the status call returned nothing usable (None, not a dict,
+    or no ``state``) ``_REPORT_CYCLE_MAX_UNREADABLE_POLLS`` times in a row.
+    ``"unrecognised"`` means the daemon DID answer, but with a ``state`` outside
+    queued/running/succeeded/failed; that is a contract mismatch, not an outage, so it
+    is returned at once instead of being waited out.
+    """
+    deadline = _cycle_clock() + _REPORT_CYCLE_DEADLINE_SECONDS
+    last_state: str | None = None
+    unreadable = 0
+    while True:
+        status = dc.get_run_status(run_id)
+        state = status.get("state") if isinstance(status, dict) else None
+        if state in ("succeeded", "failed"):
+            return "terminal", status, state
+        if state in ("queued", "running"):
+            unreadable = 0
+            last_state = state
+        elif state is not None and not (isinstance(state, str) and not state.strip()):
+            return "unrecognised", status, state
+        else:
+            unreadable += 1
+            if unreadable >= _REPORT_CYCLE_MAX_UNREADABLE_POLLS:
+                return "unreadable", status, last_state
+        remaining = deadline - _cycle_clock()
+        if remaining <= 0:
+            return "deadline", status, last_state
+        _cycle_sleep(min(_REPORT_CYCLE_POLL_INTERVAL_SECONDS, remaining))
+
+
+def _parse_run_started_at(value: Any) -> float | None:
+    """Epoch seconds from a run record's ``started_at``, or None if unusable.
+
+    The Control API serializes it with ``datetime.isoformat()`` on a UTC-aware
+    datetime (e.g. ``2026-10-11T12:34:56.789012+00:00``). A trailing ``Z`` is
+    accepted and a naive value is read as UTC (the daemon only ever emits UTC).
+    """
+    from datetime import datetime, timezone
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _iso_utc(epoch_seconds: float) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat(timespec="milliseconds")
+
+
 @mcp.tool()
 def generate_html_report(portfolio_id: str) -> str:
     """
-    Runs the advisory orchestrator (main.py) end-to-end, which internally calls
-    reporting/html_publisher.py::write_html_report -> diagnostics_and_visuals.generate_html_report
-    to produce the daily HTML report. (The old reporting_engine.py this tool used to
-    reference was deleted 2026-07-09; there is no standalone reporting-only entrypoint —
-    the report is a side effect of a full advisory run.)
+    Triggers a FULL orchestrator-daemon cycle (POST /run), waits for it to finish
+    (up to 15 minutes), and reports whether the HTML dashboard
+    (<OUTPUT_DIR>/daily_report_dashboard.html) was actually refreshed by that run.
+
+    WARNING - this is not a reporting-only call. A daemon cycle is the whole
+    pipeline: it fetches data, rescores the universe and rewrites
+    state_snapshot.json plus the dashboards. With DAEMON_AGENTIC_QUEUE_MODE=primary
+    it also rewrites the real execution queue and fires the watch-engine alerts and
+    summary push, and with ADVISORY_ONLY=false it places paper orders on the FMP
+    paper ledger. This replaces the old advisory-only main.py run (main.py is being
+    retired); there is no standalone reporting entrypoint, the report is a side
+    effect of a cycle.
+
+    Requires the orchestrator daemon (`python -m desktop.orchestrator_daemon`) and,
+    for the trigger, a matching ORCHESTRATOR_DAEMON_TOKEN. If a cycle is already
+    running, this attaches to it instead of starting a second one. The report is
+    reported as fresh only if the run's mode is "full" (or not reported) and the
+    file's mtime is at or after the run's start time. A data-only or metrics-only
+    run (e.g. attached to via the 409) never renders the dashboard, so it is never
+    reported as having refreshed it. Otherwise the tool says the report was not
+    refreshed (kill switch or other stopped cycle, an interval cycle skipped on
+    fresh data, or a render failure) and never presents an older file as new. If
+    the cycle outlives the deadline, the message names the run_id and says it is
+    still running.
+
+    LIMITATION - synthetic data is NOT detected: a cycle that fell back to synthetic
+    MockDataEngine data (market-data outage) still renders the report and still
+    counts as succeeded (only the execution queue and broker steps honour the
+    synthetic-data marker), so "refreshed" is not proof of real data. Check the
+    daemon log for "Synthetic (MockDataEngine) data detected".
 
     Args:
-        portfolio_id: Currently ignored — main.py's advisory report always covers the
-            full active universe/held account, not a specific portfolio_id.
+        portfolio_id: Currently ignored - the daemon's report always covers the
+            full tracked universe/held account, not a specific portfolio_id.
     """
     try:
+        from pathlib import Path
+
         from settings import settings
-        from pipeline.agentic_queue import daemon_owns_agentic_side_effects
+        from shared import daemon_client as dc
 
-        # Step 5.3: with the daemon as the primary agentic writer, main.py
-        # skips daily_report.html (retired, step 5 decision 5), so running it
-        # here would only re-report a stale file as fresh.
-        if daemon_owns_agentic_side_effects(getattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "off")):
+        port = getattr(settings, "ORCHESTRATOR_API_PORT", "?")
+        trig = dc.trigger_run()
+        attached = False
+        if trig.ok:
+            run_id = trig.run_id
+        elif trig.error == "already_running":
+            attached = True
+            run_id = trig.existing_run_id or _inflight_daemon_run_id(dc)
+            if not run_id:
+                return (
+                    "Report NOT generated yet: a daemon cycle is already running, but its run "
+                    "id could not be determined (it may have just finished). Call this tool "
+                    "again to attach to it or start a fresh cycle."
+                )
+        else:
+            return _describe_report_trigger_failure(trig, port)
+        if not run_id:
             return (
-                "DAEMON_AGENTIC_QUEUE_MODE=primary: daily_report.html is retired and main.py "
-                "no longer writes it. The orchestrator daemon writes "
-                f"{settings.OUTPUT_DIR / 'daily_report_dashboard.html'} every cycle; trigger "
-                "a cycle with POST /run on the Control API to refresh it."
+                "Report NOT generated: the orchestrator daemon accepted the trigger but returned "
+                "no run id, so the cycle cannot be tracked. Check the daemon logs."
             )
 
-        result = subprocess.run(
-            [sys.executable, "main.py"],
-            capture_output=True,
-            text=True,
-            timeout=900,
+        outcome, status, state = _wait_for_daemon_run(dc, run_id)
+        status = status if isinstance(status, dict) else {}
+        report_path = Path(settings.OUTPUT_DIR) / _REPORT_DASHBOARD_FILENAME
+        attach_note = (
+            " (attached to the cycle that was already running; no second cycle was started)"
+            if attached
+            else ""
         )
-        report_path = settings.OUTPUT_DIR / "daily_report.html"
-        report_exists = report_path.exists()
 
-        if result.returncode != 0:
+        if outcome == "deadline":
             return (
-                f"Advisory run failed (exit {result.returncode}); HTML report was "
-                f"{'still' if report_exists else 'NOT'} found at {report_path}.\n"
-                f"stderr:\n{result.stderr[-2000:]}"
+                f"Daemon cycle {run_id}{attach_note} is still running after "
+                f"{_REPORT_CYCLE_DEADLINE_SECONDS:g}s (last state: {state or 'unknown'}). The "
+                f"report has NOT been refreshed yet. Check GET /run/{run_id}/status on the "
+                f"Control API (127.0.0.1:{port}) or call this tool again to re-attach, then "
+                f"read {report_path} only once the run has succeeded."
             )
-        if report_exists:
+        if outcome == "unrecognised":
             return (
-                f"Advisory run completed and HTML report generated at: {report_path}\n"
-                f"(portfolio_id '{portfolio_id}' is currently ignored by this pipeline.)"
+                f"Daemon cycle {run_id}{attach_note} reported an unrecognised run state "
+                f"{str(state)[:80]!r} (expected queued, running, succeeded or failed), so its "
+                f"outcome cannot be determined. The report has NOT been confirmed refreshed "
+                f"({report_path}). Check GET /run/{run_id}/status on the Control API "
+                f"(127.0.0.1:{port}) and the daemon log."
+            )
+        if outcome == "unreadable":
+            return (
+                f"Could not read the status of daemon cycle {run_id}{attach_note}: "
+                f"{_REPORT_CYCLE_MAX_UNREADABLE_POLLS} consecutive status polls returned nothing "
+                "usable (daemon stopped, or STATE_API_TOKEN does not match the "
+                "ORCHESTRATOR_DAEMON_TOKEN this server sends on the read endpoint). The cycle may "
+                f"still be running; the report has NOT been confirmed refreshed ({report_path})."
+            )
+
+        if state == "failed":
+            error = str(status.get("error") or "no error detail reported")[-2000:]
+            return (
+                f"Daemon cycle {run_id}{attach_note} FAILED: {error} "
+                f"(trigger reason: {status.get('reason') or 'unknown'}). {report_path} was not "
+                "confirmed refreshed by this run, so a file left there is not reported as fresh."
+            )
+
+        # state == "succeeded". Do NOT default a missing mode to "full": a run whose
+        # mode the daemon did not report is flagged in the success text instead.
+        raw_mode = status.get("mode")
+        run_mode = raw_mode.strip().lower() if isinstance(raw_mode, str) else ""
+        if run_mode and run_mode != "full":
+            # An attach (409) can land on a data-only / metrics-only run. Those
+            # never include StateSnapshotStep, so whatever mtime the file has, this
+            # run did not refresh it.
+            return (
+                f"Daemon cycle {run_id}{attach_note} finished, but it was a "
+                f"'{str(raw_mode).strip()[:40]}' run (not a full cycle), which does not render "
+                f"the dashboard, so {report_path} was NOT refreshed by it. Trigger a full "
+                "cycle (call this tool again once no cycle is running) to refresh the report."
+            )
+        mode_note = "" if run_mode else " (run mode not reported)"
+
+        # A green cycle does not guarantee a fresh report (see
+        # _REPORT_NOT_REFRESHED_CAUSES), so verify the file itself against the
+        # run's start time.
+        started_ts = _parse_run_started_at(status.get("started_at"))
+        try:
+            mtime = report_path.stat().st_mtime
+        except OSError:
+            mtime = None
+
+        if started_ts is None:
+            return (
+                f"Daemon cycle {run_id}{attach_note} succeeded, but its start time could not be "
+                f"read from the run status ({status.get('started_at')!r}), so whether "
+                f"{report_path} was refreshed by this run cannot be verified. Not reporting it "
+                "as fresh."
+            )
+        if mtime is None:
+            return (
+                f"Daemon cycle {run_id}{attach_note} finished but report not refreshed: "
+                f"{report_path} does not exist ({_REPORT_NOT_REFRESHED_CAUSES}?). "
+                f"{_REPORT_NOT_REFRESHED_LOG_HINT}"
+            )
+        if mtime < started_ts:
+            return (
+                f"Daemon cycle {run_id}{attach_note} finished but report not refreshed: "
+                f"{report_path} was last written {_iso_utc(mtime)}, before this cycle started at "
+                f"{_iso_utc(started_ts)} ({_REPORT_NOT_REFRESHED_CAUSES}?). The older file was "
+                f"NOT reported as fresh. {_REPORT_NOT_REFRESHED_LOG_HINT}"
             )
         return (
-            "Advisory run completed (exit 0) but no daily_report.html was found at "
-            f"{report_path} — report generation may have failed non-fatally. Check logs."
+            f"Daemon cycle {run_id}{attach_note} succeeded and the HTML report was refreshed "
+            f"at: {report_path}{mode_note}\n"
+            f"(last written {_iso_utc(mtime)}; cycle started {_iso_utc(started_ts)}. "
+            f"portfolio_id '{portfolio_id}' is currently ignored - the report covers the full "
+            "tracked universe.)\n"
+            f"{_SYNTHETIC_DATA_CAUTION}"
         )
-    except subprocess.TimeoutExpired:
-        return "Report generation timed out after 15 minutes."
     except Exception as e:
         return f"Report generation failed: {e!s}"
 
@@ -2180,9 +2460,10 @@ def get_robinhood_account_snapshot() -> str:
     posture).
 
     Degrades to an honest "no cached snapshot" message -- never
-    fabricates figures -- when nothing has been fetched yet; populate one
-    via `main.py --refresh-account` or the Pilots PWA's Connect/Refresh
-    flow, then retry.
+    fabricates figures -- when nothing has been fetched yet. Open Settings →
+    Brokers and press Refresh (approve the device prompt on your phone), or
+    enable ROBINHOOD_SCHEDULED_LOGIN_ENABLED for the daemon's weekday-morning
+    login, then retry.
     """
     from data.robinhood_portfolio import fetch_account_snapshot
 
@@ -2192,9 +2473,10 @@ def get_robinhood_account_snapshot() -> str:
         return (
             "No cached Robinhood account snapshot is available yet "
             f"({type(e).__name__}: {e}). This tool never triggers a live "
-            "login itself -- populate a snapshot via `main.py "
-            "--refresh-account` or the Pilots PWA's Connect/Refresh flow, "
-            "then retry."
+            "login itself. Open Settings → Brokers and press Refresh "
+            "(approve the device prompt on your phone), or enable "
+            "ROBINHOOD_SCHEDULED_LOGIN_ENABLED for the daemon's "
+            "weekday-morning login, then retry."
         )
 
     lines = ["# Robinhood Account Snapshot (read-only)\n"]
@@ -4088,8 +4370,9 @@ def get_regime_status() -> str:
 
         if snap is None:
             lines.append(
-                "_State snapshot unavailable — run the pipeline (`main.py` / "
-                "`main_orchestrator.py`) to generate `output/state_snapshot.json`._\n"
+                "_State snapshot unavailable. Trigger a cycle with POST /run or the "
+                "Pipeline Dashboard's 'Run full advisory pipeline' button (daemon: "
+                "python -m desktop.orchestrator_daemon) to generate state_snapshot.json._\n"
             )
             regime = None
             vix = sahm = oas = ycurve = hmm = None

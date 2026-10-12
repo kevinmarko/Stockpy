@@ -302,14 +302,13 @@ describe("PipelineDashboard — dead-letter queue (G6)", () => {
     expect(screen.getByText(/DEAD_LETTER_RETRY_ENABLED=false/)).toBeInTheDocument();
   });
 
-  it("clicking Retry calls POST /dead-letter/retry, renders the server's real result, and toasts success", async () => {
+  it("clicking Retry calls POST /dead-letter/retry, renders the server's real run id + whole-universe note, and toasts success", async () => {
     vi.spyOn(api, "getDeadLetter").mockResolvedValue(deadLetterFixture());
     const spy = vi.spyOn(api, "retryDeadLetter").mockResolvedValue({
       symbol: "ZZZZ",
-      pid: 5150,
-      log_path: "output/gui_retry.log",
+      run_id: "orch-1234abcd",
       applies: "immediately",
-      note: "Retry launched for ZZZZ (advisory-only — no orders placed).",
+      note: "Triggered a full daemon pipeline cycle — the whole universe is re-run, not just ZZZZ.",
     });
     const user = userEvent.setup();
     renderScreen();
@@ -319,10 +318,39 @@ describe("PipelineDashboard — dead-letter queue (G6)", () => {
 
     expect(spy).toHaveBeenCalledWith("ZZZZ");
     const result = await screen.findByTestId("retry-result-ZZZZ");
-    expect(result).toHaveTextContent(/PID 5150/);
-    expect(result).toHaveTextContent(/output\/gui_retry\.log/);
+    expect(result).toHaveTextContent(/run orch-1234abcd/);
+    expect(result).toHaveTextContent(/whole universe is re-run/);
+    // No subprocess any more: the retired PID / gui_retry.log wording must not
+    // come back (the daemon cycle has neither).
+    expect(result).not.toHaveTextContent(/PID/);
+    expect(result).not.toHaveTextContent(/gui_retry\.log/);
     await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("a Retry whose response carries no run id says so instead of inventing one", async () => {
+    vi.spyOn(api, "getDeadLetter").mockResolvedValue(deadLetterFixture());
+    vi.spyOn(api, "retryDeadLetter").mockResolvedValue({
+      symbol: "ZZZZ",
+      run_id: null,
+      applies: "immediately",
+      note: "Triggered a full daemon pipeline cycle — the whole universe is re-run, not just ZZZZ.",
+    });
+    const user = userEvent.setup();
+    renderScreen();
+
+    await user.click(await screen.findByTestId("retry-ZZZZ"));
+
+    const result = await screen.findByTestId("retry-result-ZZZZ");
+    expect(result).toHaveTextContent(/run id not reported/);
+    expect(result).not.toHaveTextContent(/run null|run undefined/);
+  });
+
+  it("the warning above the queue tells the operator Retry re-runs the whole universe", async () => {
+    vi.spyOn(api, "getDeadLetter").mockResolvedValue(deadLetterFixture());
+    renderScreen();
+    await screen.findByTestId("dead-letter-row-ZZZZ");
+    expect(screen.getByText(/re-runs the whole universe/)).toBeInTheDocument();
   });
 
   it("a failed Retry surfaces the inline error and toasts a failure", async () => {
@@ -339,6 +367,21 @@ describe("PipelineDashboard — dead-letter queue (G6)", () => {
     expect(
       await screen.findByText(/DEAD_LETTER_RETRY_ENABLED is False/)
     ).toBeInTheDocument();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("a Retry rejected because a cycle is already running surfaces the in-flight run id", async () => {
+    vi.spyOn(api, "getDeadLetter").mockResolvedValue(deadLetterFixture());
+    vi.spyOn(api, "retryDeadLetter").mockRejectedValue(
+      new ApiError("A run is already in flight. In-flight run: orch-99.", 409)
+    );
+    const user = userEvent.setup();
+    renderScreen();
+
+    await user.click(await screen.findByTestId("retry-ZZZZ"));
+
+    expect(await screen.findByText(/In-flight run: orch-99/)).toBeInTheDocument();
     await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
     expect(toast.success).not.toHaveBeenCalled();
   });

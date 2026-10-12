@@ -4,6 +4,7 @@ import {
   getCommandCategory,
   getGhostText,
   tokenizeForHighlighting,
+  highStakesReason,
   REGISTERED_STRATEGIES,
 } from "./commandParse";
 import type { CommandSpec } from "./api/types";
@@ -23,15 +24,15 @@ const opt = (name: string, extra: Partial<CommandSpec["options"][number]> = {}) 
 
 const COMMANDS: CommandSpec[] = [
   {
-    name: "main.py",
-    invocation: "python3 main.py",
+    name: "main_orchestrator.py",
+    invocation: "python3 main_orchestrator.py",
     aliases: [],
-    description: "advisory orchestrator",
+    description: "one async pipeline run without the daemon",
     positionals: [],
     subcommands: [],
     options: [
-      opt("--interval", { default: 0, metavar: "SECONDS" }),
-      opt("--agent", { takes_value: false, arg_kind: "optional" }),
+      opt("--dry-run", { takes_value: false, arg_kind: "optional" }),
+      opt("--strict", { takes_value: false, arg_kind: "optional" }),
     ],
   },
   {
@@ -99,14 +100,14 @@ describe("parseCommandLine", () => {
   });
 
   it("resolves a command and suggests its options after a space", () => {
-    const r = parseCommandLine("main.py ", COMMANDS);
-    expect(r.command?.name).toBe("main.py");
-    expect(r.suggestions.map((s) => s.value)).toEqual(["--interval", "--agent"]);
+    const r = parseCommandLine("main_orchestrator.py ", COMMANDS);
+    expect(r.command?.name).toBe("main_orchestrator.py");
+    expect(r.suggestions.map((s) => s.value)).toEqual(["--dry-run", "--strict"]);
   });
 
   it("filters option suggestions by the partial flag and hides used flags", () => {
-    const r = parseCommandLine("main.py --interval 5 --ag", COMMANDS);
-    expect(r.suggestions.map((s) => s.value)).toEqual(["--agent"]);
+    const r = parseCommandLine("main_orchestrator.py --dry-run --str", COMMANDS);
+    expect(r.suggestions.map((s) => s.value)).toEqual(["--strict"]);
   });
 
   it("flags a missing required option before submit", () => {
@@ -121,7 +122,7 @@ describe("parseCommandLine", () => {
   });
 
   it("flags an unknown option", () => {
-    const r = parseCommandLine("main.py --bogus ", COMMANDS);
+    const r = parseCommandLine("main_orchestrator.py --bogus ", COMMANDS);
     expect(r.hints).toContainEqual({ level: "error", message: "unknown option: --bogus" });
   });
 
@@ -160,7 +161,7 @@ describe("parseCommandLine", () => {
   });
 
   it("categorizes commands properly", () => {
-    expect(getCommandCategory("main.py")).toBe("pipeline");
+    expect(getCommandCategory("main_orchestrator.py")).toBe("pipeline");
     expect(getCommandCategory("validation.harness")).toBe("testing");
     expect(getCommandCategory("execution.kill_switch")).toBe("database");
     expect(getCommandCategory("daily_briefing.py")).toBe("reporting");
@@ -222,3 +223,36 @@ describe("parseCommandLine", () => {
   });
 });
 
+describe("highStakesReason", () => {
+  const spec = (name: string): CommandSpec => ({
+    name,
+    invocation: `python ${name}`,
+    aliases: [],
+    description: null,
+    positionals: [],
+    subcommands: [],
+    options: [],
+  });
+
+  it("gates the kill switch on --activate / --deactivate only", () => {
+    const ks = spec("execution.kill_switch");
+    expect(highStakesReason(ks, ["--activate"])).toMatch(/activates the platform's global kill switch/);
+    expect(highStakesReason(ks, ["--deactivate"])).toMatch(/deactivates the platform's global kill switch/);
+    expect(highStakesReason(ks, ["--status"])).toBeNull();
+  });
+
+  it("gates repair_price_bars_adjustment.py on every invocation, even --dry-run", () => {
+    const repair = spec("repair_price_bars_adjustment.py");
+    expect(highStakesReason(repair, [])).toMatch(/price_bars/);
+    expect(highStakesReason(repair, ["--dry-run"])).toMatch(/price_bars/);
+  });
+
+  it("main.py is no longer a known command: it has no high-stakes rule (the --refresh-account gate is gone with it)", () => {
+    expect(highStakesReason(spec("main.py"), ["--refresh-account"])).toBeNull();
+  });
+
+  it("returns null for a null command or an ungated command", () => {
+    expect(highStakesReason(null, ["--activate"])).toBeNull();
+    expect(highStakesReason(spec("validation.harness"), ["--strategy", "x"])).toBeNull();
+  });
+});

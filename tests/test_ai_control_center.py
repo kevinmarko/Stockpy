@@ -11,9 +11,9 @@ Coverage
 * ``control_center_overview`` row shape.
 * ``validate_toggle_write`` rejects secret keys (CONSTRAINT #3) and honours the
   ``ALLOWED_KEYS`` allowlist.
-* ``orchestrator_runner.launch_scheduled_advisory`` spawns a subprocess (mocked
-  — no real child) and returns a scheduled ``RunHandle``; ``stop_run`` never
-  raises.
+* ``orchestrator_runner.stop_run`` terminates a subprocess-backed handle
+  (mocked — no real child) and never raises. (The operator-started
+  ``launch_scheduled_advisory`` ``main.py`` loop was retired with ``main.py``.)
 * Opal is gated ``not_built`` while ``llm.research`` is absent.
 * Tab-wiring source grep (gui/app.py).
 """
@@ -463,7 +463,7 @@ class TestOpalGating:
 
 
 # ---------------------------------------------------------------------------
-# Scheduling launcher (subprocess mocked)
+# stop_run (subprocess mocked)
 # ---------------------------------------------------------------------------
 class _FakePopen:
     def __init__(self, *args, **kwargs) -> None:
@@ -486,69 +486,17 @@ class _FakePopen:
         self._alive = False
 
 
-class TestSchedulingLauncher:
-    def test_launch_interval_spawns_subprocess(self, monkeypatch, tmp_path) -> None:
+class TestStopRun:
+    def test_stop_run_terminates(self) -> None:
+        import time
+
         from shared import orchestrator_runner as orr
 
-        captured = {}
-
-        def _fake_popen(cmd, **kwargs):
-            captured["cmd"] = cmd
-            return _FakePopen(cmd, **kwargs)
-
-        monkeypatch.setattr(orr.subprocess, "Popen", _fake_popen)
-        monkeypatch.setattr(orr, "SCHEDULED_LOG_PATH", tmp_path / "gui_scheduled.log")
-        monkeypatch.setattr(orr.settings, "OUTPUT_DIR", tmp_path)
-
-        handle = orr.launch_scheduled_advisory(mode="interval", interval_seconds=120)
-        assert handle.mode == "scheduled"
-        assert handle.pid == 424242
-        assert "--interval" in captured["cmd"]
-        assert "120" in captured["cmd"]
+        handle = orr.RunHandle(
+            pid=424242, started_at=time.time(), dry_run=False,
+            refresh_account=False, mode="verify", _popen=_FakePopen(["x"]),
+        )
         assert handle.is_running() is True
-
-    def test_launch_agent_uses_agent_flag(self, monkeypatch, tmp_path) -> None:
-        from shared import orchestrator_runner as orr
-
-        captured = {}
-
-        def _fake_popen(cmd, **kwargs):
-            captured["cmd"] = cmd
-            return _FakePopen(cmd, **kwargs)
-
-        monkeypatch.setattr(orr.subprocess, "Popen", _fake_popen)
-        monkeypatch.setattr(orr, "SCHEDULED_LOG_PATH", tmp_path / "gui_scheduled.log")
-        monkeypatch.setattr(orr.settings, "OUTPUT_DIR", tmp_path)
-
-        orr.launch_scheduled_advisory(mode="agent")
-        assert "--agent" in captured["cmd"]
-        assert "--interval" not in captured["cmd"]
-
-    def test_interval_clamped_to_minimum(self, monkeypatch, tmp_path) -> None:
-        from shared import orchestrator_runner as orr
-
-        captured = {}
-
-        def _fake_popen(cmd, **kwargs):
-            captured["cmd"] = cmd
-            return _FakePopen(cmd, **kwargs)
-
-        monkeypatch.setattr(orr.subprocess, "Popen", _fake_popen)
-        monkeypatch.setattr(orr, "SCHEDULED_LOG_PATH", tmp_path / "gui_scheduled.log")
-        monkeypatch.setattr(orr.settings, "OUTPUT_DIR", tmp_path)
-
-        orr.launch_scheduled_advisory(mode="interval", interval_seconds=1)
-        # Clamped to >= 30 so the operator cannot hot-loop the market-data API.
-        assert "30" in captured["cmd"]
-
-    def test_stop_run_terminates(self, monkeypatch, tmp_path) -> None:
-        from shared import orchestrator_runner as orr
-
-        monkeypatch.setattr(orr.subprocess, "Popen", lambda cmd, **kw: _FakePopen(cmd, **kw))
-        monkeypatch.setattr(orr, "SCHEDULED_LOG_PATH", tmp_path / "gui_scheduled.log")
-        monkeypatch.setattr(orr.settings, "OUTPUT_DIR", tmp_path)
-
-        handle = orr.launch_scheduled_advisory(mode="interval", interval_seconds=60)
         assert orr.stop_run(handle) is True
         assert handle.is_running() is False
 

@@ -38,8 +38,9 @@ Design principles
   positive failures on a correctly-running advisory deployment:
     - Broker-dependent checks (3): paper_trading_mode, dry_run_disabled,
       paper_trading_duration.
-    - Advisory false-positives (3): heartbeat_fresh (main.py does not write
-      the heartbeat file — only main_orchestrator.py does), validation_reports
+    - Advisory false-positives (3): heartbeat_fresh (the orchestrator daemon
+      and main.py do not write the heartbeat file — only a standalone
+      main_orchestrator.py run does), validation_reports
       (strategy validation reports are a go-live gate, not advisory health),
       no_unexpected_risk_blocks (risk-gate blocks only occur on order submission,
       which never happens in advisory mode).
@@ -103,17 +104,19 @@ Checks (numbered subset; see the note below)
                                   (never values).
  9. kill_switch_inactive        — The KILL_SWITCH sentinel file does not exist.
 10. state_snapshot_fresh        — output/state_snapshot.json exists and its
-                                  embedded timestamp is < 2 hours old.  Both
-                                  main.py (advisory) and main_orchestrator.py
-                                  write this file, making it the cross-mode
-                                  liveness indicator.  NOT auto-skipped in
+                                  embedded timestamp is < 2 hours old.  The
+                                  orchestrator daemon, main_orchestrator.py and
+                                  (until it is archived) main.py all write this
+                                  file, making it the cross-mode liveness
+                                  indicator.  NOT auto-skipped in
                                   advisory mode (it IS the advisory liveness
                                   check).
 11. heartbeat_fresh             — output/heartbeat.txt was updated within 2 hours.
                                   SKIPPED when ADVISORY_ONLY=True — the heartbeat
-                                  is written only by main_orchestrator.py; advisory
-                                  runs via main.py do not require a persistent
-                                  orchestrator process. Independently of that,
+                                  is written only by a standalone
+                                  main_orchestrator.py run (never by the daemon);
+                                  advisory deployments do not require it.
+                                  Independently of that,
                                   DEGRADES a stale/missing reading to a warning
                                   (never a hard FAIL) whenever the persistent
                                   orchestrator daemon is independently confirmed
@@ -588,9 +591,10 @@ def check_robinhood_session_present() -> CheckResult:
         return CheckResult(
             name, True,
             "⚠️  No cached Robinhood session found — the next login will need "
-            "a fresh device approval (tap 'approve' in the Robinhood app). Run "
-            "`python3 main.py --refresh-account` (or the Pilots PWA's connect "
-            "flow) with your phone nearby.",
+            "a fresh device approval (tap 'approve' in the Robinhood app). "
+            "Open Settings → Brokers and press Refresh (approve the device "
+            "prompt on your phone), or enable ROBINHOOD_SCHEDULED_LOGIN_ENABLED "
+            "for the daemon's weekday-morning login.",
             warning=True,
         )
     return CheckResult(
@@ -843,11 +847,11 @@ def check_kill_switch_inactive() -> CheckResult:
 
 
 def _paused_for_market_hours() -> bool:
-    """True when settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY (see main.py /
+    """True when settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY (see
     desktop/daemon_runtime.py's automatic-trigger gate) fully explains why
     state_snapshot.json hasn't been refreshed recently -- i.e. we're currently
-    outside the 4am-8pm ET weekday window, so main.py --interval/the daemon
-    timer are legitimately skipping cycles rather than being down. Lazy
+    outside the 4am-8pm ET weekday window, so the daemon timer is
+    legitimately skipping cycles rather than being down. Lazy
     imports keep this module's own import graph unchanged for every caller
     that never hits this branch; dead-letter by design (CONSTRAINT #6) -- any
     failure here must never turn a real staleness failure into a falsely-
@@ -865,20 +869,21 @@ def _paused_for_market_hours() -> bool:
 def check_state_snapshot_fresh(max_age_hours: float = 2.0) -> CheckResult:
     """Verify that the pipeline state snapshot was written recently.
 
-    Both ``main.py`` (advisory) and ``main_orchestrator.py`` (full pipeline)
-    write ``OUTPUT_DIR/state_snapshot.json`` at the end of every run.  The file
+    The orchestrator daemon, ``main_orchestrator.py`` (full pipeline) and,
+    until it is archived, ``main.py`` (advisory) write
+    ``OUTPUT_DIR/state_snapshot.json`` at the end of every run.  The file
     carries an ISO 8601 UTC ``timestamp`` field that this check reads to compute
     the snapshot age.  File mtime is used as a fallback when the ``timestamp``
     field is absent (e.g., written by an older version of the platform).
 
     This is the cross-mode liveness indicator: it is meaningful in advisory mode
-    (where ``main.py`` does NOT write ``heartbeat.txt``) AND in full-pipeline
-    mode (where ``main_orchestrator.py`` writes both).  It is therefore NOT in
+    and under the daemon (neither of which writes ``heartbeat.txt``) AND in
+    one-shot full-pipeline mode (where ``main_orchestrator.py`` writes both).  It is therefore NOT in
     ``_ADVISORY_AUTO_SKIP`` — it is the one check that replaces ``heartbeat_fresh``
     as the liveness gate when running in advisory mode.
 
     ``settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY`` (default ``True``) makes
-    ``main.py --interval``/the daemon timer skip automatic cycles outside the
+    the daemon timer skip automatic cycles outside the
     4am-8pm ET weekday window, so a stale snapshot found outside that window is
     expected, not a sign the pipeline is down. When ``_paused_for_market_hours()``
     confirms that's the case, staleness beyond ``max_age_hours`` degrades to a
@@ -890,7 +895,10 @@ def check_state_snapshot_fresh(max_age_hours: float = 2.0) -> CheckResult:
         return CheckResult(
             name, False,
             "output/state_snapshot.json not found — has the pipeline been run recently? "
-            "Run: python3 main.py  (advisory)  or  python3 main_orchestrator.py",
+            "Trigger a cycle with POST /run or the Pipeline Dashboard's 'Run "
+            "full advisory pipeline' button (daemon: python -m "
+            "desktop.orchestrator_daemon); a one-shot without the daemon is "
+            "python3 main_orchestrator.py.",
         )
     try:
         data = json.loads(snapshot_path.read_text(encoding="utf-8"))
@@ -915,7 +923,9 @@ def check_state_snapshot_fresh(max_age_hours: float = 2.0) -> CheckResult:
             return CheckResult(
                 name, False,
                 f"State snapshot is {age.total_seconds()/3600:.1f}h old (limit {max_age_hours}h) — "
-                "pipeline may be down; run python3 main.py to refresh",
+                "pipeline may be down; trigger a cycle with POST /run or the "
+                "Pipeline Dashboard's 'Run full advisory pipeline' button "
+                "(daemon: python -m desktop.orchestrator_daemon) to refresh",
             )
         return CheckResult(
             name, True,
@@ -1101,7 +1111,7 @@ def check_daemon_pid_alive() -> CheckResult:
             name, True,
             "No daemon.json found under OUTPUT_DIR — the persistent orchestrator "
             "daemon (desktop/orchestrator_daemon.py) has never been started here, "
-            "or this deployment runs main.py/main_orchestrator.py directly without "
+            "or this deployment runs main_orchestrator.py directly without "
             "it. Not a failure; informational only.",
         )
     try:
@@ -1995,8 +2005,9 @@ ALL_CHECKS = [
 #       orchestrator pipeline or broker execution to produce a meaningful signal;
 #       in advisory mode they would always fail even on a healthy platform.
 #
-#       - heartbeat_fresh: written by main_orchestrator.py only; main.py does not
-#         write heartbeat.txt, so this always fails in advisory mode.
+#       - heartbeat_fresh: written by a standalone main_orchestrator.py run only;
+#         neither the daemon nor main.py writes heartbeat.txt, so this always
+#         fails in advisory mode.
 #       - validation_reports: strategy validation reports are a pre-live deployment
 #         gate, not an advisory health signal.
 #       - no_unexpected_risk_blocks: risk-gate blocks occur only on order
@@ -2018,9 +2029,9 @@ _ADVISORY_AUTO_SKIP: dict[str, str] = {
         "when no orders are submitted"
     ),
     "heartbeat_fresh": (
-        "ADVISORY_ONLY=True — heartbeat is written only by "
-        "main_orchestrator.py; advisory runs via main.py do not "
-        "require a persistent orchestrator process"
+        "ADVISORY_ONLY=True — heartbeat is written only by a "
+        "standalone main_orchestrator.py run (never by the daemon); "
+        "advisory deployments do not require it"
     ),
     "validation_reports": (
         "ADVISORY_ONLY=True — validation reports gate live order "

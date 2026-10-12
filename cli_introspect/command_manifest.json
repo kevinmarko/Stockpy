@@ -1,57 +1,8 @@
 {
-  "generated_at": "2026-09-29T20:05:44.795740+00:00",
-  "command_count": 17,
+  "generated_at": "2026-10-11T21:08:37.778100+00:00",
+  "command_count": 16,
   "dead_letters": [],
   "commands": [
-    {
-      "name": "main.py",
-      "invocation": "python3 main.py",
-      "aliases": [],
-      "description": "InvestYo Quant Platform \u2014 advisory pipeline launcher",
-      "options": [
-        {
-          "name": "--interval",
-          "aliases": [
-            "--interval"
-          ],
-          "description": "Refresh market data every N seconds (0 = run once and exit).",
-          "default": 0,
-          "choices": null,
-          "required": false,
-          "arg_kind": "optional",
-          "metavar": "SECONDS",
-          "takes_value": true
-        },
-        {
-          "name": "--refresh-account",
-          "aliases": [
-            "--refresh-account"
-          ],
-          "description": "Force a fresh Robinhood fetch on this launch (bypasses daily cache).",
-          "default": false,
-          "choices": null,
-          "required": false,
-          "arg_kind": "optional",
-          "metavar": null,
-          "takes_value": false
-        },
-        {
-          "name": "--agent",
-          "aliases": [
-            "--agent"
-          ],
-          "description": "Run the autonomous advisory agent loop: adaptive cadence based on market hours / VIX / regime, backlog reminders for high-conviction signals the operator has not yet logged a decision for, persistent state across restarts.  Takes precedence over --interval.",
-          "default": false,
-          "choices": null,
-          "required": false,
-          "arg_kind": "optional",
-          "metavar": null,
-          "takes_value": false
-        }
-      ],
-      "positionals": [],
-      "subcommands": []
-    },
     {
       "name": "main_orchestrator.py",
       "invocation": "python3 main_orchestrator.py",

@@ -10,26 +10,52 @@ file degrades to an honest empty shape with ``is_clean: None`` (CONSTRAINT #4:
 "no run yet" is not the same claim as "the last run was clean") — never an
 exception (CONSTRAINT #6).
 
-``POST /dead-letter/retry`` reuses ``shared.orchestrator_runner.launch_symbol_retry``
-(the SAME launcher the Streamlit Launcher tab's dead-letter Retry button
-already calls) behind ``require_command_token`` STACKED with the dedicated
-``DEAD_LETTER_RETRY_ENABLED`` master flag.
+``POST /dead-letter/retry`` triggers ONE FULL orchestrator-daemon cycle through
+``shared.daemon_client.trigger_run()`` (the same call ``POST /automation/run``
+proxies, sharing its error -> HTTP mapping) behind ``require_command_token``
+STACKED with the dedicated ``DEAD_LETTER_RETRY_ENABLED`` master flag. It is not
+a per-symbol run (the old ``main.py`` subprocess never was either): the symbol
+is validated and echoed but never reaches ``trigger_run``.
 """
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 from unittest import mock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from settings import settings
 from pilots import dead_letter as dead_letter_reader
+from shared.daemon_client import TriggerResponse
 import api.pilots_api as pilots_api
 
 client = TestClient(pilots_api.app, client=("127.0.0.1", 54123))
 
 _CMD_TOKEN = "cmd-tok"
+
+# Patch target named by the contract: the module attribute pilots_api calls
+# through (``pilots_api.daemon_client`` is the ``shared.daemon_client`` module).
+_TRIGGER = "shared.daemon_client.trigger_run"
+
+
+def _trigger_response(**overrides) -> TriggerResponse:
+    base = dict(
+        ok=True,
+        run_id="orch-1",
+        state="queued",
+        error=None,
+        existing_run_id=None,
+        kill_switch_reason=None,
+    )
+    base.update(overrides)
+    return TriggerResponse(**base)
+
+
+def _failure(error: str, **overrides) -> TriggerResponse:
+    return _trigger_response(ok=False, run_id=None, state=None, error=error, **overrides)
 
 
 # --------------------------------------------------------------------------- #
@@ -150,64 +176,211 @@ class TestDeadLetterRetryWrite:
     def _auth(self):
         return {"Authorization": f"Bearer {_CMD_TOKEN}"}
 
-    def _post(self, symbol):
+    def _post(self, symbol, result=None):
+        """POST with a valid command token and the flag on; ``trigger_run`` is
+        patched (default: a successful trigger) and returned for assertions."""
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "DEAD_LETTER_RETRY_ENABLED", True):
-                with mock.patch("shared.orchestrator_runner.launch_symbol_retry") as m:
-                    m.return_value = mock.Mock(pid=4242, log_path="output/gui_retry.log")
+                with mock.patch(_TRIGGER) as m:
+                    m.return_value = result if result is not None else _trigger_response()
                     resp = client.post(
                         "/dead-letter/retry", json={"symbol": symbol}, headers=self._auth()
                     )
                     return resp, m
 
+    # -- auth / flag gates (nothing may reach the daemon when any gate fails) --
     def test_fails_closed_when_retry_disabled(self):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "DEAD_LETTER_RETRY_ENABLED", False):
-                resp = client.post(
-                    "/dead-letter/retry", json={"symbol": "AAPL"}, headers=self._auth()
-                )
+                with mock.patch(_TRIGGER) as m:
+                    resp = client.post(
+                        "/dead-letter/retry", json={"symbol": "AAPL"}, headers=self._auth()
+                    )
         assert resp.status_code == 403
+        m.assert_not_called()
 
     def test_fails_closed_when_follow_token_unset(self):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", None):
             with mock.patch.object(settings, "DEAD_LETTER_RETRY_ENABLED", True):
-                resp = client.post(
-                    "/dead-letter/retry",
-                    json={"symbol": "AAPL"},
-                    headers={"Authorization": "Bearer anything"},
-                )
+                with mock.patch(_TRIGGER) as m:
+                    resp = client.post(
+                        "/dead-letter/retry",
+                        json={"symbol": "AAPL"},
+                        headers={"Authorization": "Bearer anything"},
+                    )
         assert resp.status_code == 403
+        m.assert_not_called()
 
     def test_401_on_wrong_command_token(self):
         with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
             with mock.patch.object(settings, "DEAD_LETTER_RETRY_ENABLED", True):
-                resp = client.post(
-                    "/dead-letter/retry",
-                    json={"symbol": "AAPL"},
-                    headers={"Authorization": "Bearer WRONG"},
-                )
+                with mock.patch(_TRIGGER) as m:
+                    resp = client.post(
+                        "/dead-letter/retry",
+                        json={"symbol": "AAPL"},
+                        headers={"Authorization": "Bearer WRONG"},
+                    )
         assert resp.status_code == 401
+        m.assert_not_called()
 
-    def test_happy_path_calls_launcher_exactly_once_with_uppercased_symbol(self):
+    # -- success shape -------------------------------------------------------
+    def test_happy_path_triggers_one_daemon_cycle_and_returns_run_id(self):
         resp, m = self._post("aapl")
         assert resp.status_code == 200
         body = resp.json()
+        assert set(body) == {"symbol", "run_id", "applies", "note"}
         assert body["symbol"] == "AAPL"
-        assert body["pid"] == 4242
-        assert body["log_path"] == "output/gui_retry.log"
+        assert body["run_id"] == "orch-1"
         assert body["applies"] == "immediately"
-        m.assert_called_once_with("AAPL")
+        assert isinstance(body["note"], str) and body["note"]
+        m.assert_called_once_with()
 
-    def test_invalid_symbol_returns_422_and_never_launches(self):
+    def test_success_has_no_pid_or_log_path(self):
+        """The old subprocess launcher's fields are gone -- a daemon cycle has
+        neither a child PID nor a per-retry log file."""
+        resp, _ = self._post("AAPL")
+        body = resp.json()
+        assert "pid" not in body
+        assert "log_path" not in body
+
+    def test_run_id_is_null_not_fabricated_when_daemon_reports_none(self):
+        resp, _ = self._post("AAPL", result=_trigger_response(run_id=None))
+        assert resp.status_code == 200
+        assert resp.json()["run_id"] is None
+
+    @pytest.mark.parametrize("symbol", ["AAPL", "msft", " brk.b ", "ZZZZ"])
+    def test_symbol_never_influences_what_is_triggered(self, symbol):
+        """The retry is a full-universe cycle: trigger_run takes no symbol,
+        so none may be passed, positionally or by keyword."""
+        resp, m = self._post(symbol)
+        assert resp.status_code == 200
+        m.assert_called_once_with()
+        assert m.call_args.args == ()
+        assert m.call_args.kwargs == {}
+
+    def test_note_is_honest_about_a_full_universe_cycle(self):
+        resp, _ = self._post("aapl")
+        note = resp.json()["note"]
+        low = note.lower()
+        assert "AAPL" in note
+        assert "full" in low and "whole" in low  # whole universe, full cycle
+        assert "not a retry of AAPL alone" in note
+        assert "per-symbol" in low  # the old retry was never per-symbol either
+        assert "dead_letter.json" in note  # a cycle is what rewrites it
+        # The old endpoint's claim that no orders are placed is no longer true.
+        assert "no orders placed" not in low
+        assert "a full pipeline run" in low  # discloses the broader side effects
+
+    # -- error mapping (shared with POST /automation/run) --------------------
+    @pytest.mark.parametrize(
+        "error,expected_status",
+        [
+            ("already_running", 409),
+            ("kill_switch_active", 423),
+            ("command_disabled", 503),
+            ("unauthorized", 503),
+            ("unavailable", 503),
+            ("network_error", 503),
+            ("unexpected_response", 503),
+        ],
+    )
+    def test_each_trigger_error_maps_to_the_automation_run_status(self, error, expected_status):
+        resp, m = self._post("AAPL", result=_failure(error))
+        assert resp.status_code == expected_status
+        m.assert_called_once_with()
+        body = resp.json()
+        assert "detail" in body
+        # An error is never dressed up as a successful retry.
+        assert "applies" not in body and "run_id" not in body and "note" not in body
+
+    def test_409_surfaces_the_existing_run_id(self):
+        resp, _ = self._post(
+            "AAPL", result=_failure("already_running", existing_run_id="orch-old")
+        )
+        assert resp.status_code == 409
+        assert resp.json()["detail"]["run_id"] == "orch-old"
+
+    def test_423_surfaces_the_kill_switch_reason(self):
+        resp, _ = self._post(
+            "AAPL", result=_failure("kill_switch_active", kill_switch_reason="manual halt")
+        )
+        assert resp.status_code == 423
+        assert resp.json()["detail"]["kill_switch_reason"] == "manual halt"
+
+    def test_503_when_daemon_unreachable(self):
+        resp, _ = self._post("AAPL", result=_failure("network_error"))
+        assert resp.status_code == 503
+        assert "not reachable" in resp.json()["detail"]
+
+    def test_unauthorized_and_command_disabled_bodies_are_indistinguishable(self):
+        """Never let a caller learn which side's token/config is wrong."""
+        r1, _ = self._post("AAPL", result=_failure("unauthorized"))
+        r2, _ = self._post("AAPL", result=_failure("command_disabled"))
+        assert r1.status_code == r2.status_code == 503
+        assert r1.json() == r2.json()
+
+    def test_error_bodies_match_post_automation_run(self):
+        """Reuse, not a re-implementation: for every trigger error the retry
+        endpoint's response is byte-for-byte what /automation/run sends."""
+        cases = [
+            _failure("already_running", existing_run_id="orch-old"),
+            _failure("kill_switch_active", kill_switch_reason="halt"),
+            _failure("unauthorized"),
+            _failure("unavailable"),
+        ]
+        for result in cases:
+            retry, _ = self._post("AAPL", result=result)
+            with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+                with mock.patch(_TRIGGER, return_value=result):
+                    run = client.post("/automation/run", headers=self._auth())
+            assert retry.status_code == run.status_code
+            assert retry.json() == run.json()
+
+    # -- symbol validation ---------------------------------------------------
+    def test_invalid_symbol_returns_422_and_never_triggers(self):
         resp, m = self._post("NOT A TICKER!!")
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "invalid_symbol"
+        m.assert_not_called()
+
+    @pytest.mark.parametrize("symbol", ["../etc/passwd", "AAPL; rm -rf /", "$(id)", "A B"])
+    def test_malformed_symbols_never_reach_the_daemon(self, symbol):
+        resp, m = self._post(symbol)
+        assert resp.status_code == 422
+        m.assert_not_called()
+
+    def test_empty_symbol_is_rejected_and_never_triggers(self):
+        resp, m = self._post("")
+        assert resp.status_code == 422
         m.assert_not_called()
 
     def test_write_never_logs_token(self, caplog):
         with caplog.at_level("DEBUG"):
             self._post("AAPL")
         assert _CMD_TOKEN not in caplog.text
+
+
+class TestDeadLetterRetryNoLongerShellsOut:
+    def test_pilots_api_has_no_reference_to_the_removed_subprocess_launcher(self):
+        """launch_symbol_retry (a ``main.py`` subprocess) was deleted in shrink
+        step 5.4a; a daemon cycle is the only path now."""
+        assert "launch_symbol_retry" not in inspect.getsource(pilots_api)
+
+    def test_endpoint_never_spawns_a_subprocess(self):
+        with mock.patch.object(settings, "FOLLOW_API_TOKEN", _CMD_TOKEN):
+            with mock.patch.object(settings, "DEAD_LETTER_RETRY_ENABLED", True):
+                with mock.patch(_TRIGGER, return_value=_trigger_response()):
+                    with mock.patch("subprocess.Popen") as popen, mock.patch(
+                        "subprocess.run"
+                    ) as run:
+                        resp = client.post(
+                            "/dead-letter/retry",
+                            json={"symbol": "AAPL"},
+                            headers={"Authorization": f"Bearer {_CMD_TOKEN}"},
+                        )
+        assert resp.status_code == 200
+        popen.assert_not_called()
+        run.assert_not_called()
 
 
 class TestDeadLetterRetryInvariants:

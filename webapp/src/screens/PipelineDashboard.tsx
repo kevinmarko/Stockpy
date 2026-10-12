@@ -440,6 +440,12 @@ function DurableRunHistory({
   );
 }
 
+/** Honest label for the daemon run a Retry triggered: the id when the server
+ *  reported one, an explicit "not reported" otherwise — never a made-up id. */
+function runIdLabel(runId: string | null): string {
+  return runId ? `run ${runId}` : "run id not reported";
+}
+
 /**
  * DeadLetterQueueSection — Streamlit Launcher tab's dead-letter queue
  * (gui/panels/launcher.py::_render_dead_letter_queue) ported to the webapp.
@@ -447,10 +453,12 @@ function DurableRunHistory({
  * (fail-closed command token + the dedicated DEAD_LETTER_RETRY_ENABLED
  * flag). `is_clean: null` (no run yet) is rendered distinctly from
  * `is_clean: true` (a genuinely clean last run) — CONSTRAINT #4, "no run
- * yet" is not the same claim as "the last run was clean". Retry does not
- * stream logs the way Console.tsx's job launchers do (this is a bespoke
- * subprocess spawn, not routed through the generic POST /jobs job manager) —
- * it reports the spawned PID/log path it was actually given, honestly.
+ * yet" is not the same claim as "the last run was clean". Retry does NOT
+ * re-run just the clicked symbol: it triggers a full orchestrator-daemon
+ * pipeline cycle (the whole universe, same as "Run full advisory pipeline"),
+ * which is also what rewrites the dead-letter report. It does not stream logs
+ * the way Console.tsx's job launchers do — it reports the daemon run id it was
+ * actually given (or says none was reported), honestly.
  */
 function DeadLetterRow({
   entry,
@@ -475,9 +483,9 @@ function DeadLetterRow({
     if (res) {
       toast.success(
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Retry queued for {entry.symbol}</span>
+          <span style={{ fontWeight: 600, fontSize: 'var(--t-callout)' }}>Full pipeline cycle triggered (retry for {entry.symbol})</span>
           <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--t-caption)', marginTop: '4px' }}>
-            {res.note} (PID {res.pid})
+            {res.note} ({runIdLabel(res.run_id)})
           </span>
         </div>
       );
@@ -527,7 +535,7 @@ function DeadLetterRow({
         <Notice variant="success" data-testid={`retry-result-${entry.symbol}`}>
           <span aria-hidden>✅</span>
           <span>
-            {retry.result.note} (PID {retry.result.pid}, log: {retry.result.log_path})
+            {retry.result.note} ({runIdLabel(retry.result.run_id)})
           </span>
         </Notice>
       )}
@@ -573,8 +581,9 @@ function DeadLetterQueueSection() {
               <span aria-hidden>⚠️</span>
               <span>
                 {data.entries.length} symbol(s) failed in the last run
-                {data.run_id ? ` (${data.run_id.slice(0, 19)})` : ""}. Use Retry to
-                re-evaluate a single symbol.
+                {data.run_id ? ` (${data.run_id.slice(0, 19)})` : ""}. Retry
+                triggers a full pipeline cycle that re-runs the whole universe,
+                not just the failed symbol.
               </span>
             </Notice>
             {!data.retry_enabled && (

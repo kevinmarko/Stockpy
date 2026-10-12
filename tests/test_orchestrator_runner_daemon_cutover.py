@@ -2,12 +2,12 @@
 tests/test_orchestrator_runner_daemon_cutover.py
 ==================================================
 PR5 — persistent-daemon GUI cutover, behind settings.ORCHESTRATOR_DAEMON_ENABLED
-(default False). Two distinct cutover points, both in gui/orchestrator_runner.py:
+(default False). Three distinct cutover points, all in shared/orchestrator_runner.py:
 
 1. launch_daemon_engine() — the always-on desktop-shell refresh loop, spawned
    when the flag is True.
-   This reuses the EXACT SAME Popen/RunHandle/stop_run mechanics as
-   launch_scheduled_advisory (backend="subprocess") -- just a different
+   This reuses the same Popen/RunHandle/stop_run mechanics as every other
+   subprocess launcher (backend="subprocess") -- just a different
    command. No dual-backend logic needed for this path.
 
 2. launch_orchestrator()'s flag-gated HTTP fast path — the Launcher tab's
@@ -16,6 +16,11 @@ PR5 — persistent-daemon GUI cutover, behind settings.ORCHESTRATOR_DAEMON_ENABL
    a backend="daemon" RunHandle. This DOES need dual-backend logic:
    RunHandle.is_running()/returncode(), stop_run(), read_log_tail(), and
    compute_stage_status() all branch on handle.backend.
+
+3. launch_daemon_cycle() — the Console's "Advisory Pipeline" job
+   (api/_jobs.py JobType.ADVISORY), which replaced the retired main.py
+   subprocess. Daemon-ONLY: same backend="daemon" handle as (2), but never
+   gated on the flag and never falling back to a subprocess.
 
 All daemon_client calls are monkeypatched -- no real HTTP, no real daemon
 process. subprocess.Popen is monkeypatched via the same _FakePopen pattern
@@ -36,7 +41,7 @@ def runner(monkeypatch, tmp_path):
 
     monkeypatch.setattr(runner, "RUN_LOG_PATH", tmp_path / "gui_run.log")
     monkeypatch.setattr(runner, "DAEMON_LOG_PATH", tmp_path / "gui_daemon.log")
-    monkeypatch.setattr(runner, "SCHEDULED_LOG_PATH", tmp_path / "gui_scheduled.log")
+    monkeypatch.setattr(runner, "DAEMON_CYCLE_LOG_PATH", tmp_path / "gui_daemon_cycle.log")
     monkeypatch.setattr(runner.settings, "OUTPUT_DIR", tmp_path)
     return runner
 
@@ -332,6 +337,335 @@ class TestLaunchOrchestratorDaemonFastPath:
         handle = runner.launch_orchestrator()
 
         assert handle.backend == "subprocess"
+
+
+# ---------------------------------------------------------------------------
+# 4b. launch_daemon_cycle() — daemon-only, attach on 409, honest errors
+# ---------------------------------------------------------------------------
+
+def _trigger_response(**kwargs):
+    import shared.daemon_client as daemon_client
+
+    base = dict(ok=False, run_id=None, state=None, error=None)
+    base.update(kwargs)
+    return daemon_client.TriggerResponse(**base)
+
+
+@pytest.fixture()
+def no_subprocess(monkeypatch, runner):
+    """launch_daemon_cycle has NO subprocess fallback: any Popen is a failure."""
+
+    def _popen_must_not_be_called(cmd, **kwargs):
+        raise AssertionError(f"subprocess.Popen must not be called: {cmd}")
+
+    monkeypatch.setattr(runner.subprocess, "Popen", _popen_must_not_be_called)
+
+
+def _patch_trigger(monkeypatch, response, latest=None, status=None):
+    """Patch daemon_client.trigger_run to return ``response``; also make
+    daemon_available() fail the test (the cycle must not pre-probe, it goes
+    straight to POST /run). ``latest`` is what GET /run/latest returns (the
+    409 fallback); when it is left unset any read of it fails the test.
+    ``status`` is what GET /run/{id}/status returns when attaching to an
+    in-flight run (default ``None`` = unreadable). Returns the list of
+    trigger calls."""
+    import shared.daemon_client as daemon_client
+
+    calls: list = []
+
+    def _fake_trigger(timeout=5.0):
+        calls.append(timeout)
+        return response
+
+    def _available_must_not_be_called(*a, **k):
+        raise AssertionError("launch_daemon_cycle must not pre-probe daemon_available()")
+
+    def _latest_must_not_be_read(*a, **k):
+        raise AssertionError("GET /run/latest must only be read as the 409 fallback")
+
+    monkeypatch.setattr(daemon_client, "trigger_run", _fake_trigger)
+    monkeypatch.setattr(daemon_client, "daemon_available", _available_must_not_be_called)
+    monkeypatch.setattr(
+        daemon_client, "get_latest_run",
+        _latest_must_not_be_read if latest is None else (lambda timeout=2.0: latest),
+    )
+    monkeypatch.setattr(daemon_client, "get_run_status", lambda run_id, timeout=2.0: status)
+    return calls
+
+
+class TestLaunchDaemonCycle:
+    @pytest.mark.parametrize("flag", [False, True])
+    def test_ok_returns_daemon_backed_handle_regardless_of_cutover_flag(
+        self, monkeypatch, runner, no_subprocess, flag,
+    ):
+        """Unlike launch_orchestrator's fast path this is NOT gated on
+        ORCHESTRATOR_DAEMON_ENABLED -- the daemon is the only runtime."""
+        monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", flag)
+        calls = _patch_trigger(
+            monkeypatch, _trigger_response(ok=True, run_id="run-abc", state="queued"),
+        )
+
+        handle = runner.launch_daemon_cycle()
+
+        assert len(calls) == 1
+        assert handle.backend == "daemon"
+        assert handle.daemon_run_id == "run-abc"
+        assert handle.mode == "daemon_cycle"
+        assert handle.pid == -1
+        assert handle.dry_run is False
+        assert handle.refresh_account is False
+        assert handle._popen is None
+        # The daemon never writes a per-run log: the handle must not point at a
+        # file (e.g. a stale gui_run.log) that could be replayed as its output.
+        assert handle.log_path == runner.DAEMON_CYCLE_LOG_PATH
+        assert handle.log_path != runner.RUN_LOG_PATH
+        assert not handle.log_path.exists()
+
+    def test_returned_handle_uses_the_existing_daemon_backed_machinery(
+        self, monkeypatch, runner, no_subprocess,
+    ):
+        _patch_trigger(monkeypatch, _trigger_response(ok=True, run_id="run-abc", state="queued"))
+        handle = runner.launch_daemon_cycle()
+
+        monkeypatch.setattr(runner, "_daemon_run_status", lambda _rid: {"state": "running"})
+        assert handle.is_running() is True
+        assert handle.returncode() is None
+        assert all(v == runner.StageStatus.ACTIVE for v in runner.compute_stage_status(handle).values())
+
+        monkeypatch.setattr(
+            runner, "_daemon_run_status",
+            lambda _rid: {"run_id": "run-abc", "state": "succeeded", "started_at": "t0",
+                          "finished_at": "t1", "duration_seconds": 1.0, "error": None},
+        )
+        assert handle.is_running() is False
+        assert handle.returncode() == 0
+        assert "run-abc" in runner.read_log_tail(handle=handle)
+        assert "succeeded" in runner.read_log_tail(handle=handle)
+        # Not cancellable: stop_run refuses a daemon handle rather than pretending.
+        assert runner.stop_run(handle) is False
+
+    def test_409_already_running_attaches_to_existing_run(
+        self, monkeypatch, runner, no_subprocess,
+    ):
+        _patch_trigger(
+            monkeypatch,
+            _trigger_response(error="already_running", existing_run_id="run-xyz"),
+        )
+
+        handle = runner.launch_daemon_cycle()
+
+        # The body's run id wins; GET /run/latest is not consulted (the helper
+        # fails the test if it is read).
+        assert handle.backend == "daemon"
+        assert handle.daemon_run_id == "run-xyz"
+        assert handle.mode == "daemon_cycle"
+        assert handle.pid == -1
+
+    def test_409_without_a_body_run_id_attaches_to_the_verifiably_in_flight_latest_run(
+        self, monkeypatch, runner, no_subprocess,
+    ):
+        """When the 409 reply yields no run id (e.g. an unparseable body),
+        GET /run/latest (queued/running only) identifies the in-flight cycle."""
+        _patch_trigger(
+            monkeypatch,
+            _trigger_response(error="already_running", existing_run_id=None),
+            latest={"run_id": "run-latest", "state": "running"},
+        )
+        handle = runner.launch_daemon_cycle()
+        assert handle.backend == "daemon"
+        assert handle.daemon_run_id == "run-latest"
+
+    @pytest.mark.parametrize(
+        "latest",
+        [
+            {"run_id": "run-old", "state": "succeeded"},  # finished: not in flight
+            {"run_id": "run-old", "state": "failed"},
+            {"state": "running"},                          # no id to attach to
+            {},
+            None,                                          # GET /run/latest unreadable
+        ],
+    )
+    def test_409_without_any_verifiable_run_id_raises_rather_than_guessing(
+        self, monkeypatch, runner, no_subprocess, latest,
+    ):
+        import shared.daemon_client as daemon_client
+
+        _patch_trigger(monkeypatch, _trigger_response(error="already_running", existing_run_id=None))
+        monkeypatch.setattr(daemon_client, "get_latest_run", lambda timeout=2.0: latest)
+        with pytest.raises(RuntimeError, match="already running"):
+            runner.launch_daemon_cycle()
+
+    @pytest.mark.parametrize("mode", ["data", "metrics"])
+    def test_409_on_a_non_full_run_refuses_to_attach(
+        self, monkeypatch, runner, no_subprocess, mode,
+    ):
+        """The daemon is single-flight across modes: a data/metrics sub-run in
+        flight never runs the advisory/broker/queue/snapshot steps, so it must
+        not be reported as this job's result."""
+        _patch_trigger(
+            monkeypatch,
+            _trigger_response(error="already_running", existing_run_id="run-sub"),
+            status={"run_id": "run-sub", "state": "running", "mode": mode},
+        )
+        with pytest.raises(RuntimeError) as exc:
+            runner.launch_daemon_cycle()
+        msg = str(exc.value)
+        assert f"'{mode}' run" in msg
+        assert "run-sub" in msg
+        assert "advisory/broker/queue/snapshot" in msg
+        assert "not attached" in msg
+        assert "retry" in msg
+
+    def test_409_non_full_check_also_applies_to_the_run_latest_fallback(
+        self, monkeypatch, runner, no_subprocess,
+    ):
+        _patch_trigger(
+            monkeypatch,
+            _trigger_response(error="already_running", existing_run_id=None),
+            latest={"run_id": "run-sub", "state": "running", "mode": "data"},
+            status={"run_id": "run-sub", "state": "running", "mode": "data"},
+        )
+        with pytest.raises(RuntimeError, match="'data' run"):
+            runner.launch_daemon_cycle()
+
+    def test_409_on_a_full_run_attaches(self, monkeypatch, runner, no_subprocess):
+        _patch_trigger(
+            monkeypatch,
+            _trigger_response(error="already_running", existing_run_id="run-full"),
+            status={"run_id": "run-full", "state": "running", "mode": "full"},
+        )
+        handle = runner.launch_daemon_cycle()
+        assert handle.backend == "daemon"
+        assert handle.daemon_run_id == "run-full"
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            None,                                          # status unreadable
+            {"run_id": "run-x", "state": "running"},       # no mode field
+            {"run_id": "run-x", "state": "running", "mode": None},
+        ],
+    )
+    def test_409_with_an_unverifiable_mode_attaches(
+        self, monkeypatch, runner, no_subprocess, status,
+    ):
+        """We cannot prove it is a sub-run, so attach (documented limitation)."""
+        _patch_trigger(
+            monkeypatch,
+            _trigger_response(error="already_running", existing_run_id="run-x"),
+            status=status,
+        )
+        handle = runner.launch_daemon_cycle()
+        assert handle.daemon_run_id == "run-x"
+
+    def test_a_freshly_accepted_run_is_never_mode_checked(
+        self, monkeypatch, runner, no_subprocess,
+    ):
+        """POST /run always starts a full cycle; only the attach branch needs
+        the in-flight run's mode."""
+        import shared.daemon_client as daemon_client
+
+        _patch_trigger(monkeypatch, _trigger_response(ok=True, run_id="run-new", state="queued"))
+
+        def _status_must_not_be_read(*a, **k):
+            raise AssertionError("an accepted run must not be mode-checked")
+
+        monkeypatch.setattr(daemon_client, "get_run_status", _status_must_not_be_read)
+        assert runner.launch_daemon_cycle().daemon_run_id == "run-new"
+
+    def test_202_without_a_run_id_raises(self, monkeypatch, runner, no_subprocess):
+        _patch_trigger(monkeypatch, _trigger_response(ok=True, run_id=None, state="queued"))
+        with pytest.raises(RuntimeError, match="run id"):
+            runner.launch_daemon_cycle()
+
+    def test_kill_switch_active_raises_with_the_reason(
+        self, monkeypatch, runner, no_subprocess,
+    ):
+        _patch_trigger(
+            monkeypatch,
+            _trigger_response(error="kill_switch_active", kill_switch_reason="macro regime breach"),
+        )
+        with pytest.raises(RuntimeError) as exc:
+            runner.launch_daemon_cycle()
+        msg = str(exc.value).lower()
+        assert "kill switch" in msg
+        assert "macro regime breach" in msg
+
+    def test_kill_switch_active_without_a_reason_does_not_invent_one(
+        self, monkeypatch, runner, no_subprocess,
+    ):
+        _patch_trigger(
+            monkeypatch, _trigger_response(error="kill_switch_active", kill_switch_reason=""),
+        )
+        with pytest.raises(RuntimeError) as exc:
+            runner.launch_daemon_cycle()
+        assert "kill switch" in str(exc.value).lower()
+        assert "reason" not in str(exc.value).lower()
+
+    @pytest.mark.parametrize("error", ["command_disabled", "unauthorized"])
+    def test_token_problems_name_orchestrator_daemon_token(
+        self, monkeypatch, runner, no_subprocess, error,
+    ):
+        _patch_trigger(monkeypatch, _trigger_response(error=error))
+        with pytest.raises(RuntimeError, match="ORCHESTRATOR_DAEMON_TOKEN"):
+            runner.launch_daemon_cycle()
+
+    def test_503_unavailable_says_the_daemon_is_not_running_and_never_spawns_a_subprocess(
+        self, monkeypatch, runner, no_subprocess,
+    ):
+        _patch_trigger(monkeypatch, _trigger_response(error="unavailable"))
+        with pytest.raises(RuntimeError) as exc:
+            runner.launch_daemon_cycle()
+        assert "daemon not running (python -m desktop.orchestrator_daemon)" in str(exc.value)
+
+    def test_network_error_does_not_claim_nothing_started(
+        self, monkeypatch, runner, no_subprocess,
+    ):
+        """A client-side timeout can fire after the daemon accepted the run, so
+        the message says the trigger could not be confirmed, not that the
+        daemon is down."""
+        _patch_trigger(monkeypatch, _trigger_response(error="network_error"))
+        with pytest.raises(RuntimeError) as exc:
+            runner.launch_daemon_cycle()
+        msg = str(exc.value)
+        assert "could not be confirmed" in msg
+        assert "connection refused, timeout or unreadable reply" in msg
+        assert "may or may not have started" in msg
+        assert "Pipeline Dashboard" in msg and "GET /run/latest" in msg
+        assert "before retrying" in msg
+        assert "likely cause" in msg and "python -m desktop.orchestrator_daemon" in msg
+        # Over-claims the audit removed:
+        assert "daemon not running" not in msg
+        assert "nothing started" not in msg.lower()
+
+    def test_network_error_names_the_port_it_tried(self, monkeypatch, runner, no_subprocess):
+        monkeypatch.setattr(runner.settings, "ORCHESTRATOR_API_PORT", 18601)
+        _patch_trigger(monkeypatch, _trigger_response(error="network_error"))
+        with pytest.raises(RuntimeError, match="127.0.0.1:18601"):
+            runner.launch_daemon_cycle()
+
+    def test_unexpected_response_raises_honestly(self, monkeypatch, runner, no_subprocess):
+        _patch_trigger(monkeypatch, _trigger_response(error="unexpected_response"))
+        with pytest.raises(RuntimeError, match="unexpected"):
+            runner.launch_daemon_cycle()
+
+    @pytest.mark.parametrize(
+        "error",
+        ["kill_switch_active", "command_disabled", "unauthorized", "unavailable",
+         "network_error", "unexpected_response", "already_running"],
+    )
+    def test_error_messages_never_leak_the_token_value(
+        self, monkeypatch, runner, no_subprocess, error,
+    ):
+        import shared.daemon_client as daemon_client
+
+        monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_TOKEN", "sentinel-secret-9f3a")
+        _patch_trigger(monkeypatch, _trigger_response(error=error))
+        # already_running consults GET /run/latest for an id; make it unreadable.
+        monkeypatch.setattr(daemon_client, "get_latest_run", lambda timeout=2.0: None)
+        with pytest.raises(RuntimeError) as exc:
+            runner.launch_daemon_cycle()
+        assert "sentinel-secret-9f3a" not in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

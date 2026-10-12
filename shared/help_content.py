@@ -635,7 +635,10 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "A per-symbol failure record written when a single ticker's analysis "
         "crashes.  The platform never aborts the entire run because of one bad "
         "ticker — it logs the failure to `output/dead_letter.json` and continues.  "
-        "The Launcher tab shows a Dead-Letter Queue with a 'Retry' button per symbol.",
+        "The Pipeline Dashboard lists these failures.  Its 'Retry' button is not "
+        "a per-symbol retry: it triggers one full orchestrator-daemon cycle that "
+        "re-runs the whole universe and rewrites `dead_letter.json` (requires "
+        "`DEAD_LETTER_RETRY_ENABLED`).",
         "#5-running-the-pipeline",
     ),
 
@@ -783,24 +786,28 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     # ── Autonomous agent + trade-signal alerts (Tier 6 / 6.1) ──────────────────
     "autonomous advisory agent": _g(
         "Autonomous Advisory Agent",
-        "The self-pacing advisory loop (run with `python3 main.py --agent`).  It "
-        "re-runs the analysis on an adaptive schedule — faster around the open/"
-        "close and during volatility, slower overnight — and re-pings you about "
-        "high-conviction signals you have not acted on.  It is still advisory: it "
-        "never places an order on your behalf.",
+        "A legacy self-pacing advisory loop that is being archived along with "
+        "`main.py`; the orchestrator daemon has no equivalent, so it is not "
+        "available in a daemon-run deployment (the daemon's own timer and "
+        "`POST /run` pace cycles instead).  Where it ran, it re-ran the analysis "
+        "on an adaptive schedule — faster around the open/close and during "
+        "volatility, slower overnight — and re-pinged you about high-conviction "
+        "signals you had not acted on.  It was always advisory: it never placed "
+        "an order on your behalf.",
         "#autonomous-advisory-agent",
     ),
     "backlog reminder": _g(
         "Backlog Reminder",
-        "A push notification the autonomous agent sends when a high-conviction "
-        "BUY/SELL has gone unactioned, escalating over time (roughly hourly, then "
-        "every few hours, then daily).  It stops once you log a decision for that "
-        "symbol, the signal goes stale, or the reminder cap is reached.",
+        "A push notification the legacy autonomous agent loop (not part of the "
+        "orchestrator daemon) sends when a high-conviction BUY/SELL has gone "
+        "unactioned, escalating over time (roughly hourly, then every few hours, "
+        "then daily).  It stops once you log a decision for that symbol, the "
+        "signal goes stale, or the reminder cap is reached.",
         "#autonomous-advisory-agent",
     ),
     "conviction momentum": _g(
         "Conviction Momentum",
-        "An early heads-up from the agent based on a symbol's conviction "
+        "An early heads-up from the legacy agent loop based on a symbol's conviction "
         "*trajectory* across cycles: 'building' when conviction is climbing "
         "steadily toward an entry, 'fading' when it is deteriorating on a name no "
         "longer rated a buy.  Each trend alerts once.  Informational only.",
@@ -808,7 +815,7 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     ),
     "stop and target proximity": _g(
         "Stop / Target Proximity Alert",
-        "For your held positions the agent derives a volatility-based stop below "
+        "For your held positions the legacy agent loop derives a volatility-based stop below "
         "your cost and a take-profit target from the forecast, and alerts you when "
         "the live price approaches or breaches either level.  A position-"
         "management nudge — it does not place or modify any order.",

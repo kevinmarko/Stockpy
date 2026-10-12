@@ -88,4 +88,4 @@ if [ "$OPTIONAL" -eq 1 ]; then
     fi
 fi
 
-echo "✅ Setup Complete! To run your dashboard, use: python3 main.py"
+echo "✅ Setup Complete! To run your dashboard, use: ./launch_webapp.command"

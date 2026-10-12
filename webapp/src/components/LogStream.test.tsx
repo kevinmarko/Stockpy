@@ -27,6 +27,17 @@ describe("LogStream (mock mode)", () => {
     ).toBeInTheDocument();
   });
 
+  it("an emptyMessage replaces the mock-mode placeholder with the job-specific explanation", async () => {
+    const { LogStream } = await import("./LogStream");
+    render(<LogStream jobId="job-1" isStreaming emptyMessage="Daemon-hosted: no log lines." />);
+    expect(screen.getByTestId("log-stream-empty-message")).toHaveTextContent(
+      "Daemon-hosted: no log lines."
+    );
+    expect(
+      screen.queryByText("Log streaming is only available in live mode.")
+    ).not.toBeInTheDocument();
+  });
+
   it("renders the filter input, auto-scroll toggle, and clear button", async () => {
     const { LogStream } = await import("./LogStream");
     render(<LogStream jobId="job-1" isStreaming={false} />);
@@ -129,5 +140,20 @@ describe("LogStream (live streaming, simulated EventSource)", () => {
     expect(screen.queryByText("log entry 5")).not.toBeInTheDocument();
     // Latest entry should be present
     expect(await screen.findByText(`log entry ${MAX_LOG_LINES + 5}`)).toBeInTheDocument();
+  });
+
+  it("an emptyMessage is shown instead of 'No logs received yet...' while the stream is silent, and yields to real lines", async () => {
+    const { LogStream } = await import("./LogStream");
+    render(<LogStream jobId="job-d" isStreaming emptyMessage="Daemon-hosted: no log lines." />);
+
+    expect(screen.getByTestId("log-stream-empty-message")).toHaveTextContent(
+      "Daemon-hosted: no log lines."
+    );
+    expect(screen.queryByText("No logs received yet...")).not.toBeInTheDocument();
+
+    // If lines do arrive they are rendered, never hidden behind the note.
+    FakeEventSource.instances[0].emit("a real line");
+    expect(await screen.findByText("a real line")).toBeInTheDocument();
+    expect(screen.queryByTestId("log-stream-empty-message")).not.toBeInTheDocument();
   });
 });

@@ -9,20 +9,21 @@ Coverage:
     correctly (this is the pre-launch readiness check that surfaces
     ``FRED_API_KEY`` absence before the subprocess silently degrades).
 *   :func:`read_log_tail` honours the ``handle.log_path`` of the active run
-    handle (so the advisory log is shown when ``main.py`` was launched, and
-    the orchestrator log otherwise).
+    handle (so a non-orchestrator launcher's own log is shown when it was
+    launched, and the orchestrator log otherwise).
 *   :func:`read_telemetry_tail` reads ``logs/investyo.log`` and returns a
     polite idle hint when the file does not yet exist.
-*   :func:`launch_advisory_main` and :func:`launch_orchestrator` route to
-    distinct log paths and tag the handle with the correct mode.
+*   :func:`launch_orchestrator` routes to the orchestrator log, tags the handle
+    with the correct mode, and never forwards ``--refresh-account`` (which
+    ``main_orchestrator.py`` does not accept).
 *   :func:`launch_train_lgbm` and :func:`launch_train_meta_labelers` (the
     Models tab "Retrain Now" launchers) route to their own log paths, tag the
     handle with the correct mode, build the expected argv (including the
     optional ``--signal`` flag), and construct ``RunHandle`` with keyword
     arguments only.
 
-All subprocess calls are monkeypatched so no real ``main.py`` /
-``main_orchestrator.py`` child process is spawned (CONSTRAINT #6).
+All subprocess calls are monkeypatched so no real ``main_orchestrator.py``
+child process is spawned (CONSTRAINT #6).
 """
 
 from __future__ import annotations
@@ -42,7 +43,6 @@ def runner(monkeypatch, tmp_path):
 
     # Redirect every FS sink the module writes to.
     monkeypatch.setattr(runner, "RUN_LOG_PATH", tmp_path / "gui_run.log")
-    monkeypatch.setattr(runner, "ADVISORY_LOG_PATH", tmp_path / "gui_advisory.log")
     monkeypatch.setattr(runner, "PYTEST_LOG_PATH", tmp_path / "gui_pytest.log")
     monkeypatch.setattr(runner, "VERIFY_LOG_PATH", tmp_path / "gui_verify.log")
     monkeypatch.setattr(runner, "TELEMETRY_LOG_PATH", tmp_path / "investyo.log")
@@ -81,18 +81,18 @@ def test_validate_required_env_treats_whitespace_as_missing(monkeypatch, runner)
 def test_read_log_tail_follows_handle_log_path(runner, tmp_path):
     # Write distinct contents to each log so we can tell which one was read.
     runner.RUN_LOG_PATH.write_text("orch line\n", encoding="utf-8")
-    runner.ADVISORY_LOG_PATH.write_text("adv line\n", encoding="utf-8")
+    runner.PYTEST_LOG_PATH.write_text("pytest line\n", encoding="utf-8")
 
     orch_handle = runner.RunHandle(
         pid=1, started_at=time.time(), dry_run=False,
         refresh_account=False, log_path=runner.RUN_LOG_PATH, mode="orchestrator",
     )
-    adv_handle = runner.RunHandle(
+    pytest_handle = runner.RunHandle(
         pid=2, started_at=time.time(), dry_run=False,
-        refresh_account=False, log_path=runner.ADVISORY_LOG_PATH, mode="advisory",
+        refresh_account=False, log_path=runner.PYTEST_LOG_PATH, mode="pytest",
     )
     assert "orch line" in runner.read_log_tail(handle=orch_handle)
-    assert "adv line" in runner.read_log_tail(handle=adv_handle)
+    assert "pytest line" in runner.read_log_tail(handle=pytest_handle)
 
 
 def test_read_log_tail_returns_hint_when_missing(runner):
@@ -157,7 +157,7 @@ def test_read_telemetry_tail_returns_last_lines(runner):
 
 
 # ---------------------------------------------------------------------------
-# launch_advisory_main / launch_orchestrator — routing & mode tagging
+# launch_orchestrator — routing, mode tagging & argv
 # ---------------------------------------------------------------------------
 
 class _FakePopen:
@@ -173,40 +173,63 @@ class _FakePopen:
         return self._polled
 
 
-def test_launch_advisory_main_routes_to_advisory_log(monkeypatch, runner):
-    captured: dict = {}
-
-    def fake_popen(cmd, **kwargs):
-        captured["cmd"] = cmd
-        captured["stdout"] = kwargs.get("stdout")
-        return _FakePopen(cmd, **kwargs)
-
-    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
-    handle = runner.launch_advisory_main(refresh_account=True)
-
-    assert handle.mode == "advisory"
-    assert handle.log_path == runner.ADVISORY_LOG_PATH
-    assert handle.refresh_account is True
-    assert handle.dry_run is False  # advisory mode never submits orders
-    # Command must invoke main.py with the refresh-account flag.
-    assert captured["cmd"][0] == sys.executable
-    assert captured["cmd"][1] == "main.py"
-    assert "--refresh-account" in captured["cmd"]
-    # Log file must exist (truncated header line written).
-    assert runner.ADVISORY_LOG_PATH.exists()
-
-
 def test_launch_orchestrator_routes_to_orchestrator_log(monkeypatch, runner):
     def fake_popen(cmd, **kwargs):
         return _FakePopen(cmd, **kwargs)
 
     monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
-    handle = runner.launch_orchestrator(dry_run=True, refresh_account=False)
+    handle = runner.launch_orchestrator(dry_run=True)
 
     assert handle.mode == "orchestrator"
     assert handle.log_path == runner.RUN_LOG_PATH
     assert handle.dry_run is True
     assert runner.RUN_LOG_PATH.exists()
+
+
+@pytest.mark.parametrize(
+    "dry_run,expected_tail",
+    [(False, []), (True, ["--dry-run"])],
+)
+def test_launch_orchestrator_argv_only_carries_flags_its_argparse_accepts(
+    monkeypatch, runner, dry_run, expected_tail,
+):
+    """main_orchestrator.py's argparse accepts only --dry-run/--strict; a
+    forwarded --refresh-account made the subprocess fall back exit 2."""
+    captured: dict = {}
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakePopen(cmd, **kwargs)
+
+    monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", False)
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    handle = runner.launch_orchestrator(dry_run=dry_run)
+
+    assert captured["cmd"] == [sys.executable, "main_orchestrator.py", *expected_tail]
+    assert "--refresh-account" not in captured["cmd"]
+    assert handle.refresh_account is False
+    header = runner.RUN_LOG_PATH.read_text(encoding="utf-8").splitlines()[0]
+    assert "refresh_account" not in header
+
+
+def test_launch_orchestrator_no_longer_accepts_refresh_account(runner):
+    """The param was removed outright (callers get a TypeError, not a silent
+    drop); api/_jobs.py rejects the job param with HTTP 400 instead."""
+    with pytest.raises(TypeError):
+        runner.launch_orchestrator(dry_run=True, refresh_account=True)  # type: ignore[call-arg]
+
+
+def test_retired_main_py_launchers_are_gone(runner):
+    for name in (
+        "launch_advisory_main",
+        "launch_scheduled_advisory",
+        "launch_symbol_retry",
+        "ADVISORY_LOG_PATH",
+        "SCHEDULED_LOG_PATH",
+        "RETRY_LOG_PATH",
+    ):
+        assert not hasattr(runner, name), name
+    assert "main.py" not in runner.HIGH_STAKES_COMMANDS
 
 
 def test_launch_pytest_routes_to_pytest_log(monkeypatch, runner):
@@ -324,13 +347,13 @@ def test_launch_train_meta_labelers_without_signal_omits_flag(monkeypatch, runne
     assert "--signal" not in cmd
 
 
-def test_compute_stage_status_handles_advisory_log(monkeypatch, runner):
+def test_compute_stage_status_follows_the_handles_own_log(monkeypatch, runner):
     """Stage marker scan must follow the handle's own log, not the orchestrator default."""
-    # Seed the advisory log with no orchestrator markers; stages should all be idle/pending.
-    runner.ADVISORY_LOG_PATH.write_text("InvestYo Quant Platform starting.\n", encoding="utf-8")
+    # Seed a non-orchestrator log with no orchestrator markers; stages should all be idle/pending.
+    runner.VERIFY_LOG_PATH.write_text("InvestYo Quant Platform starting.\n", encoding="utf-8")
     handle = runner.RunHandle(
         pid=1, started_at=time.time(), dry_run=False, refresh_account=False,
-        log_path=runner.ADVISORY_LOG_PATH, mode="advisory",
+        log_path=runner.VERIFY_LOG_PATH, mode="verify",
     )
     status = runner.compute_stage_status(handle)
     # No orchestrator markers present → first stage is "pending" / others too.

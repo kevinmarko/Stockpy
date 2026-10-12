@@ -1174,9 +1174,10 @@ class Settings(BaseSettings):
     # login, an unattended Tier-3 attempt can never succeed (it needs a human to tap
     # approve on their phone) — it only ever raises RobinhoodApprovalRequired and
     # dead-letters. Default False reflects that: live login only happens when
-    # explicitly forced (--refresh-account, or the webapp's Connect/Refresh flows,
-    # both of which run the login in a supervised, killable worker a human is
-    # expected to be watching); every other caller gets the best available cached
+    # explicitly forced (the webapp's Connect/Refresh flows, or the daemon's
+    # ROBINHOOD_SCHEDULED_LOGIN_ENABLED login, all of which run the login in a
+    # supervised, killable worker a human is expected to be watching); every other
+    # caller gets the best available cached
     # snapshot regardless of staleness rather than spawning a doomed login attempt
     # every cycle. Set True to restore the old always-attempt behavior (meaningful
     # only if a future login mode restores unattended capability).
@@ -1187,9 +1188,10 @@ class Settings(BaseSettings):
             "Robinhood whenever the cached snapshot exceeds max_age_hours. Default "
             "False: device-approval login needs a human to tap approve, so an "
             "unattended background attempt can never succeed — live login only "
-            "happens when explicitly forced (--refresh-account, or the webapp's "
-            "Connect/Refresh flows); all other callers get the cached snapshot "
-            "regardless of staleness."
+            "happens when explicitly forced (the webapp's Connect/Refresh flows, "
+            "or the daemon's ROBINHOOD_SCHEDULED_LOGIN_ENABLED weekday-morning "
+            "login); all other callers get the cached snapshot regardless of "
+            "staleness."
         ),
     )
     # Daemon-scheduled daily Robinhood device-approval login (shrink step 5,
@@ -1273,7 +1275,7 @@ class Settings(BaseSettings):
     # dead `from data.robinhood_portfolio import _login` import left over from
     # the device-approval login rewrite. These settings gate the fix: the
     # login worker now also ingests real filled-order history into a durable
-    # store (data/broker_fills_store.py) during a `--refresh-account` login,
+    # store (data/broker_fills_store.py) during a `refresh` login,
     # instead of the operator's real sells being invisible everywhere in the
     # platform. See docs/known_issues/robinhood_order_history_window_and_fifo_limits.md.
     BROKER_TRADE_INGEST_ENABLED: bool = Field(
@@ -1321,8 +1323,9 @@ class Settings(BaseSettings):
     CLOSED_POSITION_RETENTION_DAYS: int = Field(
         default=180,
         description=(
-            "Keep a fully-sold symbol in the analysis universe (main.py's "
-            "_build_universe, data/portfolio_sync.py's resolve_universe) for "
+            "Keep a fully-sold symbol in the analysis universe (pipeline/"
+            "advisory_inputs.py's build_universe_detailed, data/portfolio_sync.py's "
+            "resolve_universe) for "
             "this many days after its most recent real Robinhood SELL fill, "
             "even after it drops out of held positions. A deliberate change "
             "to today's behavior. 0 disables retention entirely, restoring "
@@ -2409,28 +2412,39 @@ class Settings(BaseSettings):
             "pre-dedup behavior."
         ),
     )
-    # Step 5.2 of .claude/shrink_step5_retire_main_py_implementation_plan.md:
-    # whether the orchestrator daemon's AgenticQueueStep writes the Robinhood
-    # execution queue from its own advisory recommendations.
+    # Steps 5.2/5.3 of .claude/shrink_step5_retire_main_py_implementation_plan.md:
+    # whether (and how) the orchestrator daemon's AgenticQueueStep writes the
+    # Robinhood execution queue from its own advisory recommendations. All three
+    # modes are implemented (pipeline/production_steps.py::AgenticQueueStep).
     #   off     = (default) the step does nothing. main.py stays the only queue
     #             writer, exactly as before this setting existed.
     #   shadow  = writes queue_sources/advisory.json + execution_queue.json under
     #             OUTPUT_DIR/shadow/ ONLY, never the real queue, and sends no
     #             push notification / risk-gate alert / block-log entry. For
     #             comparing against main.py's queue (scripts/compare_shadow_queue.py).
-    #   primary = reserved for PR 5.3 (the daemon writes the real queue). Until
-    #             then it behaves exactly like shadow and logs a warning.
+    #   primary = the daemon is the real queue writer: it sends the run-summary
+    #             push, runs the symbol watch engine, and writes the REAL
+    #             queue_sources/advisory.json + execution_queue.json under
+    #             OUTPUT_DIR with their side effects (new-intent push, risk-gate
+    #             alerts, block log). main.py skips all of those in this mode.
     # Unknown values collapse to "off" via the validator below.
     DAEMON_AGENTIC_QUEUE_MODE: str = Field(
         default="off",
         description=(
             "Daemon agentic-queue writer mode: off | shadow | primary (default off). "
-            "off = the daemon writes no queue (main.py is the only writer). shadow = "
-            "the daemon writes queue_sources/advisory.json and execution_queue.json "
-            "under OUTPUT_DIR/shadow/ only, with no push notification, risk-gate alert "
-            "or block-log write, for comparison with main.py's queue. primary = "
-            "reserved for step 5.3; until then it behaves like shadow and logs a "
-            "warning. Unknown values collapse to off."
+            "off = the daemon writes no queue (only the legacy main.py cycle, until it "
+            "is archived, writes one). shadow = the daemon writes "
+            "queue_sources/advisory.json and execution_queue.json under "
+            "OUTPUT_DIR/shadow/ only, with no push notification, risk-gate alert or "
+            "block-log write, for comparison with main.py's queue "
+            "(scripts/compare_shadow_queue.py). primary = the daemon is the real queue "
+            "writer: each cycle it sends the run-summary push, runs the symbol watch "
+            "engine, and writes the real queue_sources/advisory.json and "
+            "execution_queue.json under OUTPUT_DIR with their side effects (new-intent "
+            "push, risk-gate alerts, block log); main.py then skips all of those. In "
+            "every mode a cycle on synthetic (MockDataEngine) data, or one whose "
+            "advisory overlay did not finish, writes nothing. Unknown values collapse "
+            "to off."
         ),
     )
     # Number of worker threads for DataEngine.fetch_technical_raw() and
@@ -2649,8 +2663,8 @@ class Settings(BaseSettings):
     ORCHESTRATOR_EXTENDED_HOURS_ONLY: bool = Field(
         default=True,
         description=(
-            "Skip automatic interval-triggered pipeline cycles (daemon timer and "
-            "main.py --interval) outside the 4am-8pm ET weekday window "
+            "Skip automatic interval-triggered pipeline cycles (the daemon's "
+            "timer) outside the 4am-8pm ET weekday window "
             "(engine.advisory_agent.is_extended_hours) -- not strict 9:30-16:00 RTH. "
             "Manual/on-demand triggers (webapp buttons, API calls) are never gated. "
             "No holiday calendar is applied (same known limitation as "
@@ -3947,8 +3961,9 @@ class Settings(BaseSettings):
     # Master switch for the Pilots API's on-demand brokerage-refresh endpoint
     # (api/pilots_api.py POST /brokerage/refresh -- forces a live Robinhood
     # re-login + account-snapshot fetch, bypassing the daily cache; the webapp/
-    # API equivalent of `python3 main.py --refresh-account` and the Streamlit
-    # GUI's "Force fresh login" checkbox on Live Inventory/Paper Monitor). A
+    # API behind Settings -> Brokers' Refresh button, which replaced the retired
+    # `python3 main.py --refresh-account` and the deleted Streamlit GUI's "Force
+    # fresh login" checkbox on Live Inventory/Paper Monitor). A
     # DEDICATED flag, NOT BROKERAGE_CONNECT_ENABLED: that flag scopes credential
     # INTAKE (verifying and persisting NEW username/password) and clearing them
     # on disconnect: it does not receive any credential material and instead
@@ -4644,10 +4659,11 @@ class Settings(BaseSettings):
     )
 
     # Master switch for the Pilots API's dead-letter retry endpoint
-    # (api/pilots_api.py POST /dead-letter/retry -- spawns a real single-symbol
-    # `main.py` subprocess via shared.orchestrator_runner.launch_symbol_retry, the
-    # SAME launcher the Streamlit Launcher tab's dead-letter Retry button
-    # already calls). A DEDICATED flag, per this codebase's established
+    # (api/pilots_api.py POST /dead-letter/retry -- triggers a full orchestrator-
+    # daemon cycle via shared.daemon_client.trigger_run; it used to spawn a
+    # single-symbol `main.py` subprocess, but that symbol was only merged into
+    # the held/discovered universe via WATCHLIST, so it was never truly
+    # per-symbol). A DEDICATED flag, per this codebase's established
     # pattern (see BROKERAGE_REFRESH_ENABLED /
     # GENERAL_SETTINGS_WRITES_ENABLED / MACRO_GATE_WRITES_ENABLED above): a
     # write with a real persistence/subprocess/network cost gets its OWN
@@ -4662,11 +4678,13 @@ class Settings(BaseSettings):
     DEAD_LETTER_RETRY_ENABLED: bool = Field(
         default=True,
         description=(
-            "Enables POST /dead-letter/retry on the Pilots API (re-runs main.py "
-            "for one dead-lettered symbol, advisory-only -- no orders). Off by "
+            "Enables POST /dead-letter/retry on the Pilots API (triggers a full "
+            "orchestrator-daemon cycle that re-runs the whole universe, not just "
+            "the one dead-lettered symbol, and rewrites dead_letter.json; the "
+            "cycle's broker step also runs when ADVISORY_ONLY=false). On by "
             "default; also requires FOLLOW_API_TOKEN. GUI-writable by operator "
             "decision (2026-08-08) — the endpoint remains gated by "
-            "FOLLOW_API_TOKEN regardless, so a single-symbol pipeline re-run "
+            "FOLLOW_API_TOKEN regardless, so a full pipeline re-run "
             "cannot ride in on any other writes-enabled flag."
         ),
     )

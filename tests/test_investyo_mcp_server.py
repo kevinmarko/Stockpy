@@ -114,8 +114,8 @@ Coverage
   file-present branches, all-absent degradation.
 * Subprocess-wrapping tools that REMAIN subprocess-based
   (``run_platform_tests``, ``trigger_edgar_backfill``,
-  ``generate_html_report``, ``run_validation_harness``,
-  ``compare_strategies``, ``trigger_model_retraining``): success /
+  ``run_validation_harness``, ``compare_strategies``,
+  ``trigger_model_retraining``): success /
   ``CalledProcessError`` / ``FileNotFoundError`` / ``TimeoutExpired``
   paths plus the exact constructed ``argv`` via a mocked
   ``subprocess.run`` that records its call args. The FIXED argv
@@ -124,8 +124,14 @@ Coverage
   ``--strategy`` / ``--json-output``); ``run_validation_harness`` OMITS
   ``--strategies`` for "default"/"all"/empty (validate all);
   ``trigger_edgar_backfill(tickers="all")`` RESOLVES the universe and
-  ALWAYS passes ``--tickers``; ``generate_html_report`` shells
-  ``[sys.executable, "main.py"]``.
+  ALWAYS passes ``--tickers``.
+* ``generate_html_report`` (``TestGenerateHtmlReport``) is NOT
+  subprocess-based any more (shrink step 5.4a): it triggers a full orchestrator
+  daemon cycle via ``shared.daemon_client`` (attaching on a 409), polls
+  ``get_run_status`` and only reports ``daily_report_dashboard.html`` as fresh
+  when its mtime is >= the run's ``started_at``. Tested with patched
+  ``trigger_run`` / ``get_run_status`` / clock / sleep (nothing really waits,
+  no subprocess or network is touched).
 * Tools that became IN-PROCESS (no longer shell to a nonexistent CLI):
   ``trigger_data_engine`` (→ ``HistoricalStore().get_bars``),
   ``trigger_forecasting`` (→ ``engine.advisory.evaluate`` reporting
@@ -2136,6 +2142,581 @@ class TestTriggerEdgarBackfillTimeoutPattern:
         assert captured["cmd"][idx + 1] == "AAPL,MSFT"
 
 
+class _FakeCycleClock:
+    """Deterministic stand-in for ``srv._cycle_clock`` / ``srv._cycle_sleep``:
+    sleeping just advances the clock, so the tool's polling loop runs instantly
+    and the deadline logic is exercised for real."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+_RUN_STARTED = datetime(2026, 10, 11, 12, 0, 0, 123456, tzinfo=timezone.utc)
+
+
+def _run_status(state, *, started_at=None, error=None, mode="full", reason="manual", run_id="run-1"):
+    """A run record in the exact shape ``api/control_api.py::_serialize_run`` emits
+    (``started_at`` is ``datetime.isoformat()`` of a UTC-aware datetime)."""
+    return {
+        "run_id": run_id,
+        "state": state,
+        "mode": mode,
+        "started_at": (started_at or _RUN_STARTED).isoformat(),
+        "finished_at": None if state in ("queued", "running") else _RUN_STARTED.isoformat(),
+        "duration_seconds": None,
+        "error": error,
+        "reason": reason,
+        "progress": None,
+    }
+
+
+class TestGenerateHtmlReport:
+    """``generate_html_report`` triggers a FULL daemon cycle and only reports
+    ``daily_report_dashboard.html`` as fresh when the file itself is newer than
+    the run's start. Everything external is patched: ``trigger_run`` /
+    ``get_run_status`` / ``get_latest_run`` on ``shared.daemon_client``, the
+    module's clock/sleep, and ``subprocess`` (which must never be touched)."""
+
+    @pytest.fixture(autouse=True)
+    def _env(self, monkeypatch, tmp_path):
+        from settings import settings
+        from shared import daemon_client as dc
+
+        self.dc = dc
+        self.out = tmp_path
+        self.report = tmp_path / "daily_report_dashboard.html"
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+
+        self.clock = _FakeCycleClock()
+        monkeypatch.setattr(srv, "_cycle_clock", self.clock.clock)
+        monkeypatch.setattr(srv, "_cycle_sleep", self.clock.sleep)
+
+        # The old implementation shelled out to `python main.py`; nothing in the
+        # new one may spawn a process.
+        def _no_subprocess(*a, **k):
+            raise AssertionError(f"generate_html_report must not use subprocess: {a!r}")
+
+        for name in ("run", "Popen", "call", "check_call", "check_output"):
+            monkeypatch.setattr(subprocess, name, _no_subprocess)
+
+        # Default every daemon_client call to "unexpected": each test installs
+        # exactly the ones it expects (an unplanned call raises, and the tool
+        # surfaces that as "Report generation failed", failing the assertion).
+        def _unexpected(name):
+            def _f(*a, **k):
+                raise AssertionError(f"unexpected daemon_client.{name}{a!r}")
+
+            return _f
+
+        self.trigger_calls = 0
+        self.status_calls = []
+        for name in ("trigger_run", "get_run_status", "get_latest_run"):
+            monkeypatch.setattr(dc, name, _unexpected(name))
+        self.monkeypatch = monkeypatch
+
+    # -- helpers ----------------------------------------------------------
+    def _install(self, trigger, statuses=(), latest=None):
+        """*statuses*: successive get_run_status() results; the last repeats."""
+        seq = list(statuses)
+
+        def _trigger(*a, **k):
+            self.trigger_calls += 1
+            return trigger
+
+        def _status(run_id, *a, **k):
+            self.status_calls.append(run_id)
+            return seq.pop(0) if len(seq) > 1 else (seq[0] if seq else None)
+
+        self.monkeypatch.setattr(self.dc, "trigger_run", _trigger)
+        self.monkeypatch.setattr(self.dc, "get_run_status", _status)
+        self.monkeypatch.setattr(self.dc, "get_latest_run", lambda *a, **k: latest)
+
+    def _accepted(self, run_id="run-1"):
+        return self.dc.TriggerResponse(ok=True, run_id=run_id, state="queued", error=None)
+
+    def _refused(self, error, **kw):
+        return self.dc.TriggerResponse(ok=False, run_id=None, state=None, error=error, **kw)
+
+    def _write_report(self, offset_seconds):
+        """Write the dashboard with an mtime *offset_seconds* from the run start."""
+        self.report.write_text("<html>dashboard</html>", encoding="utf-8")
+        ts = _RUN_STARTED.timestamp() + offset_seconds
+        os.utime(self.report, (ts, ts))
+
+    # -- success ----------------------------------------------------------
+    def test_success_with_fresh_dashboard(self):
+        self._write_report(+30)
+        self._install(self._accepted(), [_run_status("succeeded")])
+
+        result = srv.generate_html_report("port-1")
+
+        assert "succeeded" in result and "report was refreshed" in result
+        assert str(self.report) in result
+        assert "not refreshed" not in result
+        assert "port-1" in result  # the ignored portfolio_id is disclosed
+        assert "run mode not reported" not in result  # mode "full" was reported
+        # A synthetic-data (market-data outage) cycle still renders the report and is
+        # still "succeeded"; the tool cannot see it and must say so, not imply real data.
+        assert "synthetic MockDataEngine data" in result
+        assert "still renders this report" in result and "still recorded as succeeded" in result
+        assert "cannot detect that" in result
+        assert "Synthetic (MockDataEngine) data detected" in result
+        # A keyless run (no FRED_API_KEY) is synthetic too but never logs that line
+        # (the data_is_synthetic marker is only set on the empty-fetch fallback).
+        assert "no FRED_API_KEY configured" in result
+        assert "FRED_API_KEY not configured" in result
+        assert self.trigger_calls == 1
+        assert self.status_calls == ["run-1"]
+
+    def test_polls_until_terminal_with_patched_sleep(self):
+        self._write_report(+30)
+        self._install(
+            self._accepted(),
+            [_run_status("queued"), _run_status("running"), _run_status("succeeded")],
+        )
+
+        result = srv.generate_html_report("p")
+
+        assert "report was refreshed" in result
+        assert self.status_calls == ["run-1"] * 3
+        assert self.clock.sleeps == [srv._REPORT_CYCLE_POLL_INTERVAL_SECONDS] * 2
+
+    def test_file_written_exactly_at_started_at_counts_as_fresh(self):
+        self._write_report(0)
+        self._install(self._accepted(), [_run_status("succeeded")])
+        assert "report was refreshed" in srv.generate_html_report("p")
+
+    def test_succeeded_but_dashboard_older_than_started_at_is_not_fresh(self):
+        self._write_report(-30)
+        self._install(self._accepted(), [_run_status("succeeded")])
+
+        result = srv.generate_html_report("p")
+
+        assert "finished but report not refreshed" in result
+        assert "kill switch, stopped cycle" in result
+        assert "Advisory paused by kill-switch sentinel" in result  # points at the real log line
+        assert "NOT reported as fresh" in result
+        assert "report was refreshed" not in result
+        # StateSnapshotStep does not honour data_is_synthetic: synthetic cycles DO
+        # render the report, so they must never be offered as a reason it is missing.
+        assert "synthetic" not in result.lower()
+
+    def test_succeeded_but_dashboard_missing_is_not_fresh(self):
+        # A stale legacy daily_report.html must never stand in for the dashboard.
+        (self.out / "daily_report.html").write_text("<html>old</html>", encoding="utf-8")
+        self._install(self._accepted(), [_run_status("succeeded")])
+
+        result = srv.generate_html_report("p")
+
+        assert "finished but report not refreshed" in result
+        assert "does not exist" in result
+        assert "report was refreshed" not in result
+        assert "synthetic" not in result.lower()
+
+    # -- run mode (V2) ----------------------------------------------------
+    @pytest.mark.parametrize("mode", ["data", "metrics"])
+    @pytest.mark.parametrize("file_state", ["fresh_mtime", "missing"])
+    def test_non_full_mode_run_never_counts_as_refreshed(self, mode, file_state):
+        # A 409 attach can land on a data-only / metrics-only run. Those never render
+        # the dashboard, so even a file whose mtime is newer than started_at (written
+        # by something else) must not be credited to this run.
+        if file_state == "fresh_mtime":
+            self._write_report(+30)
+        self._install(self._accepted(), [_run_status("succeeded", mode=mode)])
+
+        result = srv.generate_html_report("p")
+
+        assert f"'{mode}' run (not a full cycle)" in result
+        assert "does not render the dashboard" in result
+        assert "NOT refreshed by it" in result
+        assert "Trigger a full cycle" in result
+        assert "report was refreshed" not in result
+        assert "Synthetic (MockDataEngine)" not in result  # no freshness caution on a non-claim
+
+    def test_non_full_mode_attach_names_the_run_and_the_attach(self):
+        self._write_report(+30)
+        self._install(
+            self._refused("already_running", existing_run_id="run-data"),
+            [_run_status("succeeded", mode="data", run_id="run-data")],
+        )
+        result = srv.generate_html_report("p")
+        assert "run-data" in result and "attached" in result
+        assert "'data' run (not a full cycle)" in result
+        assert "report was refreshed" not in result
+
+    def test_full_mode_run_is_credited_without_a_mode_flag(self):
+        self._write_report(+30)
+        self._install(self._accepted(), [_run_status("succeeded", mode="full")])
+        result = srv.generate_html_report("p")
+        assert "report was refreshed" in result
+        assert "run mode not reported" not in result
+
+    @pytest.mark.parametrize("missing", ["absent", "none", "empty"])
+    def test_missing_mode_is_not_defaulted_but_flagged(self, missing):
+        self._write_report(+30)
+        status = _run_status("succeeded")
+        if missing == "absent":
+            del status["mode"]
+        elif missing == "none":
+            status["mode"] = None
+        else:
+            status["mode"] = ""
+        self._install(self._accepted(), [status])
+
+        result = srv.generate_html_report("p")
+
+        # The mtime check still decides freshness, but the success text must not
+        # pretend the run was known to be a full cycle.
+        assert "report was refreshed" in result
+        assert "(run mode not reported)" in result
+
+    def test_missing_mode_with_stale_file_is_still_not_fresh(self):
+        self._write_report(-30)
+        status = _run_status("succeeded")
+        del status["mode"]
+        self._install(self._accepted(), [status])
+        result = srv.generate_html_report("p")
+        assert "finished but report not refreshed" in result
+        assert "report was refreshed" not in result
+
+    @pytest.mark.parametrize("started_at", [None, "", "not-a-timestamp", 12345])
+    def test_unreadable_started_at_is_never_reported_as_fresh(self, started_at):
+        self._write_report(+30)
+        status = _run_status("succeeded")
+        status["started_at"] = started_at
+        self._install(self._accepted(), [status])
+
+        result = srv.generate_html_report("p")
+
+        assert "cannot be verified" in result
+        assert "Not reporting it as fresh" in result
+        assert "report was refreshed" not in result
+
+    def test_parse_run_started_at_formats(self):
+        parse = srv._parse_run_started_at
+        expected = _RUN_STARTED.timestamp()
+        # the real Control API format: datetime.isoformat() of a UTC-aware value
+        assert parse(_RUN_STARTED.isoformat()) == expected
+        assert parse("2026-10-11T12:00:00.123456Z") == expected
+        # a non-UTC offset is converted, not read as UTC
+        assert parse("2026-10-11T14:00:00.123456+02:00") == expected
+        # naive values are read as UTC (the daemon only emits UTC)
+        assert parse("2026-10-11T12:00:00.123456") == expected
+        for bad in (None, "", "  ", "yesterday", 0):
+            assert parse(bad) is None
+
+    # -- attach on 409 ----------------------------------------------------
+    def test_already_running_attaches_to_existing_run(self):
+        self._write_report(+30)
+        self._install(
+            self._refused("already_running", existing_run_id="run-live"),
+            [_run_status("succeeded", run_id="run-live")],
+        )
+
+        result = srv.generate_html_report("p")
+
+        assert self.trigger_calls == 1
+        assert self.status_calls == ["run-live"]
+        assert "run-live" in result and "attached" in result
+        assert "report was refreshed" in result
+
+    def test_already_running_without_run_id_falls_back_to_latest_run(self):
+        # The Control API nests the 409 body under "detail", so a real
+        # existing_run_id can arrive as None; GET /run/latest names the in-flight run.
+        self._write_report(+30)
+        self._install(
+            self._refused("already_running", existing_run_id=None),
+            [_run_status("succeeded", run_id="run-latest")],
+            latest=_run_status("running", run_id="run-latest"),
+        )
+
+        result = srv.generate_html_report("p")
+
+        assert self.status_calls == ["run-latest"]
+        assert "report was refreshed" in result
+
+    @pytest.mark.parametrize(
+        "latest",
+        [None, _run_status("succeeded", run_id="run-done"), {"state": "running"}],
+    )
+    def test_already_running_without_any_verifiable_run_id_is_honest(self, latest):
+        self._install(self._refused("already_running", existing_run_id=None), latest=latest)
+
+        result = srv.generate_html_report("p")
+
+        assert "run id could not be determined" in result
+        assert "Report NOT generated" in result
+        assert self.status_calls == []
+
+    # -- trigger refusals -------------------------------------------------
+    @pytest.mark.parametrize(
+        "error, kwargs, expected",
+        [
+            (
+                "kill_switch_active",
+                {"kill_switch_reason": "manual halt"},
+                ["kill switch is active", "HTTP 423", "Kill-switch reason: manual halt"],
+            ),
+            (
+                "kill_switch_active",
+                {"kill_switch_reason": None},
+                ["kill switch is active", "Kill-switch reason: not reported by the daemon"],
+            ),
+            ("command_disabled", {}, ["HTTP 403", "ORCHESTRATOR_DAEMON_TOKEN", "not configured"]),
+            ("unauthorized", {}, ["HTTP 401", "ORCHESTRATOR_DAEMON_TOKEN", "does not match"]),
+            (
+                "unavailable",
+                {},
+                ["HTTP 503", "daemon is not available", "python -m desktop.orchestrator_daemon"],
+            ),
+            (
+                "network_error",
+                {},
+                [
+                    "no cycle was confirmed started",
+                    "could not reach",
+                    "127.0.0.1:",
+                    "connection refused, timeout or unreadable reply",
+                    "most likely cause is that the daemon is not running",
+                    "python -m desktop.orchestrator_daemon",
+                    "may still have started a cycle",
+                ],
+            ),
+            ("unexpected_response", {}, ["unexpected response", "unexpected_response"]),
+        ],
+    )
+    def test_trigger_refusals_give_specific_messages(self, error, kwargs, expected):
+        self._install(self._refused(error, **kwargs))
+
+        result = srv.generate_html_report("p")
+
+        assert result.startswith("Report NOT generated")
+        for fragment in expected:
+            assert fragment in result, (fragment, result)
+        if error == "network_error":
+            # A client-side timeout can follow a daemon that DID accept the run.
+            assert "No cycle was started" not in result
+        assert self.status_calls == []  # nothing to poll when no cycle started
+
+    def test_trigger_ok_without_run_id_is_reported(self):
+        self._install(self.dc.TriggerResponse(ok=True, run_id=None, state="queued", error=None))
+        result = srv.generate_html_report("p")
+        assert "no run id" in result
+        assert self.status_calls == []
+
+    def test_trigger_exception_is_caught(self):
+        def _boom(*a, **k):
+            raise RuntimeError("daemon client exploded")
+
+        self.monkeypatch.setattr(self.dc, "trigger_run", _boom)
+        assert srv.generate_html_report("p") == "Report generation failed: daemon client exploded"
+
+    # -- failed run -------------------------------------------------------
+    def test_failed_run_surfaces_error_and_reason(self):
+        self._write_report(+30)  # even a fresh-looking file must not be reported
+        self._install(
+            self._accepted(),
+            [_run_status("failed", error="PipelineFatalError: no data", reason="manual")],
+        )
+
+        result = srv.generate_html_report("p")
+
+        assert "FAILED" in result
+        assert "PipelineFatalError: no data" in result
+        assert "trigger reason: manual" in result
+        # Not "predates it": a timed-out snapshot step's worker thread can still
+        # write the file later, so the tool only says it was not confirmed.
+        assert "was not confirmed refreshed by this run" in result
+        assert "predates" not in result
+        assert "report was refreshed" not in result
+
+    def test_failed_run_without_error_detail_says_so(self):
+        self._install(self._accepted(), [_run_status("failed", error=None)])
+        assert "no error detail reported" in srv.generate_html_report("p")
+
+    # -- deadline / unreadable status ------------------------------------
+    def test_deadline_exceeded_names_run_and_says_still_running(self):
+        self.monkeypatch.setattr(srv, "_REPORT_CYCLE_DEADLINE_SECONDS", 20.0)
+        self.monkeypatch.setattr(srv, "_REPORT_CYCLE_POLL_INTERVAL_SECONDS", 5.0)
+        self._write_report(+30)  # an existing file must not be passed off as fresh
+        self._install(self._accepted("run-slow"), [_run_status("running", run_id="run-slow")])
+
+        result = srv.generate_html_report("p")
+
+        assert "run-slow" in result
+        assert "still running after 20s" in result
+        assert "NOT been refreshed yet" in result
+        assert "report was refreshed" not in result
+        assert len(self.status_calls) == 5  # t = 0, 5, 10, 15, 20
+        assert sum(self.clock.sleeps) == 20.0
+
+    def test_final_sleep_is_clamped_to_the_remaining_budget(self):
+        self.monkeypatch.setattr(srv, "_REPORT_CYCLE_DEADLINE_SECONDS", 12.0)
+        self.monkeypatch.setattr(srv, "_REPORT_CYCLE_POLL_INTERVAL_SECONDS", 5.0)
+        self._install(self._accepted(), [_run_status("running")])
+        srv.generate_html_report("p")
+        assert self.clock.sleeps == [5.0, 5.0, 2.0]
+
+    def test_transient_unreadable_status_is_tolerated(self):
+        self._write_report(+30)
+        self._install(
+            self._accepted(),
+            [None, None, _run_status("running"), None, _run_status("succeeded")],
+        )
+
+        result = srv.generate_html_report("p")
+
+        assert "report was refreshed" in result
+        assert len(self.status_calls) == 5
+
+    @pytest.mark.parametrize("state", ["mystery", "cancelled", "SUCCEEDED", 7])
+    def test_unrecognised_state_is_reported_as_such(self, state):
+        self._write_report(+30)
+        self._install(self._accepted(), [{"state": state, "run_id": "run-1"}])
+
+        result = srv.generate_html_report("p")
+
+        assert "unrecognised run state" in result
+        assert repr(str(state)) in result  # the offending value is shown
+        assert "expected queued, running, succeeded or failed" in result
+        assert "report was refreshed" not in result
+        # It is a contract mismatch, not an outage: no stopped-daemon / token blame,
+        # and no waiting out the unreadable-poll budget.
+        assert "STATE_API_TOKEN" not in result and "daemon stopped" not in result
+        assert "Could not read the status" not in result
+        assert self.status_calls == ["run-1"]
+        assert self.clock.sleeps == []
+
+    def test_unrecognised_state_after_normal_polls_names_the_run(self):
+        self._install(
+            self._accepted(),
+            [_run_status("running"), {"state": "mystery", "run_id": "run-1"}],
+        )
+        result = srv.generate_html_report("p")
+        assert result.startswith("Daemon cycle run-1")
+        assert "'mystery'" in result
+        assert len(self.status_calls) == 2
+
+    @pytest.mark.parametrize("bad", [{}, {"run_id": "run-1"}, {"state": None}, {"state": ""}, "oops"])
+    def test_missing_or_blank_state_still_counts_as_unreadable(self, bad):
+        self._install(self._accepted(), [bad])
+        result = srv.generate_html_report("p")
+        assert "Could not read the status" in result
+        assert "unrecognised run state" not in result
+
+    def test_permanently_unreadable_status_stops_waiting_early(self):
+        self._write_report(+30)  # again: must not be reported as fresh
+        self._install(self._accepted(), [None])
+
+        result = srv.generate_html_report("p")
+
+        n = srv._REPORT_CYCLE_MAX_UNREADABLE_POLLS
+        assert len(self.status_calls) == n
+        assert len(self.clock.sleeps) == n - 1
+        assert self.clock.now < srv._REPORT_CYCLE_DEADLINE_SECONDS  # did not burn the deadline
+        assert "Could not read the status of daemon cycle run-1" in result
+        assert "STATE_API_TOKEN" in result and "ORCHESTRATOR_DAEMON_TOKEN" in result
+        assert "report was refreshed" not in result
+
+    # -- no main.py / no mode dependence ---------------------------------
+    @pytest.mark.parametrize("mode", ["off", "shadow", "primary"])
+    def test_behaviour_does_not_depend_on_agentic_queue_mode(self, mode):
+        from settings import settings
+
+        self.monkeypatch.setattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", mode, raising=False)
+        self._write_report(+30)
+        self._install(self._accepted(), [_run_status("succeeded")])
+
+        result = srv.generate_html_report("p")
+
+        # No early-return pointer in primary: a cycle was really triggered.
+        assert self.trigger_calls == 1
+        assert "report was refreshed" in result
+        assert "retired" not in result
+
+    def test_does_not_shell_out_to_main_py(self):
+        import inspect
+
+        # The autouse fixture makes any subprocess call raise; additionally pin
+        # the source so a regression cannot reintroduce the shell-out quietly.
+        for fn in (
+            srv.generate_html_report,
+            srv._wait_for_daemon_run,
+            srv._describe_report_trigger_failure,
+            srv._inflight_daemon_run_id,
+        ):
+            src = inspect.getsource(fn)
+            assert "subprocess" not in src, fn.__name__
+            assert "sys.executable" not in src, fn.__name__
+
+    def test_docstring_discloses_full_cycle_side_effects(self):
+        doc = srv.generate_html_report.__doc__
+        for fragment in (
+            "FULL orchestrator-daemon cycle",
+            "state_snapshot.json",
+            "execution queue",
+            "DAEMON_AGENTIC_QUEUE_MODE=primary",
+            "paper orders",
+            "ADVISORY_ONLY=false",
+            "ORCHESTRATOR_DAEMON_TOKEN",
+            "daily_report_dashboard.html",
+            # synthetic-data limitation (the tool cannot detect it) + where to look
+            "LIMITATION - synthetic data is NOT detected",
+            "still renders the report and still",
+            "counts as succeeded",
+            "Synthetic (MockDataEngine) data detected",
+            # non-full runs are never credited with the report
+            "data-only or metrics-only",
+        ):
+            assert fragment in doc, fragment
+        # Synthetic cycles do NOT skip the report (StateSnapshotStep ignores the marker).
+        assert "synthetic-data or non-full-mode cycles skip" not in doc
+        assert "synthetic-data cycles skip" not in doc
+
+
+class TestOperatorHintsDoNotMentionMainPy:
+    """The retired ``main.py`` entrypoint must not be recommended by tool hints."""
+
+    def test_robinhood_snapshot_hint_points_at_settings_brokers(self, monkeypatch):
+        import data.robinhood_portfolio as rp
+
+        def _raise(*a, **k):
+            raise RuntimeError("no cache")
+
+        monkeypatch.setattr(rp, "fetch_account_snapshot", _raise)
+
+        result = srv.get_robinhood_account_snapshot()
+
+        assert "Open Settings → Brokers and press Refresh" in result
+        assert "ROBINHOOD_SCHEDULED_LOGIN_ENABLED" in result
+        assert "main.py" not in result and "--refresh-account" not in result
+        assert "main.py" not in srv.get_robinhood_account_snapshot.__doc__
+
+    def test_regime_status_hint_points_at_the_daemon(self, monkeypatch, tmp_path):
+        import execution.kill_switch as ks_mod
+        from settings import settings
+
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)  # no state_snapshot.json
+        fake_ks = MagicMock()
+        fake_ks.is_active.return_value = False
+        monkeypatch.setattr(ks_mod, "GlobalKillSwitch", lambda *a, **k: fake_ks)
+
+        result = srv.get_regime_status()
+
+        assert "State snapshot unavailable" in result
+        assert "Trigger a cycle with POST /run" in result
+        assert "python -m desktop.orchestrator_daemon" in result
+        assert "main.py" not in result
+
+
 class TestRemainingSubprocessToolsArgv:
     """Lighter-touch tests for the tools that REMAIN subprocess-wrapping:
     verify the constructed argv is correct and that a nonzero exit
@@ -2144,28 +2725,6 @@ class TestRemainingSubprocessToolsArgv:
 
     (``trigger_forecasting`` / ``trigger_macro_engine`` / ``trigger_full_pipeline``
     became in-process and now have their own dedicated classes below.)"""
-
-    def test_generate_html_report(self, monkeypatch, tmp_path):
-        from settings import settings
-
-        # Fixed contract: success is no longer trusted from the subprocess exit
-        # code alone (CONSTRAINT #4 - never fabricate) -- the tool checks that
-        # daily_report.html was actually produced under settings.OUTPUT_DIR.
-        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
-        (tmp_path / "daily_report.html").write_text("<html></html>", encoding="utf-8")
-
-        captured = {}
-        monkeypatch.setattr(
-            subprocess, "run", _capturing_run(captured, SimpleNamespace(stdout="ok", returncode=0))
-        )
-        result = srv.generate_html_report("port-1")
-        assert "HTML report generated" in result
-        # Fixed contract: shells `[sys.executable, "main.py"]` (the real advisory
-        # orchestrator entrypoint), NOT `-m reporting.html_publisher` / a
-        # nonexistent reporting_engine.py.
-        assert "main.py" in captured["cmd"]
-        assert "reporting.html_publisher" not in captured["cmd"]
-        assert "reporting_engine.py" not in captured["cmd"]
 
     def test_run_validation_harness(self, monkeypatch):
         captured = {}
