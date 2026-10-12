@@ -24,7 +24,6 @@ class Target:
 
 
 TARGETS: list[Target] = [
-    Target("path", "main.py", "main.py", "python3 main.py"),
     Target("path", "main_orchestrator.py", "main_orchestrator.py", "python3 main_orchestrator.py"),
     Target("path", "universe_engine.py", "universe_engine.py", "python3 universe_engine.py"),
     # app_shell.py (the frozen, decommissioned Streamlit native-shell wrapper —

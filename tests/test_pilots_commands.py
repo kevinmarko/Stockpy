@@ -111,7 +111,11 @@ def test_commands_endpoint_shape_from_committed_manifest():
     assert body["reason"] is None
     assert body["command_count"] >= 1
     names = {c["name"] for c in body["commands"]}
-    assert "main.py" in names
+    assert "main_orchestrator.py" in names
+    # main.py was retired as an operator-facing command (shrink step 5.4a):
+    # the daemon / main_orchestrator.py is the runtime, so the Commands screen
+    # must not offer it.
+    assert "main.py" not in names
     assert "options_strategy_registry" not in body
     assert "paper_broker_options_strategy_registry" not in body
 

@@ -5536,9 +5536,10 @@ class GravityAIAuditor:
         ``gui/orchestrator_runner.py``:
 
             * :func:`validate_required_env`
-            * :func:`launch_advisory_main`
+            * :func:`launch_daemon_cycle` (replaced the retired
+              ``launch_advisory_main`` ``main.py`` subprocess launcher)
             * :func:`read_telemetry_tail`
-            * ``RunHandle.mode`` (``"orchestrator"`` | ``"advisory"``)
+            * ``RunHandle.mode`` (``"orchestrator"`` | ``"daemon_cycle"``)
 
         Without this audit a regression could silently disable the
         pre-launch check or revert the launcher to a single entry point
@@ -5548,13 +5549,16 @@ class GravityAIAuditor:
         ------
         1.  ``validate_required_env`` returns ``False`` when the var is unset.
         2.  ``validate_required_env`` returns ``True`` when the var is set.
-        3.  ``launch_advisory_main`` is importable and the resulting handle
-            has ``mode == "advisory"`` and points at ``ADVISORY_LOG_PATH``
-            (subprocess monkeypatched so no child is spawned).
+        3.  ``launch_daemon_cycle`` is importable and, with
+            ``shared.daemon_client.trigger_run`` stubbed to accept, returns a
+            ``backend="daemon"`` handle tagged ``mode == "daemon_cycle"``
+            carrying the daemon's run id, WITHOUT spawning a subprocess (it
+            has no subprocess fallback).
         4.  ``read_telemetry_tail`` returns an "idle" hint when the
             telemetry file does not yet exist.
-        5.  ``RUN_LOG_PATH`` and ``ADVISORY_LOG_PATH`` resolve to DISTINCT
-            files (so stage marker scans on one don't see the other's text).
+        5.  ``RUN_LOG_PATH`` and ``DAEMON_CYCLE_LOG_PATH`` resolve to DISTINCT
+            files (so a daemon-cycle handle never replays the orchestrator's
+            log text).
         """
         audit: dict = {"step": "step_41_launcher_telemetry_audit",
                        "checks": [], "status": "PENDING"}
@@ -5590,29 +5594,37 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and present_ok
 
-            # 3. launch_advisory_main produces an advisory-mode handle
+            # 3. launch_daemon_cycle produces a daemon-backed handle and never
+            #    spawns a subprocess (daemon-only, no fallback)
+            import shared.daemon_client as _daemon_client
+
             original_popen = runner.subprocess.Popen
+            original_trigger = _daemon_client.trigger_run
+            spawned: list = []
 
-            class _Stub:
-                def __init__(self, *a, **kw) -> None:
-                    self.pid = 9999
-                def poll(self) -> None:
-                    return None
+            def _no_spawn(*a, **kw):
+                spawned.append(a)
+                raise AssertionError("launch_daemon_cycle must not spawn a subprocess")
 
-            runner.subprocess.Popen = _Stub  # type: ignore[assignment]
+            runner.subprocess.Popen = _no_spawn  # type: ignore[assignment]
+            _daemon_client.trigger_run = lambda timeout=5.0: _daemon_client.TriggerResponse(  # type: ignore[assignment]
+                ok=True, run_id="gravity-run", state="queued", error=None,
+            )
             try:
-                handle = runner.launch_advisory_main(refresh_account=False)
+                handle = runner.launch_daemon_cycle()
                 handle_ok = (
-                    handle.mode == "advisory"
-                    and handle.log_path == runner.ADVISORY_LOG_PATH
-                    and handle.dry_run is False
+                    handle.mode == "daemon_cycle"
+                    and handle.backend == "daemon"
+                    and handle.daemon_run_id == "gravity-run"
+                    and not spawned
                 )
             finally:
                 runner.subprocess.Popen = original_popen  # type: ignore[assignment]
+                _daemon_client.trigger_run = original_trigger  # type: ignore[assignment]
             audit["checks"].append({
-                "check": "launch_advisory_main returns a handle tagged mode='advisory'",
+                "check": "launch_daemon_cycle returns a daemon-backed handle (mode='daemon_cycle') without a subprocess",
                 "passed": handle_ok,
-                "detail": f"mode={handle.mode}, log_path={handle.log_path.name}",
+                "detail": f"mode={handle.mode}, backend={handle.backend}, run_id={handle.daemon_run_id}",
             })
             all_pass = all_pass and handle_ok
 
@@ -5638,13 +5650,13 @@ class GravityAIAuditor:
             all_pass = all_pass and hint_ok
 
             # 5. Distinct log paths
-            distinct_ok = runner.RUN_LOG_PATH != runner.ADVISORY_LOG_PATH
+            distinct_ok = runner.RUN_LOG_PATH != runner.DAEMON_CYCLE_LOG_PATH
             audit["checks"].append({
-                "check": "RUN_LOG_PATH and ADVISORY_LOG_PATH resolve to distinct files",
+                "check": "RUN_LOG_PATH and DAEMON_CYCLE_LOG_PATH resolve to distinct files",
                 "passed": distinct_ok,
                 "detail": (
                     f"run={runner.RUN_LOG_PATH.name}, "
-                    f"adv={runner.ADVISORY_LOG_PATH.name}"
+                    f"daemon_cycle={runner.DAEMON_CYCLE_LOG_PATH.name}"
                 ),
             })
             all_pass = all_pass and distinct_ok
@@ -6386,8 +6398,9 @@ class GravityAIAuditor:
            each ticker's per-symbol block in a try/except with a ``_stage``
            tracker, and writes ``output/dead_letter.json`` atomically after the
            loop.  ``gui/dead_letter.py`` is the read-side consumer; the Launcher
-           tab shows failed symbols + per-symbol **🔄 Retry** buttons that spawn
-           ``main.py`` via ``orchestrator_runner.launch_symbol_retry``.
+           tab shows failed symbols + per-symbol **🔄 Retry** buttons (a retry
+           now triggers a full daemon cycle via ``shared.daemon_client.trigger_run``;
+           the old ``main.py`` ``launch_symbol_retry`` subprocess is retired).
         2. **Contextual error classification** — ``extract_symbol_from_message``
            and ``classify_log_entry`` in ``gui/observability_telemetry.py``
            distinguish *systemic* (pipeline-wide) from *symbol-specific* errors
@@ -6411,8 +6424,9 @@ class GravityAIAuditor:
         6.  ``classify_log_entry`` returns ``"systemic"`` for a pipeline-crash message
             that contains no ticker.
         7.  ``HeartbeatTrendStore`` ring buffer rolls off oldest samples when full.
-        8.  ``shared.orchestrator_runner.launch_symbol_retry`` exists and is callable
-            (structural check — does not spawn a process).
+        8.  ``shared.daemon_client.trigger_run`` exists and is callable — the call
+            a dead-letter retry now makes (structural check — does not contact
+            a daemon or spawn a process).
         9.  ``main_orchestrator.run_pipeline`` source contains the dead-letter try/except
             block and the dead-letter JSON write.
         10. ``main_orchestrator.run_pipeline`` contains the stage-tracking variable
@@ -6541,11 +6555,11 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c7
 
-            # Check 8: launch_symbol_retry exists and is callable (structural)
-            from shared import orchestrator_runner
-            c8 = callable(getattr(orchestrator_runner, "launch_symbol_retry", None))
+            # Check 8: the dead-letter retry's trigger exists and is callable (structural)
+            from shared import daemon_client
+            c8 = callable(getattr(daemon_client, "trigger_run", None))
             audit["checks"].append({
-                "check": "orchestrator_runner.launch_symbol_retry is callable",
+                "check": "shared.daemon_client.trigger_run is callable (dead-letter retry triggers a daemon cycle)",
                 "passed": c8,
             })
             all_pass = all_pass and c8
@@ -13925,11 +13939,14 @@ class GravityAIAuditor:
             / not_built all reachable (not_built exercised via a synthetic
             capability pointing at a nonexistent module, since Opal itself
             shipped in Tier 9 Scope 4 and can no longer produce that state).
-        5.  Scheduling launcher exists — ``orchestrator_runner``
-            ``launch_scheduled_advisory`` AND ``stop_run`` are callable.
-        6.  Operator-triggered only — ``launch_scheduled_advisory`` spawns via
-            ``subprocess`` and has NO autonomous scheduler (no ``threading.Timer``
-            / ``cron`` / ``schedule.every`` in the launcher source).
+        5.  Run launchers exist — ``orchestrator_runner``
+            ``launch_daemon_cycle`` AND ``stop_run`` are callable (the
+            operator-started ``main.py`` ``launch_scheduled_advisory`` loop was
+            retired with ``main.py``).
+        6.  Operator-triggered only — the launchers spawn via ``subprocess``
+            (or trigger the daemon over HTTP) and have NO autonomous scheduler
+            (no ``threading.Timer`` / ``cron`` / ``schedule.every`` in the
+            launcher source).
         7.  Tab registration: ``gui/app.py`` references
             ``panels.render_ai_control_center`` AND a ``🎛️ AI Control Center``
             label.
@@ -14070,12 +14087,12 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c4
 
-            # ── 5. scheduling launcher exists ──────────────────────────────
+            # ── 5. run launchers exist ─────────────────────────────────────
             from shared import orchestrator_runner as _orr
-            c5 = callable(getattr(_orr, "launch_scheduled_advisory", None)) \
+            c5 = callable(getattr(_orr, "launch_daemon_cycle", None)) \
                 and callable(getattr(_orr, "stop_run", None))
             audit["checks"].append({
-                "check": "orchestrator_runner.launch_scheduled_advisory + stop_run callable",
+                "check": "orchestrator_runner.launch_daemon_cycle + stop_run callable",
                 "passed": bool(c5),
             })
             all_pass = all_pass and c5
@@ -14089,7 +14106,7 @@ class GravityAIAuditor:
                 and "crontab" not in orr_src
             )
             audit["checks"].append({
-                "check": "scheduling launcher spawns via subprocess, no autonomous scheduler",
+                "check": "run launchers spawn via subprocess, no autonomous scheduler",
                 "passed": bool(c6),
             })
             all_pass = all_pass and c6

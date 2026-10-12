@@ -15,7 +15,7 @@
 
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { mockApi } from "./mock";
-import { ApiError, ForecastBackfillConflictError } from "./types";
+import { ApiError, ForecastBackfillConflictError, JobConflictError } from "./types";
 import type {
   CurvePoint,
   Headline,
@@ -948,5 +948,152 @@ describe("mock API — Agentic Trading contract", () => {
     expect(second.scan_config.created_at).toBe(first.scan_config.created_at);
     expect(second.scan_config.enabled).toBe(false);
     expect(second.scan_config.filters).toEqual({ min_price: 10 });
+  });
+});
+
+describe("mock API — daemon-hosted jobs (Console Advisory Pipeline) are not cancellable", () => {
+  // Parity with api/_jobs.py: JobType.ORCHESTRATOR and (since step 5.4)
+  // JobType.ADVISORY are hosted on the orchestrator daemon -- no local PID, so
+  // `cancellable: false` and POST /jobs/{id}/cancel answers 400.
+  it("createJob('advisory') reports cancellable=false; a subprocess-backed job type stays cancellable", async () => {
+    const advisory = await mockApi.createJob("advisory");
+    expect(advisory.job_type).toBe("advisory");
+    expect(advisory.status).toBe("running");
+    expect(advisory.cancellable).toBe(false);
+
+    const preflight = await mockApi.createJob("preflight");
+    expect(preflight.cancellable).toBe(true);
+  });
+
+  it("getJobStatus / listJobs keep reporting an advisory job as non-cancellable", async () => {
+    const advisory = await mockApi.listJobs();
+    const row = advisory.jobs.find((j) => j.job_type === "advisory");
+    expect(row, "advisory job from the previous test should be listed").toBeDefined();
+    expect(row!.cancellable).toBe(false);
+
+    const status = await mockApi.getJobStatus(row!.job_id);
+    expect(status.job_type).toBe("advisory");
+    expect(status.cancellable).toBe(false);
+  });
+
+  it("cancelJob on a daemon-hosted job rejects with a 400 instead of claiming it cancelled", async () => {
+    const { jobs } = await mockApi.listJobs();
+    const row = jobs.find((j) => j.job_type === "advisory")!;
+    await expect(mockApi.cancelJob(row.job_id)).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining("daemon-hosted"),
+    });
+    // ...and the job was not silently marked cancelled.
+    const after = await mockApi.getJobStatus(row.job_id);
+    expect(after.status).not.toBe("cancelled");
+  });
+});
+
+describe("mock API — POST /dead-letter/retry (full daemon cycle contract)", () => {
+  afterEach(async () => {
+    await mockApi.resumeAutomation("test cleanup");
+  });
+
+  it("returns {symbol, run_id, applies, note} with no pid / log_path, and says the whole universe is re-run", async () => {
+    const res = await mockApi.retryDeadLetter(" zzzz ");
+    expect(res.symbol).toBe("ZZZZ");
+    expect(typeof res.run_id).toBe("string");
+    expect(res.applies).toBe("immediately");
+    expect(res.note).toMatch(/WHOLE universe/);
+    expect(res).not.toHaveProperty("pid");
+    expect(res).not.toHaveProperty("log_path");
+  });
+
+  it("an active kill switch rejects with 423 (live /automation/run parity), never a fake success", async () => {
+    await mockApi.pauseAutomation("manual halt");
+    await expect(mockApi.retryDeadLetter("ZZZZ")).rejects.toMatchObject({
+      status: 423,
+      message: expect.stringContaining("manual halt"),
+    });
+  });
+});
+
+describe("mock API — createJob refusals for the daemon-hosted pipeline jobs (live parity)", () => {
+  // The single-flight scan looks at Date.now() - startedAt < 30s, and earlier
+  // describes in this file leave a running advisory job in the module-global
+  // job table. Fake ONLY Date and jump it past that window so these tests are
+  // independent of test order (setTimeout stays real, so delay() still works).
+  // Cumulative, so jobs launched by one test here are also outside the next
+  // test's single-flight window.
+  let clockOffsetMs = 0;
+  beforeEach(() => {
+    clockOffsetMs += 120_000;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + clockOffsetMs);
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await mockApi.resumeAutomation("test cleanup");
+  });
+
+  it("advisory with the kill switch on rejects 409 with a plain STRING message (not a single-flight conflict), and starts no job", async () => {
+    await mockApi.pauseAutomation("manual halt");
+    const before = (await mockApi.listJobs()).jobs.length;
+
+    const err = await mockApi.createJob("advisory").catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).not.toBeInstanceOf(JobConflictError);
+    expect(err).toMatchObject({ status: 409 });
+    expect((err as Error).message).toBe(
+      "The global kill switch is active, so the daemon will not start a pipeline cycle. " +
+        "Reason: manual halt. Deactivate the kill switch to run a cycle."
+    );
+    // Refused at launch: nothing was registered as a running job.
+    expect((await mockApi.listJobs()).jobs.length).toBe(before);
+  });
+
+  it("advisory with the kill switch on but no recorded reason omits the Reason clause (no 'Reason: null')", async () => {
+    await mockApi.pauseAutomation("");
+    const err = await mockApi.createJob("advisory").catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 409 });
+    expect((err as Error).message).toBe(
+      "The global kill switch is active, so the daemon will not start a pipeline cycle. " +
+        "Deactivate the kill switch to run a cycle."
+    );
+    expect((err as Error).message).not.toMatch(/null|undefined/);
+  });
+
+  it("the kill switch only blocks the daemon-cycle job: a subprocess job type still launches", async () => {
+    await mockApi.pauseAutomation("manual halt");
+    const job = await mockApi.createJob("pytest");
+    expect(job.job_type).toBe("pytest");
+    expect(job.status).toBe("running");
+  });
+
+  it("advisory launches normally once the kill switch is cleared", async () => {
+    await mockApi.pauseAutomation("manual halt");
+    await mockApi.resumeAutomation("cleared");
+    const job = await mockApi.createJob("advisory");
+    expect(job.job_type).toBe("advisory");
+    expect(job.cancellable).toBe(false);
+  });
+
+  it.each(["advisory", "orchestrator"] as const)(
+    "%s with refresh_account rejects 400 pointing at POST /brokerage/refresh",
+    async (jobType) => {
+      const err = await mockApi.createJob(jobType, { refresh_account: true }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err).toMatchObject({ status: 400 });
+      expect((err as Error).message).toContain(`The ${jobType} job does not accept refresh_account`);
+      expect((err as Error).message).toContain("POST /brokerage/refresh");
+    }
+  );
+
+  it("a falsy refresh_account is not an error for the pipeline jobs", async () => {
+    const job = await mockApi.createJob("orchestrator", { refresh_account: false });
+    expect(job.job_type).toBe("orchestrator");
+    expect(job.cancellable).toBe(false);
+  });
+
+  it("refresh_account is only rejected for advisory/orchestrator (other job types ignore it, as the backend does)", async () => {
+    const job = await mockApi.createJob("preflight", { refresh_account: true });
+    expect(job.job_type).toBe("preflight");
   });
 });

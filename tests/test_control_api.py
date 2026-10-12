@@ -1310,6 +1310,384 @@ class TestJobsApi:
         assert "event: end\ndata: Job completed with exit code 0\n\n" in body
         assert mock_warning.called
 
+    def test_stream_reads_handle_status_off_the_event_loop(self, monkeypatch, tmp_path):
+        """A daemon-backed handle's is_running()/returncode() make a blocking
+        HTTP call to this very server. On the event-loop thread that call can
+        never be answered: it always timed out (None), so a running job's
+        stream ended early with "exit code None" and the whole API stalled
+        for the timeout. Both calls must run in a worker thread."""
+        import asyncio
+
+        on_loop = []
+
+        def _record():
+            try:
+                asyncio.get_running_loop()
+                on_loop.append(True)
+            except RuntimeError:  # no running loop => a worker thread
+                on_loop.append(False)
+
+        class _LoopAwareHandle(_FakeHandle):
+            def is_running(self):
+                _record()
+                return super().is_running()
+
+            def returncode(self):
+                _record()
+                return super().returncode()
+
+        log_path = tmp_path / "job.log"
+        log_path.write_text("")
+        handle = _LoopAwareHandle(running=False, rc=0, backend="daemon", log_path=log_path)
+        monkeypatch.setattr(jobs_module, "launch_preflight", lambda: handle)
+        with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+             mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
+             mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            created = client.post(
+                "/jobs",
+                json={"job_type": "preflight"},
+                headers={"Authorization": "Bearer cmd-tok"},
+            ).json()
+            on_loop.clear()  # only the calls the stream itself makes count
+
+            resp = client.get(f"/jobs/{created['job_id']}/stream?token=read-tok")
+
+        assert resp.status_code == 200
+        assert "event: end\ndata: Job completed with exit code 0\n\n" in resp.text
+        assert on_loop, "the stream never read the handle status"
+        assert not any(on_loop), "handle status was read on the event-loop thread"
+
+
+# ---------------------------------------------------------------------------
+# JobType.ADVISORY (-> launch_daemon_cycle) and the ORCHESTRATOR refresh_account
+# rejection, through POST /jobs. ADVISORY used to spawn ``main.py``; it now
+# triggers a full cycle on the daemon (daemon-only, no subprocess fallback).
+# ---------------------------------------------------------------------------
+
+import io
+import urllib.error
+import urllib.parse
+
+import shared.daemon_client as daemon_client_module
+import shared.orchestrator_runner as orchestrator_runner_module
+
+_JOBS_HEADERS = {"Authorization": "Bearer cmd-tok"}
+
+
+class _HttpResponse:
+    """Minimal stand-in for the urllib response shared.daemon_client reads."""
+
+    def __init__(self, status: int, body: bytes):
+        self.status = status
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def _urlopen_via_control_api(req, timeout=None):
+    """Route shared.daemon_client's loopback HTTP into the in-process Control
+    API (the same ``client``) so POST /jobs -> launch_daemon_cycle ->
+    POST /run -> a hand-written fake daemon runs end to end with real auth and
+    status-code mapping -- no socket, no real daemon."""
+    path = urllib.parse.urlparse(req.full_url).path
+    resp = client.request(
+        req.get_method(), path, headers=dict(req.header_items()), content=req.data,
+    )
+    if resp.status_code >= 400:
+        raise urllib.error.HTTPError(
+            req.full_url, resp.status_code, "error", None, io.BytesIO(resp.content),
+        )
+    return _HttpResponse(resp.status_code, resp.content)
+
+
+@pytest.fixture()
+def advisory_env(monkeypatch):
+    """JOBS_API on, matching tokens, real daemon_client wired to the in-process
+    Control API, and any subprocess spawn is a hard failure."""
+
+    def _popen_must_not_be_called(cmd, **kwargs):
+        raise AssertionError(f"ADVISORY must not spawn a subprocess: {cmd}")
+
+    monkeypatch.setattr(orchestrator_runner_module.subprocess, "Popen", _popen_must_not_be_called)
+    monkeypatch.setattr(daemon_client_module.urllib.request, "urlopen", _urlopen_via_control_api)
+    with mock.patch.object(settings, "JOBS_API_ENABLED", True), \
+         mock.patch.object(settings, "ORCHESTRATOR_DAEMON_TOKEN", "cmd-tok"), \
+         mock.patch.object(settings, "STATE_API_TOKEN", None):
+        yield
+
+
+def _post_advisory(params=None):
+    body = {"job_type": "advisory"}
+    if params is not None:
+        body["params"] = params
+    return client.post("/jobs", json=body, headers=_JOBS_HEADERS)
+
+
+class TestAdvisoryJobViaDaemon:
+    def test_advisory_triggers_a_daemon_cycle_and_tracks_it(self, advisory_env):
+        runs = {"run-adv-1": _make_run_record("run-adv-1", RunState.RUNNING, finished=False)}
+        daemon = _make_fake_daemon(
+            trigger_result=TriggerResult(TriggerOutcome.ACCEPTED, "run-adv-1"), get_run_map=runs,
+        )
+        control_api.set_daemon(daemon)
+
+        with mock.patch.object(control_api, "GlobalKillSwitch") as ks:
+            ks.return_value.is_active.return_value = False
+            created = _post_advisory()
+            assert created.status_code == 200
+            body = created.json()
+            assert body["job_type"] == "advisory"
+            assert body["status"] == "running"
+            # A daemon-hosted cycle has no local process: never offer Cancel.
+            assert body["cancellable"] is False
+            daemon.trigger_run.assert_called_once_with(reason="manual")
+
+            rec = jobs_module.job_manager.get_job(body["job_id"])
+            assert rec.handle.backend == "daemon"
+            assert rec.handle.daemon_run_id == "run-adv-1"
+
+            running = client.get(f"/jobs/{body['job_id']}", headers=_JOBS_HEADERS).json()
+            assert running["status"] == "running"
+            assert running["exit_code"] is None
+
+            runs["run-adv-1"] = _make_run_record("run-adv-1", RunState.SUCCEEDED)
+            done = client.get(f"/jobs/{body['job_id']}", headers=_JOBS_HEADERS).json()
+            assert done["status"] == "success"
+            assert done["exit_code"] == 0
+
+            cancel = client.post(f"/jobs/{body['job_id']}/cancel", headers=_JOBS_HEADERS)
+        assert cancel.status_code == 400
+        assert "daemon-hosted" in cancel.json()["detail"]
+
+    def test_advisory_attaches_to_a_cycle_already_in_flight(self, advisory_env):
+        # Real 409 body shape: {"detail": {"detail": ..., "run_id": ...}}.
+        live = _make_run_record("run-live", RunState.RUNNING, finished=False)
+        daemon = _make_fake_daemon(
+            trigger_result=TriggerResult(TriggerOutcome.ALREADY_RUNNING, "run-live"),
+            get_run_map={"run-live": live},
+            last_result=live,
+        )
+        control_api.set_daemon(daemon)
+
+        with mock.patch.object(control_api, "GlobalKillSwitch") as ks:
+            ks.return_value.is_active.return_value = False
+            resp = _post_advisory()
+        assert resp.status_code == 200
+        rec = jobs_module.job_manager.get_job(resp.json()["job_id"])
+        assert rec.handle.backend == "daemon"
+        assert rec.handle.daemon_run_id == "run-live"
+        assert resp.json()["status"] == "running"
+
+    def test_advisory_refuses_to_attach_to_a_data_only_run_in_flight(self, advisory_env):
+        """The daemon is single-flight across modes: a POST /pipeline/data
+        sub-run in flight never runs the advisory/broker/queue/snapshot steps."""
+        import dataclasses
+
+        sub = dataclasses.replace(
+            _make_run_record("run-sub", RunState.RUNNING, finished=False), mode="data",
+        )
+        daemon = _make_fake_daemon(
+            trigger_result=TriggerResult(TriggerOutcome.ALREADY_RUNNING, "run-sub"),
+            get_run_map={"run-sub": sub},
+            last_result=sub,
+        )
+        control_api.set_daemon(daemon)
+
+        with mock.patch.object(control_api, "GlobalKillSwitch") as ks:
+            ks.return_value.is_active.return_value = False
+            resp = _post_advisory()
+        assert resp.status_code == 409
+        assert "'data' run" in resp.json()["detail"]
+        assert "not attached" in resp.json()["detail"]
+        assert jobs_module.job_manager.list_jobs() == []
+
+    def test_kill_switch_active_is_409_with_the_reason_and_no_job_left_behind(self, advisory_env):
+        daemon = _make_fake_daemon()
+        control_api.set_daemon(daemon)
+
+        with mock.patch.object(control_api, "GlobalKillSwitch") as ks:
+            ks.return_value.is_active.return_value = True
+            ks.return_value.reason.return_value = "manual halt"
+            resp = _post_advisory()
+        assert resp.status_code == 409
+        detail = resp.json()["detail"].lower()
+        assert "kill switch" in detail
+        # Needs shared.daemon_client to read the 423 body's nested
+        # ``detail.kill_switch_reason`` (the real Control API shape).
+        assert "manual halt" in detail
+        daemon.trigger_run.assert_not_called()
+        # The failed launch must not leave a "starting" record that would
+        # 409 every later attempt as a single-flight conflict.
+        assert jobs_module.job_manager.list_jobs() == []
+
+    def test_no_daemon_attached_is_409_daemon_not_running(self, advisory_env):
+        control_api.set_daemon(None)  # POST /run -> 503 "Daemon not available."
+
+        resp = _post_advisory()
+        assert resp.status_code == 409
+        assert "daemon not running (python -m desktop.orchestrator_daemon)" in resp.json()["detail"]
+        assert jobs_module.job_manager.list_jobs() == []
+
+    @pytest.mark.parametrize(
+        "error,needle",
+        [
+            ("command_disabled", "ORCHESTRATOR_DAEMON_TOKEN"),
+            ("unauthorized", "ORCHESTRATOR_DAEMON_TOKEN"),
+            ("network_error", "could not be confirmed"),
+            ("unexpected_response", "unexpected"),
+        ],
+    )
+    def test_other_daemon_failures_are_409_with_an_operator_readable_message(
+        self, advisory_env, monkeypatch, error, needle,
+    ):
+        monkeypatch.setattr(
+            daemon_client_module, "trigger_run",
+            lambda timeout=5.0: daemon_client_module.TriggerResponse(
+                ok=False, run_id=None, state=None, error=error,
+            ),
+        )
+        resp = _post_advisory()
+        assert resp.status_code == 409
+        # Survives api._redact.redact_line intact (names the setting, no secret).
+        assert needle in resp.json()["detail"]
+        assert "cmd-tok" not in resp.json()["detail"]
+
+    def test_second_advisory_while_one_runs_is_a_structured_409_and_does_not_retrigger(
+        self, advisory_env,
+    ):
+        daemon = _make_fake_daemon(
+            trigger_result=TriggerResult(TriggerOutcome.ACCEPTED, "run-adv-2"),
+            get_run_map={"run-adv-2": _make_run_record("run-adv-2", RunState.RUNNING, finished=False)},
+        )
+        control_api.set_daemon(daemon)
+
+        with mock.patch.object(control_api, "GlobalKillSwitch") as ks:
+            ks.return_value.is_active.return_value = False
+            first = _post_advisory()
+            second = _post_advisory()
+        assert first.status_code == 200
+        assert second.status_code == 409
+        assert second.json()["detail"]["job_type"] == "advisory"
+        assert second.json()["detail"]["job_id"] == first.json()["job_id"]
+        daemon.trigger_run.assert_called_once()
+
+    def test_advisory_rejects_refresh_account_with_400_and_never_triggers(
+        self, advisory_env, monkeypatch,
+    ):
+        def _trigger_must_not_be_called(*a, **k):
+            raise AssertionError("a rejected ADVISORY job must not trigger the daemon")
+
+        monkeypatch.setattr(daemon_client_module, "trigger_run", _trigger_must_not_be_called)
+        resp = _post_advisory({"refresh_account": True})
+        assert resp.status_code == 400
+        assert "POST /brokerage/refresh" in resp.json()["detail"]
+
+
+class TestOrchestratorJobRefreshAccount:
+    def test_refresh_account_true_is_400_pointing_at_brokerage_refresh(self, advisory_env, monkeypatch):
+        """main_orchestrator.py has no --refresh-account flag: the old param
+        exited 2 on the subprocess path. It is rejected, not silently dropped."""
+
+        def _launch_must_not_be_called(**kw):
+            raise AssertionError("a rejected ORCHESTRATOR job must not launch")
+
+        monkeypatch.setattr(jobs_module, "launch_orchestrator", _launch_must_not_be_called)
+        resp = client.post(
+            "/jobs",
+            json={"job_type": "orchestrator", "params": {"refresh_account": True}},
+            headers=_JOBS_HEADERS,
+        )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "POST /brokerage/refresh" in detail
+        assert "refresh_account" in detail
+        assert jobs_module.job_manager.list_jobs() == []
+
+    @pytest.mark.parametrize("params", [None, {}, {"refresh_account": False}, {"dry_run": True}])
+    def test_orchestrator_without_refresh_account_still_launches(self, advisory_env, monkeypatch, params):
+        seen: dict = {}
+
+        def _fake_launch(**kw):
+            seen.update(kw)
+            return _FakeHandle(running=True)
+
+        monkeypatch.setattr(jobs_module, "launch_orchestrator", _fake_launch)
+        body = {"job_type": "orchestrator"}
+        if params is not None:
+            body["params"] = params
+        resp = client.post("/jobs", json=body, headers=_JOBS_HEADERS)
+        assert resp.status_code == 200
+        # refresh_account is no longer a launch_orchestrator argument at all.
+        assert seen == {"dry_run": bool((params or {}).get("dry_run", False))}
+
+
+class TestCancelDuringLaunchWindow:
+    """JobRecord.cancellable is True while handle is None, so a cancel that
+    lands mid-launch is accepted and sets rec.cancelled. A subprocess is then
+    stopped after launch; a daemon-hosted cycle cannot be, and must not be
+    reported as "cancelled" while it keeps running."""
+
+    def _start_with_cancel_mid_launch(self, monkeypatch, launcher_name, job_type, handle):
+        def _launch(*args, **kwargs):
+            (rec,) = jobs_module.job_manager.list_jobs()
+            assert rec.handle is None  # still in the launch window
+            assert jobs_module.job_manager.cancel_job(rec.job_id) is True
+            assert rec.cancelled is True
+            return handle
+
+        monkeypatch.setattr(jobs_module, launcher_name, _launch)
+        return jobs_module.job_manager.start_job(job_type)
+
+    def test_daemon_backed_job_is_not_reported_cancelled(self, monkeypatch, caplog):
+        handle = _FakeHandle(running=True, backend="daemon")
+        stopped: list = []
+        monkeypatch.setattr(
+            jobs_module, "stop_run_detailed",
+            lambda h: stopped.append(h) or StopOutcome(stopped=True, already_stopped=False),
+        )
+        with caplog.at_level("WARNING", logger=jobs_module.logger.name):
+            rec = self._start_with_cancel_mid_launch(
+                monkeypatch, "launch_daemon_cycle", jobs_module.JobType.ADVISORY, handle,
+            )
+        assert rec.cancelled is False
+        assert rec.status() == "running"
+        assert stopped == []  # a daemon cycle is never signalled
+        assert any(
+            "cannot be cancelled" in r.getMessage() and rec.job_id in r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING"
+        )
+
+    def test_daemon_backed_job_reports_its_real_terminal_state(self, monkeypatch):
+        handle = _FakeHandle(running=True, backend="daemon")
+        rec = self._start_with_cancel_mid_launch(
+            monkeypatch, "launch_daemon_cycle", jobs_module.JobType.ADVISORY, handle,
+        )
+        handle._running = False
+        handle._rc = 0
+        assert rec.status() == "success"
+
+    def test_subprocess_backed_job_is_still_stopped_and_cancelled(self, monkeypatch):
+        handle = _FakeHandle(running=True, backend="subprocess")
+        stopped: list = []
+        monkeypatch.setattr(
+            jobs_module, "stop_run_detailed",
+            lambda h: stopped.append(h) or StopOutcome(stopped=True, already_stopped=False),
+        )
+        rec = self._start_with_cancel_mid_launch(
+            monkeypatch, "launch_pytest", jobs_module.JobType.PYTEST, handle,
+        )
+        assert stopped == [handle]
+        assert rec.cancelled is True
+        assert rec.status() == "cancelled"
+
 
 # ---------------------------------------------------------------------------
 # Architectural guard

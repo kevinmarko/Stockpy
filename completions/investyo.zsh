@@ -11,7 +11,6 @@ _investyo_complete() {
     if [[ -z "$cmd" ]]; then
       local prevw="${words[i-1]}"
       case "$w" in
-        main.py|*/main.py) cmd='main.py' ;;
         main_orchestrator.py|*/main_orchestrator.py) cmd='main_orchestrator.py' ;;
         universe_engine.py|*/universe_engine.py) cmd='universe_engine.py' ;;
         execution.kill_switch) [[ "$prevw" == "-m" ]] && cmd='execution.kill_switch' ;;
@@ -56,7 +55,6 @@ _investyo_complete() {
 
   ctx="$cmd"; [[ -n "$sub" ]] && ctx="$cmd/$sub"
   case "$ctx" in
-    main.py) kind='opts'; cands=(--interval --refresh-account --agent); disp=('--interval  -- Refresh market data every N seconds (0 = run once and exit).' '--refresh-account  -- Force a fresh Robinhood fetch on this launch (bypasses daily cache).' '--agent  -- Run the autonomous advisory agent loop: adaptive cadence based on market hours / VIX / regime, backlog reminders for high-conviction signals the operator has not yet logged a decision for, persistent state across restarts.  Takes precedence over --interval.') ;;
     main_orchestrator.py) kind='opts'; cands=(--dry-run --strict); disp=('--dry-run  -- Log intended orders but do not submit to broker.' '--strict  -- Treat DashboardSchema validation failures as fatal (exit 1). For CI / schema-drift gating.') ;;
     universe_engine.py) kind='opts'; cands=(--date --report); disp=('--date  -- As-of date in YYYY-MM-DD format' '--report  -- Print survivorship bias report') ;;
     execution.kill_switch) kind='opts'; cands=(--activate --deactivate --activate-soft-halt --deactivate-soft-halt --status --reason); disp=('--activate  -- Activate the global kill switch.' '--deactivate  -- Deactivate the global kill switch.' '--activate-soft-halt  -- Activate soft halt (block BUYs).' '--deactivate-soft-halt  -- Deactivate soft halt.' '--status  -- Print current status.' '--reason  -- Reason text (--activate / --activate-soft-halt).') ;;

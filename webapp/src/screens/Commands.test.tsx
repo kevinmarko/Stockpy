@@ -44,15 +44,16 @@ function type(value: string) {
 
 // ---- Fixtures for the "Run button" describe block below ------------------
 //
-// The shared MOCK_COMMAND_MANIFEST (api/mock.ts) already carries a plain
-// `main.py` command with a `--refresh-account` option, so the "main.py
-// --refresh-account requires confirmation" test can reuse it unmodified.
-// It does NOT carry `execution.kill_switch` (an --activate/--deactivate
-// option) or `app_shell.py` (a no-subprocess local-launcher command), so
-// those two tests mock `api.getCommands` with a small custom manifest built
-// here instead of editing the shared fixture — isolating this test file from
-// the parallel agent's own edits to api/mock.ts (per this file's existing
-// convention, e.g. the "an empty manifest renders..." test above).
+// The shared MOCK_COMMAND_MANIFEST (api/mock.ts) carries validation.harness,
+// preflight_check.py, snapshot_diff.py, prompt_registry and
+// refresh_validations.py. It does NOT carry any high-stakes command
+// (`execution.kill_switch`'s --activate/--deactivate, or
+// `repair_price_bars_adjustment.py`) nor `app_shell.py` (a no-subprocess
+// local-launcher command), so those tests mock `api.getCommands` with a small
+// custom manifest built here instead of editing the shared fixture —
+// isolating this test file from the parallel agent's own edits to api/mock.ts
+// (per this file's existing convention, e.g. the "an empty manifest
+// renders..." test above).
 function buildManifest(commands: CommandSpec[]): CommandManifest {
   return {
     generated_at: "2026-07-17T12:00:00+00:00",
@@ -117,29 +118,29 @@ const APP_SHELL_COMMAND: CommandSpec = {
   options: [],
 };
 
-const MAIN_PY_COMMAND: CommandSpec = {
-  name: "main.py",
-  invocation: "python3 main.py",
+const REPAIR_PRICE_BARS_COMMAND: CommandSpec = {
+  name: "repair_price_bars_adjustment.py",
+  invocation: "python scripts/repair_price_bars_adjustment.py",
   aliases: [],
-  description: "Clean advisory orchestrator.",
+  description: "Delete and re-fetch price_bars rows for symbols with a corrupted adjustment.",
   positionals: [],
   subcommands: [],
   options: [
     {
-      name: "--interval",
-      aliases: ["--interval"],
-      description: "refresh cadence in seconds (0 = run once)",
-      default: 0,
+      name: "--tickers",
+      aliases: ["--tickers"],
+      description: "symbols to repair",
+      default: null,
       choices: null,
       required: false,
-      arg_kind: "optional",
-      metavar: "SECONDS",
+      arg_kind: "variadic",
+      metavar: "TICKER",
       takes_value: true,
     },
     {
-      name: "--refresh-account",
-      aliases: ["--refresh-account"],
-      description: "force a fresh Robinhood login this run",
+      name: "--dry-run",
+      aliases: ["--dry-run"],
+      description: "preview without writing",
       default: false,
       choices: null,
       required: false,
@@ -171,7 +172,7 @@ describe("Commands screen (real mock API)", () => {
     expect(await screen.findByRole("heading", { name: "Commands" })).toBeInTheDocument();
     // Reference list shows the manifest commands while nothing is typed.
     expect(await screen.findByText("validation.harness")).toBeInTheDocument();
-    expect(screen.getByText("main.py")).toBeInTheDocument();
+    expect(screen.getByText("preflight_check.py")).toBeInTheDocument();
   });
 
   it("renders the manifest's generated_at freshness, never fabricated when null", async () => {
@@ -192,17 +193,17 @@ describe("Commands screen (real mock API)", () => {
 
   it("suggests a resolved command's options after a space", async () => {
     renderCommands();
-    await screen.findByText("main.py");
-    type("main.py ");
+    await screen.findByText("validation.harness");
+    type("refresh_validations.py ");
     const listbox = await screen.findByTestId("command-suggestions");
-    expect(within(listbox).getByText("--interval <SECONDS>")).toBeInTheDocument();
+    expect(within(listbox).getByText("--start <YYYY-MM-DD>")).toBeInTheDocument();
     // The default is surfaced in the option's description.
-    expect(within(listbox).getByText(/default: 0/)).toBeInTheDocument();
+    expect(within(listbox).getByText(/default: 2005-01-01/)).toBeInTheDocument();
   });
 
   it("flags a missing required option before submit", async () => {
     renderCommands();
-    await screen.findByText("main.py");
+    await screen.findByText("validation.harness");
     type("validation.harness ");
     const hints = await screen.findByTestId("command-hints");
     expect(within(hints).getByText(/missing required option: --strategy/)).toBeInTheDocument();
@@ -210,7 +211,7 @@ describe("Commands screen (real mock API)", () => {
 
   it("composes the runnable command once complete", async () => {
     renderCommands();
-    await screen.findByText("main.py");
+    await screen.findByText("validation.harness");
     type("validation.harness --strategy momentum");
     expect(await screen.findByTestId("command-composed")).toHaveTextContent(
       "python -m validation.harness --strategy momentum"
@@ -219,7 +220,7 @@ describe("Commands screen (real mock API)", () => {
 
   it("resolves a subcommand by alias and completes its choices/options", async () => {
     renderCommands();
-    await screen.findByText("main.py");
+    await screen.findByText("validation.harness");
     type("prompt_registry g --");
     const listbox = await screen.findByTestId("command-suggestions");
     expect(within(listbox).getByText("--version")).toBeInTheDocument();
@@ -313,7 +314,7 @@ describe("Robinhood execution queue section (real mock API)", () => {
     vi.spyOn(api, "getExecutionQueue").mockRejectedValueOnce(new ApiError("boom", 500));
     renderCommands();
     // The command bar (a separate useApi call) still loads successfully.
-    expect(await screen.findByText("main.py")).toBeInTheDocument();
+    expect(await screen.findByText("validation.harness")).toBeInTheDocument();
     expect(await screen.findByText("Couldn't load")).toBeInTheDocument();
   });
 });
@@ -323,7 +324,7 @@ describe("Commands screen — Run button", () => {
 
   it("shows a Run button once a valid command is composed, but not while validation errors are present", async () => {
     renderCommands();
-    await screen.findByText("main.py");
+    await screen.findByText("validation.harness");
 
     // Missing required --strategy -> validation error, no runnable command.
     type("validation.harness ");
@@ -348,7 +349,7 @@ describe("Commands screen — Run button", () => {
       .mockResolvedValueOnce(commandJobRecord("mock-job-1"));
 
     renderCommands();
-    await screen.findByText("main.py");
+    await screen.findByText("validation.harness");
     type("validation.harness --strategy momentum");
 
     const runButton = await screen.findByRole("button", { name: /run/i });
@@ -451,24 +452,25 @@ describe("Commands screen — Run button", () => {
     expect(createJobSpy).not.toHaveBeenCalled();
   });
 
-  it("main.py --refresh-account requires confirmation before calling createJob", async () => {
-    // main.py + --refresh-account is already in the shared mock manifest, but
-    // pin an explicit fixture here too so this test doesn't silently depend on
-    // shared-fixture edits made elsewhere.
-    vi.spyOn(api, "getCommands").mockResolvedValueOnce(buildManifest([MAIN_PY_COMMAND]));
+  it("repair_price_bars_adjustment.py requires confirmation before calling createJob, even with --dry-run", async () => {
+    // Its HIGH_STAKES rule has an empty flag set, so it gates EVERY invocation
+    // (the table can't express "confirm unless --dry-run"). The shared mock
+    // manifest doesn't carry this command, so pin an explicit fixture.
+    vi.spyOn(api, "getCommands").mockResolvedValueOnce(buildManifest([REPAIR_PRICE_BARS_COMMAND]));
     const createJobSpy = vi
       .spyOn(api, "createJob")
       .mockResolvedValueOnce(commandJobRecord("mock-job-4"));
 
     renderCommands();
-    await screen.findByText("main.py");
-    type("main.py --refresh-account");
+    await screen.findByText("repair_price_bars_adjustment.py");
+    type("repair_price_bars_adjustment.py --dry-run");
 
     const runButton = await screen.findByRole("button", { name: /run/i });
     fireEvent.click(runButton);
 
     const dialog = await screen.findByRole("dialog");
     expect(createJobSpy).not.toHaveBeenCalled();
+    expect(within(dialog).getByText(/deletes price_bars rows/)).toBeInTheDocument();
 
     const confirmButton = within(dialog)
       .getAllByRole("button")
@@ -480,8 +482,8 @@ describe("Commands screen — Run button", () => {
       expect(createJobSpy).toHaveBeenCalledWith(
         "command",
         expect.objectContaining({
-          command: "main.py",
-          args: expect.arrayContaining(["--refresh-account"]),
+          command: "repair_price_bars_adjustment.py",
+          args: expect.arrayContaining(["--dry-run"]),
           confirm: true,
         })
       )
@@ -494,7 +496,7 @@ describe("Commands screen — Run button", () => {
       .mockResolvedValueOnce(commandJobRecord("mock-job-5"));
 
     renderCommands();
-    await screen.findByText("main.py");
+    await screen.findByText("validation.harness");
 
     fireEvent.click(await screen.findByRole("button", { name: "Configure prompt_registry" }));
     const modal = await screen.findByTestId("command-form-builder");
@@ -522,13 +524,13 @@ describe("Commands screen — Run button", () => {
     Object.assign(navigator, { clipboard: { writeText } });
 
     renderCommands();
-    await screen.findByText("main.py");
+    await screen.findByText("validation.harness");
 
-    const copyButton = await screen.findByRole("button", { name: "Copy main.py" });
+    const copyButton = await screen.findByRole("button", { name: "Copy validation.harness" });
     expect(copyButton).toHaveTextContent("📋");
     fireEvent.click(copyButton);
 
-    expect(writeText).toHaveBeenCalledWith("python3 main.py");
+    expect(writeText).toHaveBeenCalledWith("python -m validation.harness");
     await waitFor(() => expect(copyButton).toHaveTextContent("✅"));
   });
 
@@ -537,9 +539,9 @@ describe("Commands screen — Run button", () => {
     Object.assign(navigator, { clipboard: { writeText } });
 
     renderCommands();
-    await screen.findByText("main.py");
+    await screen.findByText("validation.harness");
 
-    const copyButton = await screen.findByRole("button", { name: "Copy main.py" });
+    const copyButton = await screen.findByRole("button", { name: "Copy validation.harness" });
     fireEvent.click(copyButton);
 
     await waitFor(() => expect(writeText).toHaveBeenCalled());
@@ -550,7 +552,7 @@ describe("Commands screen — Run button", () => {
 
   it("shows the Bulk Validate All Strategies button when refresh_validations.py is in the manifest, and clicking it opens Form Mode for that command", async () => {
     renderCommands();
-    await screen.findByText("main.py");
+    await screen.findByText("validation.harness");
 
     const bulkButton = await screen.findByRole("button", {
       name: /Bulk Validate All Strategies/i,
@@ -562,10 +564,10 @@ describe("Commands screen — Run button", () => {
   });
 
   it("does not render the Bulk Validate All Strategies button when the manifest lacks refresh_validations.py", async () => {
-    vi.spyOn(api, "getCommands").mockResolvedValueOnce(buildManifest([MAIN_PY_COMMAND]));
+    vi.spyOn(api, "getCommands").mockResolvedValueOnce(buildManifest([REPAIR_PRICE_BARS_COMMAND]));
 
     renderCommands();
-    await screen.findByText("main.py");
+    await screen.findByText("repair_price_bars_adjustment.py");
 
     expect(
       screen.queryByRole("button", { name: /Bulk Validate All Strategies/i })
@@ -578,7 +580,7 @@ describe("Commands screen — Run button", () => {
     );
 
     renderCommands();
-    await screen.findByText("main.py");
+    await screen.findByText("validation.harness");
     type("validation.harness --strategy momentum");
 
     const runButton = await screen.findByRole("button", { name: /run/i });

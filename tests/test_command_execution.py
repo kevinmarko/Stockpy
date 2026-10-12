@@ -18,7 +18,8 @@ verbatim), not against the in-progress implementation:
     ``DISALLOWED_EXECUTE_COMMANDS`` (``app_shell.py``) and unresolvable
     commands with ``ValueError``, requires ``confirm=True`` for any
     ``HIGH_STAKES_COMMANDS`` flag-set match (``execution.kill_switch
-    --activate``/``--deactivate``, ``main.py --refresh-account``), and
+    --activate``/``--deactivate``, ``database_setup.py``,
+    ``repair_price_bars_adjustment.py``), and
     otherwise spawns ``[sys.executable] + shlex.split(invocation)[1:] +
     args`` via ``subprocess.Popen``, logging to
     ``settings.OUTPUT_DIR / "gui_commands" / f"{job_id}.log"``.
@@ -68,7 +69,7 @@ _HEADERS = {"Authorization": "Bearer test-token"}
 # behaviors reference: an ordinary target, a second (distinct) ordinary
 # target for the concurrency tests, the disallowed app_shell.py entry (to
 # prove the disallow-check fires even for a name the manifest DOES list),
-# and both HIGH_STAKES_COMMANDS entries.
+# and every HIGH_STAKES_COMMANDS entry.
 FIXTURE_MANIFEST = {
     "generated_at": "2026-07-30T00:00:00+00:00",
     "command_count": 4,
@@ -102,8 +103,8 @@ FIXTURE_MANIFEST = {
             "subcommands": [],
         },
         {
-            "name": "main.py",
-            "invocation": "python3 main.py",
+            "name": "repair_price_bars_adjustment.py",
+            "invocation": "python scripts/repair_price_bars_adjustment.py",
             "aliases": [],
             "description": None,
             "options": [],
@@ -387,29 +388,42 @@ def test_kill_switch_deactivate_also_requires_confirmation(monkeypatch):
     mock_popen.assert_not_called()
 
 
-def test_main_refresh_account_requires_confirmation_then_succeeds(monkeypatch):
+def test_repair_price_bars_requires_confirmation_then_succeeds(monkeypatch):
+    """repair_price_bars_adjustment.py deletes price_bars rows -- like
+    database_setup.py its HIGH_STAKES_COMMANDS entry keys on frozenset(), so
+    any argv is gated on confirm."""
     created: list = []
     monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _recording_popen(created))
     with _manifest_patch(), _enabled():
         no_confirm = client.post(
             "/jobs",
-            json={"job_type": "command", "params": {"command": "main.py", "args": ["--refresh-account"]}},
+            json={
+                "job_type": "command",
+                "params": {"command": "repair_price_bars_adjustment.py", "args": ["--tickers", "AAPL"]},
+            },
             headers=_HEADERS,
         )
         assert no_confirm.status_code == 400
         assert "confirmation required" in no_confirm.json()["detail"].lower()
+        assert created == []  # nothing spawned on the rejected attempt
 
         confirmed = client.post(
             "/jobs",
             json={
                 "job_type": "command",
-                "params": {"command": "main.py", "args": ["--refresh-account"], "confirm": True},
+                "params": {
+                    "command": "repair_price_bars_adjustment.py",
+                    "args": ["--tickers", "AAPL"],
+                    "confirm": True,
+                },
             },
             headers=_HEADERS,
         )
     assert confirmed.status_code == 200
     assert len(created) == 1
-    assert created[0].args == [sys.executable, "main.py", "--refresh-account"]
+    assert created[0].args == [
+        sys.executable, "scripts/repair_price_bars_adjustment.py", "--tickers", "AAPL",
+    ]
 
 
 def test_database_setup_requires_confirmation_then_succeeds(monkeypatch):
@@ -567,7 +581,7 @@ def test_launch_manifest_command_high_stakes_with_confirm_succeeds(monkeypatch, 
 def test_launch_manifest_command_database_setup_requires_confirmation(monkeypatch):
     """database_setup.py's HIGH_STAKES_COMMANDS entry keys on frozenset()
     (the empty set), so an empty args list still triggers the gate -- unlike
-    the kill-switch/main.py entries, there is no flag whose ABSENCE would
+    the kill-switch entries, there is no flag whose ABSENCE would
     exempt it."""
     mock_popen = MagicMock()
     monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", mock_popen)
@@ -591,27 +605,29 @@ def test_launch_manifest_command_database_setup_with_confirm_succeeds(monkeypatc
     assert created[0].args == [sys.executable, "database_setup.py"]
 
 
-def test_launch_manifest_command_main_refresh_account_requires_confirmation(monkeypatch):
+def test_launch_manifest_command_repair_price_bars_requires_confirmation(monkeypatch):
     mock_popen = MagicMock()
     monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", mock_popen)
     with _manifest_patch():
         with pytest.raises(ValueError, match="(?i)confirmation required"):
             orchestrator_runner.launch_manifest_command(
-                "job-7", "main.py", None, ["--refresh-account"]
+                "job-7", "repair_price_bars_adjustment.py", None, ["--tickers", "AAPL"]
             )
     mock_popen.assert_not_called()
 
 
-def test_launch_manifest_command_refresh_account_confirm_sets_handle_field(monkeypatch):
+def test_launch_manifest_command_repair_price_bars_with_confirm_succeeds(monkeypatch):
     created: list = []
     monkeypatch.setattr(orchestrator_runner.subprocess, "Popen", _recording_popen(created))
     with _manifest_patch():
         handle = orchestrator_runner.launch_manifest_command(
-            "job-8", "main.py", None, ["--refresh-account"], confirm=True
+            "job-8", "repair_price_bars_adjustment.py", None, ["--tickers", "AAPL"], confirm=True
         )
     assert handle.mode == "command"
-    assert handle.refresh_account is True
-    assert created[0].args == [sys.executable, "main.py", "--refresh-account"]
+    assert handle.refresh_account is False
+    assert created[0].args == [
+        sys.executable, "scripts/repair_price_bars_adjustment.py", "--tickers", "AAPL",
+    ]
 
 
 def test_launch_manifest_command_refresh_account_false_when_flag_absent(monkeypatch):

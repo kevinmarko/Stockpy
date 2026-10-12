@@ -146,11 +146,30 @@ class TriggerResponse:
 
 def _parse_json_body(raw: bytes) -> dict:
     """Best-effort JSON parse of an HTTPError body. Returns {} (never raises)
-    on empty/malformed bodies so callers can safely use ``.get(...)``."""
+    on empty/malformed bodies, and on any JSON that is not an object (a list
+    or scalar from a foreign server), so callers can safely use ``.get(...)``."""
     try:
-        return json.loads(raw) if raw else {}
+        parsed = json.loads(raw) if raw else {}
     except (ValueError, json.JSONDecodeError):
         return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _flatten_error_detail(data: dict) -> dict:
+    """Lift a nested error ``detail`` object up to the top level.
+
+    ``api/control_api.py`` raises ``HTTPException(detail={"detail": msg,
+    "run_id": ...})`` and FastAPI serializes that as ``{"detail": {"detail":
+    msg, "run_id": ...}}``, so ``run_id`` / ``kill_switch_reason`` live one
+    level down. A flat body (``{"detail": msg, "run_id": ...}``) is returned
+    unchanged, as is anything whose ``detail`` is a plain string. Never raises.
+    """
+    nested = data.get("detail")
+    if not isinstance(nested, dict):
+        return data
+    flat = {k: v for k, v in data.items() if k != "detail"}
+    flat.update(nested)
+    return flat
 
 
 def trigger_run(timeout: float = 5.0) -> TriggerResponse:
@@ -177,6 +196,10 @@ def trigger_run(timeout: float = 5.0) -> TriggerResponse:
             body = resp.read()
             if resp.status == 202:
                 data = json.loads(body)
+                if not isinstance(data, dict):
+                    return TriggerResponse(
+                        ok=False, run_id=None, state=None, error="unexpected_response"
+                    )
                 return TriggerResponse(
                     ok=True,
                     run_id=data.get("run_id"),
@@ -189,7 +212,7 @@ def trigger_run(timeout: float = 5.0) -> TriggerResponse:
                 ok=False, run_id=None, state=None, error="unexpected_response"
             )
     except urllib.error.HTTPError as exc:
-        data = _parse_json_body(exc.read())
+        data = _flatten_error_detail(_parse_json_body(exc.read()))
         if exc.code == 409:
             return TriggerResponse(
                 ok=False,

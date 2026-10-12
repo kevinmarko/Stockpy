@@ -17,7 +17,7 @@ const PAGE_SIZE = 25;
  * performance" panel (which is a cache-only, 8-row-truncated summary feed):
  * this reads the durable store (`GET /portfolio/trade-history`,
  * `data/broker_fills_store.py`, fed by the login worker's orders ingest
- * during a `--refresh-account` login) and supports real pagination and a
+ * during a device-approval login, e.g. Settings → Brokers → Refresh) and supports real pagination and a
  * per-symbol filter over the operator's entire ingested history.
  *
  * `get_all_stock_orders` (the Robinhood API this is built on) is
@@ -54,7 +54,7 @@ export function TradeHistory() {
       ) : !page.data || !page.data.available ? (
         <EmptyState
           title="No trade history ingested yet"
-          hint="Run `python3 main.py --refresh-account` (a device-approval login) to fetch and persist your real Robinhood filled-order history."
+          hint="Open Settings → Brokers and press Refresh (approve the device prompt on your phone) to fetch and persist your real Robinhood filled-order history, or enable ROBINHOOD_SCHEDULED_LOGIN_ENABLED for the daemon's weekday-morning login."
         />
       ) : (
         <>

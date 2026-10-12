@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import toast from "react-hot-toast";
 import { TabGuide } from "../components/TabGuide";
 import { LogStream } from "../components/LogStream";
@@ -39,10 +40,27 @@ interface QuickAction {
 const QUICK_ACTIONS: QuickAction[] = [
   { key: "preflight", icon: "🛡️", label: "Preflight Check", description: "Validate environment & keys", jobType: "preflight" },
   { key: "pytest", icon: "🧪", label: "Run Test Suite", description: "Execute full pytest suite", jobType: "pytest" },
-  { key: "advisory", icon: "🚀", label: "Advisory Pipeline", description: "Run main.py cycle", jobType: "advisory" },
+  { key: "advisory", icon: "🚀", label: "Advisory Pipeline", description: "Triggers a full daemon pipeline cycle — per the daemon's settings it can place paper orders and write the execution queue", jobType: "advisory" },
   { key: "verify", icon: "⚡", label: "Full Verification", description: "Env + Tests + Live Cycle", jobType: "verify" },
   { key: "gravity", icon: "🔍", label: "Gravity Audit", description: "Run Gravity AI Review Suite", jobType: "gravity" },
 ];
+
+/**
+ * Job types the backend hosts on the orchestrator DAEMON instead of as a local
+ * subprocess (api/_jobs.py: ORCHESTRATOR, and ADVISORY since step 5.4 -> a
+ * daemon cycle). Such a job reports `cancellable: false` and its SSE log stream
+ * stays empty (the daemon never writes the log file the stream tails). When the
+ * job is not cancellable the Log panel says so, rather than an unexplained
+ * "No logs received yet...".
+ */
+const DAEMON_HOSTED_JOB_TYPES: ReadonlySet<string> = new Set(["advisory", "orchestrator"]);
+
+const DAEMON_JOB_LOG_NOTE = (
+  <>
+    This job runs inside the orchestrator daemon, so it streams no log lines here and cannot be
+    cancelled from this screen. Follow the cycle on the <Link to="/pipeline">Pipeline Dashboard</Link>.
+  </>
+);
 
 function fmtPercent(n: number | null): string {
   return n == null ? "—" : `${n.toFixed(1)}%`;
@@ -440,7 +458,15 @@ export function Console() {
           </div>
 
           <div key="logStream">
-            <LogStream jobId={activeJob?.job_id} isStreaming={Boolean(activeJob)} />
+            <LogStream
+              jobId={activeJob?.job_id}
+              isStreaming={Boolean(activeJob)}
+              emptyMessage={
+                activeJob && DAEMON_HOSTED_JOB_TYPES.has(activeJob.job_type) && !activeJob.cancellable
+                  ? DAEMON_JOB_LOG_NOTE
+                  : undefined
+              }
+            />
           </div>
 
           <div key="jobHistory">

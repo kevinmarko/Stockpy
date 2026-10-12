@@ -193,7 +193,9 @@ function BrokerageSection({
             {data.connected ? (
               <>
                 Bypasses the daily cache and re-authenticates against Robinhood
-                right now — equivalent to <code>python3 main.py --refresh-account</code>.
+                right now — the same device-approval login the daemon runs each
+                weekday morning when <code>ROBINHOOD_SCHEDULED_LOGIN_ENABLED</code> is on
+                (approve the prompt on your phone).
               </>
             ) : (
               <>

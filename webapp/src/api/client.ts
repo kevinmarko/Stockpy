@@ -337,6 +337,35 @@ async function http<T>(
   return data;
 }
 
+/**
+ * Readable message from a FastAPI error `detail` that is either a plain string
+ * or the structured object POST /automation/run (and POST /dead-letter/retry,
+ * which shares its error mapping) returns for a documented runtime outcome:
+ * `{detail, run_id}` (409 already running -- the in-flight run's id) or
+ * `{detail, kill_switch_reason}` (423). Returns null when there is nothing
+ * usable, so the caller falls back to the HTTP status line rather than a
+ * fabricated sentence. `existing_run_id` is accepted as an alias of `run_id`
+ * (the name `TriggerRunResult` uses).
+ */
+function describeTriggerDetail(detail: unknown): string | null {
+  if (typeof detail === "string") return detail;
+  if (detail === null || typeof detail !== "object") return null;
+  const d = detail as Record<string, unknown>;
+  const text =
+    typeof d.detail === "string" ? d.detail : typeof d.message === "string" ? d.message : null;
+  if (text === null) return null;
+  const runId =
+    typeof d.run_id === "string"
+      ? d.run_id
+      : typeof d.existing_run_id === "string"
+        ? d.existing_run_id
+        : null;
+  const reason = typeof d.kill_switch_reason === "string" ? d.kill_switch_reason : null;
+  return [text, runId ? `In-flight run: ${runId}.` : null, reason ? `Reason: ${reason}` : null]
+    .filter((part): part is string => part !== null)
+    .join(" ");
+}
+
 // ---- Live client (shape-identical to mockApi) ----
 const liveApi = {
   getStrategyReportCard: () => http<StrategyReportCardSnapshot>("/strategy/report-card"),
@@ -903,6 +932,13 @@ const liveApi = {
       /* non-JSON body */
     }
 
+    // 409 has two meanings. A single-flight conflict carries an OBJECT detail
+    // ({detail, job_id, job_type, ...}); a launcher refusal (JobType.ADVISORY
+    // when the kill switch is on, the daemon is down or its token is wrong)
+    // carries a plain STRING detail. Only the first is "already running".
+    if (resp.status === 409 && typeof body?.detail === "string") {
+      throw new ApiError(body.detail, 409);
+    }
     if (resp.status === 409) {
       const detail = body?.detail as { detail?: string; job_id?: string; job_type?: string; command_name?: string } | undefined;
       throw new JobConflictError(
@@ -943,11 +979,56 @@ const liveApi = {
   getReport: (name: string) =>
     http<ReportContent>(`/reports/${encodeURIComponent(name)}`),
   getDeadLetter: () => http<DeadLetterQueue>("/dead-letter"),
-  retryDeadLetter: (symbol: string) =>
-    http<DeadLetterRetryResult>("/dead-letter/retry", {
-      method: "POST",
-      body: JSON.stringify({ symbol }),
-    }),
+  /**
+   * POST /dead-letter/retry. Triggers a FULL daemon pipeline cycle (not a
+   * per-symbol re-run) and returns `{symbol, run_id, applies, note}`. Its error
+   * contract mirrors POST /automation/run -- 409 already-running and 423
+   * kill-switch carry a STRUCTURED detail (`{detail, run_id}` /
+   * `{detail, kill_switch_reason}`), which the shared http() helper's
+   * `String(body.detail)` would flatten to "[object Object]" (and lose the
+   * in-flight run id). So, like triggerRun()/watchCandidate() above, this
+   * bypasses http() and renders those details into the ApiError message;
+   * every non-2xx still THROWS (unlike triggerRun(), the Retry row's inline
+   * Notice + toast branch on a rejected promise).
+   */
+  retryDeadLetter: async (symbol: string): Promise<DeadLetterRetryResult> => {
+    const path = "/dead-letter/retry";
+    const headers: Record<string, string> = {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    };
+    if (TOKEN) headers["Authorization"] = `Bearer ${TOKEN}`;
+
+    const base = baseFor(path);
+    let resp: Response;
+    try {
+      resp = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ symbol }),
+      });
+    } catch {
+      throw new ApiError(
+        `Network error reaching the API at ${base}. Is the owning service running (Pilots :8602)?`,
+        0
+      );
+    }
+
+    let body: { detail?: unknown } | null = null;
+    try {
+      body = await resp.json();
+    } catch {
+      /* non-JSON body */
+    }
+
+    if (!resp.ok) {
+      throw new ApiError(
+        describeTriggerDetail(body?.detail) ?? `${resp.status} ${resp.statusText}`,
+        resp.status
+      );
+    }
+    return body as unknown as DeadLetterRetryResult;
+  },
   // ---- Prompt Registry (pilots base, :8602) — webapp parity gap G4 ----
   getPrompts: () => http<PromptListResponse>("/prompts"),
   getPrompt: (id: string, version?: string) =>

@@ -805,9 +805,9 @@ export interface BrokerageLoginCancelResult extends BrokerageLoginJob {
 
 /**
  * POST /brokerage/refresh response — starts an async live Robinhood
- * re-login + account-snapshot fetch bypassing the daily cache (the webapp
- * equivalent of `python3 main.py --refresh-account` / the Streamlit GUI's
- * "Force fresh login" checkbox), polled the same way `connectBrokerage`'s
+ * re-login + account-snapshot fetch bypassing the daily cache (the same
+ * device-approval login the daemon's scheduled login runs when
+ * `ROBINHOOD_SCHEDULED_LOGIN_ENABLED` is on), polled the same way `connectBrokerage`'s
  * job is (see `BrokerageLoginJob`) — no separate synchronous `Portfolio`
  * result anymore; re-fetch `GET /portfolio` once the job succeeds if the
  * refreshed figures themselves are needed.
@@ -3000,7 +3000,7 @@ export interface CommandArg {
 
 /** A CLI command — a top-level entry point, or one subcommand (recursive). */
 export interface CommandSpec {
-  name: string; // typed name, e.g. "main.py" / "validation.harness" / "get"
+  name: string; // typed name, e.g. "main_orchestrator.py" / "validation.harness" / "get"
   invocation: string; // full run prefix, e.g. "python -m validation.harness"
   aliases: string[]; // subcommand aliases (top-level commands: [])
   description: string | null;
@@ -3617,17 +3617,25 @@ export interface DeadLetterQueue {
 }
 
 /**
- * `POST /dead-letter/retry` response. Re-runs `main.py` (advisory-only — no
- * orders) for exactly one symbol via the same subprocess launcher the
- * Streamlit Launcher tab's dead-letter Retry button already uses. Does not
- * wait for the run to finish — returns immediately with the spawned PID/log
- * path so the caller can poll/tail it. `applies: "immediately"` describes
- * the subprocess launch itself, never any order submission (there is none).
+ * `POST /dead-letter/retry` response. Triggers a FULL orchestrator-daemon
+ * pipeline cycle (the same one `POST /automation/run` starts) — NOT a
+ * per-symbol re-run: the whole tracked universe is re-evaluated, and that
+ * cycle is what rewrites `dead_letter.json`. `symbol` echoes the row the
+ * operator clicked; it does not scope the run. Like any daemon cycle it can
+ * place paper orders / write the execution queue per the daemon's own
+ * settings, so it is no longer "advisory-only". Does not wait for the run to
+ * finish — `run_id` is the daemon run to watch (`null` when the daemon
+ * accepted the trigger without returning an id; never a fabricated one).
+ * `applies: "immediately"` describes the trigger being accepted, not the
+ * cycle having finished. Errors mirror `POST /automation/run`: 409
+ * already-running (the in-flight run id is in the detail), 423 kill switch
+ * active, 503 daemon unavailable, 401/403 auth or `DEAD_LETTER_RETRY_ENABLED`
+ * off. (The pre-5.4 `pid` / `log_path` fields are gone — no subprocess is
+ * spawned any more.)
  */
 export interface DeadLetterRetryResult {
   symbol: string;
-  pid: number;
-  log_path: string;
+  run_id: string | null;
   applies: "immediately";
   note: string;
 }

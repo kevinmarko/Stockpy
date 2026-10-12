@@ -47,7 +47,8 @@ const COLD_START: ObservabilitySummary = {
     over_limit: null,
     n_positions: 0,
     as_of: null,
-    reason: "No account snapshot yet — run `python3 main.py --refresh-account` to populate.",
+    reason:
+      "No account snapshot yet — open Settings → Brokers and press Refresh (approve the device prompt on your phone), or enable ROBINHOOD_SCHEDULED_LOGIN_ENABLED for the daemon's weekday-morning login, to populate.",
   },
   equity_curve: { range: "1Y", points: [], reason: "No account snapshots yet." },
   regime: {

@@ -579,21 +579,75 @@ class TestMainPyPrimarySkip:
 
 
 class TestMcpReportUnderPrimary:
-    def test_generate_html_report_does_not_run_main_py_in_primary(self, monkeypatch, tmp_path):
+    """Step 5.4a: the MCP ``generate_html_report`` tool no longer special-cases
+    primary (and no longer shells out to main.py in any mode). It triggers a daemon
+    cycle and reports ``daily_report_dashboard.html`` only when the run refreshed it.
+    Full matrix: ``tests/test_investyo_mcp_server.py::TestGenerateHtmlReport``."""
+
+    @staticmethod
+    def _wire(monkeypatch, tmp_path, mode, status):
         import subprocess
 
         import investyo_mcp_server as srv
         from settings import settings
+        from shared import daemon_client as dc
 
-        monkeypatch.setattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "primary", raising=False)
+        monkeypatch.setattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", mode, raising=False)
         monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path, raising=False)
-        (tmp_path / "daily_report.html").write_text("<html>stale</html>", encoding="utf-8")
         ran = mock.MagicMock()
         monkeypatch.setattr(subprocess, "run", ran)
+        monkeypatch.setattr(srv, "_cycle_sleep", lambda *_: None)
+        triggered = mock.MagicMock(
+            return_value=dc.TriggerResponse(ok=True, run_id="run-1", state="queued", error=None)
+        )
+        monkeypatch.setattr(dc, "trigger_run", triggered)
+        monkeypatch.setattr(dc, "get_run_status", lambda run_id, *a, **k: status)
+        return srv, ran, triggered
+
+    @pytest.mark.parametrize("mode", ["off", "shadow", "primary"])
+    def test_generate_html_report_triggers_a_cycle_in_every_mode(self, monkeypatch, tmp_path, mode):
+        import os
+
+        started = datetime(2026, 10, 11, 12, 0, 0, tzinfo=timezone.utc)
+        status = {"run_id": "run-1", "state": "succeeded", "mode": "full", "error": None,
+                  "reason": "manual", "started_at": started.isoformat()}
+        srv, ran, triggered = self._wire(monkeypatch, tmp_path, mode, status)
+        # A stale legacy report must never count; the fresh dashboard does.
+        (tmp_path / "daily_report.html").write_text("<html>stale</html>", encoding="utf-8")
+        dash = tmp_path / "daily_report_dashboard.html"
+        dash.write_text("<html>fresh</html>", encoding="utf-8")
+        os.utime(dash, (started.timestamp() + 60, started.timestamp() + 60))
+
         text = srv.generate_html_report("p")
+
+        ran.assert_not_called()  # main.py is never run
+        triggered.assert_called_once()
+        assert "report was refreshed" in text and "daily_report_dashboard.html" in text
+        assert "retired" not in text
+        # A synthetic-data cycle still renders the report and is still "succeeded"
+        # (StateSnapshotStep ignores the marker), so the tool must say it cannot tell.
+        assert "Synthetic (MockDataEngine) data detected" in text
+
+    def test_stale_dashboard_after_a_green_cycle_is_not_reported_as_fresh(self, monkeypatch, tmp_path):
+        import os
+
+        # In primary a cycle that skips the snapshot step (kill-switch sentinel or
+        # other stopped cycle, interval cycle skipped on fresh data) leaves
+        # yesterday's dashboard on disk even though the run is "succeeded".
+        started = datetime(2026, 10, 11, 12, 0, 0, tzinfo=timezone.utc)
+        status = {"run_id": "run-1", "state": "succeeded", "mode": "full", "error": None,
+                  "reason": "manual", "started_at": started.isoformat()}
+        srv, ran, _ = self._wire(monkeypatch, tmp_path, "primary", status)
+        dash = tmp_path / "daily_report_dashboard.html"
+        dash.write_text("<html>yesterday</html>", encoding="utf-8")
+        os.utime(dash, (started.timestamp() - 86400, started.timestamp() - 86400))
+
+        text = srv.generate_html_report("p")
+
         ran.assert_not_called()
-        assert "retired" in text and "daily_report_dashboard.html" in text
-        assert "HTML report generated" not in text
+        assert "report not refreshed" in text
+        assert "report was refreshed" not in text
+        assert "synthetic" not in text.lower()  # synthetic cycles DO render the report
 
 
 # ---------------------------------------------------------------------------

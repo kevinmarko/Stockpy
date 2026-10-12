@@ -405,9 +405,10 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "same blast radius as PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED."
     ),
     "DEAD_LETTER_RETRY_ENABLED": (
-        "Gates POST /dead-letter/retry, which spawns a real main.py "
-        "subprocess (network calls, a fresh data fetch, a real advisory "
-        "evaluation) for one symbol."
+        "Gates POST /dead-letter/retry, which triggers a full "
+        "orchestrator-daemon cycle (network calls, a fresh data fetch, a "
+        "real advisory evaluation of the whole universe, and the broker "
+        "step when ADVISORY_ONLY=false) and rewrites dead_letter.json."
     ),
     "GENERAL_SETTINGS_WRITES_ENABLED": (
         "Gates PUT /settings/tunables — Kelly sizing, risk-gate, and "

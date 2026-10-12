@@ -400,6 +400,162 @@ describe("client.ts — live client (mocked fetch)", () => {
     });
   });
 
+  describe("retryDeadLetter() — POST /dead-letter/retry (daemon-cycle contract)", () => {
+    it("POSTs {symbol} and resolves the {symbol, run_id, applies, note} body (no pid / log_path)", async () => {
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      const body = {
+        symbol: "ZZZZ",
+        run_id: "orch-1",
+        applies: "immediately",
+        note: "Triggered a full daemon pipeline cycle.",
+      };
+      fetchMock.mockResolvedValueOnce(jsonResponse(body, { status: 202 }));
+
+      const result = await mod.api.retryDeadLetter("ZZZZ");
+
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("http://localhost:8602/dead-letter/retry");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({ symbol: "ZZZZ" });
+      expect(result).toEqual(body);
+      expect(result).not.toHaveProperty("pid");
+      expect(result).not.toHaveProperty("log_path");
+    });
+
+    it("a 409 already-running STRUCTURED detail is rendered with the in-flight run id, never '[object Object]'", async () => {
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(
+          { detail: { detail: "A run is already in flight.", run_id: "orch-7" } },
+          { status: 409, ok: false }
+        )
+      );
+
+      const err = await mod.api.retryDeadLetter("ZZZZ").catch((e: unknown) => e);
+      expect(err).toMatchObject({ status: 409 });
+      const message = (err as Error).message;
+      expect(message).toContain("A run is already in flight.");
+      expect(message).toContain("orch-7");
+      expect(message).not.toContain("[object Object]");
+    });
+
+    it("a 423 kill-switch STRUCTURED detail is rendered with the reason", async () => {
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(
+          {
+            detail: {
+              detail: "Kill switch active — pipeline triggering is paused.",
+              kill_switch_reason: "manual halt",
+            },
+          },
+          { status: 423, ok: false }
+        )
+      );
+
+      const err = await mod.api.retryDeadLetter("ZZZZ").catch((e: unknown) => e);
+      expect(err).toMatchObject({ status: 423 });
+      expect((err as Error).message).toContain("Kill switch active");
+      expect((err as Error).message).toContain("manual halt");
+      expect((err as Error).message).not.toContain("[object Object]");
+    });
+
+    it("plain-string details (403 flag off, 503 daemon unreachable) pass through unchanged", async () => {
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ detail: "DEAD_LETTER_RETRY_ENABLED is False." }, { status: 403, ok: false })
+      );
+      await expect(mod.api.retryDeadLetter("ZZZZ")).rejects.toMatchObject({
+        status: 403,
+        message: "DEAD_LETTER_RETRY_ENABLED is False.",
+      });
+
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ detail: "Orchestrator daemon is not reachable." }, { status: 503, ok: false })
+      );
+      await expect(mod.api.retryDeadLetter("ZZZZ")).rejects.toMatchObject({
+        status: 503,
+        message: "Orchestrator daemon is not reachable.",
+      });
+    });
+
+    it("an error body with no usable detail falls back to the HTTP status line", async () => {
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        statusText: "Internal Server Error",
+        json: async () => {
+          throw new Error("not json");
+        },
+      } as unknown as Response);
+
+      await expect(mod.api.retryDeadLetter("ZZZZ")).rejects.toMatchObject({
+        status: 500,
+        message: "500 Internal Server Error",
+      });
+    });
+
+    it("sends the bearer token when VITE_API_TOKEN is set", async () => {
+      const mod = await importLiveClient({ VITE_API_TOKEN: "secret-token" });
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ symbol: "ZZZZ", run_id: null, applies: "immediately", note: "ok" }, { status: 202 })
+      );
+
+      await mod.api.retryDeadLetter("ZZZZ");
+
+      const [, init] = fetchMock.mock.calls[0];
+      expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer secret-token");
+    });
+  });
+
+  describe("createJob() — the two meanings of HTTP 409", () => {
+    it("a launcher refusal (STRING detail) is a plain ApiError carrying the real reason, not 'already running'", async () => {
+      // JobType.ADVISORY now raises RuntimeError from launch_daemon_cycle when the
+      // kill switch is on / the daemon is down / its token is wrong; control_api
+      // maps that to 409 with a string detail.
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(
+          { detail: "The global kill switch is active, so the daemon will not start a pipeline cycle. Reason: manual halt." },
+          { status: 409, ok: false }
+        )
+      );
+
+      const err = (await mod.api.createJob("advisory").catch((e: unknown) => e)) as Error;
+      expect(err.name).not.toBe("JobConflictError");
+      expect(err).toMatchObject({ status: 409 });
+      expect(err.message).toContain("kill switch is active");
+      expect(err.message).toContain("manual halt");
+    });
+
+    it("a single-flight conflict (OBJECT detail) is still a JobConflictError with the existing job id", async () => {
+      const mod = await importLiveClient();
+      const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(
+          { detail: { detail: "Job of type advisory is already running.", job_id: "job-9", job_type: "advisory" } },
+          { status: 409, ok: false }
+        )
+      );
+
+      const err = (await mod.api.createJob("advisory").catch((e: unknown) => e)) as Error & {
+        existingJobId: string | null;
+      };
+      expect(err.name).toBe("JobConflictError");
+      expect(err.existingJobId).toBe("job-9");
+      expect(err.message).toBe("Job of type advisory is already running.");
+    });
+  });
+
   it("the Agentic Trading endpoints hit the pilots base with the right methods/body", async () => {
     const mod = await importLiveClient({ VITE_API_BASE_URL: "http://example.test:9000" });
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;

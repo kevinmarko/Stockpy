@@ -533,7 +533,7 @@ def fetch_account_snapshot(
         best available cached snapshot is returned instead (stale or not),
         raising only when no cache exists at all.  Unlike
         ``ROBINHOOD_AUTO_REFRESH_ENABLED`` (an operator-wide setting
-        affecting every caller — GUI panels, main.py's daily refresh, the
+        affecting every caller — GUI panels, the daemon's scheduled login, the
         Pilots API), this is a per-call opt-out for callers that should
         never attempt a device-approval login regardless of the global
         setting — e.g. a headless backfill script resolving the universe
@@ -556,7 +556,8 @@ def fetch_account_snapshot(
         Subsequent same-day calls → returns instantly from cache, NO network.
         force=True → always re-authenticates and refreshes cache, regardless
             of settings.ROBINHOOD_AUTO_REFRESH_ENABLED (this is the explicit
-            "I want it now" override — see main.py --refresh-account).
+            "I want it now" override — see the Pilots API's POST
+            /brokerage/refresh, which Settings → Brokers calls).
         Live-fetch failure + cache present → returns stale cache, logs warning.
         Live-fetch failure + no cache     → raises the original exception.
 
@@ -604,9 +605,11 @@ def fetch_account_snapshot(
             )
             logger.info(
                 "%s — skipping live Robinhood login, returning best available "
-                "cached snapshot regardless of staleness. Run "
-                "`python3 main.py --refresh-account` to fetch fresh data on "
-                "demand.",
+                "cached snapshot regardless of staleness. To fetch fresh data "
+                "on demand, open Settings → Brokers and press Refresh (approve "
+                "the device prompt on your phone), or enable "
+                "ROBINHOOD_SCHEDULED_LOGIN_ENABLED for the daemon's "
+                "weekday-morning login.",
                 reason,
             )
             try:
@@ -621,8 +624,10 @@ def fetch_account_snapshot(
                 return cached
             raise RuntimeError(
                 f"No cached Robinhood account snapshot available and {reason} "
-                "prevents a live fetch. Run `python3 main.py --refresh-account` "
-                "to fetch one manually."
+                "prevents a live fetch. Open Settings → Brokers and press "
+                "Refresh (approve the device prompt on your phone), or enable "
+                "ROBINHOOD_SCHEDULED_LOGIN_ENABLED for the daemon's "
+                "weekday-morning login, to fetch one."
             )
 
     try:

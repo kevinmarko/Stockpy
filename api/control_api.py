@@ -852,9 +852,18 @@ def stream_job_logs(
                     current_offset = new_offset
                     sent_any = True
 
-            if not rec.is_running and current_offset >= size:
+            # Handle status is read in a worker thread, never on the event loop:
+            # for a daemon-hosted job (JobType.ADVISORY, the orchestrator fast
+            # path) is_running/returncode are a blocking loopback HTTP request
+            # to THIS very server, which cannot answer while this coroutine
+            # blocks the loop. On the loop thread it always timed out (None),
+            # so a still-running job's stream ended early with "exit code
+            # None" and the whole Control API stalled for the timeout.
+            running = await asyncio.to_thread(lambda: rec.is_running)
+            if not running and current_offset >= size:
                 # Stream final lines if any and stop
-                yield f"event: end\ndata: Job completed with exit code {rec.exit_code()}\n\n"
+                exit_code = await asyncio.to_thread(rec.exit_code)
+                yield f"event: end\ndata: Job completed with exit code {exit_code}\n\n"
                 # getattr-guarded for the same reason as create_job's
                 # broadcast above -- never AttributeError against a JobType
                 # enum build predating TRAIN_META/TRAIN_LGBM.
@@ -867,7 +876,7 @@ def stream_job_logs(
                         await _training_status_manager.broadcast(json.dumps({
                             "job_id": job_id,
                             "status": "finished",
-                            "exit_code": rec.exit_code(),
+                            "exit_code": exit_code,
                         }))
                     except Exception:
                         pass

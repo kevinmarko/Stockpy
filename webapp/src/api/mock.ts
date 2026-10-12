@@ -2090,7 +2090,7 @@ const MOCK_DANGEROUS_KEYS = new Set([
 //
 // So: these two fields are labelled here for DEMO COVERAGE and do not describe
 // the real platform's behaviour for them. Everything else above does.
-//   - LOG_LEVEL is shown env-pinned because `LOG_LEVEL=DEBUG python3 main.py`
+//   - LOG_LEVEL is shown env-pinned because `LOG_LEVEL=DEBUG python -m desktop.orchestrator_daemon`
 //     is the single most plausible real shell export in this repo.
 //   - REQUIRED_RETURN_RATE is shown no-effect purely to exercise that badge.
 // ---------------------------------------------------------------------------
@@ -2779,7 +2779,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   {
     group: "Runtime & Ops", key: "ROBINHOOD_AUTO_REFRESH_ENABLED", type: "boolean",
     value: false, default: false,
-    description: "When True, fetch_account_snapshot() automatically re-logs-in to Robinhood whenever the cached snapshot exceeds max_age_hours. Default False: device-approval login needs a human to tap approve, so an unattended background attempt can never succeed — live login only happens when explicitly forced (--refresh-account, or the webapp's Connect/Refresh flows); all other callers get the cached snapshot regardless of staleness.",
+    description: "When True, fetch_account_snapshot() automatically re-logs-in to Robinhood whenever the cached snapshot exceeds max_age_hours. Default False: device-approval login needs a human to tap approve, so an unattended background attempt can never succeed — live login only happens when explicitly forced (the webapp's Connect/Refresh flows, or the daemon's ROBINHOOD_SCHEDULED_LOGIN_ENABLED weekday-morning login); all other callers get the cached snapshot regardless of staleness.",
   },
   {
     group: "Runtime & Ops", key: "RUNTIME_FLAGS_REFRESH_ENABLED", type: "boolean",
@@ -2867,7 +2867,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     value: true,
     default: true,
     description:
-      "Skip automatic interval-triggered pipeline cycles (daemon timer and main.py --interval) outside the 4am-8pm ET weekday window (engine.advisory_agent.is_extended_hours) -- not strict 9:30-16:00 RTH. Manual/on-demand triggers (webapp buttons, API calls) are never gated. No holiday calendar is applied (same known limitation as is_us_market_open); default True fixes previously-unconditional 24/7 automatic runs.",
+      "Skip automatic interval-triggered pipeline cycles (the daemon's timer) outside the 4am-8pm ET weekday window (engine.advisory_agent.is_extended_hours) -- not strict 9:30-16:00 RTH. Manual/on-demand triggers (webapp buttons, API calls) are never gated. No holiday calendar is applied (same known limitation as is_us_market_open); default True fixes previously-unconditional 24/7 automatic runs.",
   },
   {
     group: "Advanced / Config",
@@ -3039,7 +3039,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     default: true,
     type: "boolean",
     description:
-      "When True, fetch_account_snapshot() automatically re-logs-in to Robinhood whenever the cached snapshot exceeds max_age_hours. Default False: device-approval login needs a human to tap approve, so an unattended background attempt can never succeed — live login only happens when explicitly forced (--refresh-account, or the webapp's Connect/Refresh flows); all other callers get the cached snapshot regardless of staleness.",
+      "When True, fetch_account_snapshot() automatically re-logs-in to Robinhood whenever the cached snapshot exceeds max_age_hours. Default False: device-approval login needs a human to tap approve, so an unattended background attempt can never succeed — live login only happens when explicitly forced (the webapp's Connect/Refresh flows, or the daemon's ROBINHOOD_SCHEDULED_LOGIN_ENABLED weekday-morning login); all other callers get the cached snapshot regardless of staleness.",
     group: "Runtime & Ops",
   },
   {
@@ -4326,7 +4326,7 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     value: true,
     default: true,
     description:
-      "Gates POST /dead-letter/retry, which spawns a real main.py subprocess for one symbol.",
+      "Gates POST /dead-letter/retry, which triggers a full orchestrator-daemon cycle (network calls, a fresh data fetch, a real advisory evaluation of the whole universe, and the broker step when ADVISORY_ONLY=false) and rewrites dead_letter.json.",
   },
   {
     group: "Write & Execution Gates",
@@ -7265,7 +7265,7 @@ const MOCK_RLHF_PROPOSALS: RlhfProposal[] = [
  */
 const MOCK_COMMAND_MANIFEST: CommandManifest = {
   generated_at: "2026-07-17T12:00:00+00:00",
-  command_count: 6,
+  command_count: 5,
   dead_letters: [],
   reason: null,
   // The live STRATEGY_REGISTRY from scripts/refresh_validations.py, kept in
@@ -7293,50 +7293,6 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
     "aroon_trend",
   ],
   commands: [
-    {
-      name: "main.py",
-      invocation: "python3 main.py",
-      aliases: [],
-      description:
-        "Clean advisory orchestrator — one full cycle (or loop with --interval).",
-      positionals: [],
-      subcommands: [],
-      options: [
-        {
-          name: "--interval",
-          aliases: ["--interval"],
-          description: "refresh cadence in seconds (0 = run once)",
-          default: 0,
-          choices: null,
-          required: false,
-          arg_kind: "optional",
-          metavar: "SECONDS",
-          takes_value: true,
-        },
-        {
-          name: "--refresh-account",
-          aliases: ["--refresh-account"],
-          description: "force a fresh Robinhood login this run",
-          default: false,
-          choices: null,
-          required: false,
-          arg_kind: "optional",
-          metavar: null,
-          takes_value: false,
-        },
-        {
-          name: "--agent",
-          aliases: ["--agent"],
-          description: null,
-          default: false,
-          choices: null,
-          required: false,
-          arg_kind: "optional",
-          metavar: null,
-          takes_value: false,
-        },
-      ],
-    },
     {
       name: "validation.harness",
       invocation: "python -m validation.harness",
@@ -7796,6 +7752,18 @@ const _mockJobs: Record<
     cancelled: boolean;
   }
 > = {};
+
+// Job types the backend hosts on the orchestrator DAEMON rather than as a
+// local subprocess (api/_jobs.py: JobType.ORCHESTRATOR, and since step 5.4
+// JobType.ADVISORY -> launch_daemon_cycle). A daemon-hosted cycle has no local
+// PID, so the backend reports `cancellable: false`, POST /jobs/{id}/cancel
+// answers 400, and the SSE log stream is empty (the daemon never writes
+// gui_run.log). Mirrored here so the Console's non-cancellable / empty-log
+// branches are exercisable offline.
+const _DAEMON_HOSTED_MOCK_JOB_TYPES: ReadonlySet<string> = new Set(["orchestrator", "advisory"]);
+function mockJobCancellable(jobType: string): boolean {
+  return !_DAEMON_HOSTED_MOCK_JOB_TYPES.has(jobType);
+}
 
 // ---------------------------------------------------------------------------
 // Prompt Registry (webapp parity gap G4) — GET /prompts, GET /prompts/{id},
@@ -9540,7 +9508,7 @@ export const mockApi = {
           snapshot_age_source: "timestamp",
           heartbeat_age_seconds: null,
           heartbeat_note:
-            "heartbeat.txt is written only by main_orchestrator.py; advisory runs (main.py) never write it, so null here does not mean the engine is down — see pipeline.snapshot_age_seconds for the cross-mode liveness signal.",
+            "heartbeat.txt is written only by a standalone main_orchestrator.py run; the orchestrator daemon never writes it, so null here does not mean the engine is down — see pipeline.snapshot_age_seconds for the cross-mode liveness signal.",
         },
         progress: null,
         kill_switch: readKillSwitch(),
@@ -11278,9 +11246,10 @@ export const mockApi = {
     job_type: string,
     params?: Record<string, unknown>,
   ): Promise<JobRecord> {
-    // job_type === "command" mirrors the backend's two HIGH_STAKES_COMMANDS
-    // gates (see commandParse.ts) so the frontend can exercise the full
-    // confirm/error flow offline, plus the app_shell.py hard-disallow.
+    // job_type === "command" mirrors the backend's kill-switch
+    // HIGH_STAKES_COMMANDS gate (see commandParse.ts) so the frontend can
+    // exercise the full confirm/error flow offline, plus the app_shell.py
+    // hard-disallow.
     if (job_type === "command") {
       const command = typeof params?.command === "string" ? params.command : "";
       const args = Array.isArray(params?.args)
@@ -11301,16 +11270,16 @@ export const mockApi = {
           400,
         );
       }
-      if (
-        command === "main.py" &&
-        args.includes("--refresh-account") &&
-        !confirmed
-      ) {
-        throw new ApiError(
-          "confirmation required: this command forces a fresh Robinhood login.",
-          400,
-        );
-      }
+    }
+
+    // Live parity (api/_jobs.py start_job -> 400): neither pipeline job can
+    // honor refresh_account (a daemon cycle takes no per-run options), so a
+    // request for it is rejected loudly rather than silently dropped.
+    if ((job_type === "advisory" || job_type === "orchestrator") && params?.refresh_account) {
+      throw new ApiError(
+        `The ${job_type} job does not accept refresh_account. To force a fresh Robinhood account login use POST /brokerage/refresh (Settings -> Brokers -> Refresh).`,
+        400,
+      );
     }
 
     const commandName =
@@ -11350,6 +11319,22 @@ export const mockApi = {
       }
     }
 
+    // Live parity (shared/orchestrator_runner.launch_daemon_cycle, surfaced by
+    // POST /jobs as a 409 with a plain STRING detail -- NOT the object detail
+    // of a single-flight conflict): the daemon will not start a cycle while the
+    // global kill switch is on. Same wording as the backend's message.
+    if (job_type === "advisory") {
+      const ks = readKillSwitch();
+      if (ks.active) {
+        throw new ApiError(
+          "The global kill switch is active, so the daemon will not start a pipeline cycle." +
+            (ks.reason ? ` Reason: ${ks.reason}.` : "") +
+            " Deactivate the kill switch to run a cycle.",
+          409,
+        );
+      }
+    }
+
     const job_id = `mock-job-${Object.keys(_mockJobs).length + 1}`;
     const createdAt = new Date().toISOString();
     _mockJobs[job_id] = {
@@ -11364,7 +11349,7 @@ export const mockApi = {
         job_id,
         job_type: job_type as any,
         status: "running",
-        cancellable: job_type !== "orchestrator",
+        cancellable: mockJobCancellable(job_type),
         command_name: commandName,
         created_at: createdAt,
       },
@@ -11374,7 +11359,7 @@ export const mockApi = {
 
   async listJobs(activeOnly?: boolean, limit?: number): Promise<JobsListResponse> {
     const jobs = Object.entries(_mockJobs).map(([job_id, job]) => {
-      const cancellable = job.jobType !== "orchestrator";
+      const cancellable = mockJobCancellable(job.jobType);
       const status = job.cancelled
         ? "cancelled"
         : Date.now() - job.startedAt < 30000
@@ -11413,7 +11398,7 @@ export const mockApi = {
     // Console.tsx's status-polling loop has something real to demonstrate
     // even against the mock backend rather than reporting terminal on the
     // very first poll.
-    const cancellable = job ? job.jobType !== "orchestrator" : true;
+    const cancellable = job ? mockJobCancellable(job.jobType) : true;
     const status = !job
       ? "success"
       : job.cancelled
@@ -11443,6 +11428,14 @@ export const mockApi = {
     const job = _mockJobs[job_id];
     if (!job) {
       return delay({ job_id, cancelled: false }, 100);
+    }
+    if (!mockJobCancellable(job.jobType)) {
+      // Live parity (api/_jobs.py cancel_job -> 400): a daemon-hosted run has
+      // no local process to signal and is never reported as cancelled.
+      throw new ApiError(
+        `Job '${job_id}' of type '${job.jobType}' has no local process to cancel (daemon-hosted run — it will run to completion)`,
+        400,
+      );
     }
     if (job.cancelled) {
       return delay({ job_id, cancelled: true }, 100);
@@ -11537,13 +11530,26 @@ export const mockApi = {
 
   async retryDeadLetter(symbol: string): Promise<DeadLetterRetryResult> {
     const sym = symbol.trim().toUpperCase();
+    // Live parity: the endpoint shares POST /automation/run's error mapping,
+    // so an active kill switch rejects with 423 (rendered into the message the
+    // same way client.ts's describeTriggerDetail does) instead of a fake
+    // success -- the Retry row's inline error branch is exercisable offline.
+    const ks = readKillSwitch();
+    if (ks.active) {
+      await delay(null, 150);
+      throw new ApiError(
+        `Kill switch active — pipeline triggering is paused.${ks.reason ? ` Reason: ${ks.reason}` : ""}`,
+        423,
+      );
+    }
     return delay(
       {
         symbol: sym,
-        pid: 51234,
-        log_path: `output/gui_retry.log`,
+        run_id: `orch-mock-${Date.now()}`,
         applies: "immediately",
-        note: `(mock) Retry launched for ${sym} (advisory-only — no orders placed).`,
+        note:
+          `(mock) Triggered a full daemon pipeline cycle — the WHOLE universe is re-run, not just ${sym}. ` +
+          `Like any cycle it can place paper orders and write the execution queue per the daemon's settings.`,
       },
       200,
     );

@@ -4,7 +4,7 @@
  * cancelJob) so a drift between mockApi and liveApi's JobRecord shape would
  * surface here, and confirms Cancel only ever renders for a cancellable job.
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Console } from "./Console";
@@ -84,6 +84,83 @@ describe("Console screen (real mock API)", () => {
     expect(
       screen.queryByRole("button", { name: "Cancel Active Job" })
     ).not.toBeInTheDocument();
+  });
+
+  it("the Advisory Pipeline card says it triggers a full daemon cycle that can place paper orders, not 'Run main.py cycle'", () => {
+    renderConsole();
+    const card = screen.getByText("🚀 Advisory Pipeline").closest("button")!;
+    expect(card).toHaveTextContent(/full daemon pipeline cycle/);
+    expect(card).toHaveTextContent(/paper orders/);
+    expect(card).toHaveTextContent(/execution queue/);
+    expect(card).not.toHaveTextContent(/main\.py/);
+  });
+
+  it("a real (mock-API) Advisory Pipeline launch is non-cancellable and the log panel explains the empty stream", async () => {
+    renderConsole();
+    // Before any job: the generic idle log copy, not the daemon explanation.
+    expect(screen.queryByTestId("log-stream-empty-message")).not.toBeInTheDocument();
+
+    screen.getByText("🚀 Advisory Pipeline").click();
+    expect(await screen.findByText(/Active Job:/)).toBeInTheDocument();
+
+    // advisory is daemon-hosted: no local process to cancel.
+    expect(
+      screen.queryByRole("button", { name: "Cancel Active Job" })
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("No")).toBeInTheDocument(); // Cancellable column
+
+    // ...and the (always empty) log stream says why instead of "No logs yet".
+    const note = await screen.findByTestId("log-stream-empty-message");
+    expect(note).toHaveTextContent(/runs inside the orchestrator daemon/);
+    expect(note).toHaveTextContent(/cannot be cancelled/);
+    expect(within(note).getByRole("link", { name: "Pipeline Dashboard" })).toHaveAttribute(
+      "href",
+      "/pipeline"
+    );
+  });
+
+  it("Advisory Pipeline with the kill switch on surfaces the backend's refusal in the launch-failure toast, with no active job", async () => {
+    // Skip past the 30s single-flight window the earlier real advisory launch
+    // in this file may still occupy, so the kill-switch refusal (not a
+    // conflict) is what is exercised.
+    const realNow = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(realNow + 120_000);
+    await api.pauseAutomation("manual halt");
+    try {
+      renderConsole();
+      screen.getByText("🚀 Advisory Pipeline").click();
+
+      expect(await screen.findByText("Job advisory failed to launch")).toBeInTheDocument();
+      expect(
+        screen.getByText(/The global kill switch is active, so the daemon will not start a pipeline cycle\. Reason: manual halt\./)
+      ).toBeInTheDocument();
+      // (No "Already running" assertion: react-hot-toast's store is global, so
+      // an earlier test's conflict toast can still be mounted here.)
+      expect(screen.queryByText(/Active Job:/)).not.toBeInTheDocument();
+    } finally {
+      await api.resumeAutomation("test cleanup");
+    }
+  });
+
+  it("a cancellable subprocess job does NOT get the daemon explanation in its log panel", async () => {
+    renderConsole();
+    screen.getByText("🧪 Run Test Suite").click();
+    expect(await screen.findByText(/Active Job:/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel Active Job" })).toBeInTheDocument();
+    expect(screen.queryByTestId("log-stream-empty-message")).not.toBeInTheDocument();
+  });
+
+  it("an orchestrator job that fell back to a local subprocess (cancellable) is not mislabelled as daemon-hosted", async () => {
+    vi.spyOn(api, "createJob").mockResolvedValueOnce({
+      job_id: "job-orch-local",
+      job_type: "orchestrator",
+      status: "running",
+      cancellable: true,
+    });
+    renderConsole();
+    screen.getByText("🚀 Advisory Pipeline").click();
+    expect(await screen.findByText(/Active Job:/)).toBeInTheDocument();
+    expect(screen.queryByTestId("log-stream-empty-message")).not.toBeInTheDocument();
   });
 
   it("polls status until the job reaches a terminal state", async () => {

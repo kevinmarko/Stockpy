@@ -455,8 +455,10 @@ def fetch_filled_orders(
 
                 raise RobinhoodApprovalRequired(
                     "Robinhood order history can only be fetched inside the "
-                    "isolated login worker. Run `python3 main.py "
-                    "--refresh-account` to ingest it."
+                    "isolated login worker. Open Settings → Brokers and press "
+                    "Refresh (approve the device prompt on your phone), or "
+                    "enable ROBINHOOD_SCHEDULED_LOGIN_ENABLED for the daemon's "
+                    "weekday-morning login, to ingest it."
                 )
         if symbol_resolver is None:
             symbol_resolver = _default_symbol_resolver()

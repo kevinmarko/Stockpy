@@ -216,6 +216,65 @@ class TestTriggerRun:
         assert result.error == "kill_switch_active"
         assert result.kill_switch_reason == "manual pause by operator"
 
+    def test_already_running_on_409_with_the_real_nested_body(self):
+        # api/control_api.py raises HTTPException(detail={"detail": ..., "run_id": ...}),
+        # which FastAPI serializes with the object under a "detail" key. The flat
+        # body above is not what the server sends (regression: run id was lost).
+        body = {"detail": {"detail": "A run is already in flight.", "run_id": "existing-run-1"}}
+        with patch(
+            "shared.daemon_client.urllib.request.urlopen",
+            side_effect=_http_error(409, body),
+        ):
+            result = daemon_client.trigger_run()
+        assert result.error == "already_running"
+        assert result.existing_run_id == "existing-run-1"
+
+    def test_kill_switch_active_on_423_with_the_real_nested_body(self):
+        body = {
+            "detail": {
+                "detail": "Kill switch active — pipeline triggering is paused.",
+                "kill_switch_reason": "manual pause by operator",
+            }
+        }
+        with patch(
+            "shared.daemon_client.urllib.request.urlopen",
+            side_effect=_http_error(423, body),
+        ):
+            result = daemon_client.trigger_run()
+        assert result.error == "kill_switch_active"
+        assert result.kill_switch_reason == "manual pause by operator"
+
+    def test_non_object_json_bodies_never_raise(self):
+        # A foreign server on the port could answer with a JSON list/scalar;
+        # trigger_run's "never raises" contract must hold for both the error
+        # path and a 202.
+        for code, expected in ((409, "already_running"), (423, "kill_switch_active")):
+            for raw in (b"[1, 2]", b'"oops"', b"42"):
+                with patch(
+                    "shared.daemon_client.urllib.request.urlopen",
+                    side_effect=_http_error(code, raw),
+                ):
+                    result = daemon_client.trigger_run()
+                assert result.error == expected
+                assert result.existing_run_id is None
+                assert result.kill_switch_reason is None
+        resp = _make_response(202, [1, 2])
+        with patch("shared.daemon_client.urllib.request.urlopen", return_value=resp):
+            result = daemon_client.trigger_run()
+        assert result.ok is False
+        assert result.error == "unexpected_response"
+
+    def test_string_detail_bodies_still_yield_no_ids(self):
+        # A plain-string detail (e.g. a proxy or an older server) must not break
+        # the parse or invent an id.
+        with patch(
+            "shared.daemon_client.urllib.request.urlopen",
+            side_effect=_http_error(409, {"detail": "A run is already in flight."}),
+        ):
+            result = daemon_client.trigger_run()
+        assert result.error == "already_running"
+        assert result.existing_run_id is None
+
     def test_unauthorized_on_401(self):
         body = {"detail": "Invalid or missing bearer token"}
         with patch(

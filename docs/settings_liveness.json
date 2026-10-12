@@ -435,7 +435,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 799,
+    "attr": 794,
     "factory_param": 4,
     "getattr_const": 308,
     "os_environ": 2
@@ -443,7 +443,7 @@
   "read_forms_distinct_fields": {
     "attr": 249,
     "factory_param": 4,
-    "getattr_const": 181,
+    "getattr_const": 182,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -1728,7 +1728,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:150",
+        "site": "shared/orchestrator_runner.py:143",
         "via": []
       },
       {
@@ -1966,7 +1966,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6124",
+        "site": "investyo_mcp_server.py:6405",
         "via": []
       }
     ],
@@ -1977,7 +1977,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:31",
+        "site": "investyo_mcp_server.py:32",
         "via": []
       },
       {
@@ -1986,7 +1986,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6069",
+        "site": "investyo_mcp_server.py:6350",
         "via": []
       }
     ],
@@ -1997,16 +1997,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:40",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "investyo_mcp_server.py:52",
+        "site": "investyo_mcp_server.py:41",
         "via": []
       },
       {
@@ -2017,6 +2008,15 @@
         ],
         "site": "investyo_mcp_server.py:53",
         "via": []
+      },
+      {
+        "discarded": false,
+        "form": "attr",
+        "rules": [
+          "module_level"
+        ],
+        "site": "investyo_mcp_server.py:54",
+        "via": []
       }
     ],
     "MCP_OAUTH_PASSWORD": [
@@ -2026,7 +2026,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6077",
+        "site": "investyo_mcp_server.py:6358",
         "via": []
       }
     ],
@@ -2171,7 +2171,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:87",
+        "site": "shared/orchestrator_runner.py:88",
         "via": []
       },
       {
@@ -2180,7 +2180,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:90",
+        "site": "shared/orchestrator_runner.py:95",
         "via": []
       },
       {
@@ -2189,7 +2189,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:97",
+        "site": "shared/orchestrator_runner.py:100",
         "via": []
       },
       {
@@ -2198,7 +2198,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:102",
+        "site": "shared/orchestrator_runner.py:106",
         "via": []
       },
       {
@@ -2207,7 +2207,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:107",
+        "site": "shared/orchestrator_runner.py:112",
         "via": []
       },
       {
@@ -2216,7 +2216,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:113",
+        "site": "shared/orchestrator_runner.py:118",
         "via": []
       },
       {
@@ -2225,7 +2225,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:119",
+        "site": "shared/orchestrator_runner.py:123",
         "via": []
       },
       {
@@ -2234,7 +2234,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:125",
+        "site": "shared/orchestrator_runner.py:132",
         "via": []
       },
       {
@@ -2243,7 +2243,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:130",
+        "site": "shared/orchestrator_runner.py:138",
         "via": []
       },
       {
@@ -2252,25 +2252,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:139",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "shared/orchestrator_runner.py:145",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "shared/orchestrator_runner.py:1104",
+        "site": "shared/orchestrator_runner.py:1095",
         "via": []
       }
     ],
@@ -2292,7 +2274,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:10736",
+        "site": "Gravity AI Review Suite.py:10750",
         "via": []
       }
     ],
@@ -2533,7 +2515,7 @@
     "init_body": 8,
     "init_self_assign": 41,
     "method_self_assign": 5,
-    "module_level": 50,
+    "module_level": 48,
     "os_environ": 2
   },
   "restart_required_via_name_literal_only": [

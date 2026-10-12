@@ -10,8 +10,8 @@
  *
  * `composed` can now also be RUN directly (a gated, confirmed execution path —
  * see Commands.tsx's Run control and the backend's `COMMAND_EXECUTION_ENABLED`
- * flag), not just copied. High-stakes commands (the kill switch, a forced
- * broker re-login) require an explicit operator confirmation
+ * flag), not just copied. High-stakes commands (the kill switch, the
+ * price-bar history rewrite) require an explicit operator confirmation
  * (`highStakesReason`) before the run request is even sent; `app_shell.py`
  * (`DISALLOWED_EXECUTE_COMMANDS`) stays copy-only since it opens a native
  * window on the server host, not the browser.
@@ -48,18 +48,17 @@ export interface ParseResult {
   argTokens: string[];
 }
 
-/** Mirrors gui/orchestrator_runner.py's HIGH_STAKES_COMMANDS table exactly —
- *  same two command names, same flag names. This is a client-side UX hint
+/** Client-side mirror of shared/orchestrator_runner.py's HIGH_STAKES_COMMANDS
+ *  table (same command names, same flag names) for the entries below. The
+ *  server table additionally gates `database_setup.py` on every invocation,
+ *  which this client table does not yet mirror. This is a client-side UX hint
  *  only; the server is still the enforcing authority. */
 const HIGH_STAKES_COMMANDS: Record<string, { flags: string[]; reason: string }[]> = {
   "execution.kill_switch": [
     { flags: ["--activate"], reason: "This activates the platform's global kill switch — it immediately blocks ALL order submission." },
     { flags: ["--deactivate"], reason: "This deactivates the platform's global kill switch — order submission resumes." },
   ],
-  "main.py": [
-    { flags: ["--refresh-account"], reason: "This forces a fresh Robinhood login, bypassing the daily account-snapshot cache." },
-  ],
-  // Same "no single flag to gate on" shape as gui/orchestrator_runner.py's
+  // Same "no single flag to gate on" shape as shared/orchestrator_runner.py's
   // database_setup.py entry: an empty flags array matches vacuously (every
   // element of [] passes .every(...)), so this triggers on ANY invocation --
   // including --dry-run, which is otherwise safe. There's no way to express
@@ -71,10 +70,11 @@ const HIGH_STAKES_COMMANDS: Record<string, { flags: string[]; reason: string }[]
 };
 
 /** Non-null when running `command` with `argTokens` needs explicit operator
- *  confirmation before executing (kill switch activate/deactivate, a forced
- *  broker re-login). Mirrors gui/orchestrator_runner.py's HIGH_STAKES_COMMANDS
- *  table — the server is still the enforcing authority; this is a client-side
- *  UX gate so the operator sees the risk BEFORE the request is even sent. */
+ *  confirmation before executing (kill switch activate/deactivate, the
+ *  price-bar history rewrite). Mirrors shared/orchestrator_runner.py's
+ *  HIGH_STAKES_COMMANDS table (see the note on the table above) — the server is
+ *  still the enforcing authority; this is a client-side UX gate so the operator
+ *  sees the risk BEFORE the request is even sent. */
 export function highStakesReason(command: CommandSpec | null, argTokens: string[]): string | null {
   if (!command) return null;
   const rules = HIGH_STAKES_COMMANDS[command.name];

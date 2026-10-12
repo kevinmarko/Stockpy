@@ -313,8 +313,10 @@ def _empty_portfolio_heat(n_positions: int = 0, reason: Optional[str] = None) ->
         "n_positions": n_positions,
         "as_of": None,
         "reason": reason or (
-            "No account snapshot yet — run `python3 main.py --refresh-account` "
-            "to populate."
+            "No account snapshot yet — open Settings → Brokers and press "
+            "Refresh (approve the device prompt on your phone), or enable "
+            "ROBINHOOD_SCHEDULED_LOGIN_ENABLED for the daemon's weekday-morning "
+            "login, to populate."
         ),
     }
 

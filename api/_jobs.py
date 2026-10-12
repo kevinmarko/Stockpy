@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from shared.orchestrator_runner import (
     RunHandle,
-    launch_advisory_main,
+    launch_daemon_cycle,
     launch_gravity_audit,
     launch_manifest_command,
     launch_orchestrator,
@@ -91,9 +91,10 @@ class JobRecord:
     @property
     def cancellable(self) -> bool:
         # Only a genuine local subprocess can be signaled. A daemon-hosted
-        # cycle (launch_orchestrator's ORCHESTRATOR_DAEMON_ENABLED fast path)
-        # has no local PID — stop_run() itself refuses to touch it (returns
-        # False rather than raising), so don't offer Cancel for it at all.
+        # cycle (launch_daemon_cycle, or launch_orchestrator's
+        # ORCHESTRATOR_DAEMON_ENABLED fast path) has no local PID —
+        # stop_run() itself refuses to touch it (returns False rather than
+        # raising), so don't offer Cancel for it at all.
         if self.handle is None:
             return True
         return getattr(self.handle, "backend", "subprocess") == "subprocess"
@@ -154,7 +155,9 @@ class JobManager:
         caller maps that to an HTTP 409 (single-flight per job type, widened
         to per-``single_flight_key`` group for TRAIN_LGBM/TRAIN_META so the
         two training job types can't run concurrently against the same
-        model-registry write path)."""
+        model-registry write path). A RuntimeError from the launcher itself
+        (ADVISORY: ``launch_daemon_cycle`` could not reach/trigger the
+        daemon) takes the same 409 path with the launcher's message."""
         params = params or {}
         single_flight_key = "train" if job_type in (JobType.TRAIN_META, JobType.TRAIN_LGBM) else None
         command_name = params.get("command") if job_type == JobType.COMMAND else None
@@ -188,9 +191,20 @@ class JobManager:
                 raise ValueError("COMMAND job requires params: command (str)")
             if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
                 raise ValueError("COMMAND job requires params: args (list[str])")
-        elif job_type not in (JobType.PREFLIGHT, JobType.PYTEST, JobType.VERIFY, JobType.GRAVITY, 
+        elif job_type not in (JobType.PREFLIGHT, JobType.PYTEST, JobType.VERIFY, JobType.GRAVITY,
                               JobType.ADVISORY, JobType.ORCHESTRATOR, JobType.TRAIN_LGBM, JobType.TRAIN_META):
             raise ValueError(f"Unsupported job type: {job_type}")
+
+        # main_orchestrator.py has no --refresh-account flag (its argparse is
+        # --dry-run/--strict) and a daemon cycle takes no per-run options, so
+        # neither pipeline job can honor it. Reject it loudly rather than
+        # silently drop a request to force a fresh Robinhood login.
+        if job_type in (JobType.ORCHESTRATOR, JobType.ADVISORY) and params.get("refresh_account"):
+            raise ValueError(
+                f"The {job_type.value} job does not accept refresh_account. To "
+                "force a fresh Robinhood account login use POST /brokerage/refresh "
+                "(Settings -> Brokers -> Refresh)."
+            )
 
         with self._lock:
             job_id = f"job-{uuid.uuid4().hex[:8]}"
@@ -238,13 +252,12 @@ class JobManager:
             elif job_type == JobType.GRAVITY:
                 handle = launch_gravity_audit()
             elif job_type == JobType.ADVISORY:
-                handle = launch_advisory_main(
-                    refresh_account=bool(params.get("refresh_account", False))
-                )
+                # A full daemon cycle (no subprocess fallback; raises
+                # RuntimeError -> HTTP 409 when the daemon can't take it).
+                handle = launch_daemon_cycle()
             elif job_type == JobType.ORCHESTRATOR:
                 handle = launch_orchestrator(
                     dry_run=bool(params.get("dry_run", False)),
-                    refresh_account=bool(params.get("refresh_account", False)),
                 )
             elif job_type == JobType.COMMAND:
                 handle = launch_manifest_command(job_id, command_name, subcommand_name, args, confirm=confirm)
@@ -259,9 +272,23 @@ class JobManager:
 
         with rec._lock:
             rec.handle = handle
-            if rec.cancelled and getattr(handle, "backend", "subprocess") == "subprocess":
-                stop_run_detailed(handle)
-                
+            if rec.cancelled:
+                if getattr(handle, "backend", "subprocess") == "subprocess":
+                    stop_run_detailed(handle)
+                else:
+                    # A cancel landed in the launch window (handle still None,
+                    # so cancel_job accepted it), but a daemon-hosted cycle
+                    # cannot be cancelled and keeps running (it may place paper
+                    # orders). Don't let job_status report "cancelled" for it.
+                    rec.cancelled = False
+                    logger.warning(
+                        "Job %s (%s): cancel requested during launch, but "
+                        "daemon-hosted runs cannot be cancelled -- the cycle "
+                        "(run_id=%s) keeps running.",
+                        rec.job_id, rec.job_type.value,
+                        getattr(handle, "daemon_run_id", None),
+                    )
+
         return rec
 
     def get_job(self, job_id: str) -> Optional[JobRecord]:

@@ -5327,13 +5327,15 @@ def put_settings_reference(body: SettingsReferenceUpdateRequest) -> Dict[str, An
 def require_dead_letter_retry_enabled() -> None:
     """FAIL-CLOSED master-switch guard for ``POST /dead-letter/retry``. A
     DEDICATED flag (``settings.DEAD_LETTER_RETRY_ENABLED``), NOT any sibling
-    ``require_*_writes_enabled`` flag: this spawns a REAL single-symbol
-    ``main.py`` subprocess (network calls, a fresh data fetch, a real
-    advisory evaluation) — a materially different cost/risk than any
-    existing flag was scoped for. Mirrors ``require_automation_writes_enabled``
-    exactly — GUI-writable (as of 2026-08-08) (``gui/env_io.py``), surfaced in the Feature Flags screen
-    ``.env`` only. ``GET /dead-letter`` is read-only and NOT gated by this
-    flag (``require_read_token`` alone, matching every other GET here)."""
+    ``require_*_writes_enabled`` flag: the endpoint triggers a REAL FULL
+    orchestrator-daemon cycle (a fresh data fetch and a full pipeline run for
+    the whole universe, including the broker step) — a materially different
+    cost/risk than any existing flag was scoped for. Mirrors
+    ``require_automation_writes_enabled`` — GUI-writable (as of 2026-08-08;
+    ``shared/env_io.py`` ``ALLOWED_KEYS``, a ``DANGEROUS_KEYS`` member so the
+    write needs typed confirmation), surfaced in the Feature Flags screen.
+    ``GET /dead-letter`` is read-only and NOT gated by this flag
+    (``require_read_token`` alone, matching every other GET here)."""
     if not settings.DEAD_LETTER_RETRY_ENABLED:
         raise HTTPException(
             status_code=403,
@@ -5342,16 +5344,12 @@ def require_dead_letter_retry_enabled() -> None:
 
 
 class DeadLetterRetryRequest(BaseModel):
-    """Body for ``POST /dead-letter/retry``. Re-runs ``main.py``
-    (advisory-only — no orders) for exactly ONE symbol via
-    ``shared.orchestrator_runner.launch_symbol_retry``, the SAME subprocess
-    launcher the Streamlit Launcher tab's dead-letter Retry button already
-    uses (``gui/panels/launcher.py::_render_dead_letter_queue``). ``symbol``
-    shape is re-validated by the endpoint against
-    ``pilots.watchlist_writer._SYMBOL_RE`` before the launcher is ever
-    invoked — the launcher itself builds a subprocess env var from the raw
-    string and performs no shape validation of its own (unlike
-    ``pilots.watchlist_writer.append_symbols``)."""
+    """Body for ``POST /dead-letter/retry``. ``symbol`` names the dead-lettered
+    entry the operator is retrying; it is validated by the endpoint against
+    ``pilots.watchlist_writer._SYMBOL_RE`` (422 ``invalid_symbol``) and echoed
+    back, but it does NOT influence what runs: the endpoint triggers one full
+    orchestrator-daemon cycle over the whole universe, never a single-symbol
+    run (see :func:`post_dead_letter_retry`)."""
 
     symbol: str = Field(..., min_length=1, max_length=16)
 
@@ -5401,9 +5399,9 @@ def get_report_content(name: str) -> Dict[str, Any]:
 @app.get("/dead-letter", dependencies=[Depends(require_read_token)])
 def get_dead_letter() -> Dict[str, Any]:
     """The last pipeline run's dead-letter queue (failed symbols) —
-    ``output/dead_letter.json``, written by ``main_orchestrator.run_pipeline``
-    (mirrors the Streamlit Launcher tab's dead-letter section,
-    ``gui/panels/launcher.py::_render_dead_letter_queue``).
+    ``output/dead_letter.json``, rewritten by the pipeline's
+    ``StrategyEvalStep`` (``pipeline/production_steps.py``) each time a daemon
+    cycle reaches that step — nothing else writes it.
 
     Fail-open read (``require_read_token``). ``retry_enabled`` mirrors the
     ``writable`` convention used elsewhere (``GET /strategy/matrix``,
@@ -5420,6 +5418,21 @@ def get_dead_letter() -> Dict[str, Any]:
     return payload
 
 
+_DEAD_LETTER_RETRY_NOTE = (
+    "Queued one FULL orchestrator-daemon cycle - not a retry of {symbol} alone. "
+    "The whole tracked universe (held positions, watchlist and discovered "
+    "symbols) is re-run, exactly as POST /automation/run would; the old "
+    "per-symbol retry was never truly per-symbol either, it merged {symbol} "
+    "with the held and discovered symbols. The dead-letter list does not "
+    "change until that cycle finishes: a cycle is what rewrites "
+    "dead_letter.json (only the daemon's strategy-evaluation step writes it), "
+    "and {symbol} drops off only if it evaluates cleanly this time. Unlike the "
+    "old advisory-only retry, a cycle is a full pipeline run - it also "
+    "rewrites the state snapshot and, depending on DAEMON_AGENTIC_QUEUE_MODE "
+    "and the paper-trading settings, the execution queue and paper orders."
+)
+
+
 @app.post(
     "/dead-letter/retry",
     dependencies=[
@@ -5427,26 +5440,44 @@ def get_dead_letter() -> Dict[str, Any]:
         Depends(require_dead_letter_retry_enabled),
     ],
 )
-def post_dead_letter_retry(body: DeadLetterRetryRequest) -> Dict[str, Any]:
-    """Re-run ``main.py`` for exactly one dead-lettered symbol — a genuine
-    subprocess spawn with real network/broker-cache cost, so this sits
-    behind ``require_command_token`` STACKED with the dedicated
+def post_dead_letter_retry(body: DeadLetterRetryRequest) -> JSONResponse:
+    """Re-run the pipeline after a dead-lettered symbol by triggering ONE FULL
+    orchestrator-daemon cycle (``shared.daemon_client.trigger_run()``, via
+    :func:`trigger_automation_run` — so single-flight, kill-switch and auth
+    enforcement, and the error -> HTTP mapping in ``_TRIGGER_ERROR_STATUS``,
+    are shared with ``POST /automation/run`` rather than re-implemented).
+
+    This is NOT a single-symbol run and never was: the previous implementation
+    spawned ``main.py`` with ``WATCHLIST=<symbol>``, which was merged with the
+    held and discovered symbols, and it could not clear a dead-letter entry
+    because ``output/dead_letter.json`` is only ever rewritten by the daemon's
+    ``StrategyEvalStep``. The symbol is therefore validated (422
+    ``invalid_symbol`` against ``pilots.watchlist_writer._SYMBOL_RE``) and
+    echoed back, but it does not influence what is triggered —
+    ``trigger_run()`` is called with no arguments. A cycle is a full pipeline
+    run (state snapshot, and — depending on ``DAEMON_AGENTIC_QUEUE_MODE`` and
+    the paper-trading settings — the execution queue and paper orders), unlike
+    the old advisory-only subprocess; the response ``note`` says so.
+
+    Sits behind ``require_command_token`` STACKED with the dedicated
     ``require_dead_letter_retry_enabled`` master switch (same "auth tier AND
     feature flag" pattern as ``PUT /strategy/modules`` / ``POST
-    /agentic/watch``). Reuses ``shared.orchestrator_runner.launch_symbol_retry``
-    — the SAME launcher the Streamlit Launcher tab's per-symbol Retry button
-    already calls — rather than re-implementing the subprocess spawn.
+    /agentic/watch``).
 
-    The symbol is re-validated against ``pilots.watchlist_writer._SYMBOL_RE``
-    here first (422 ``invalid_symbol`` on a malformed value) since
-    ``launch_symbol_retry`` performs no shape validation of its own before
-    writing the value into a subprocess env var and a log-file banner line.
-    Does not wait for the run to finish — returns immediately with the
-    spawned PID and log path so the caller can poll/tail it. This is an
-    advisory-only, no-order diagnostic run (``main.py`` submits no orders),
-    never applied retroactively (``applies: "immediately"`` describes the
-    subprocess launch itself, not any order submission — there is none)."""
-    from shared.orchestrator_runner import launch_symbol_retry
+    Does not wait for the cycle to finish. Success (HTTP 200)::
+
+        {"symbol": str, "run_id": str | None, "applies": "immediately",
+         "note": str}
+
+    ``applies: "immediately"`` means the cycle is queued now; the dead-letter
+    list itself only changes when that cycle completes (poll
+    ``GET /dead-letter`` / the run status). Failures are passed through from
+    :func:`trigger_automation_run` unchanged: 409 ``already_running`` (with
+    the in-flight ``run_id``), 423 ``kill_switch_active`` (with the reason),
+    503 for ``command_disabled`` / ``unauthorized`` / ``unavailable`` /
+    ``network_error`` / ``unexpected_response`` (``unauthorized`` and
+    ``command_disabled`` return the identical generic body so a caller can
+    never learn which side's token is misconfigured)."""
     from pilots.watchlist_writer import _SYMBOL_RE
 
     symbol = body.symbol.strip().upper()
@@ -5459,14 +5490,23 @@ def post_dead_letter_retry(body: DeadLetterRetryRequest) -> Dict[str, Any]:
             },
         )
 
-    handle = launch_symbol_retry(symbol)
-    return {
-        "symbol": symbol,
-        "pid": handle.pid,
-        "log_path": str(handle.log_path),
-        "applies": "immediately",
-        "note": f"Retry launched for {symbol} (advisory-only — no orders placed).",
-    }
+    triggered = trigger_automation_run()
+    if triggered.status_code >= 300:
+        # 409 / 423 / 503: the exact response /automation/run would send.
+        return triggered
+    try:
+        raw_run_id = json.loads(triggered.body).get("run_id")
+    except (TypeError, ValueError, AttributeError):
+        raw_run_id = None
+    return JSONResponse(
+        content={
+            "symbol": symbol,
+            # None, never a placeholder, if the daemon did not report an id.
+            "run_id": raw_run_id if isinstance(raw_run_id, str) else None,
+            "applies": "immediately",
+            "note": _DEAD_LETTER_RETRY_NOTE.format(symbol=symbol),
+        }
+    )
 
 
 # =============================================================================
