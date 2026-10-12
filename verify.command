@@ -6,7 +6,8 @@
 # Double-click this file from Finder to run the three-step readiness check:
 #   1. Env-var presence (FRED_API_KEY required; Robinhood / ntfy optional)
 #   2. Full pytest suite
-#   3. One live run_once() cycle against the real sheet — prints the summary
+#   3. One dry-run pipeline cycle (scripts/step5_4_verify_cycle.py): queue mode
+#      forced off, no orders, no pushes; prints the cycle's briefing summary
 #
 # ONE-TIME SETUP:
 #   chmod +x /Users/kevinlee/Desktop/Stockpy/verify.command
@@ -83,7 +84,7 @@ echo ""
 
 # ── Step 2: Test suite ───────────────────────────────────────────────────────
 echo "=== Step 2 / 3  Test suite ==="
-"$PYTHON" -m pytest -v --tb=short -n auto
+"$PYTHON" -m pytest -v --tb=short -n auto --dist loadgroup
 PYTEST_STATUS=$?
 
 if [[ $PYTEST_STATUS -ne 0 ]]; then
@@ -96,30 +97,22 @@ fi
 
 echo ""
 
-# ── Step 3: Live one-cycle run ───────────────────────────────────────────────
-echo "=== Step 3 / 3  Live one-cycle run ==="
-"$PYTHON" - <<'PYEOF'
-# load_dotenv() here is mandatory: run_once() deliberately does NOT call it
-# (would pollute pytest) so the verify script must populate os.environ itself
-# before invoking the pipeline.
-from dotenv import load_dotenv
-load_dotenv(override=False)
-
-from alerting import setup_logging, summarize_run
-import main
-
-setup_logging()
-result = main.run_once()
-print(summarize_run(result))
-PYEOF
+# ── Step 3: One dry-run pipeline cycle ───────────────────────────────────────
+echo "=== Step 3 / 3  One dry-run pipeline cycle (queue mode forced off; no orders, no pushes) ==="
+# The helper loads .env, forces DAEMON_AGENTIC_QUEUE_MODE=off in-process, runs
+# main_orchestrator.main(dry_run=True), and exits non-zero (with an explicit
+# reason) if the cycle failed or did not refresh state_snapshot.json.
+"$PYTHON" scripts/step5_4_verify_cycle.py
 LIVE_STATUS=$?
 
 echo ""
 if [[ $LIVE_STATUS -eq 0 ]]; then
     echo "=== verify complete — all steps passed ==="
 else
-    echo "WARNING: Live run exited with status $LIVE_STATUS (check logs/investyo.log for details)."
+    echo "ERROR: verify cycle failed with status $LIVE_STATUS — see the reason printed above."
+    echo "       The pipeline log is under \$LOCAL_DATA_ROOT/logs/investyo.log (default ~/.stockpy_local/logs)."
 fi
 
 echo ""
 read -rp "Press any key to close..." _
+exit "$LIVE_STATUS"

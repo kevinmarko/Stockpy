@@ -118,7 +118,7 @@ TRAIN_LGBM_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_train_lgbm.log"
 TRAIN_META_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_train_meta.log"
 
 # Log written by ``launch_verify`` — the Maintenance tab's "Run make verify"
-# button (env-var check → pytest → one live run_once + summary).  Distinct file
+# button (env-var check → pytest → one standalone dry-run cycle + summary).  Distinct file
 # so the operator can tail the full readiness gate independently of a refresh.
 VERIFY_LOG_PATH: Path = settings.OUTPUT_DIR / "gui_verify.log"
 
@@ -1041,14 +1041,15 @@ def launch_verify() -> RunHandle:
     """Spawn the ``make verify`` readiness gate as a non-blocking subprocess.
 
     This backs the Maintenance tab's "Run make verify" button.  ``make verify``
-    runs the full readiness gate — env-var check → pytest → one live
-    ``run_once()`` cycle → print summary — and is therefore long-running, so it
+    runs the full readiness gate — env-var check → pytest → one dry-run
+    pipeline cycle (``scripts/step5_4_verify_cycle.py``: queue mode forced off,
+    no orders, no pushes) → print summary — and is therefore long-running, so it
     is spawned via a detached :class:`subprocess.Popen` (never inline) with a
     tailed log, exactly like the other launchers in this module.
 
     Note the command is ``["make", "verify"]``, NOT ``sys.executable`` — ``make``
     is the executable here, and the Makefile's ``verify`` target itself invokes
-    ``.venv/bin/python3`` for the pytest + ``run_once()`` steps.  The child runs
+    ``.venv/bin/python3`` for the pytest + verify-cycle steps.  The child runs
     from the repo root inheriting the current environment; stdout+stderr are
     redirected to :data:`VERIFY_LOG_PATH`, truncated at launch so the UI tails
     only the current run.

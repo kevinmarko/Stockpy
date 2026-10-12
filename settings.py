@@ -2635,28 +2635,30 @@ class Settings(BaseSettings):
             "alert would ever need to."
         ),
     )
-    # Cutover flag for the persistent orchestrator daemon (desktop/
-    # daemon_runtime.py + desktop/orchestrator_daemon.py + api/control_api.py).
-    # False (the default) preserves today's exact behavior everywhere: the
-    # desktop shell's always-on refresh loop spawns `main.py --interval N`
-    # (shared.orchestrator_runner.launch_scheduled_advisory), and the Launcher
-    # tab's manual "Run Pipeline" button spawns a fresh
-    # `main_orchestrator.py` subprocess per click. True switches BOTH to the
-    # warm daemon: desktop/engine_supervisor.start_engine spawns
-    # `python -m desktop.orchestrator_daemon --interval N` instead (still a
-    # supervised subprocess -- the warm-engine benefit is entirely internal
-    # to that process), and shared.orchestrator_runner.launch_orchestrator()
-    # triggers a cycle over the Control API (gui/daemon_client.py) against
-    # an already-running daemon instead of spawning a new process, falling
-    # back to the old subprocess path if the daemon is unreachable.
+    # Legacy cutover flag for the persistent orchestrator daemon (desktop/
+    # daemon_runtime.py + desktop/orchestrator_daemon.py + api/control_api.py);
+    # step 5.6 of the main.py retirement removes it. False (the default) keeps the
+    # subprocess behaviour: launch_webapp.command starts only the bare APIs and
+    # shared.orchestrator_runner.launch_orchestrator() spawns a fresh
+    # `main_orchestrator.py` subprocess. True makes launch_webapp.command start
+    # `python -m desktop.orchestrator_daemon`, and makes launch_orchestrator()
+    # trigger a cycle over the Control API (shared/daemon_client.py) against an
+    # already-running daemon (non-dry-run only; it falls back to the subprocess
+    # when the daemon is unreachable). The Console "Advisory Pipeline" job
+    # (launch_daemon_cycle) is daemon-only and ignores this flag.
     ORCHESTRATOR_DAEMON_ENABLED: bool = Field(
         default=False,
         description=(
-            "Route the desktop shell's always-on refresh loop and the "
-            "Launcher tab's manual run trigger through the persistent "
-            "orchestrator daemon instead of spawning a fresh subprocess per "
-            "cycle. False (default) preserves today's exact subprocess "
-            "behavior everywhere."
+            "Legacy flag (shrink step 5.6 retires it). When true, "
+            "./launch_webapp.command starts the real orchestrator daemon "
+            "(python -m desktop.orchestrator_daemon) instead of only the bare "
+            "APIs, and the 'orchestrator' job launcher triggers a cycle over "
+            "the Control API against an already-running daemon instead of "
+            "spawning a subprocess (it falls back to the subprocess if the "
+            "daemon is unreachable; dry-run runs always use the subprocess). "
+            "False (default) keeps the subprocess behaviour. The Console "
+            "'Advisory Pipeline' job always uses the daemon and ignores this "
+            "flag."
         ),
     )
     # Gate automatic interval-triggered pipeline cycles to extended market hours.

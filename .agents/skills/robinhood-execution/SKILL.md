@@ -114,9 +114,13 @@ not — read them a checklist only if they ask for one.
      `unauthorized` / `command_disabled` → `ORCHESTRATOR_DAEMON_TOKEN` is
      missing or wrong in `.env`; tell the operator and stop. A cycle that ends
      `failed` → say so and do not place. A cycle that ends `succeeded` does not
-     guarantee a new queue (a cycle writes nothing when the data was synthetic,
-     the advisory step failed, or no BUY/SELL cleared the conviction floor), so
-     still apply the freshness hard stop below to the queue you then read.
+     guarantee a new queue (a cycle writes nothing when its price fetch came back
+     empty and fell back to synthetic data, the advisory step failed, or no
+     BUY/SELL cleared the conviction floor; a daemon running with no
+     `FRED_API_KEY` is NOT covered by that skip, a known unfixed gap, so if the
+     queue's reference prices look implausible next to the live quotes
+     `review_equity_order` returns, say so and stop), so still apply the
+     freshness hard stop below to the queue you then read.
    - **`off` or `shadow`** — `main.py` writes the queue (the 08:45 weekday job,
      or `python3 main.py` by hand). If the queue is stale, offer to re-run
      `python3 main.py` first.

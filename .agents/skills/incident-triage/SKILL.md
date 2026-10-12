@@ -100,9 +100,10 @@ In advisory mode, "emergency shutdown" = pausing signal generation via the
 ```bash
 # Pause:
 python -m execution.kill_switch --activate --reason "advisory pause — investigating anomaly"
-# Confirm the pipeline sees it:
-python3 main.py
-# Expected: INFO — Advisory paused by kill-switch sentinel — skipping evaluation cycle.
+# Confirm the daemon sees it (read-only: GET /status, starts no cycle):
+python3 -c "from shared import daemon_client as dc; s = dc.get_status() or {}; print(s.get('kill_switch_active'), s.get('kill_switch_reason'))"
+# Expected: True advisory pause — investigating anomaly
+# (None None means the daemon is down or ORCHESTRATOR_DAEMON_TOKEN is missing.)
 
 # Check status any time:
 python -m execution.kill_switch --status
@@ -110,11 +111,32 @@ python -m execution.kill_switch --status
 # Resume, after root cause is resolved:
 python -m execution.kill_switch --deactivate
 python scripts/preflight_check.py   # should exit 0 before resuming
-python3 main.py
+# Verify with a daemon cycle. The kill switch must already be OFF (see below):
+python3 -c "from shared import daemon_client as dc; r = dc.trigger_run(timeout=10); print(r.ok, r.run_id, r.error)"
+# Then poll dc.get_run_status(r.run_id) until its "state" is "succeeded" or "failed".
+# (r.error == "already_running" means a cycle is in flight: poll r.existing_run_id instead.)
 ```
 
 (`--activate`/`--deactivate`/`--status` are mutually exclusive flags on
 `execution/kill_switch.py`'s real argparse; `--reason` is `--activate`-only.)
+
+**The kill switch now gates the verification step itself.** `POST /run` (what
+`trigger_run()` calls) answers HTTP 423 / `error="kill_switch_active"` while the
+sentinel file exists, so a verification cycle cannot start until the switch is
+deactivated — a 423 after "resume" means the switch is still on (re-check
+`--status`), not that the daemon is broken. It also means a manual trigger is no
+longer a way to "test" the pause: use the read-only `get_status()` check above.
+A cycle that the daemon's interval timer starts is not refused at the API; it
+reaches the data-fetch step, logs `Advisory paused by kill-switch sentinel —
+skipping pipeline.` and stops there (no recommendations, no queue write, no
+orders). If the daemon is down, `python3
+main_orchestrator.py --dry-run` runs one standalone cycle through the same
+steps (no broker orders; with the switch on it stops at the same log line).
+Caveat: `--dry-run` does not switch off the agentic-queue step, so with the
+switch OFF and `DAEMON_AGENTIC_QUEUE_MODE=primary` a standalone cycle still
+writes the real execution queue and sends pushes — in `primary`, start the
+daemon (`python -m desktop.orchestrator_daemon`) and use `trigger_run()` rather
+than the standalone fallback.
 
 The Pilots PWA is a second front-end for this exact sentinel — `POST
 /automation/pause`/`/resume` on `api/pilots_api.py` call the same
