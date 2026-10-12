@@ -31,6 +31,15 @@ checkout*, not a running system:
 
 ## 1. Autopilot's autonomous per-cycle universe
 
+> **2026-10 clarification (steps 5.1 / 5.4b):** this trace predates the universe-builder
+> unification — both entry points below now call
+> `pipeline.advisory_inputs.build_universe_detailed()` (`main.py` through its thin `build_universe`
+> wrapper; see `CLAUDE.md`, "Symbol universe"). `main.py`
+> (`--interval` / `--agent`) is being
+> retired (archived in step 5.5) and is no longer how the advisory is run or scheduled: the
+> orchestrator daemon runs it (`POST /run` or its interval timer), and the `main.py` line numbers
+> below are as of the original trace.
+
 **[Traced against live code.]** Two independent orchestrator entry points
 exist in this codebase, and both resolve their per-cycle symbol universe
 through the same shared function:

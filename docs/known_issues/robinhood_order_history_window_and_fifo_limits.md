@@ -9,6 +9,11 @@ login (`data/robinhood_login_worker.py`), is built entirely on top of `robin_sto
 `get_all_stock_orders()`. That single API call defines everything this feature can and
 cannot see.
 
+[2026-10-12: `main.py --refresh-account` is no longer wired to any runtime caller (step 5.4).
+The ingest lives in `data/robinhood_login_worker.py`'s `refresh` mode, which Settings -> Brokers ->
+Refresh / `POST /brokerage/refresh` (`api/_rh_login.py::start_refresh_job`) and the daemon's
+scheduled morning login both start through `start_login("refresh")`, so it runs on those logins.]
+
 ## 1. Equities only
 
 `get_all_stock_orders()` returns Robinhood **equity** orders only. Options fills and crypto

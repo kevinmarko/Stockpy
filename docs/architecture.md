@@ -135,7 +135,7 @@ flowchart TD
 
     %% ── Output / Sinks ────────────────────────────────────────────────────
     subgraph OUTPUT["Output Sinks"]
-        HTML["output/daily_report.html\nHoldings & P/L · Δ Since Last Run\nSignals table · Rationale · Gravity audit"]
+        HTML["output/daily_report_dashboard.html\nHoldings & P/L · Δ Since Last Run\nSignals table · Rationale · Gravity audit"]
         SS["output/state_snapshot.json\n(+ rotated history/ copies)"]
         DL["output/decision_log.jsonl\nOperator acted / passed / modified"]
         NTFY_OUT["Phone push notification\nntfy.sh topic"]
@@ -222,8 +222,9 @@ misrepresent the actual arrangement. Any agent may touch any file for the task i
 
 | Entry point | When to use | Key difference |
 |-------------|-------------|----------------|
-| `python3 main.py` | Advisory refresh — fastest, broker-free | Calls `engine/advisory.py` directly; writes `output/daily_report.html` + `output/state_snapshot.json` |
-| `python3 main_orchestrator.py` | Full async pipeline with schema validation | Runs all 50+ dashboard columns through Pandera; writes `output/daily_report_dashboard.html` |
+| `python -m desktop.orchestrator_daemon` | The one runtime — keeps the engines warm, hosts the Control API (+ Pilots API when `PILOTS_API_ENABLED`), runs the full pipeline on `ORCHESTRATOR_INTERVAL_SECONDS` (default `0` = on-demand) or on request | Trigger a cycle with `POST /run` or the Pipeline Dashboard's "Run full advisory pipeline" button. A cycle writes `output/daily_report_dashboard.html` + `output/state_snapshot.json` and, with `DAEMON_AGENTIC_QUEUE_MODE=primary` (live since 2026-10-12, per `docs/RUNBOOK.md` §3.15), the execution queue |
+| `python3 main_orchestrator.py` | One async pipeline cycle without the daemon's timer or APIs | Same steps as a daemon cycle (Pandera schema validation across the 50+ dashboard columns); writes `output/daily_report_dashboard.html` |
+| `python3 main.py` | **Being retired (step 5.5 archives it to `legacy/`) — do not use to run the pipeline** | Calls `engine/advisory.py` directly; writes `output/daily_report.html` + `output/state_snapshot.json` only when the daemon is not the queue writer (it writes neither in `primary`); its runtime callers moved to the daemon in step 5.4a, `launch.command` is deleted (5.4b), and the `com.investyo.daily-advisory` launchd job is unloaded (its plist is kept for rollback, `docs/RUNBOOK.md` §3.15) |
 | `./launch_webapp.command` | Visual control panel (Pilots PWA, `webapp/`) | Starts the web app and, in live mode, the backend APIs it needs |
 | `python scripts/preflight_check.py` | Readiness gate | 17 checks; advisory-mode auto-skips 8 broker/false-positive checks |
 
@@ -237,7 +238,7 @@ misrepresent the actual arrangement. Any agent may touch any file for the task i
 
 ---
 
-*Last updated: 2026-07-10. Reflects the Yahoo statement-derived fundamentals engine (`data/yahoo_fundamentals.py`, replacing Finnhub as the fundamentals source; Finnhub was later removed entirely, 2026-09, and FMP now serves news_catalyst), the Robinhood Execution Bridge (Tier 8), `data/portfolio_sync.py` (Task 1.4), `data/robinhood_orders.py` (Tier 7), the `lgbm_ranker` signal module, Tier 5.3 advisory pause gate, Tier 4 validation cadence, Tier 2.4 news catalyst, and the ADVISORY_ONLY=true default. Also reconciles the Kelly-sizing DB-outage degrade path (`_OfflineTransactionsStore` → vol-target fallback), `reporting/progress.py` live pipeline-progress telemetry, and the `reporting/html_publisher.py` + `pipeline/steps.py` reporting/pipeline extractions.*
+*Last updated: 2026-07-10 (Entry Points table updated 2026-10-12, step 5.4b: the daemon is the runtime, `main.py` is being retired). Reflects the Yahoo statement-derived fundamentals engine (`data/yahoo_fundamentals.py`, replacing Finnhub as the fundamentals source; Finnhub was later removed entirely, 2026-09, and FMP now serves news_catalyst), the Robinhood Execution Bridge (Tier 8), `data/portfolio_sync.py` (Task 1.4), `data/robinhood_orders.py` (Tier 7), the `lgbm_ranker` signal module, Tier 5.3 advisory pause gate, Tier 4 validation cadence, Tier 2.4 news catalyst, and the ADVISORY_ONLY=true default. Also reconciles the Kelly-sizing DB-outage degrade path (`_OfflineTransactionsStore` → vol-target fallback), `reporting/progress.py` live pipeline-progress telemetry, and the `reporting/html_publisher.py` + `pipeline/steps.py` reporting/pipeline extractions.*
 
 
 ## Recent Architecture Updates

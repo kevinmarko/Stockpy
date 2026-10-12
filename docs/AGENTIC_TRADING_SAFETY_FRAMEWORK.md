@@ -22,7 +22,7 @@ This map supersedes the previous 2026-07-18 synthesis, reflecting updates up thr
 |---|---|---|
 | Copy-a-strategy Pilots + follow/mirror rebalance | **Production-ready** | `pilots/catalog.py`, `pilots/mirror.py`, `pilots/follows_store.py` |
 | Holding-aware recommendations | **Production-ready** | `engine/advisory.py` |
-| Advisory-only adaptive-cadence agent loop policy | **Partial** — wired only into `main.py`'s legacy `--agent` subprocess loop; the daemon backend (`desktop/daemon_runtime.py`) imports only the narrower `is_automatic_run_gated` helper, not the backlog-reminder/cadence policy itself | `engine/advisory_agent.py` |
+| Advisory-only adaptive-cadence agent loop policy | **Partial** — wired only into `main.py`'s legacy `--agent` loop (`_run_agent_loop`), which no runtime caller launches since step 5.4 (hand-run only; to be archived with `main.py` in step 5.5); the daemon backend (`desktop/daemon_runtime.py`) imports only the narrower `is_automatic_run_gated` helper, not the backlog-reminder/cadence policy itself | `engine/advisory_agent.py` |
 | Gated dry-run order queue → human execution | **Production-ready, gated** | `execution/queue_builder.py`, `.claude/skills/robinhood-execution/SKILL.md` (or `.agents/skills/...`) |
 | Decision journal | **Production-ready** — lives in `shared/` and is the live backing store read by `api/pilots_api.py`/`pilots/calibration.py` and surfaced in `webapp/src/screens/Calibration.tsx` | `shared/decision_log.py` |
 | Paper trading book | **Production-ready** | `data/paper_account_store.py` (virtual cash/positions/order history for the default `settings.BROKER_BACKEND="fmp_paper"` engine); `transactions_store.py` is a separate closed-trade ledger feeding Kelly sizing/evaluation, not the paper book itself |

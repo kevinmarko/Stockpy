@@ -6,6 +6,7 @@
 # Double-click this file from Finder (or the Dock) to install the macOS
 # launchd timers:
 #   • com.investyo.daily-advisory  — runs `main.py` each weekday 08:45 local
+#                                    (ROLLBACK ONLY, see the NOTE below)
 #   • com.investyo.monthly-retrain — runs `python -m scripts.retrain_models`
 #                                    on the 1st of each month at 04:00 local
 #   • com.investyo.weekly-edgar    — runs `python -m scripts.backfill_edgar_
@@ -13,7 +14,16 @@
 #
 # These are OS timers ONLY — they invoke the scripts on a schedule. They do
 # NOT create any autonomous self-invoking agent loop. Retraining deliberately
-# runs OUTSIDE the daily advisory cycle.
+# runs OUTSIDE the daemon's advisory pipeline cycle.
+#
+# NOTE on com.investyo.daily-advisory: that is the old scheduled `main.py` run.
+# Per docs/RUNBOOK.md §3.15 (cutover record, 2026-10-12) the job was unloaded on
+# the live machine and the always-on orchestrator daemon is the one runtime; with
+# DAEMON_AGENTIC_QUEUE_MODE=primary the daemon, not main.py, writes the real
+# execution queue. The plist is kept in this repo for rollback only, and this
+# installer still installs it, so re-running the installer RELOADS that job
+# (it prints a warning when it reaches that label). Install the daemon itself
+# with scripts/install_stack_service.command (the com.investyo.stack job).
 #
 # ONE-TIME SETUP — run this once in any Terminal:
 #   chmod +x /Users/kevinlee/Desktop/Stockpy/scripts/install_schedule.command
@@ -103,6 +113,10 @@ for LABEL in "${LABELS[@]}"; do
         exit 1
     fi
 
+    if [[ "$LABEL" == "com.investyo.daily-advisory" ]]; then
+        echo "WARNING: daily-advisory was deliberately UNLOADED at the 2026-10-12 cutover (the daemon is the queue writer); installing it RELOADS the old main.py job. Rollback only: see docs/RUNBOOK.md §3.15, and if this was not intended run 'launchctl unload $INSTALLED_PLIST'."
+    fi
+
     # Rewrite every occurrence of the canonical repo path in the template with
     # the real REPO_ROOT so the job is portable. Uses '|' as sed delimiter
     # (paths have slashes). The templates ship pointing at
@@ -131,7 +145,7 @@ done
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "Installed. Schedules:"
-echo "  • daily-advisory  — each weekday 08:45 local time"
+echo "  • daily-advisory  — each weekday 08:45 local time (rollback only; not the live queue writer, see docs/RUNBOOK.md §3.15)"
 echo "  • monthly-retrain — 1st of the month, 04:00 local time"
 echo "  • weekly-edgar    — each Sunday, 02:00 local time"
 echo ""

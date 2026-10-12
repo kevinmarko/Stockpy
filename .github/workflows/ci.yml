@@ -4,7 +4,8 @@ name: CI
 # Network/live tests (real Yahoo Finance / Wikipedia / broker calls) are tagged
 # `@pytest.mark.network` and deselected here via `-m "not network"` so CI stays
 # deterministic and offline. Python is pinned to 3.12 — the only version the
-# project supports (setup.sh / launch*.command hard-abort on anything else).
+# project supports (setup.sh, verify.command and the scripts/install_*.command
+# installers hard-abort on anything else).
 #
 # `test` (the main offline suite) additionally deselects `@pytest.mark.slow`
 # (long-running tests — heavy real ARIMA/GARCH/LightGBM fits) so PRs stay

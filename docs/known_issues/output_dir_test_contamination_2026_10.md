@@ -16,6 +16,6 @@ At import time the root `conftest.py` sets the `OUTPUT_DIR` environment variable
 - Three tests in `tests/test_robinhood_execution_panel.py` that asserted the literal folder name `output` now compare against the resolved `settings.OUTPUT_DIR`.
 
 ## Clean-up
-The files above are rewritten by the next daemon or `main.py` cycle. The exception is `risk_gate_blocks.jsonl`, an append-only log that keeps the fake rows; treat AAPL/NVDA `strategy_id=advisory` rows in it with suspicion. The real advisory source is rewritten by `main.py` at 08:45 ET on the next weekday.
+The files above are rewritten by the next daemon or `main.py` cycle. The exception is `risk_gate_blocks.jsonl`, an append-only log that keeps the fake rows; treat AAPL/NVDA `strategy_id=advisory` rows in it with suspicion. The real advisory source is rewritten by `main.py` at 08:45 ET on the next weekday. [2026-10-12: that 08:45 `main.py` launchd job has been unloaded since the step 5.3 cutover (its plist is kept for rollback, `docs/RUNBOOK.md` §3.15); with `DAEMON_AGENTIC_QUEUE_MODE=primary` the daemon rewrites the real advisory source on its next completed cycle (`POST /run` forces one).]
 
 Worktrees still on pre-fix code keep writing into the live dir when their tests run, until they pull this change.

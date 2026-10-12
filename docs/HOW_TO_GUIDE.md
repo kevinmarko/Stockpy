@@ -165,11 +165,12 @@ Or override programmatically in `settings.py` by changing the `DEFAULT_TICKERS` 
 
 ### How `main.py` builds its universe (held ∪ watchlist ∪ discovered ∪ DEFAULT_TICKERS fallback)
 
-The advisory orchestrator `main.py` assembles its universe from held positions, the
-watchlist, and discovered scan candidates, falling back to `DEFAULT_TICKERS` only when
-that whole union is empty (`_build_universe()`, delegating most of the logic to
-`data.portfolio_sync.compute_tracked_universe()` so `main.py` and the persistent daemon
-can't silently diverge on what counts as "the tracked universe"):
+Every pipeline cycle assembles its universe from held positions, the watchlist, and
+discovered scan candidates, falling back to `DEFAULT_TICKERS` only when that whole union is
+empty. One builder, `pipeline.advisory_inputs.build_universe_detailed()` (delegating most of
+the logic to `data.portfolio_sync.compute_tracked_universe()`), serves both the persistent
+orchestrator daemon (the runtime today) and `main.py` (being retired in step 5.5), so they
+can't silently diverge on what counts as "the tracked universe":
 
 1. **Robinhood held positions** — every symbol in your account snapshot is always included when the snapshot is available.
 2. **`WATCHLIST` env var or `watchlist.txt`** — merged in whenever present. The env var (comma-separated) takes precedence over the file; the file is one ticker per line with `#` for comments.
@@ -177,10 +178,10 @@ can't silently diverge on what counts as "the tracked universe"):
 4. **`settings.DEFAULT_TICKERS`** — used **only as a fallback** when sources 1-3 are all empty (or rating-exclusion emptied them).
 5. **Recently-closed positions** (`settings.CLOSED_POSITION_RETENTION_DAYS`) — a symbol you recently sold stays in the universe for a bounded window; unioned in last.
 
-If the whole union (including the `DEFAULT_TICKERS` fallback) is still empty, `main.py`
-logs a warning naming the remediation paths (RH_* env vars, `WATCHLIST`, `watchlist.txt`)
-and exits the cycle cleanly. SPY is still fetched automatically by the macro/HMM layer
-regardless.
+If the whole union (including the `DEFAULT_TICKERS` fallback) is still empty, nothing is
+evaluated; `main.py` logs a warning naming the remediation paths (RH_* env vars, `WATCHLIST`,
+`watchlist.txt`) and ends the cycle cleanly. SPY is still fetched automatically by the
+macro/HMM layer regardless.
 
 **Retired (2026-09, step 4e):** a Google Sheet "Sheet2" column-A last-resort fallback
 used to run after `DEFAULT_TICKERS`. It was removed along with the rest of the Google
@@ -190,7 +191,7 @@ Sheet output sink — see [Section 18](#18-google-sheets-integration-legacy).
 
 The Pilots PWA's Settings → Tracked Universe screen includes a coverage
 panel with three honest counts. Note this reads a narrower universe than
-`main.py`'s own three-tier assembly described above — held positions plus
+the pipeline's own assembly described above — held positions plus
 Robinhood/file-backed watchlists only, not the Sheet2 fallback or
 scan-discovered candidates:
 
@@ -224,8 +225,8 @@ The platform's UI is the **Pilots PWA** (`webapp/`). Double-click `launch_webapp
 at the project root from **Finder** or the **Dock**. It asks whether to use offline mock
 data (the default) or live data. In live mode it starts the backend APIs it needs (and the
 orchestrator daemon, when `ORCHESTRATOR_DAEMON_ENABLED=true`) if they aren't already
-running, then opens the web app. It does not run the pipeline for you — use the Pipeline
-screen (below) or `launch.command`.
+running, then opens the web app. It does not run the pipeline for you — trigger a cycle with
+`POST /run` or the Pipeline Dashboard's "Run full advisory pipeline" button (below).
 
 For a backend that keeps running with no Terminal window open, install the always-on stack
 service — see `docs/RUNBOOK.md` §0.1.
@@ -239,29 +240,30 @@ The old Streamlit desktop app (`launch_app.command`, `launch_gui.command`,
 
 ### The headless way — double-click on macOS
 
-Prefer a terminal-only loop with no web app, or need something scriptable for a scheduled task?
-`launch.command` at the project root is a macOS launcher you can double-click from **Finder** or the **Dock**. It:
+`launch.command` (a double-click launcher that ran `python main.py --interval 60` in a Terminal
+window) was removed in step 5.4b (2026-10); the orchestrator daemon replaces it. The
+`com.investyo.daily-advisory` launchd job that ran `main.py` each weekday at 08:45 is unloaded on
+the live deployment (per the repo's cutover record); its plist stays in `scripts/` for rollback
+only (`docs/RUNBOOK.md` §3.15). For a terminal-only or scriptable setup:
 
-1. Navigates to the project root automatically.
-2. Verifies `.venv` exists — if not, prints exact instructions for creating it.
-3. Confirms the `.venv` Python is exactly **3.12.x** — if it's 3.14 or anything else, shows a clear error and exits rather than running with the wrong interpreter.
-4. Warns if `.env` is missing (non-fatal — the pipeline degrades gracefully).
-5. Runs `python main.py --interval 60` (keeps refreshing every 60 seconds) **or** `python main.py` (single run), depending on the `REFRESH_INTERVAL_SECONDS` variable at the top of the file.
-6. Pauses with **"Press any key to close"** on exit so you can always read the output.
+1. **Install the always-on stack service** (recommended) — double-click
+   `scripts/install_stack_service.command` (see `docs/RUNBOOK.md` §0.1). It keeps the daemon and
+   its APIs running with no window open.
+2. **Or start the daemon by hand** — `python -m desktop.orchestrator_daemon`, using the repo's `.venv`
+   interpreter (`./setup.sh` creates it).
+3. **Set how often it runs unattended** with `ORCHESTRATOR_INTERVAL_SECONDS` (default `0` =
+   on-demand only: a cycle runs only when you trigger it; automatic runs are skipped outside the
+   04:00–20:00 ET weekday window while `ORCHESTRATOR_EXTENDED_HOURS_ONLY` is on).
+4. **Trigger a cycle** with `POST /run` or the Pipeline Dashboard's "Run full advisory pipeline"
+   button (daemon: `python -m desktop.orchestrator_daemon`). From a script:
+   `python -c "from shared import daemon_client as d; print(d.trigger_run())"` and poll
+   `d.get_run_status(<run_id>)`; a 409 means a cycle is already running (attach to it).
+5. **One cycle with no daemon** — `python3 main_orchestrator.py` (see below).
 
-**One-time setup** (already done — listed here for reference if you ever recreate the file):
-
-```bash
-chmod +x launch.command
-```
-
-**To add to the Dock**: drag `launch.command` to your Dock → right-click → Options → Keep in Dock.
-
-**To switch between interval and single-run mode**: open `launch.command` in any text editor and change line:
-
-```bash
-REFRESH_INTERVAL_SECONDS=60   # change to 0 for a single run
-```
+A daemon cycle is the full pipeline: it rewrites the state snapshot and dashboards, writes the
+Robinhood execution queue (with `DAEMON_AGENTIC_QUEUE_MODE=primary`, the live setting per the
+repo's cutover record) and, when `ADVISORY_ONLY=false`, places paper orders on the FMP paper
+ledger.
 
 ---
 
@@ -321,15 +323,13 @@ If a `FRED_API_KEY` is not configured, the orchestrator automatically falls back
 
 This is expected in development.
 
+> **Keep the key set on a live deployment.** The synthetic-data gate does not cover a run with no `FRED_API_KEY` (it only trips when a price fetch comes back empty and falls back). On a `DAEMON_AGENTIC_QUEUE_MODE=primary` deployment a keyless daemon cycle could therefore write the real execution queue from flat-$10 mock data (a known gap, `docs/RUNBOOK.md` §3.15; per-trade human confirmation and `ADVISORY_ONLY` still stand before any order).
+
 **Note (2026-09):** this gate used to key off `os.path.exists("credentials.json")` (the Google Sheets service-account file). It was switched to a FRED-key check in step 4 prep, ahead of the Google Sheet publisher's retirement in step 4e (see [Section 18](#18-google-sheets-integration-legacy)) — deleting `credentials.json` no longer silently switches the daemon to fabricated data.
 
 ### The advisory orchestrator
 
-```bash
-python3 main.py
-```
-
-This is the original synchronous, clean advisory pipeline. Use `main_orchestrator.py` for everything that needs the full 50+ dashboard column set. `main.py` no longer writes to Google Sheets — that sink was retired in step 4e (2026-09); see [Section 18](#18-google-sheets-integration-legacy).
+`main.py` is the original synchronous, clean advisory pipeline. **It is being retired** (step 5.5 archives it to `legacy/`) and is no longer how you run or schedule the pipeline: the orchestrator daemon runs it (trigger a cycle with `POST /run` or the Pipeline Dashboard's "Run full advisory pipeline" button; daemon: `python -m desktop.orchestrator_daemon`). With `DAEMON_AGENTIC_QUEUE_MODE=primary` — the live setting since 2026-10-12 per the repo's cutover record — `main.py` writes no queue, watch state, push, `daily_report.html` or state snapshot even if something launches it, and it logs a warning saying so. Use the daemon (or `main_orchestrator.py`) for everything, including the full 50+ dashboard column set. `main.py` no longer writes to Google Sheets — that sink was retired in step 4e (2026-09); see [Section 18](#18-google-sheets-integration-legacy). The rollback path (set `DAEMON_AGENTIC_QUEUE_MODE` to `off`/`shadow` and reload the `com.investyo.daily-advisory` job, whose plist is kept for this) is in `docs/RUNBOOK.md` §3.15.
 
 ---
 
@@ -360,13 +360,16 @@ The pipeline prints a JSON payload at the end:
 
 ### HTML report
 
-Two entry points write a daily report via the same renderer
-(`diagnostics_and_visuals.generate_html_report`):
-
-- `python3 main.py` → `output/daily_report.html` (advisory path — the holdings-aware report below)
-- `python3 main_orchestrator.py` → `output/daily_report_dashboard.html` (wide pipeline schema)
-
-Open either in any browser. The advisory report (`daily_report.html`)
+Every full daemon cycle (and `python3 main_orchestrator.py`) writes the daily report to
+`output/daily_report_dashboard.html` via `diagnostics_and_visuals.generate_html_report`
+(wide pipeline schema). The older `output/daily_report.html` — written only by `main.py`,
+which is being retired — is retired too: `main.py` writes none of it while the daemon is the
+queue writer (`DAEMON_AGENTIC_QUEUE_MODE=primary`), and the MCP `generate_html_report` tool
+reports the dashboard file (the web app's Report Library lists whichever report files exist).
+Open it in any browser. The layout below was written for the `main.py` report; the daemon's
+call passes no account summary, so the **Portfolio summary band is hidden** (only `main.py`
+supplied it), while the Δ Since Last Run band is passed and shows once a prior snapshot
+exists. The advisory report
 **leads with Holdings & P&L and Action & Rationale**:
 
 - **Portfolio summary band** (top): total equity, buying power, aggregate
@@ -627,7 +630,16 @@ Paper trading = running with real market data and real logic, but simulated mone
 
 ### Automate daily runs
 
-To run automatically every trading day, add a cron job:
+The recommended way is the orchestrator daemon's own timer: install the always-on stack service
+(`docs/RUNBOOK.md` §0.1) and set `ORCHESTRATOR_INTERVAL_SECONDS` (`0`, the default, means a cycle
+runs only when you trigger it). The old `com.investyo.daily-advisory` launchd job (`main.py`
+each weekday at 08:45) is unloaded on the live deployment per the repo's cutover record; its
+plist stays in `scripts/` for rollback only (`docs/RUNBOOK.md` §3.15). The cron/launchd examples
+below instead run a single standalone `main_orchestrator.py` cycle each day, without the daemon's
+APIs — don't combine them with the daemon's timer: two runners would both write the same outputs
+(state snapshot, dashboards and, with `DAEMON_AGENTIC_QUEUE_MODE=primary`, the execution queue).
+
+To run a standalone cycle automatically every trading day, add a cron job:
 
 ```bash
 # Run at 9:35 AM ET every weekday
@@ -737,7 +749,7 @@ Runs 27 checks total. Behaviour depends on `ADVISORY_ONLY`:
 | `dry_run_disabled` | **Yes** | `DRY_RUN=false` | Set `DRY_RUN=false` in `.env` |
 | `env_not_committed` | No | `.env` is not tracked by git | Add `.env` to `.gitignore` (already done in this repo) |
 | `kill_switch_inactive` | No | No `output/KILL_SWITCH` file exists | Run `python -m execution.kill_switch --deactivate` |
-| `state_snapshot_fresh` | No | `output/state_snapshot.json` is < 2 hours old (written by BOTH `main.py` and `main_orchestrator.py` — the cross-mode liveness indicator, so never skipped even in advisory mode) | Run `python3 main.py` or `python3 main_orchestrator.py` to regenerate it |
+| `state_snapshot_fresh` | No | `output/state_snapshot.json` is < 2 hours old (written by every orchestrator-daemon cycle and by `main_orchestrator.py` — and, until it is archived, `main.py`, though not in `DAEMON_AGENTIC_QUEUE_MODE=primary` — the cross-mode liveness indicator, so never skipped even in advisory mode) | Trigger a cycle with `POST /run` or the Pipeline Dashboard's "Run full advisory pipeline" button (daemon: `python -m desktop.orchestrator_daemon`), or run `python3 main_orchestrator.py` |
 | `heartbeat_fresh` | **Yes** | `output/heartbeat.txt` is < 2 hours old (written by `main_orchestrator.py` only) | Run `python3 main_orchestrator.py` to generate it |
 | `db_exists` | No | `quant_platform.db` exists and is non-empty | Run `python3 database_setup.py` |
 | `paper_trading_duration` | **Yes** | ≥ 90 days since `PAPER_TRADING_START_DATE` | Wait — this is intentional; set your start date when you begin |
@@ -787,11 +799,11 @@ ntfy.sh is a free, open-source push-notification service with native iOS and And
 | Event | Priority | When |
 |-------|----------|------|
 | ⚠ Errors Detected | **HIGH** (always makes a sound) | Any symbol-level pipeline failure |
-| ✓ Refresh Complete | Default | Once per launch (not per interval tick) |
+| ✓ Refresh Complete | Default | At most once per US/Eastern day (not per cycle) |
 
 The error notification lists which symbols failed and at which pipeline stage. The "refresh complete" notification includes the full run summary (BUY/SELL/HOLD counts, top 3 recommendations, duration).
 
-**Interval mode** (`python3 main.py --interval 60`): the "refresh complete" notification fires only once per launch, not once per tick. Error notifications fire every cycle where errors occur.
+**Daemon timer** (`ORCHESTRATOR_INTERVAL_SECONDS`): the cycle-summary pushes are sent by the orchestrator daemon while `DAEMON_AGENTIC_QUEUE_MODE=primary` (`pipeline/agentic_queue.py::send_run_summary_push`). The "refresh complete" notification fires at most once per US/Eastern day (the limit is kept in memory, so a daemon restart can send a second one that day), not once per cycle. Error notifications fire every cycle where errors occur. (The retiring `main.py --interval` loop sent it once per launch.)
 
 #### Without NTFY_TOPIC
 
@@ -872,11 +884,12 @@ For Gmail: use an App Password (not your main password). Google account → Secu
 ## 15. The Kill Switch / Pause Gate
 
 In **advisory mode** (`ADVISORY_ONLY=true`) the kill switch sentinel (`output/KILL_SWITCH`)
-repurposes as a **pause-recommendations gate**: when the file exists, `main.run_once()`
-logs `"Advisory paused by kill-switch sentinel — skipping evaluation cycle"` and returns
-an empty RunResult for that cycle.  `main_orchestrator._main_body()` returns immediately
-before `run_pipeline()` so the last written `state_snapshot.json` and HTML report are
-preserved.  No broker interaction exists to halt — this is purely a signal-generation pause.
+repurposes as a **pause-recommendations gate**: when the file exists, the daemon pipeline's
+`AsyncDataFetchStep` logs `"Advisory paused by kill-switch sentinel — skipping pipeline"` and
+stops the cycle before `run_pipeline()`, so the last written `state_snapshot.json` and HTML
+report are preserved (and `POST /run` itself returns 423 "Kill switch active").  `main.run_once()`
+(being retired) logs `"... skipping evaluation cycle"` and returns an empty RunResult.  No broker
+interaction exists to halt — this is purely a signal-generation pause.
 
 In **live-execution mode** (`ADVISORY_ONLY=false`) the sentinel also causes `OrderManager`
 to raise `KillSwitchActiveError` before any order reaches the broker.
@@ -1230,7 +1243,7 @@ This creates `reports/main_pipeline_validation_summary.json`. The preflight chec
 
 ---
 
-*Last updated: 2026-07-10. Reflects: Tier 5.3 kill-switch pause gate wired into `main.run_once()` and `main_orchestrator._main_body()`, macro-triggered advisory gating (RECESSION hard gate, VIX/Sahm soft gate, sector veto) added to §15. Prior: Tier 5.1 `ADVISORY_ONLY=true` default (broker quarantine), advisory-mode preflight auto-skip (§13), Strategy Matrix mode toggle suppressed under advisory mode, new Advisory-Only Mode section, Sheet2 column-A universe fallback, `load_dotenv()` placement fix.*
+*Last updated: 2026-07-10. Reflects: Tier 5.3 kill-switch pause gate wired into `main.run_once()` and `main_orchestrator._main_body()`, macro-triggered advisory gating (RECESSION hard gate, VIX/Sahm soft gate, sector veto) added to §15. Prior: Tier 5.1 `ADVISORY_ONLY=true` default (broker quarantine), advisory-mode preflight auto-skip (§13), Strategy Matrix mode toggle suppressed under advisory mode, new Advisory-Only Mode section, Sheet2 column-A universe fallback, `load_dotenv()` placement fix. Running/scheduling instructions updated 2026-10 (step 5.4b): the orchestrator daemon replaces `launch.command` and the `com.investyo.daily-advisory` launchd job (unloaded on the live deployment; its plist is kept for rollback).*
 
 ## Safety tab (formerly Gravity Audit) — what to check when an order is blocked
 
@@ -1337,7 +1350,7 @@ The platform can send proactive ntfy push notifications whenever a symbol's advi
 
 ### How it works
 
-At the end of every `run_once()` cycle, `watch_engine.py`:
+At the end of every orchestrator-daemon cycle (with `DAEMON_AGENTIC_QUEUE_MODE=primary`, the live setting; `AgenticQueueStep` runs the watch engine) — formerly every `main.py` `run_once()` cycle — `watch_engine.py`:
 1. Loads rules from `watch_rules.yaml` (project root).
 2. Loads the previous run's state from `output/watch_state.json`.
 3. Compares the current advisory output against the previous state.
@@ -1370,14 +1383,14 @@ rules:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `WATCH_RULES_FILE` | `watch_rules.yaml` | Path to the YAML rule file. Relative paths are resolved from the working directory where `main.py` is launched. |
+| `WATCH_RULES_FILE` | `watch_rules.yaml` | Path to the YAML rule file. Relative paths are resolved from the working directory the daemon is launched from (the always-on stack service `cd`s to the repo root). |
 | `NTFY_DASHBOARD_URL` | *(empty)* | Optional URL appended to every alert body (e.g. `http://localhost:5173`). Tap the notification to open the web app directly. |
 
 ### Adding or editing rules
 
 1. Open `watch_rules.yaml` in any text editor.
 2. Add, remove, or modify `rules` entries.
-3. The changes take effect on the **next** `run_once()` cycle — no restart needed.
+3. The changes take effect on the **next** cycle — no restart needed.
 
 ### Resetting alert state
 
@@ -1403,7 +1416,7 @@ By default the per-symbol rationale is a single terse paragraph suitable for das
 - No additional dependencies.
 
 ### How it works
-Every time `run_once()` evaluates a symbol it calls `engine.advisory.evaluate()`. When `RATIONALE_VERBOSITY=verbose`:
+Every time the pipeline evaluates a symbol (the daemon's `AdvisoryOverlayStep`; formerly `main.py`'s `run_once()`) it calls `engine.advisory.evaluate()`. When `RATIONALE_VERBOSITY=verbose`:
 
 1. `evaluate()` pre-computes win-rate data from `TransactionsStore` (same database used by Kelly sizing).
 2. It also pulls first-line `__doc__` strings from all signal modules that are active in the current macro regime.
@@ -1425,15 +1438,9 @@ Every time `run_once()` evaluates a symbol it calls `engine.advisory.evaluate()`
 RATIONALE_VERBOSITY=verbose
 ```
 
-Then restart the platform (`.env` is loaded at entry-point startup):
+Then restart the orchestrator daemon (`.env` is read once at startup; for the always-on stack service re-run `./scripts/install_stack_service.command`, see `docs/RUNBOOK.md` §0.1) and trigger a cycle with `POST /run` or the Pipeline Dashboard's "Run full advisory pipeline" button. A one-off `python3 main_orchestrator.py` run also picks it up.
 
-```bash
-python3 main.py         # advisory orchestrator (fastest refresh)
-# or
-python3 main_orchestrator.py  # full async pipeline
-```
-
-The `rationale` field in the HTML report and Google Sheet will now show the extended narrative.
+The `rationale` field in the HTML report will now show the extended narrative (the Google Sheet sink was retired in step 4e).
 
 ### Switching back to standard mode
 
@@ -1471,7 +1478,7 @@ The `[A]–[D]` markers are stable labels — compliance reviewers can cite "sec
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| No verbose sections even after setting `RATIONALE_VERBOSITY=verbose` | `.env` was not reloaded | Restart `main.py` / `main_orchestrator.py` — settings are loaded once at startup. |
+| No verbose sections even after setting `RATIONALE_VERBOSITY=verbose` | `.env` was not reloaded | Restart the orchestrator daemon (or re-run `main_orchestrator.py`) — settings are loaded once at startup. |
 | `[B]` shows "Insufficient closed-trade history" | Fewer than 30 closed trades in `quant_platform.db` | Expected on fresh installations. Run for several weeks to accumulate trade history. |
 | `[D]` section absent | All signal modules filtered out by `is_active_in_regime()` (e.g. RECESSION regime) | Expected in extreme macro regimes where most signals are suppressed. Check the `[A]` section for the regime name. |
 
@@ -1479,13 +1486,22 @@ The `[A]–[D]` markers are stable labels — compliance reviewers can cite "sec
 
 ## Autonomous Advisory Agent
 
+> **Status (2026-10, step 5.4b):** this loop exists only as `main.py --agent` (and
+> `--interval`). `main.py` is being retired (archived in step 5.5) and the orchestrator daemon
+> has **no equivalent**: its timer is a fixed `ORCHESTRATOR_INTERVAL_SECONDS` (default `0` =
+> on-demand), and its pipeline does not run the backlog reminders below (the reminder and backlog
+> functions in `engine.advisory_agent` are called only from `main.py`). Do not start `--agent`
+> while the daemon is the queue writer — in `DAEMON_AGENTIC_QUEUE_MODE=primary` `main.py` skips
+> the queue, watch alerts and summary push anyway. The description below is kept as the record of
+> what the agent loop does.
+
 The autonomous agent (Tier 6) replaces `--interval N`'s fixed timer with a
 self-pacing loop. It still only produces advisory output — it never places an
 order — but it decides *when* to re-run and re-pings you about high-conviction
 signals you have not acted on.
 
 ```bash
-python3 main.py --agent          # takes precedence over --interval
+python3 main.py --agent          # RETIRING (step 5.5), no daemon equivalent — see the status note above
 ```
 
 ### What it does each cycle
@@ -1517,7 +1533,9 @@ live in `engine.advisory_agent.CONFIG`.
 
 ## Trade-Signal Alerts
 
-Two advisory trading abilities (Tier 6.1) layer on the autonomous agent. Both
+(2026-10: these ride on the `main.py --agent` loop, which has no daemon equivalent — see the
+status note under "Autonomous Advisory Agent" above.) Two advisory trading abilities (Tier 6.1)
+layer on the autonomous agent. Both
 are derived purely from data the agent already has each cycle (recommendations
 + your Robinhood snapshot) and both are pushed as ntfy alerts — no order code.
 
@@ -1586,7 +1604,9 @@ requires it `> 0` or `preflight_check.py` fails.
 ### Running it
 
 ```bash
-python3 main.py                  # writes output/execution_queue.json when mode != off
+# trigger a daemon cycle (POST /run or the Pipeline Dashboard's "Run full advisory pipeline"
+# button; daemon: python -m desktop.orchestrator_daemon). With DAEMON_AGENTIC_QUEUE_MODE=primary
+# it writes output/execution_queue.json when ROBINHOOD_EXECUTION_MODE != off
 # then in Claude Code:
 /rh-execute                      # previews every order; in live mode, places with confirmation
 ```
@@ -1600,7 +1620,7 @@ before each order):
 python -m execution.kill_switch --activate --reason "halt robinhood execution"
 ```
 
-Or set `ROBINHOOD_EXECUTION_MODE=off` so the next run emits nothing. Full
+Or set `ROBINHOOD_EXECUTION_MODE=off` so the next cycle emits nothing. Full
 operating procedure: see `docs/RUNBOOK.md` → "Robinhood Live Execution
 Procedure".
 

@@ -6,7 +6,8 @@
 # Double-click from Finder (or the Dock) to install the launchd agent
 # com.investyo.stack, which starts (at login, and restarts on crash) the
 # always-on backend stack for the Pilots PWA:
-#   • orchestrator daemon — warm refresh every ORCHESTRATOR_INTERVAL_SECONDS + Control API :8601 + Pilots :8602
+#   • orchestrator daemon — the one runtime: runs the advisory pipeline on its own
+#       timer (ORCHESTRATOR_INTERVAL_SECONDS; 0 = on-demand via POST /run) + Control API :8601 + Pilots :8602
 #   • data_api    :8603
 #   • metrics_api :8604
 #
@@ -14,9 +15,11 @@
 #   1. Verifies .venv exists and Python is 3.12.x.
 #   2. Installs scripts/com.investyo.stack.plist into ~/Library/LaunchAgents/
 #      (rewriting paths to THIS repo's location) and launchctl-loads it.
-#   3. Unloads the legacy com.investyo.daily-advisory job — the always-on
-#      daemon supersedes that single pre-market run (and it was failing under
-#      macOS TCC anyway). Its plist is left in place so you can re-enable it.
+#   3. Unloads the legacy com.investyo.daily-advisory job if an older install
+#      of it is still loaded on this machine — the always-on daemon replaced
+#      its single pre-market main.py run (it was also failing under macOS
+#      TCC). Its plist is left in place, and scripts/com.investyo.daily-advisory.plist
+#      stays in this repo, as the rollback path (docs/RUNBOOK.md §3.15).
 #   4. Waits a few seconds and checks the service actually came up, calling out
 #      the Full Disk Access fix if it hit the macOS ~/Desktop permission wall.
 #
@@ -66,13 +69,13 @@ echo "Using $PY_VER"
 chmod +x "$SCRIPT_DIR/investyo_stack_service.sh" 2>/dev/null || true
 mkdir -p "$LAUNCH_AGENTS_DIR" "$REPO_ROOT/output"
 
-# ── Retire the legacy (broken-under-TCC) daily-advisory job ──────────────────
+# ── Unload the legacy daily-advisory job (plist kept for rollback), if present ─
 DAILY="$LAUNCH_AGENTS_DIR/com.investyo.daily-advisory.plist"
 if [[ -f "$DAILY" ]]; then
     echo ""
     echo "Retiring legacy com.investyo.daily-advisory (superseded by the always-on daemon)…"
     launchctl unload "$DAILY" 2>/dev/null || true
-    echo "  Unloaded. (plist left at $DAILY — re-enable with 'launchctl load' if you want the daily Sheet publish back.)"
+    echo "  Unloaded. (plist left at $DAILY — for a rollback only, 'launchctl load' it; see docs/RUNBOOK.md §3.15.)"
 fi
 
 # ── Install the stack service ────────────────────────────────────────────────
@@ -135,8 +138,8 @@ else
 fi
 
 echo ""
-echo "Note: if you ALSO open launch_app.command, its engine loop will spawn a"
-echo "second daemon that contends for :8601/:8602 (the later one yields its API"
-echo "bind but the advisory still runs). For always-on, prefer THIS service and"
-echo "use launch_webapp.command just to view the data."
+echo "Note: this service IS the orchestrator daemon (the one runtime). Do not"
+echo "hand-start a second 'python -m desktop.orchestrator_daemon' next to it — it"
+echo "would contend for :8601/:8602. launch_webapp.command reuses a daemon that is"
+echo "already listening on those ports, so use it just to view the data."
 exit 0

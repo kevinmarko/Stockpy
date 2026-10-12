@@ -7,11 +7,13 @@
 # starts at login and is restarted on crash. It brings up the three backend
 # processes the webapp reads from and keeps the pipeline collecting data:
 #
-#   * orchestrator daemon (BACKGROUNDED + waited on, see below) — 5-min warm
-#       refresh cycles, and hosts the Control API :8601 + Pilots API :8602
-#       (PILOTS_API_ENABLED in .env). Honors the DATA_FRESHNESS_TTL_SECONDS
-#       gate: an interval cycle that finds the DB already fresh (<15 min)
-#       skips the network pull.
+#   * orchestrator daemon (BACKGROUNDED + waited on, see below) — runs the
+#       advisory pipeline on its own timer (ORCHESTRATOR_INTERVAL_SECONDS in
+#       .env; 0 = on-demand only, via POST /run) and hosts the Control API
+#       :8601 + Pilots API :8602 (PILOTS_API_ENABLED in .env). With
+#       DAEMON_AGENTIC_QUEUE_MODE=primary it is also the real execution-queue
+#       writer. Honors the DATA_FRESHNESS_TTL_SECONDS gate: an interval cycle
+#       that finds the DB already fresh (<15 min) skips the network pull.
 #   * data_api    :8603  (background)
 #   * metrics_api :8604  (background)
 #   * caddy       :8888  (background, OPTIONAL) — reverse proxy for Pilots PWA.
@@ -56,9 +58,9 @@
 # (no `wait -n`, no associative arrays); the poll loop below (rather than a
 # second `wait $DAEMON_PID` inside the trap) is chosen for that reason — a
 # `wait` on an already-signalled/reaped pid can return without blocking on
-# this bash version, so an explicit `kill -0` poll (mirroring
-# launch_app.command's own previous-instance-replace loop) is the reliable
-# primitive here.
+# this bash version, so an explicit `kill -0` poll is the reliable primitive
+# here. (It originally mirrored the previous-instance-replace loop in
+# launch_app.command, which was deleted along with the Streamlit shell.)
 #
 # macOS NOTE: launchd runs in a restricted TCC context. If this repo lives
 # under ~/Desktop / ~/Documents / ~/Downloads, you MUST grant Full Disk Access
@@ -142,7 +144,7 @@ fi
 DAEMON_PID=$!
 
 # Idempotency guard -- mirrors this codebase's Python _torn_down pattern
-# (app_shell.py, desktop/orchestrator_daemon.py): a signal arriving while
+# (desktop/orchestrator_daemon.py): a signal arriving while
 # `wait` below is blocked interrupts that `wait` and runs this trap; once it
 # returns, execution resumes after `wait` and immediately reaches the
 # script's natural end, which fires the EXIT trap a SECOND time. Without
@@ -157,9 +159,10 @@ _teardown() {
     kill -TERM "$DAEMON_PID" 2>/dev/null
     # Bounded poll for the daemon's OWN graceful teardown to actually finish
     # (settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS, default 25s) plus a margin
-    # -- mirrors desktop/engine_supervisor.py's stop_engine() daemon-mode
-    # timeout (DAEMON_SHUTDOWN_TIMEOUT_SECONDS + 5s grace). 60 iterations *
-    # 0.5s = 30s.
+    # -- the same "DAEMON_SHUTDOWN_TIMEOUT_SECONDS + 5s grace" budget
+    # launch_webapp.command uses for a daemon it started (outer supervisors
+    # must wait longer than the daemon's own budget; ladder in
+    # docs/RUNBOOK.md). 60 iterations * 0.5s = 30s.
     for _ in $(seq 1 60); do
         kill -0 "$DAEMON_PID" 2>/dev/null || break
         sleep 0.5

@@ -8,8 +8,8 @@
   `python -m scripts.retrain_models` entrypoint — the expensive walk-forward
   retraining job the registry header refers to. This is an OS timer only — it
   does NOT create any autonomous self-invoking agent loop, and it deliberately
-  runs OUTSIDE the daily advisory cycle (retraining must never run inside
-  main.py / main_orchestrator.py).
+  runs OUTSIDE the advisory pipeline cycle (retraining must never run inside
+  the daemon's cycle / main_orchestrator.py).
 
   What it does: at 04:00 local on day 1 of each month, launchd invokes
   `.venv/bin/python3 -m scripts.retrain_models` (a single retraining pass over
@@ -20,7 +20,8 @@
   non-zero only on a hard training crash.
 
   INSTALL (recommended): double-click scripts/install_schedule.command (which
-  installs BOTH the daily-advisory and this monthly-retrain job), or run
+  installs this monthly-retrain job, the weekly-edgar job and the rollback-only
+  daily-advisory job), or run
       launchctl load  ~/Library/LaunchAgents/com.investyo.monthly-retrain.plist
 
   UNINSTALL:

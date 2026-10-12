@@ -124,9 +124,11 @@ reads a gated execution queue the pipeline writes.
 - **`main.py` is being retired** (shrink step 5, plan `.claude/shrink_step5_retire_main_py_implementation_plan.md`).
   It still runs the advisory cycle but, since the 2026-10-12 cutover, is no longer the real
   execution-queue writer (the `com.investyo.daily-advisory` launchd job is unloaded; its plist stays
-  for rollback). Steps 5.4–5.6 (switch callers,
-  archive `main.py` to `legacy/`, retire `ORCHESTRATOR_DAEMON_ENABLED`) are pending. Don't build new
-  features on `main.py`.
+  for rollback). Steps 5.0–5.4 are done: the runtime callers (Console Advisory job,
+  `POST /dead-letter/retry`, MCP `generate_html_report`) trigger a daemon cycle, `make verify` runs
+  its own standalone dry-run cycle (`scripts/step5_4_verify_cycle.py`, queue mode forced off) and
+  `launch.command` is gone. Pending: 5.5 (archive `main.py` to `legacy/`) and 5.6 (retire
+  `ORCHESTRATOR_DAEMON_ENABLED`). Don't build new features on `main.py`.
 - **Daemon pipeline steps** (`pipeline/production_steps.py`, assembled in `main_orchestrator.py`):
   `AsyncDataFetchStep` → `RunPipelineStep` (inner `MacroStep` → `TrendVolatilityStep` →
   `ProcessingStep` → `ForecastingStep` → `StrategyEvalStep`) → `AdvisoryOverlayStep` (runs
@@ -187,7 +189,7 @@ is the operator's call once the count is reached.
 
 - **Allowed:** bug fixes; security and dependency fixes; tests; docs; measurement or observability
   of existing behavior; removing or archiving code; and the already-approved plans — shrink steps
-  5.4–5.6 (`.claude/shrink_step5_retire_main_py_implementation_plan.md`) and the forecasting
+  5.5–5.6 (`.claude/shrink_step5_retire_main_py_implementation_plan.md`) and the forecasting
   rebuild (`.claude/forecasting_rebuild_implementation_plan.md`).
 - **Needs the operator's explicit OK first:** new signal modules, strategies, Pilots, webapp
   screens, data sources, ML models, or new settings flags for new capabilities.
@@ -225,7 +227,6 @@ python3 main_orchestrator.py         # one async pipeline run without the daemon
 python -m execution.kill_switch --status # check / activate / deactivate the global kill switch
 # Being retired (step 5) — prefer POST /run or shared.daemon_client.trigger_run():
 python3 main.py                      # one advisory cycle; --interval N loops; --refresh-account forces a Robinhood login
-./launch.command                     # runs main.py in a Terminal window (pauses on exit)
 
 # ── Tests & gates ─────────────────────────────────────────────────────────────
 pytest tests/test_<module>.py        # targeted tests; add ::test_name for one test
