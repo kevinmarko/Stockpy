@@ -140,8 +140,9 @@ reads a gated execution queue the pipeline writes.
   `execution_queue.json` under `OUTPUT_DIR/shadow/` with no side effects; `primary` makes the daemon
   the real queue writer (summary push, watch engine, real queue files, with a run-ownership guard so
   a timed-out cycle cannot write late) and `main.py` then skips those side effects. **The live
-  deployment runs `shadow` until the operator cuts over after a 5-trading-day review ending
-  2026-10-05** (`scripts/compare_shadow_queue.py` diffs the real queue against the shadow one;
+  deployment runs `shadow` until the operator cuts over after an extended 5-trading-day review,
+  2026-10-12..10-16** (the first, 09-29..10-05, wasn't clean; forecast-reuse advisory diffs are
+  accepted; `scripts/compare_shadow_queue.py` diffs the real queue against the shadow one;
   cutover steps: `docs/RUNBOOK.md` §3.15). Walkthroughs: `.claude/shrink_step5_*_walkthrough.md`.
 - **Symbol universe** — one builder, `pipeline/advisory_inputs.py::build_universe_detailed()`, used
   by both `main.py` and the daemon: held positions ∪ `WATCHLIST` env var ∪ `watchlist.txt` ∪
@@ -177,7 +178,8 @@ reads a gated execution queue the pipeline writes.
 The platform is in a **feature freeze** until the pipeline has closed **30** of its own paper trades
 (target 50), so the next decisions rest on measured outcomes instead of more features. Only
 `paper_closed_trades` rows with `strategy_id == "main_pipeline"` count — manual Quick Trades, delta
-hedges and untagged rows never do. Check progress with `python scripts/feature_freeze_status.py`
+hedges and untagged rows never do, nor do trades the operator ruled out (each listed with a reason in
+`scripts/feature_freeze_status.py::EXCLUDED_TRADES` and reported as excluded). Check progress with `python scripts/feature_freeze_status.py`
 (exit 0 = the minimum is reached, 2 = still frozen; `--json` for machine output). Ending the freeze
 is the operator's call once the count is reached.
 

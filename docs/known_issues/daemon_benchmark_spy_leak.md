@@ -35,9 +35,18 @@ A second, separate leak: `StrategyEvalStep` computed cross-sectional 12-1m momen
 - `AdvisoryOverlayStep`'s "evaluated anyway" warning is kept as a tripwire for any future leak path.
 - Tests: `tests/test_benchmark_spy_leak.py`. Both pipeline tests were confirmed to fail against the pre-fix code.
 
-## Leaked paper trade (operator decision)
+## Leaked paper trade
 
-The live `quant_platform.db` has one SPY round trip tagged `strategy_id = "main_pipeline"`: a buy and a sell of 1.301487 shares, closed with realized P&L −$4.87. It was produced by this leak, not by a tracked symbol. Because it is `main_pipeline`, it counts toward the feature-freeze tally (`scripts/feature_freeze_status.py`). It was not edited. Whether to exclude it is the operator's call.
+The live `quant_platform.db` has one SPY round trip tagged `strategy_id = "main_pipeline"`. It is `paper_closed_trades.trade_id` 2: 1.301487 shares, entered 2026-09-30 14:34 UTC, closed 2026-10-01, realized P&L −$4.87. The leak produced it, not a tracked symbol.
+
+- **Feature-freeze count:** excluded. The operator decided this on 2026-10-11. It is listed in `scripts/feature_freeze_status.py::EXCLUDED_TRADES` with its reason, and the script reports it as excluded. The ledger row is unchanged.
+- **Kelly ledger: removed on 2026-10-12, by operator decision.** The paper row had been bridged into the `transactions_store` `trades` ledger as `trades.trade_id` 1. Production Kelly and the evaluation engine read that ledger unfiltered by strategy.
+  - A live DB backup was taken first: `~/.stockpy_local/backups/quant_platform_pre_spy_kelly_removal_20261012T100014Z.db`.
+  - Then, in one transaction, the ledger row was deleted (matched on id, symbol, entry time and strategy). The paper row was set to `bridge_status='excluded'`, `bridged_trade_id=NULL`, with the reason in `bridge_error`. That reuses the bridge's own vocabulary for manual trades.
+  - The transaction would have rolled back unless exactly one row matched each statement.
+  - Nothing else referenced the ledger row. Nothing re-bridges a closed trade, since the bridge runs only at close time.
+  - The ledger now holds SDIV, DIV and AGNC.
+  - Impact today was nil for sizing: Kelly needs `MIN_TRADES_REQUIRED = 30` closed trades and falls back to vol-target below that. The row would have counted once the ledger reached 30, and in the evaluation engine's trade stats.
 
 ## Verify after deploy
 
