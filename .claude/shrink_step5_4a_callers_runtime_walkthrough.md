@@ -6,20 +6,26 @@ Plan: `.claude/shrink_step5_4_callers_implementation_plan.md` (PR 5.4a section).
 **Code only.** Nothing here changes the live `.env`, `runtime_flags.json` or `~/.stockpy_local`. 5.4b (shell/`make verify`/skills/
 docs) is a separate PR; 5.5 archives `main.py`.
 
-**Correction (2026-10-12).** An earlier version of this walkthrough, the plan and the PR text said the operator had confirmed the live
-system was already cut over (`DAEMON_AGENTIC_QUEUE_MODE=primary`). That premise was wrong: `main` (#1119, merged 2026-10-12 10:07Z)
-records that the first shadow review "wasn't clean" and that a second 5-trading-day review runs 2026-10-12..10-16, with cutover after
-day 5. **The live daemon is still on `shadow`.** Nothing in 5.4a depends on the cutover (see the next section for the one behaviour
-change), but the parts of step 5.4 that do (deleting the 08:45 launchd job and `launch.command`, marking RUNBOOK 3.15 done, skills that
-stop when the mode is not `primary`) are held until after the review.
+**Timeline (2026-10-12).** What this PR assumed about the live cutover flipped twice while it was in flight, so the text here was
+corrected twice. Early on, the work was planned on the premise that the live system was already on `DAEMON_AGENTIC_QUEUE_MODE=primary`.
+When `main` moved (#1119, merged 10:07Z) it recorded that the first shadow review "wasn't clean" and that a second 5-trading-day review
+ran 2026-10-12..10-16, so a first version of this walkthrough and the PR text retracted the premise and said "still on `shadow`". Then
+#1120 (the operator's commit, authored 06:34 -0400, i.e. after #1119) recorded that **the operator cut over to `primary` on
+2026-10-12** without waiting for the extended review (flag in the runtime flags store, `ROBINHOOD_SCHEDULED_LOGIN_ENABLED=true`,
+`com.investyo.daily-advisory` unloaded, plist kept for rollback). This walkthrough is written against that: primary is the live state.
+The facts about #1120 come from the repository's own docs; nothing here was checked against the running machine. No code in 5.4a depends
+on the mode; the one behaviour change in the next section does.
 
-## Behaviour change while the live daemon is on `shadow`
+## Behaviour change under `primary` (the live state since 2026-10-12)
 
-The Console "Advisory Pipeline" job, the MCP `generate_html_report` tool and `POST /dead-letter/retry` used to run `main.py`. While
-the queue mode is not `primary`, `main.py` is the REAL queue writer, so those three actions refreshed the live `execution_queue.json`,
-ran the watch engine and sent pushes. They now trigger a daemon cycle, and in `shadow` a daemon cycle writes only the review copy under
-`OUTPUT_DIR/shadow/` and sends nothing. So until cutover the only things that refresh the real queue are the 08:45 `main.py` launchd
-job and a hand-run `python3 main.py`; pressing those three buttons no longer does. Manual `main.py` runs are unaffected (5.5 archives it).
+The Console "Advisory Pipeline" job, the MCP `generate_html_report` tool and `POST /dead-letter/retry` used to run `main.py`. Under
+`primary`, `main.py` skips the queue, watch-engine and push side effects (the daemon owns them), so those three actions only refreshed
+the advisory output and dashboards. They now trigger a **full daemon cycle**, which under `primary` rewrites the real
+`execution_queue.json`, `queue_sources/advisory.json` and `watch_state.json`, sends the summary push and watch alerts, and, if
+`ADVISORY_ONLY=false`, places paper orders on the FMP paper ledger. A dead-letter retry for one symbol therefore re-runs the whole
+universe with those effects. The descriptions of all three actions say so. Rolling the mode back to `shadow` (RUNBOOK 3.15 rollback)
+changes this: a `shadow` cycle writes only the review copy under `OUTPUT_DIR/shadow/` and sends nothing, while the real queue then
+needs a hand-run `main.py` (the launchd job is unloaded). Manual `main.py` runs are unaffected by this PR (5.5 archives it).
 
 ## What changed
 
