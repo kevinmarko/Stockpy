@@ -71,8 +71,10 @@ Refresh or `POST /run`. The stale `DAEMON_AGENTIC_QUEUE_MODE` description (said 
   cancel-during-launch).
 
 ## Not verified / disclosed limits
-- No real primary cycle (queue write, watch alerts, paper orders): no market-data/Robinhood keys here and the synthetic-data gate
-  skips queue + broker. The operator's RUNBOOK 3.15 live smoke test covers it.
+- No real primary cycle (queue write, watch alerts, paper orders): no market-data/Robinhood keys here, and every smoke run used
+  `DAEMON_AGENTIC_QUEUE_MODE=off`. (An earlier draft of this note said the synthetic-data gate would skip the queue + broker in
+  this sandbox. That is wrong for a keyless run: see "Pre-existing problems" below.) The operator's RUNBOOK 3.15 live smoke test
+  covers a real primary cycle.
 - Daemon-hosted jobs: SSE log stream is empty (the daemon never writes a job log) and cancel is unsupported; the Console says so.
   `get_run_status` needs `STATE_API_TOKEN` when set, and `daemon_client` sends only `ORCHESTRATOR_DAEMON_TOKEN`: with differing tokens a
   job reads "unknown" immediately. Check both tokens before relying on the Console job.
@@ -86,6 +88,13 @@ Refresh or `POST /run`. The stale `DAEMON_AGENTIC_QUEUE_MODE` description (said 
 - `StateSnapshotStep` ignores `data_is_synthetic`: during a market-data outage the daemon writes `state_snapshot.json` and the
   dashboards from fabricated MockDataEngine data and records the cycle `succeeded` (same for the dead-letter write). Needs its own
   plan (pipeline tier).
+- **The synthetic-data gate does not cover a keyless run.** `AsyncDataFetchStep` sets `data_is_synthetic` only in the fallback for an
+  empty price fetch (`pipeline/production_steps.py` ~222). When `FRED_API_KEY` is unset, `live_data_configured()` is false and the
+  step picks `MockDataEngine` up front without the marker, so `AgenticQueueStep` and `BrokerExecutionStep` do not skip. Found by
+  running `python main_orchestrator.py --dry-run` with `DAEMON_AGENTIC_QUEUE_MODE=primary` and no key in an isolated data root: it
+  wrote `watch_state.json` and `queue_sources/advisory.json` from the flat-$10 mock data. If the key were ever cleared on the live
+  `primary` deployment, the daemon would write the real queue from fabricated prices (orders still need per-trade human
+  confirmation, and `ADVISORY_ONLY` still blocks paper orders). Needs its own plan (pipeline tier); not changed here.
 - `launch_orchestrator`'s fast path (flag-gated, off by default) falls back to a subprocess on 409/423 and uses a stale-log path;
   retired with the flag in 5.6.
 - Stale or untrue help text: "no orders placed" claims in `shared/help_content.py` and `webapp/src/help/helpContent.ts`, pointers to the

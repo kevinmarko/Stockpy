@@ -16,4 +16,4 @@ Plan: `.claude/shrink_step5_4_callers_implementation_plan.md` (PR 5.4a section).
 - [x] Settings census + liveness regenerated
 - [x] Full offline suite (11,898 passed; 2 failures explained in the walkthrough), webapp typecheck + vitest on the final tree
 - [x] Browser pass (Playwright) and real-daemon smoke in mock mode
-- [ ] Commit, push, draft PR, subscribe
+- [x] Commit, push, draft PR (#1117), subscribe

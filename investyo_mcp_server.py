@@ -1102,11 +1102,13 @@ _REPORT_NOT_REFRESHED_LOG_HINT = (
 )
 # pipeline/production_steps.py sets ctx.context_extras['data_is_synthetic'] on a
 # market-data outage, but only AgenticQueueStep and BrokerExecutionStep honour it.
+# With no FRED_API_KEY the step picks MockDataEngine up front and never sets the
+# marker, so a keyless cycle is synthetic AND is not skipped by those two steps.
 _SYNTHETIC_DATA_CAUTION = (
-    "Caution: a cycle that fell back to synthetic MockDataEngine data (market-data "
-    "outage) still renders this report and is still recorded as succeeded; this tool "
-    "cannot detect that. Check the daemon log for 'Synthetic (MockDataEngine) data "
-    "detected'."
+    "Caution: a cycle that ran on synthetic MockDataEngine data (a market-data outage, "
+    "or no FRED_API_KEY configured) still renders this report and is still recorded as "
+    "succeeded; this tool cannot detect that. Check the daemon log for 'Synthetic "
+    "(MockDataEngine) data detected' (outage) or 'FRED_API_KEY not configured' (no key)."
 )
 _cycle_sleep = time.sleep
 _cycle_clock = time.monotonic

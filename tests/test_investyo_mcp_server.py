@@ -2269,6 +2269,10 @@ class TestGenerateHtmlReport:
         assert "still renders this report" in result and "still recorded as succeeded" in result
         assert "cannot detect that" in result
         assert "Synthetic (MockDataEngine) data detected" in result
+        # A keyless run (no FRED_API_KEY) is synthetic too but never logs that line
+        # (the data_is_synthetic marker is only set on the empty-fetch fallback).
+        assert "no FRED_API_KEY configured" in result
+        assert "FRED_API_KEY not configured" in result
         assert self.trigger_calls == 1
         assert self.status_calls == ["run-1"]
 
