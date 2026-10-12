@@ -288,6 +288,8 @@ Each PR merges with the suite green. Every equivalence gate runs a **frozen-inpu
 - Change every "`python3 main.py`" hint listed in section 2.
 - Gate: `grep -rn "main\.py"` outside `legacy/`, `docs/` and `.claude/` returns only intended hits.
 
+_Status (2026-10-12): 5.4 done — 5.4a #1117, 5.4b-i #1121, 5.4b-ii (deletes `launch.command`; daily-advisory plist kept for rollback, installed only with `install_schedule.command --with-daily-advisory`, which refuses unless the mode is `off`/`shadow`)._
+
 **5.5: Archive `main.py` to `legacy/`**
 - Move `main.py`, `pipeline/steps.py`, and the advisory snapshot writer (keep `_safe_float_or_none` and the `_rating_*` helpers in a small module).
 - Move `html_publisher` unless decision 5 keeps it.

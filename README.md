@@ -43,7 +43,7 @@ cp .env.example .env
 make verify           # env check + tests + one dry-run cycle (or double-click verify.command)
 
 # 5. Launch
-./launch.command      # double-click from Finder, or run in terminal
+./launch_webapp.command   # web app + backend; or install the always-on stack (docs/RUNBOOK.md §0.1)
 ```
 
 ---
@@ -73,7 +73,7 @@ safe defaults — see the full list in [`.env.example`](.env.example).
 
 ## Ticker universe
 
-`main.py` builds its evaluation universe from up to three sources, in priority order:
+The pipeline (`pipeline/advisory_inputs.py::build_universe_detailed()`) builds its evaluation universe from up to three sources, in priority order:
 
 1. **Robinhood held positions** — always included when the snapshot is available.
 2. **`WATCHLIST` env var or `watchlist.txt`** — merged in whenever present.
@@ -161,11 +161,9 @@ backend service does.
 **Pipeline (unchanged — the data/compute layer the web app's backend depends on):**
 
 ```bash
-./launch.command                          # double-click from Finder — runs main.py in a loop
-.venv/bin/python3 main.py                 # single advisory cycle
-.venv/bin/python3 main.py --interval 60   # refresh every 60 s
-.venv/bin/python3 main.py --refresh-account   # force fresh Robinhood snapshot
-.venv/bin/python3 main_orchestrator.py    # async orchestrator (HTML report)
+.venv/bin/python3 -m desktop.orchestrator_daemon   # the daemon: Control API + Pilots API + pipeline timer
+.venv/bin/python3 -c "from shared import daemon_client as d; print(d.trigger_run())"   # one cycle (POST /run)
+.venv/bin/python3 main_orchestrator.py    # one async pipeline run without the daemon
 ```
 
 The old Streamlit desktop app (`launch_app.command`, `launch_gui.command`, and
@@ -262,7 +260,7 @@ source completions/investyo.zsh                  # zsh — shows flag descriptio
 source completions/investyo.bash                 # bash
 
 # Then tab-complete any known entry point, e.g.:
-#   python main.py --<TAB>            → --interval  --refresh-account  --agent
+#   python main_orchestrator.py --<TAB>   → --dry-run  --strict
 #   python -m prompt_registry <TAB>   → list  get  sync  pin  rollback  diff  verify  publish
 ```
 

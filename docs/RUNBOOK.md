@@ -26,29 +26,12 @@ orchestrator daemon (Control API `:8601` + Pilots API `:8602`) when
 the app points at them. It does not run the pipeline for you. For a backend that keeps
 running with no Terminal window open, see §0.1.
 
-`launch.command` (headless interval loop) still works for headless/scripted runs:
+`launch.command` (the old headless `main.py --interval 60` loop) was removed in step 5.4b-ii:
+the orchestrator daemon is the one runtime. For a headless backend use the always-on stack
+service (§0.1), or run `.venv/bin/python3 -m desktop.orchestrator_daemon` in a Terminal.
 
-1. Verifies `.venv` exists and Python is exactly 3.12.x before starting.
-2. Prints a clear error (and pauses for you to read it) if either check fails.
-3. `launch.command` runs `python main.py --interval 60` by default — refreshes every
-   60 s until you close the window.
-4. Pauses with "Press any key to close" after exit so final output is always visible.
-
-**To change the interval**: open `launch.command` in any text editor, set
-`REFRESH_INTERVAL_SECONDS=N` at the top (`0` = single run).
-
-**If `.venv` is missing** (e.g., fresh clone):
-
-```bash
-cd /Users/kevinlee/Desktop/Stockpy
-python3.12 -m venv .venv
-./.venv/bin/pip install -r requirements.txt
-```
-
-Then double-click the launcher again.
-
-**If the wrong Python version is detected**: the launcher tells you which version was found
-and how to recreate `.venv` with Python 3.12.
+**If `.venv` is missing** (e.g., fresh clone), run `./setup.sh` (creates `.venv` with Python 3.12
+via uv and installs `requirements.txt`).
 
 **Running the pipeline from the web app**: the **Pipeline** screen (`/pipeline`) shows the
 orchestrator daemon's live status, run history, and dead-letter queue, and has the run
@@ -306,11 +289,11 @@ Run this EVERY trading morning before 09:00 ET:
 
 | Check | Command / Action |
 |-------|-----------------|
-| **Start pipeline** | Web app **Pipeline** screen → "Run full advisory pipeline" (needs the backend from §0.1), or double-click `launch.command` |
+| **Start pipeline** | Web app **Pipeline** screen → "Run full advisory pipeline" (needs the backend from §0.1), or `python -c "from shared import daemon_client as d; print(d.trigger_run())"` |
 | Advisory mode active | Web app status banner shows "Advisory Only Mode (Live Execution Disabled)" |
 | Heartbeat recent | `ls -la output/heartbeat.txt` (< 2 h old); or web app **Mission Control** → Heartbeat |
 | Preflight pass | `python scripts/preflight_check.py` (exit 0; `advisory_only_active` = PASS) |
-| Account snapshot fresh | `python3 main.py --refresh-account` if snapshot age > 20 h |
+| Account snapshot fresh | Approve the daemon's 08:40 ET Robinhood push (§5.1a); if the snapshot is still > 20 h old, web app **Portfolio** → Refresh |
 | Holdings & P&L sane | Web app **Portfolio** screen — equity, buying power, per-position unrealized P&L. If empty, force refresh above. |
 | No dead-letter failures | Web app **Pipeline** screen → Dead-Letter Queue (all symbols completed) |
 | Δ Since Last Run reviewed | Open `output/daily_report.html` — check top band for unexpected action flips or conviction drops |
@@ -879,7 +862,11 @@ previous queue stays and the skill's ~30-minute freshness rule keeps it from bei
 real queue from flat-$10 mock data (a known gap, not fixed; keep the key set).
 
 **Rollback:** set `DAEMON_AGENTIC_QUEUE_MODE=off` (or `shadow`) and reload
-`com.investyo.daily-advisory`; main.py resumes as the writer on its next run.
+`com.investyo.daily-advisory` (`./scripts/install_schedule.command --with-daily-advisory`, or
+`launchctl load ~/Library/LaunchAgents/com.investyo.daily-advisory.plist`); main.py resumes as the
+writer on its next run. The plist stays in `scripts/` for this until 5.5 archives `main.py`. While
+rolled back, `/rh-execute` does not refresh the queue itself (it only does that in `primary`): it
+reads whatever the 08:45 job last wrote, under the same freshness stop.
 
 **Cutover record (2026-10-12).** Done in this order: `daily-advisory` unloaded, then
 `ROBINHOOD_SCHEDULED_LOGIN_ENABLED=true` and `DAEMON_AGENTIC_QUEUE_MODE=primary` written to the
@@ -979,55 +966,36 @@ force**. The warning lists each key with its reason.
 | Quarterly | Full review of `MAX_POSITION_WEIGHT`, `KELLY_FRACTION`, `KELLY_CAP`; check calibration curve for systematic bias |
 | Annually | Full stress-test re-run for options-selling strategies; re-review `ADVISORY_ONLY` status if broker execution is intended |
 
-### 5.1 Unattended daily-advisory scheduler (macOS launchd)
+### 5.1 Unattended scheduled jobs (macOS launchd)
 
-The 90-day paper-trading gate and the conviction-calibration history
-(`output/decision_log.jsonl`) only fill if the advisory actually runs each
-day. A macOS **launchd** timer runs the existing headless `main.py` once per
-weekday pre-market. This is an OS timer invoking `main.py` only — there is no
-autonomous self-scheduling agent loop.
+The daily advisory run is the always-on daemon now (§0.1, `com.investyo.stack`; it cycles on
+`ORCHESTRATOR_INTERVAL_SECONDS` inside the 04:00–20:00 ET weekday window). The old
+`com.investyo.daily-advisory` job (`.venv/bin/python3 main.py` at 08:45 weekdays) was unloaded at the
+2026-10-12 cutover and is kept **only for rollback** (§3.15).
 
-**Install** (double-click, recommended):
+`scripts/install_schedule.command` installs the remaining OS timers: `com.investyo.monthly-retrain`
+(1st of the month, 04:00) and `com.investyo.weekly-edgar` (Sundays, 02:00). It does **not** install
+`daily-advisory` unless you pass `--with-daily-advisory` (rollback only; it refuses while the daemon is
+the queue writer, see the script). These are OS timers invoking scripts, not an agent loop.
 
 ```bash
 chmod +x scripts/install_schedule.command   # one-time
-# then double-click scripts/install_schedule.command from Finder
+./scripts/install_schedule.command          # or double-click it in Finder
+launchctl list | grep com.investyo          # expect stack, monthly-retrain, weekly-edgar
+python scripts/track_record_status.py       # gate progress + calibration depth + staleness
 ```
 
-The helper verifies `.venv` / Python 3.12, rewrites
-`scripts/com.investyo.daily-advisory.plist` to this repo's absolute path,
-copies it to `~/Library/LaunchAgents/`, then `launchctl unload` (any prior
-job) + `launchctl load`. It runs `.venv/bin/python3 main.py` at **08:45
-America/New_York** on Mon–Fri, logging to
-`output/scheduled_advisory.out` / `.err`.
+**Uninstall a job:** `launchctl unload ~/Library/LaunchAgents/<label>.plist && rm ~/Library/LaunchAgents/<label>.plist`.
 
-**Check status / logs:**
-
-```bash
-launchctl list | grep com.investyo.daily-advisory
-tail -f output/scheduled_advisory.out
-python scripts/track_record_status.py        # gate progress + calibration depth + staleness
-```
-
-**Uninstall:**
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.investyo.daily-advisory.plist
-rm ~/Library/LaunchAgents/com.investyo.daily-advisory.plist
-```
-
-> **Timezone note:** launchd's `StartCalendarInterval` fires in the machine's
-> local timezone. Keep the Mac set to America/New_York (or edit the `Hour` in
-> the plist) so 08:45 lands pre-market ET. If the Mac is asleep at 08:45, the
-> job runs at the next wake.
+> **Timezone note:** launchd's `StartCalendarInterval` fires in the machine's local timezone. Keep
+> the Mac on America/New_York and awake on weekday mornings: the daemon stops while it sleeps.
 
 #### 5.1a Daily Robinhood login from the daemon (step 5.3 cutover)
 
-Today the 08:45 launchd `main.py` run is what triggers the day's Robinhood
-device-approval push. When you unload that job at the step-5.3 cutover
-(`.claude/shrink_step5_retire_main_py_implementation_plan.md`), turn on the
-daemon's own scheduled login in the **same** change, or no morning prompt
-will arrive:
+Since the 2026-10-12 cutover the daemon's scheduled login is what triggers
+the day's Robinhood device-approval push (it used to be the 08:45 launchd
+`main.py` run, now unloaded). If you ever roll back (§3.15) or rebuild the
+config, keep it on, or no morning prompt will arrive:
 
 ```bash
 # .env (or Settings → Feature Flags; ENABLED needs typed confirmation)
