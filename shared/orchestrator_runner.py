@@ -296,10 +296,16 @@ def launch_orchestrator(dry_run: bool = False) -> RunHandle:
     already-running daemon reachable, and ``dry_run=False``): triggers a
     cycle over HTTP via :mod:`shared.daemon_client` against the running daemon
     instead of spawning a new process, returning a ``backend="daemon"``
-    ``RunHandle``. Falls back to the subprocess path below (unchanged) when
-    the flag is off, the daemon is unreachable, ``trigger_run()`` itself
-    fails, or ``dry_run=True`` — CONSTRAINT #6, this fast path degrades
-    silently rather than ever blocking a manual run.
+    ``RunHandle``. If a cycle is already in flight (HTTP 409
+    ``already_running``) the handle attaches to that run (its id from the 409
+    body, else from ``GET /run/latest`` while queued/running) instead of
+    spawning a second, parallel pipeline cycle; an in-flight run that is
+    verifiably not a full cycle (a ``data``/``metrics`` sub-run) raises
+    ``RuntimeError`` rather than being reported as this run or duplicated.
+    Falls back to the subprocess path below (unchanged) when the flag is off,
+    the daemon is unreachable, ``trigger_run()`` fails for any other reason,
+    a 409 yields no verifiable run id, or ``dry_run=True`` — CONSTRAINT #6,
+    this fast path degrades rather than ever blocking a manual run.
 
     Subprocess path (default / fallback): the child inherits the current
     environment (so ``.env`` is loaded by the orchestrator itself via
@@ -315,16 +321,57 @@ def launch_orchestrator(dry_run: bool = False) -> RunHandle:
     Brokers → Refresh).
     """
     if settings.ORCHESTRATOR_DAEMON_ENABLED and not dry_run:
+        # Set inside the try, raised after it: the fast path's catch-all
+        # below would otherwise turn a deliberate refusal into the very
+        # parallel subprocess cycle the refusal exists to prevent.
+        refusal: Optional[str] = None
         try:
             from shared.daemon_client import daemon_available, trigger_run
 
             if daemon_available():
                 result = trigger_run()
+                attach_run_id: Optional[str] = None
                 if result.ok:
+                    attach_run_id = result.run_id
                     logger.info(
                         "Triggered orchestrator cycle via daemon Control API: run_id=%s",
-                        result.run_id,
+                        attach_run_id,
                     )
+                elif result.error == "already_running":
+                    # A cycle is already in flight on the daemon: attach to it
+                    # rather than spawning a second, parallel pipeline cycle.
+                    attach_run_id = result.existing_run_id or _inflight_daemon_run_id()
+                    if attach_run_id:
+                        status = _daemon_run_status(attach_run_id)
+                        run_mode = status.get("mode") if isinstance(status, dict) else None
+                        # The daemon is single-flight ACROSS modes: a data/metrics
+                        # sub-run never runs the advisory/broker/queue/snapshot
+                        # steps, so neither report it as this run nor duplicate
+                        # it. An unverifiable mode attaches (as launch_daemon_cycle).
+                        if run_mode is not None and run_mode != "full":
+                            refusal = (
+                                f"A '{run_mode}' run ({attach_run_id}) is in flight on "
+                                "the orchestrator daemon. It does not run the "
+                                "advisory/broker/queue/snapshot steps, so this run was "
+                                "not attached to it. Wait for it to finish and retry."
+                            )
+                            attach_run_id = None
+                        if attach_run_id:
+                            logger.info(
+                                "Daemon cycle already in flight; attaching to run_id=%s",
+                                attach_run_id,
+                            )
+                    else:
+                        logger.warning(
+                            "Daemon answered 409 already_running but no in-flight "
+                            "run id could be verified; falling back to subprocess launch."
+                        )
+                else:
+                    logger.warning(
+                        "Daemon reachable but trigger_run failed (%s); falling back "
+                        "to subprocess launch.", result.error,
+                    )
+                if attach_run_id:
                     return RunHandle(
                         pid=-1,  # no local process — the daemon owns this run
                         started_at=time.time(),
@@ -333,14 +380,12 @@ def launch_orchestrator(dry_run: bool = False) -> RunHandle:
                         log_path=RUN_LOG_PATH,
                         mode="orchestrator",
                         backend="daemon",
-                        daemon_run_id=result.run_id,
+                        daemon_run_id=attach_run_id,
                     )
-                logger.warning(
-                    "Daemon reachable but trigger_run failed (%s); falling back "
-                    "to subprocess launch.", result.error,
-                )
         except Exception as exc:  # noqa: BLE001 - the fast path must never block a manual run
             logger.warning("Daemon fast path failed (%s); falling back to subprocess launch.", exc)
+        if refusal is not None:
+            raise RuntimeError(refusal)
 
     settings.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
