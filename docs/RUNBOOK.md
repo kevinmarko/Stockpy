@@ -874,6 +874,28 @@ freshness rule keeps it from being placed.
 **Rollback:** set `DAEMON_AGENTIC_QUEUE_MODE=off` (or `shadow`) and reload
 `com.investyo.daily-advisory`; main.py resumes as the writer on its next run.
 
+**Cutover record (2026-10-12).** Done in this order: `daily-advisory` unloaded, then
+`ROBINHOOD_SCHEDULED_LOGIN_ENABLED=true` and `DAEMON_AGENTIC_QUEUE_MODE=primary` written to the
+runtime flags store (not `.env`), stack restarted, one `POST /run` verified (real
+`execution_queue.json`, `queue_sources/advisory.json` and `watch_state.json` rewritten by the
+daemon; `shadow/` untouched).
+
+**How the shadow review was judged (read this before repeating it).** Exit 0 from
+`compare_shadow_queue` is not reachable while `ADVISORY_REUSE_PIPELINE_COMPUTE=true`: only the daemon
+honors it (it feeds `evaluate()` the pipeline's own `Forecast_30`/`GARCH_Vol`; `main.py` refits inline),
+so forecast targets differ on nearly every symbol and a symbol can cross a conviction bucket
+(`tests/test_daemon_advisory_reuse_diff.py` documents this as the intended diff). Judge a paired run on:
+(a) same-day, back-to-back `main.py` and `POST /run` runs, (b) the same universe, (c) every differing
+row explained by the reuse forecast path, (d) queue intents differing only where a conviction bucket
+crosses the 0.85 floor. Two traps seen on 2026-10-11/12:
+- Benchmark rows: `SPY` leaked into the daemon's dashboard, advisory source and paper ledger until
+  #1116 (`docs/known_issues/daemon_benchmark_spy_leak.md`).
+- Rating streaks: `main.py` records a symbol rating on every run, the daemon once per trading day.
+  Extra manual `main.py` runs on a non-trading day advance `symbol_rating_consecutive_bad_cycles` and
+  can push symbols over `SYMBOL_RATING_DROP_THRESHOLD_CYCLES` early (META, SNPS and T did).
+Also keep the Mac awake at 08:45 ET on weekdays: `daily-advisory` and the daemon both stop while it
+sleeps (missed 2026-10-08 and 10-09).
+
 ### 3.16 Feature-freeze progress and trade quality (step 7)
 
 ```bash
