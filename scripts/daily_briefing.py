@@ -27,13 +27,16 @@ Usage
     python -m scripts.daily_briefing --print         # also print to stdout
     python -m scripts.daily_briefing --output-dir /tmp/briefings
 
-Wire-up in ``launch.command``
-------------------------------
-After the ``python main.py`` line (single-run or interval), append::
+Where it is used
+----------------
+``scripts/step5_4_verify_cycle.py`` (step 3 of ``make verify`` / ``verify.command``)
+prints ``generate_briefing(settings.OUTPUT_DIR)`` after its dry-run cycle. To
+get the same digest after any daemon cycle, run::
 
     python -m scripts.daily_briefing --print
 
-so each launch ends with a fresh briefing printed to the same Terminal window.
+(pass ``--output-dir`` when ``OUTPUT_DIR`` is not the repo's ``output/``, e.g. a
+``LOCAL_DATA_ROOT`` install).
 """
 
 from __future__ import annotations
@@ -308,7 +311,7 @@ def generate_briefing(output_dir: Path = _DEFAULT_OUTPUT_DIR) -> str:
         _section_calibration(),
         "\n---\n\n",
         "_Run `python -m scripts.daily_briefing` to refresh · "
-        "[Report](output/daily_report.html)_\n",
+        "[Report](output/daily_report_dashboard.html)_\n",
     ]
     return "".join(sections)
 

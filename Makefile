@@ -1,7 +1,9 @@
 # InvestYo Quant Platform — developer convenience targets
 #
 # Usage:
-#   make verify      env-var check → test suite → one live advisory cycle
+#   make verify      env-var check → test suite → one dry-run pipeline cycle
+#                     (queue mode forced off: no queue write, orders or pushes;
+#                     fails on a failed cycle or one that ran on synthetic data)
 #   make test        pytest only (full suite -- no marker filter)
 #   make ci          offline pytest only (mirrors GitHub Actions `test` job:
 #                     -m "not network and not slow" --dist loadgroup)
@@ -25,7 +27,7 @@ ifeq ($(_VENV_PYTHON),)
 $(warning No .venv found here or in the main checkout; using system python3 ($(shell python3 -V 2>&1)). Run ./setup.sh or pass PYTHON=...)
 endif
 
-.PHONY: verify test ci smoke lint
+.PHONY: verify test ci smoke lint _check_env _live_run
 
 # ── Main gate ─────────────────────────────────────────────────────────────────
 verify: _check_env test _live_run
@@ -66,14 +68,7 @@ lint:
 
 _live_run:
 	@echo ""
-	@echo "=== Step 3 / 3  Live one-cycle run ==="
-	@$(PYTHON) -c "\
-from dotenv import load_dotenv; load_dotenv(override=False); \
-from alerting import setup_logging, summarize_run; \
-import main; \
-setup_logging(); \
-result = main.run_once(); \
-print(summarize_run(result)) \
-"
-	@echo ""
-	@echo "=== verify complete ==="
+	@echo "=== Step 3 / 3  One dry-run pipeline cycle (queue mode forced off; no orders, no pushes) ==="
+	@$(PYTHON) scripts/step5_4_verify_cycle.py && \
+	echo "" && \
+	echo "=== verify complete ==="

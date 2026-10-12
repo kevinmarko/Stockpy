@@ -230,7 +230,7 @@ python3 main.py                      # one advisory cycle; --interval N loops; -
 # ── Tests & gates ─────────────────────────────────────────────────────────────
 pytest tests/test_<module>.py        # targeted tests; add ::test_name for one test
 make ci                              # offline suite: pytest -m "not network and not slow" -n auto --dist loadgroup
-make verify                          # env check + pytest + one live run + summary (./verify.command = same)
+make verify                          # env check + pytest + one standalone dry-run cycle (queue mode forced off: no queue/orders/pushes; fails on synthetic data) + summary (./verify.command = same)
 python scripts/preflight_check.py [--json]   # pre-live readiness gate (exit 0 = all pass)
 
 # ── Validation & data ─────────────────────────────────────────────────────────

@@ -40,7 +40,7 @@ cp .env.example .env
 #    In the Sheet: Share → paste the email → Editor role
 
 # 4. Verify everything works before relying on it
-make verify           # env check + tests + one live cycle (or double-click verify.command)
+make verify           # env check + tests + one dry-run cycle (or double-click verify.command)
 
 # 5. Launch
 ./launch.command      # double-click from Finder, or run in terminal
@@ -223,7 +223,7 @@ gates instead of skipping them; (3) re-launch. The web app's execution-mode sele
 ## Verify before use
 
 ```bash
-make verify          # env check → test suite → one live cycle → print summary
+make verify          # env check → test suite → one dry-run cycle (no queue/orders/pushes) → print summary
 ./verify.command     # same, double-clickable from macOS Finder
 ```
 

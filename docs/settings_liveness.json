@@ -108,9 +108,23 @@
       "line": 893,
       "resolved_by_factory": null,
       "rules": []
+    },
+    {
+      "expr": "getattr(settings, key, None)",
+      "file": "scripts/step5_4_verify_cycle.py",
+      "line": 163,
+      "resolved_by_factory": null,
+      "rules": []
+    },
+    {
+      "expr": "getattr(settings, name)",
+      "file": "scripts/step5_4_verify_cycle.py",
+      "line": 271,
+      "resolved_by_factory": null,
+      "rules": []
     }
   ],
-  "files_scanned": 378,
+  "files_scanned": 379,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -437,7 +451,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 811,
+    "attr": 813,
     "factory_param": 4,
     "getattr_const": 306,
     "os_environ": 2
@@ -2254,7 +2268,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:1095",
+        "site": "shared/orchestrator_runner.py:1096",
         "via": []
       }
     ],

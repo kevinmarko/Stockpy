@@ -7,10 +7,8 @@ Run the same offline gate CI runs on every PR (`.github/workflows/ci.yml`'s
 
 1. **Lint (ruff, genuine-bug rules only):**
    ```
-   make lint
+   python -m ruff check . --select=F821,F822,F823,E9
    ```
-   (`python -m ruff check . --select=F821,F822,F823,E9` under the resolved
-   project interpreter -- the main checkout's `.venv` when run from a worktree.)
    This is scoped to undefined-name/syntax-error classes of bug, not the
    full default ruleset (the codebase has ~1200 pre-existing style
    violations against that this gate deliberately does not enforce).
@@ -28,8 +26,16 @@ underlying issue and re-run from step 1; do not report this as done while
 either step is red.
 
 Note: `make verify` runs a deeper gate on top of this (env-var check, the
-full test suite, and one **live** `run_once()` cycle that touches real
-broker/credential paths). It's available for a more thorough check but
-should be offered to the operator, not run unprompted.
+full test suite, and one standalone dry-run pipeline cycle via
+`scripts/step5_4_verify_cycle.py`, in its own process; it never contacts the
+daemon). That cycle forces `DAEMON_AGENTIC_QUEUE_MODE` to `off` in-process,
+turns off symbol-rating and cap-audit recording, never starts a Robinhood
+login, and suppresses every alert, so it writes no execution queue and sends
+no pushes or orders — but it still fetches live market data and rewrites
+`state_snapshot.json`, the dashboards and `dead_letter.json`. It exits
+non-zero if the cycle fails, does not refresh the snapshot, or runs on
+synthetic data (so a data outage or a missing `FRED_API_KEY` fails it rather
+than passing). It's available for a more thorough check but should be offered
+to the operator, not run unprompted.
 
 $ARGUMENTS

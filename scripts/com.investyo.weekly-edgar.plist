@@ -5,15 +5,17 @@
   ===============================
   macOS launchd job: sweep SEC EDGAR PIT fundamentals for the operator's whole
   tracked universe ONCE a week (Sundays, 02:00 local time) via the standalone
-  `python -m scripts.backfill_edgar_fundamentals --tickers all` entrypoint. The
-  Linux/GCP deployment runs the same sweep from deploy/crontab.txt (Sun 06:00
-  UTC); this plist is the macOS equivalent so a Mac-only operator gets the same
-  weekly PIT-fundamentals refresh. This is an OS timer only — it does NOT create
-  any autonomous self-invoking agent loop.
+  `python -m scripts.backfill_edgar_fundamentals` entrypoint (its tickers option
+  set to "all", see ProgramArguments below). The Linux/GCP deployment runs the
+  same sweep from deploy/crontab.txt (Sun 06:00 UTC); this plist is the macOS
+  equivalent so a Mac-only operator gets the same weekly PIT-fundamentals
+  refresh. This is an OS timer only — it does NOT create any autonomous
+  self-invoking agent loop.
 
   What it does: at 02:00 local on Sunday, launchd invokes
-  `.venv/bin/python3 -m scripts.backfill_edgar_fundamentals --tickers all` with
-  WorkingDirectory set to the repo root, redirecting stdout/stderr to
+  `.venv/bin/python3 -m scripts.backfill_edgar_fundamentals` with the tickers
+  option set to "all" (see ProgramArguments below) and WorkingDirectory set to
+  the repo root, redirecting stdout/stderr to
   output/scheduled_edgar.out and output/scheduled_edgar.err. "all" resolves (via
   data.portfolio_sync.resolve_universe) to held ∪ watchlists ∪ DEFAULT_TICKERS.
   The backfill's incremental skip means steady-state weekly runs only fetch +

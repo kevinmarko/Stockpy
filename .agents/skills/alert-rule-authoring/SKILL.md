@@ -29,28 +29,43 @@ here.
 
 | System | Module | Audience / trigger | Channels |
 |---|---|---|---|
-| Advisory-loop mobile push | `alerting.py` | `main.py`'s own run loop only | ntfy.sh (`notify()`) |
+| Advisory-cycle mobile push | `alerting.py` | The orchestrator daemon's `AgenticQueueStep` when `DAEMON_AGENTIC_QUEUE_MODE=primary` (run-summary push, symbol-watch alerts, new-intent push); `main.py` (being retired) sends the same pushes only when the mode is not `primary`, plus its `--agent` loop's backlog reminders and trade alerts | ntfy.sh (`notify()`) |
 | General multi-channel dispatcher | `observability/alerts.py` | Strategy/risk/execution-layer code, `prompt_registry`, `validation/drift` | console, file, Discord, Slack, email |
 | MCP-tool-facing notifier | `alerting_mcp/notifier.py` | The `configure_alerts`/`send_test_alert` MCP tools (`investyo_mcp_server.py`) | ntfy, email, Slack |
 | Legacy reconciliation webhook | `execution/order_manager.py` (`_send_alert`, uses `settings.ALERT_WEBHOOK_URL`) | Broker-vs-internal position drift only | one Slack/Discord incoming webhook |
 
 ## 1. Deciding which system a new alert belongs in
 
-- **A personal mobile push tied to `main.py`'s own advisory-loop cycle**
+- **A personal mobile push tied to the advisory cycle's own outcome**
   (e.g. "notify me when this run completes/errors") → `alerting.notify()`.
-  Reads `NTFY_TOPIC` from `os.environ` directly (not `settings.X` — this
-  module predates the `settings.X`-only convention documented elsewhere in
-  this repo; don't "fix" it without checking `tests/test_alerting.py` first,
-  since `main.py`'s own call sites may depend on the current read path).
-  Silent no-op when `NTFY_TOPIC` is unset. **Never pass secrets in `title`/
-  `message`** — no `Authorization` header is added; ntfy topics are
+  Today its callers are: in the daemon, only `AgenticQueueStep` in
+  `DAEMON_AGENTIC_QUEUE_MODE=primary` — `pipeline/agentic_queue.py::
+  send_run_summary_push` (an error push on every cycle with errors; the clean
+  "Refresh Complete" push at most once per US/Eastern day, kept in memory),
+  `watch_engine.dispatch_watch_alerts`, and
+  `execution/queue_builder.py::_notify_new_intents` (reached through
+  `compose_and_emit`). The daemon's `shadow` mode runs with
+  `side_effects=False` (no push) and `off` does nothing, so a daemon cycle in
+  either mode pushes nothing; in `primary` the whole step is also skipped (no
+  push) for a cycle that was stopped by the kill switch, ran on synthetic
+  data, or did not finish the advisory overlay. `main.py`
+  (being retired in step 5.5) still calls `notify()` for the same summary and
+  watch pushes, but skips them when the mode is `primary`; its `--agent` loop
+  also sends `engine/advisory_agent.py::dispatch_backlog_reminders` and
+  `engine/trade_signals.py::dispatch_trade_alerts`, which have no daemon
+  caller. Reads `settings.ALERT_NTFY_TOPIC` (not `NTFY_TOPIC`, and not
+  `os.environ`). Silent no-op when it is unset. **Never pass secrets in
+  `title`/`message`** — no `Authorization` header is added; ntfy topics are
   access-controlled by name alone.
 - **Anything else — strategy/risk/execution-layer, a new CRITICAL/WARNING/
-  INFO condition anywhere outside `main.py`'s own loop** →
+  INFO condition outside the advisory-cycle summary/watch/queue pushes
+  above** →
   `observability.alerts.send_alert(level, message, channels=None, extra=None,
-  dedup_key=None)`. This is the module's own explicit instruction: *"If you
-  are adding a new alert trigger outside `main.py`'s advisory loop, use
-  `observability.alerts.send_alert()` instead of this module."*
+  dedup_key=None)`. `alerting.py`'s own module docstring still tells you:
+  *"If you are adding a new alert trigger outside `main.py`'s advisory loop,
+  use `observability.alerts.send_alert()` instead of this module"* (its
+  wording predates the daemon becoming the queue writer; the rule it states
+  — new triggers go to `send_alert()` — is unchanged).
   - `level` is one of `"INFO"` / `"WARNING"` / `"CRITICAL"` (a `Literal`
     type, not a free string). The module docstring's own contract: CRITICAL
     = kill switch activated, reconciliation drift, broker connection lost,
@@ -86,14 +101,15 @@ here.
 - **You're changing what the MCP `configure_alerts`/`send_test_alert` tools
   do** → that's `alerting_mcp/notifier.py`, a THIRD, simpler module — do not
   assume it's the same as either of the above. It reads its channel config
-  via plain `os.getenv(...)` (`ALERT_NTFY_TOPIC`, `ALERT_EMAIL_TO`,
+  via `settings.X` (`ALERT_NTFY_TOPIC`, `ALERT_EMAIL_TO`,
   `ALERT_EMAIL_FROM`, `ALERT_EMAIL_SMTP_HOST`/`_PORT`/`_PASSWORD`,
-  `ALERT_SLACK_WEBHOOK_URL`, `ALERT_CHANNELS`) rather than `settings.X` — be
-  aware this means a value that exists only in `.env` (never exported to the
-  real shell environment) will not be seen here unless something upstream
-  calls `load_dotenv()` first (see CLAUDE.md's Settings rule "Read config via `settings.X`, never `os.environ`" and the ".env resolution fix" entry in `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section for the general shape of this bug class; this module has not been
-  confirmed migrated to `settings.X`, so verify against the current source
-  before assuming it has been fixed). `get_alert_config()`/
+  `ALERT_SLACK_WEBHOOK_URL`, `ALERT_CHANNELS`), so a value that exists only in
+  `.env` is seen (CLAUDE.md's Settings rule "Read config via `settings.X`,
+  never `os.environ`"). Two things differ from `alerting.notify()` even though
+  both read `settings.ALERT_NTFY_TOPIC`: when it is unset the MCP notifier's
+  ntfy channel falls back to the literal topic `investyo-alerts` instead of
+  being a silent no-op, and it also has its own `ALERT_CHANNELS` selector
+  (default `ntfy`). `get_alert_config()`/
   `save_alert_config(config)` persist the event-subscription config
   (`signal_fired`/`model_stale`/`pipeline_failed`/`pit_audit_failed`
   booleans + active `channels` list) to `alert_config.json` at the repo
@@ -155,9 +171,11 @@ in order: (1) is the relevant channel's setting actually populated
 (`settings.DISCORD_WEBHOOK_URL`/`SLACK_WEBHOOK_URL` for
 `observability.alerts`; the module's channel list is evaluated at dispatch
 time, so a value set after import is still picked up — this rules out an
-import-order bug); (2) for `alerting_mcp.notifier`, is the value actually in
-the real process environment (see the `os.getenv` caveat in §1 — a `.env`
--only value may not be visible here); (3) is a `dedup_key` silently
+import-order bug); (2) for `alerting_mcp.notifier`, is the channel actually
+selected in `ALERT_CHANNELS` (default `ntfy`) and its `ALERT_*` setting
+populated; for `alerting.notify()`, is `ALERT_NTFY_TOPIC` set and was the
+call site reached at all (see the daemon-vs-`main.py` caller list in §1: in
+`off`/`shadow` the daemon sends none of these pushes); (3) is a `dedup_key` silently
 suppressing it because a prior identical-key call fired within the last
 `ALERT_DEDUP_WINDOW_SECONDS`.
 

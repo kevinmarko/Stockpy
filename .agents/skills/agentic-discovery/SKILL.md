@@ -26,10 +26,12 @@ description: >-
 This skill is the **only** actor permitted to call the Robinhood Trading MCP's
 scan tools (`create_scan`, `run_scan`, `update_scan_filters`,
 `update_scan_config`, `get_scans`, `get_scanner_filter_specs`). Like
-`robinhood-execution`, it exists because the headless Stockpy pipeline
-(`main.py`) cannot call MCP tools at all — the platform's fixed universe
-(held positions ∪ `WATCHLIST` ∪ `watchlist.txt`) has no path to *discover* new
-names, only to analyze the ones already on it. This skill closes that gap
+`robinhood-execution`, it exists because the headless Stockpy pipeline (the
+orchestrator daemon) cannot call MCP tools at all — the universe the daemon
+analyzes each cycle (built by `pipeline/advisory_inputs.py::build_universe_detailed()`:
+held positions ∪ `WATCHLIST` ∪ `watchlist.txt` ∪ the scan candidates this skill
+writes) has no way to *discover* new names on its own, only to analyze the ones
+already on it. This skill closes that gap
 without touching order placement: it finds candidates, scores them with the
 platform's own advisory engine, and writes a file the webapp reads. Placing an
 order is always a separate, later step through `robinhood-execution` — this
@@ -142,12 +144,13 @@ and invite questions before writing the file.
    `BUY` action is information, not consent — this step only runs when the
    operator explicitly names which symbol(s) to start tracking (e.g. "track
    YMM"), never automatically for every high-conviction hit.
-   1. `main._load_watchlist()` unions BOTH the `WATCHLIST` env var and
-      `watchlist.txt`, deduped — its own docstring states plainly that
-      "neither one takes precedence over the other." So appending to
-      `watchlist.txt` is always effective regardless of whether `WATCHLIST`
-      is also set; there's no precedence conflict to check or ask the
-      operator to resolve here.
+   1. `pipeline/advisory_inputs.py::load_watchlist()` (which
+      `build_universe_detailed()` calls on every daemon cycle) unions BOTH the
+      `WATCHLIST` env var and `watchlist.txt`, deduped — its own docstring
+      states plainly that "neither one takes precedence over the other." So
+      appending to `watchlist.txt` is always effective regardless of whether
+      `WATCHLIST` is also set; there's no precedence conflict to check or ask
+      the operator to resolve here.
    2. Read `watchlist.txt` (create it if missing). Append the named
       ticker(s), one per line, uppercase, skipping any already present
       (case-insensitive match against existing non-comment lines) — never
@@ -155,8 +158,11 @@ and invite questions before writing the file.
       above the new line(s) for auditability, matching the file's existing
       `#`-comment convention.
    3. Report exactly which lines were added vs. already present. Note this
-      takes effect on the *next* `main.py`/`main_orchestrator.py` universe
-      build — it's not retroactive and places no order on its own.
+      takes effect on the *next* daemon cycle's universe build
+      (`pipeline/advisory_inputs.py::build_universe_detailed()`, run by the
+      daemon's data-fetch step — a manual `POST /run`, or the interval timer
+      if `ORCHESTRATOR_INTERVAL_SECONDS` is set) — it's not retroactive and
+      places no order on its own.
    4. `DEFAULT_TICKERS` (`data/portfolio_sync.py`'s separate coverage-tracking
       universe, distinct from the advisory pipeline's `WATCHLIST`/
       `watchlist.txt`) is a DIFFERENT mechanism — don't conflate the two. See

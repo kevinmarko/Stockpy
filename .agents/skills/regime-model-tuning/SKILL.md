@@ -130,7 +130,11 @@ and `macro_dto.vix` directly, not `hmm_risk_on_probability` or `killSwitch`.
 ## 4. Running/inspecting regime state
 
 ```bash
-# Full cycle -- exercises macro_engine.py + regime/hmm_regime.py together:
+# Full cycle -- exercises macro_engine.py + regime/hmm_regime.py together.
+# CAUTION: with DAEMON_AGENTIC_QUEUE_MODE=primary (after the shadow-to-primary cutover) this also writes the
+# real execution queue and sends pushes, and with ADVISORY_ONLY=false places paper orders.
+# --dry-run stops orders only; `python scripts/step5_4_verify_cycle.py` runs the same cycle
+# with the queue mode forced off (and fails if it ran on synthetic data).
 python3 main_orchestrator.py
 
 # Targeted tests (read these before changing fit()/predict_proba() -- they

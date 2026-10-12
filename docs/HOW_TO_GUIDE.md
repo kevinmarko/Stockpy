@@ -313,6 +313,8 @@ python3 main_orchestrator.py --dry-run
 
 The pipeline runs identically but any generated orders are logged rather than placed on the paper ledger. Use this to verify the setup before enabling live order flow.
 
+> **`--dry-run` stops broker orders only.** It does not switch off the agentic-queue step: with `DAEMON_AGENTIC_QUEUE_MODE=primary` a standalone `--dry-run` cycle still writes the real `execution_queue.json`, runs the watch engine and sends pushes, and it still rewrites the state snapshot and dashboards. To confirm the pipeline runs without the queue and push side effects, use `make verify` (or `python scripts/step5_4_verify_cycle.py`): it forces the queue mode `off` in-process and suppresses alerts (it still rewrites the state snapshot and dashboards, and it exits non-zero if the cycle ran on synthetic data).
+
 ### Offline / mock mode
 
 If a `FRED_API_KEY` is not configured, the orchestrator automatically falls back to `MockDataEngine`, which generates deterministic synthetic data (`data_engine.live_data_configured()` — a FRED key check, not a `credentials.json` presence check; see the note below). Useful for testing code changes without network access.
@@ -1167,6 +1169,8 @@ python3 main_orchestrator.py --dry-run
 ```
 
 This generates `output/heartbeat.txt`. The check passes if that file is < 2 hours old.
+
+> Only a standalone `main_orchestrator.py` run writes that file; the daemon never does, so under a daemon deployment its absence is expected (preflight reports it as such). A standalone `--dry-run` in `primary` mode also writes the real execution queue and sends pushes (see the dry-run note above), so don't run it just to silence this check.
 
 ### Orders are being blocked by risk gate
 

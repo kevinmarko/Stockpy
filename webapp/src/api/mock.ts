@@ -2868,7 +2868,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     value: false,
     default: false,
     description:
-      "Route the desktop shell's always-on refresh loop and the Launcher tab's manual run trigger through the persistent orchestrator daemon instead of spawning a fresh subprocess per cycle. False (default) preserves today's exact subprocess behavior everywhere.",
+      "Legacy flag (shrink step 5.6 retires it). When true, ./launch_webapp.command starts the real orchestrator daemon (python -m desktop.orchestrator_daemon) instead of only the bare APIs, and the 'orchestrator' job launcher triggers a cycle over the Control API against an already-running daemon instead of spawning a subprocess (it falls back to the subprocess if the daemon is unreachable; dry-run runs always use the subprocess). False (default) keeps the subprocess behaviour. The Console 'Advisory Pipeline' job always uses the daemon and ignores this flag.",
   },
   {
     group: "Advanced / Config",

@@ -252,6 +252,10 @@ sitting in `webapp/dist`; rebuild.
    ```
    Expect the CRITICAL log and alert `no automated broker when going live` — that is the
    correct, fail-closed behavior (no orders are placed by the automated pipeline).
+   `--dry-run` stops broker orders only: in `primary` mode this standalone cycle still writes the real
+   execution queue, runs the watch engine and sends pushes. `make verify`'s cycle
+   (`scripts/step5_4_verify_cycle.py`) forces the queue mode off and suppresses alerts, so it avoids those
+   side effects but will not show you this alert either.
 4. Place real orders only via the Robinhood execution queue (see the Robinhood Execution
    Bridge sections), one human confirmation per trade.
 5. Confirm the Robinhood account positions against `transactions_store` after each fill.
@@ -867,9 +871,12 @@ runs (hourly with `ORCHESTRATOR_INTERVAL_SECONDS=3600`; the clean-run
 with errors). `main.py` still runs if something launches it, but writes none
 of those, no `daily_report.html` and no state snapshot; it logs a WARNING
 saying so. `daily_report.html` is retired: use `daily_report_dashboard.html`
-or the webapp. A paused (kill-switch) or synthetic-data cycle writes nothing
-and pushes nothing; the previous queue stays and the skill's ~30-minute
-freshness rule keeps it from being placed.
+or the webapp. A paused (kill-switch) cycle, or one whose price
+fetch came back empty and fell back to synthetic data, writes nothing and pushes nothing; the
+previous queue stays and the skill's ~30-minute freshness rule keeps it from being placed.
+**A daemon running with no `FRED_API_KEY` configured is NOT covered by that skip:** it picks
+`MockDataEngine` up front without the synthetic-data flag, so in `primary` it would write the
+real queue from flat-$10 mock data (a known gap, not fixed; keep the key set).
 
 **Rollback:** set `DAEMON_AGENTIC_QUEUE_MODE=off` (or `shadow`) and reload
 `com.investyo.daily-advisory`; main.py resumes as the writer on its next run.
