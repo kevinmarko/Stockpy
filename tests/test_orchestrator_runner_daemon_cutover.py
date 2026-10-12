@@ -7,10 +7,11 @@ shell's always-on loop launcher that only that flag used), leaving two:
 
 1. launch_orchestrator()'s HTTP fast path — a non-dry run triggers a cycle on
    an already-running daemon via shared.daemon_client, producing a
-   backend="daemon" RunHandle, and falls back to the main_orchestrator.py
-   subprocess when the daemon is unreachable or the trigger fails.
-   RunHandle.is_running()/returncode(), stop_run(), read_log_tail(), and
-   compute_stage_status() all branch on handle.backend.
+   backend="daemon" RunHandle. A 409 attaches to the in-flight full cycle (or
+   refuses for a data/metrics sub-run); other failures fall back to the
+   main_orchestrator.py subprocess. RunHandle.is_running()/returncode(),
+   stop_run(), read_log_tail(), and compute_stage_status() all branch on
+   handle.backend.
 
 2. launch_daemon_cycle() — the Console's "Advisory Pipeline" job
    (api/_jobs.py JobType.ADVISORY). Daemon-ONLY: same backend="daemon" handle
@@ -210,25 +211,134 @@ class TestLaunchOrchestratorDaemonFastPath:
         assert handle.backend == "subprocess"
         assert handle.mode == "orchestrator"
 
-    def test_trigger_fails_falls_back_to_subprocess(self, monkeypatch, runner):
+    @staticmethod
+    def _patch_fast_path(monkeypatch, runner, response, *, latest=None, status=None,
+                         allow_popen=False):
+        """Daemon reachable, trigger_run -> ``response``. ``latest`` is
+        GET /run/latest (default: reading it fails the test), ``status`` is
+        GET /run/{id}/status. Popen fails the test unless ``allow_popen``."""
         import shared.daemon_client as daemon_client
 
+        def _latest_must_not_be_read(*a, **k):
+            raise AssertionError("GET /run/latest must only be read as the 409 fallback")
+
         monkeypatch.setattr(daemon_client, "daemon_available", lambda timeout=0.5: True)
+        monkeypatch.setattr(daemon_client, "trigger_run", lambda timeout=5.0: response)
         monkeypatch.setattr(
-            daemon_client, "trigger_run",
-            lambda timeout=5.0: daemon_client.TriggerResponse(
-                ok=False, run_id=None, state=None, error="already_running",
-                existing_run_id="run-xyz",
-            ),
+            daemon_client, "get_latest_run",
+            _latest_must_not_be_read if latest is None else (lambda timeout=2.0: latest),
+        )
+        monkeypatch.setattr(daemon_client, "get_run_status", lambda run_id, timeout=2.0: status)
+
+        def _popen_must_not_be_called(cmd, **kwargs):
+            raise AssertionError(f"subprocess.Popen must not be called: {cmd}")
+
+        monkeypatch.setattr(
+            runner.subprocess, "Popen",
+            (lambda cmd, **kw: _FakePopen(cmd, **kw)) if allow_popen else _popen_must_not_be_called,
         )
 
-        def fake_popen(cmd, **kwargs):
-            return _FakePopen(cmd, **kwargs)
+    def test_409_already_running_attaches_to_existing_run(self, monkeypatch, runner):
+        """A 409 means a cycle is already in flight on the daemon: attach to it,
+        never spawn a second, parallel main_orchestrator.py cycle."""
+        self._patch_fast_path(
+            monkeypatch, runner,
+            _trigger_response(error="already_running", existing_run_id="run-xyz"),
+        )
 
-        monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+        handle = runner.launch_orchestrator()
+
+        assert handle.backend == "daemon"
+        assert handle.daemon_run_id == "run-xyz"
+        assert handle.mode == "orchestrator"
+        assert handle.pid == -1
+        assert handle._popen is None
+
+    def test_202_without_a_run_id_still_returns_a_daemon_handle(
+        self, monkeypatch, runner,
+    ):
+        """The daemon ACCEPTED the run; a missing id must not drop through to
+        the subprocess fallback and start a second, parallel cycle."""
+        self._patch_fast_path(
+            monkeypatch, runner, _trigger_response(ok=True, run_id=None, state="queued"),
+        )
+
+        handle = runner.launch_orchestrator()
+
+        assert handle.backend == "daemon"
+        assert handle.daemon_run_id is None
+
+    def test_409_attaches_to_a_full_run(self, monkeypatch, runner):
+        self._patch_fast_path(
+            monkeypatch, runner,
+            _trigger_response(error="already_running", existing_run_id="run-full"),
+            status={"run_id": "run-full", "state": "running", "mode": "full"},
+        )
+
+        handle = runner.launch_orchestrator()
+
+        assert handle.backend == "daemon"
+        assert handle.daemon_run_id == "run-full"
+
+    def test_409_without_body_id_attaches_to_verifiably_in_flight_latest_run(
+        self, monkeypatch, runner,
+    ):
+        self._patch_fast_path(
+            monkeypatch, runner,
+            _trigger_response(error="already_running", existing_run_id=None),
+            latest={"run_id": "run-latest", "state": "running"},
+        )
+
+        handle = runner.launch_orchestrator()
+
+        assert handle.backend == "daemon"
+        assert handle.daemon_run_id == "run-latest"
+
+    def test_409_without_any_verifiable_run_id_falls_back(self, monkeypatch, runner):
+        """No id in the 409 body and /run/latest is not queued/running: nothing
+        to attach to, so the pre-existing subprocess fallback applies."""
+        self._patch_fast_path(
+            monkeypatch, runner,
+            _trigger_response(error="already_running", existing_run_id=None),
+            latest={"run_id": "run-old", "state": "succeeded"},
+            allow_popen=True,
+        )
+
         handle = runner.launch_orchestrator()
 
         assert handle.backend == "subprocess"
+
+    @pytest.mark.parametrize("sub_mode", ["data", "metrics"])
+    def test_409_on_a_non_full_run_refuses_without_spawning(
+        self, monkeypatch, runner, sub_mode,
+    ):
+        """A data/metrics sub-run in flight must be neither reported as this
+        run nor duplicated by a subprocess -- the refusal must escape the fast
+        path's catch-all fallback."""
+        self._patch_fast_path(
+            monkeypatch, runner,
+            _trigger_response(error="already_running", existing_run_id="run-sub"),
+            status={"run_id": "run-sub", "state": "running", "mode": sub_mode},
+        )
+
+        with pytest.raises(RuntimeError, match=sub_mode):
+            runner.launch_orchestrator()
+
+    @pytest.mark.parametrize(
+        "error", ["network_error", "unavailable", "kill_switch_active",
+                  "command_disabled", "unauthorized", "unexpected_response"],
+    )
+    def test_non_409_trigger_failure_falls_back_to_subprocess(
+        self, monkeypatch, runner, error,
+    ):
+        self._patch_fast_path(
+            monkeypatch, runner, _trigger_response(error=error), allow_popen=True,
+        )
+
+        handle = runner.launch_orchestrator()
+
+        assert handle.backend == "subprocess"
+        assert handle.mode == "orchestrator"
 
     def test_daemon_client_import_exception_falls_back(self, monkeypatch, runner):
         """Any unexpected exception in the fast-path block (e.g. a broken

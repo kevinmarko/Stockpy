@@ -49,4 +49,4 @@ jobs:
           pip install -r requirements.txt pytest
 
       - name: Run Dynamic Lookahead Tests
-        run: pytest tests/test_lgbm_no_leakage.py tests/test_forecasting_lookahead.py tests/test_bert_lla_lookahead.py tests/test_forecast_backfill.py
+        run: pytest tests/test_lgbm_no_leakage.py tests/test_forecasting_lookahead.py tests/test_forecast_backfill.py

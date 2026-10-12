@@ -785,14 +785,15 @@ class TestBlendWithSkill:
 # ---------------------------------------------------------------------------
 
 class TestModuleSurface:
-    def test_all_model_names_contains_ten_entries(self):
-        """Extended for the BERT-LLA ablations (lstm_baseline,
-        lstm_attention, bert_lla) alongside the original four, plus the
-        zero-cost naive persistence baseline (WP6 -- see
+    def test_all_model_names_contains_seven_entries(self):
+        """The original four, plus the zero-cost naive persistence baseline
+        (WP6 -- see
         docs/known_issues/forecast_ito_double_correction_and_horizon_units.md),
         plus the published ``blend`` (forecasting rebuild F1), plus the
-        shadow ``gated_blend`` (forecasting rebuild F3)."""
-        assert len(ALL_MODEL_NAMES) == 10
+        shadow ``gated_blend`` (forecasting rebuild F3). The three BERT-LLA
+        ablation names were removed with BERT-LLA (F4 part 1)."""
+        assert len(ALL_MODEL_NAMES) == 7
+        assert not set(ALL_MODEL_NAMES) & {"lstm_baseline", "lstm_attention", "bert_lla"}
         assert MODEL_NAIVE in ALL_MODEL_NAMES
         assert MODEL_BLEND in ALL_MODEL_NAMES
         assert "gated_blend" in ALL_MODEL_NAMES

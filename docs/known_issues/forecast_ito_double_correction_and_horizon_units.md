@@ -49,6 +49,9 @@ forecast-math half plus one directly-coupled options-engine regression the fix s
 - **F2:** `settings.FORECAST_DRIFT_SHRINKAGE` (default `0.0`, opt-in) applies
   `mu_used = mu * (1 - shrinkage)`. `1.0` reproduces a pure random walk (the defensible null given the
   s.e. numbers above).
+  *Status (2026-10, forecasting rebuild F4 part 1):* never enabled live (default `0.0` throughout) and
+  removed from `settings.py`/`run_monte_carlo`; the shrinkage code is preserved only in git history
+  and `legacy/README.md` records the removal.
 - **F3:** `run_monte_carlo` gained a `seed: Optional[int] = None` parameter, sourced from
   `settings.FORECAST_MC_RANDOM_SEED` (default `42`) when not explicitly overridden, via a local
   `np.random.default_rng()` — never mutates global NumPy RNG state. `simulations` default raised

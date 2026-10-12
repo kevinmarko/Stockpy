@@ -227,7 +227,6 @@ def _deterministic_engine(monkeypatch):
     monkeypatch.setattr(settings, "FORECAST_MC_RANDOM_SEED", 42)
     monkeypatch.setattr(settings, "FORECAST_SKILL_WEIGHTING_ENABLED", False)
     monkeypatch.setattr(settings, "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED", False)
-    monkeypatch.setattr(settings, "BERT_LLA_ENABLED", False)
     monkeypatch.setattr(settings, "FORECAST_NAIVE_GATE_ENABLED", False)
 
 

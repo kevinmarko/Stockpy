@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 316,
+    "live_safe": 310,
     "no_op": 2,
-    "restart_required": 81,
-    "total": 399
+    "restart_required": 79,
+    "total": 391
   },
   "dynamic_sites": [
     {
@@ -56,21 +56,21 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4302,
+      "line": 4297,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4407,
+      "line": 4402,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5217,
+      "line": 5212,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -124,7 +124,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 375,
+  "files_scanned": 367,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -155,11 +155,6 @@
     "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE",
     "AUTOMATION_WRITES_ENABLED",
     "BARS_BACKFILL_DAYS",
-    "BERT_LLA_ABLATION_ENABLED",
-    "BERT_LLA_BLEND_ENABLED",
-    "BERT_LLA_ENABLED",
-    "BERT_LLA_MIN_SENTIMENT_COVERAGE",
-    "BERT_LLA_WINDOW_SIZE",
     "BETA_LOOKBACK_DAYS",
     "BROKERAGE_CONNECT_ENABLED",
     "BROKERAGE_REFRESH_ENABLED",
@@ -232,7 +227,6 @@
     "FORECAST_BACKFILL_SNEQR_QUALITY_FACTS_ENABLED",
     "FORECAST_CLAMP_SIGMA_K",
     "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
-    "FORECAST_DRIFT_SHRINKAGE",
     "FORECAST_INPUT_PRICE_TOLERANCE",
     "FORECAST_MAX_CONCURRENCY",
     "FORECAST_MC_RANDOM_SEED",
@@ -452,13 +446,13 @@
   "read_forms": {
     "attr": 793,
     "factory_param": 4,
-    "getattr_const": 303,
+    "getattr_const": 294,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 253,
     "factory_param": 4,
-    "getattr_const": 180,
+    "getattr_const": 172,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -481,7 +475,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4832",
+        "site": "api/pilots_api.py:4827",
         "via": []
       },
       {
@@ -570,7 +564,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4165",
+        "site": "api/pilots_api.py:4160",
         "via": []
       },
       {
@@ -662,7 +656,7 @@
         "rules": [
           "cross_module_init_helper"
         ],
-        "site": "forecasting/forecast_tracker.py:633",
+        "site": "forecasting/forecast_tracker.py:623",
         "via": []
       },
       {
@@ -1228,7 +1222,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4783",
+        "site": "api/pilots_api.py:4778",
         "via": []
       }
     ],
@@ -1239,7 +1233,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4782",
+        "site": "api/pilots_api.py:4777",
         "via": []
       }
     ],
@@ -1285,7 +1279,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4903",
+        "site": "api/pilots_api.py:4898",
         "via": []
       }
     ],
@@ -1689,7 +1683,7 @@
         "rules": [
           "init_body"
         ],
-        "site": "forecasting/forecast_tracker.py:637",
+        "site": "forecasting/forecast_tracker.py:627",
         "via": []
       },
       {
@@ -2258,7 +2252,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:1012",
+        "site": "shared/orchestrator_runner.py:1063",
         "via": []
       }
     ],
@@ -2370,32 +2364,6 @@
         ],
         "site": "data/robinhood_client.py:103",
         "via": []
-      }
-    ],
-    "SECTOR_FORECAST_CONFIGS": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "indirect_init_helper_d1"
-        ],
-        "site": "forecasting_engine.py:345",
-        "via": [
-          218
-        ]
-      }
-    ],
-    "SECTOR_FORECAST_CONFIG_PATH": [
-      {
-        "discarded": false,
-        "form": "getattr_const",
-        "rules": [
-          "indirect_init_helper_d1"
-        ],
-        "site": "forecasting_engine.py:343",
-        "via": [
-          218
-        ]
       }
     ],
     "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE": [
@@ -2517,7 +2485,7 @@
   "restart_required_reason_counts": {
     "cross_module_init_helper": 86,
     "dynamic_name_literal_unattributable": 9,
-    "indirect_init_helper_d1": 9,
+    "indirect_init_helper_d1": 7,
     "init_body": 8,
     "init_self_assign": 41,
     "method_self_assign": 5,

@@ -115,15 +115,13 @@ _NEW_PROMOTED_KEYS = {
 }
 
 _NEW_ADVANCED_KEYS = {
-    "SECTOR_FORECAST_CONFIG_PATH",
-    "SECTOR_FORECAST_CONFIGS",
     "PROMPT_REGISTRY_ENABLED",
     "PROMPT_REGISTRY_BACKEND",
     "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
     "CORS_ALLOWED_ORIGINS",
     "GRAVITY_REQUIRE_NATIVE",
 }
-_JSON_KIND_KEYS = {"SECTOR_FORECAST_CONFIGS", "CORS_ALLOWED_ORIGINS"}
+_JSON_KIND_KEYS = {"CORS_ALLOWED_ORIGINS"}
 
 # 32 additional flags/tunables surfaced from settings.py across the existing
 # "Position Sizing"/"Risk Gate"/"Forecasting"/"Market Data"/"Runtime & Ops"
@@ -135,8 +133,6 @@ _JSON_KIND_KEYS = {"SECTOR_FORECAST_CONFIGS", "CORS_ALLOWED_ORIGINS"}
 _NEW_MISC_TUNABLE_KEYS = {
     "USE_DUAL_MOMENTUM_OVERLAY", "DUAL_MOMENTUM_SAFE_ASSET", "DUAL_MOMENTUM_RISKY_ASSETS",
     "EXECUTION_PRIORITY_QUEUE_ENABLED", "EXECUTION_QUEUE_LEAK_RATE_PER_SEC", "FLATTEN_ON_KILL",
-    "BERT_LLA_ENABLED", "BERT_LLA_WINDOW_SIZE", "BERT_LLA_MIN_SENTIMENT_COVERAGE",
-    "BERT_LLA_BLEND_ENABLED", "BERT_LLA_ABLATION_ENABLED",
     "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", "CNN_LSTM_PROCESS_POOL_WORKERS",
     "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS", "FORECAST_CNN_LSTM_WALKFORWARD_SCALING",
     "LGBM_RANKER_NATIVE_MULTIINDEX_CV_ENABLED",
@@ -313,7 +309,7 @@ class TestGetTunables:
 
 
 # ---------------------------------------------------------------------------
-# "json" kind fields (Advanced / Config: SECTOR_FORECAST_CONFIGS, CORS_ALLOWED_ORIGINS)
+# "json" kind fields (Advanced / Config: CORS_ALLOWED_ORIGINS)
 # ---------------------------------------------------------------------------
 
 
@@ -327,15 +323,14 @@ class TestJsonKindFields:
             assert json.loads(field["value"]) == getattr(settings, key)
 
     def test_default_factory_fields_surface_a_real_default_not_null(self):
-        """Regression guard: SECTOR_FORECAST_CONFIGS/CORS_ALLOWED_ORIGINS use
-        pydantic ``default_factory=`` rather than ``default=``, so
-        ``fi.default`` is the ``PydanticUndefined`` sentinel, not the real
-        dict/list default. ``_tunable_default()`` must resolve the factory."""
+        """Regression guard: CORS_ALLOWED_ORIGINS uses pydantic
+        ``default_factory=`` rather than ``default=``, so ``fi.default`` is
+        the ``PydanticUndefined`` sentinel, not the real list default.
+        ``_tunable_default()`` must resolve the factory. (The dict-typed
+        SECTOR_FORECAST_CONFIGS case was retired with that setting in
+        forecasting rebuild F4 part 1.)"""
         with mock.patch.object(settings, "STATE_API_TOKEN", None):
             body = client.get("/settings/tunables").json()
-        sector_default = _find_field(body, "SECTOR_FORECAST_CONFIGS")["default"]
-        assert sector_default is not None
-        assert json.loads(sector_default) == {}
         cors_field = _find_field(body, "CORS_ALLOWED_ORIGINS")
         assert cors_field["default"] is not None
         factory = type(settings).model_fields["CORS_ALLOWED_ORIGINS"].default_factory
@@ -366,15 +361,6 @@ class TestJsonKindFields:
     def test_put_json_non_string_rejected(self):
         rejected = _put_and_get_rejected({"CORS_ALLOWED_ORIGINS": ["already", "a", "list"]})
         assert rejected["CORS_ALLOWED_ORIGINS"] == "expected_string"
-
-    def test_put_json_object_dict_shape_accepted(self):
-        with mock.patch.object(pilots_api.env_io, "write_many_atomic") as w:
-            resp = _put({"SECTOR_FORECAST_CONFIGS": '{"Technology": {"days": 30, "model": "MC"}}'})
-        assert resp.status_code == 200
-        assert resp.json()["rejected"] == {}
-        assert w.call_args[0][0] == {
-            "SECTOR_FORECAST_CONFIGS": {"Technology": {"days": 30, "model": "MC"}}
-        }
 
 
 # ---------------------------------------------------------------------------

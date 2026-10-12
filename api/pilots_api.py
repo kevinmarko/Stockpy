@@ -4137,11 +4137,6 @@ _TUNABLE_GROUPS: List[tuple] = [
             ("FORECAST_MODEL_PERSISTENCE_ENABLED", "bool", {}),
             ("FORECAST_MODEL_RETRAIN_DAYS", "int", {"min": 1, "max": 3650, "step": 1}),
             ("BETA_LOOKBACK_DAYS", "int", {"min": 1, "max": 3650, "step": 1}),
-            ("BERT_LLA_ENABLED", "bool", {}),
-            ("BERT_LLA_WINDOW_SIZE", "int", {"min": 1, "max": 1000, "step": 1}),
-            ("BERT_LLA_MIN_SENTIMENT_COVERAGE", "float", {"min": 0.0, "max": 1.0, "step": 0.05}),
-            ("BERT_LLA_BLEND_ENABLED", "bool", {}),
-            ("BERT_LLA_ABLATION_ENABLED", "bool", {}),
             ("CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED", "bool", {}),
             ("CNN_LSTM_PROCESS_POOL_WORKERS", "int", {"min": 1, "max": 64, "step": 1}),
             ("CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS", "int", {"min": 1, "max": 3600, "step": 10}),
@@ -4176,12 +4171,12 @@ _TUNABLE_GROUPS: List[tuple] = [
     ),
     (
         # Widgetless / JSON-structured tunables ported from the Streamlit tab's
-        # own _SETTINGS_LAYOUT (gui/panels/settings_manager.py:36-77) — all 7
-        # were previously missing from this editor entirely.
+        # own _SETTINGS_LAYOUT (gui/panels/settings_manager.py:36-77) — all
+        # were previously missing from this editor entirely. (The 2
+        # SECTOR_FORECAST_CONFIG* rows were retired in forecasting rebuild F4
+        # part 1.)
         "Advanced / Config",
         [
-            ("SECTOR_FORECAST_CONFIG_PATH", "str", {}),
-            ("SECTOR_FORECAST_CONFIGS", "json", {}),
             ("PROMPT_REGISTRY_ENABLED", "bool", {}),
             ("PROMPT_REGISTRY_BACKEND", "str", {}),
             ("ORCHESTRATOR_EXTENDED_HOURS_ONLY", "bool", {}),
@@ -4261,8 +4256,8 @@ class TunablesUpdateRequest(BaseModel):
 
 def _tunable_default(fi: Any) -> Any:
     """A settings field's real default — including fields declared with
-    ``default_factory=`` (e.g. ``SECTOR_FORECAST_CONFIGS``/``CORS_ALLOWED_ORIGINS``,
-    both dict/list defaults), whose ``fi.default`` is pydantic's
+    ``default_factory=`` (e.g. ``CORS_ALLOWED_ORIGINS``, a list default),
+    whose ``fi.default`` is pydantic's
     ``PydanticUndefined`` sentinel rather than the actual default value.
     Dead-letter: a factory that raises degrades to ``None`` (CONSTRAINT #6),
     never a crash."""
@@ -5894,87 +5889,3 @@ def post_live_trade_reject(token: str) -> Dict[str, Any]:
     except LiveTradeProposalAlreadyDecidedError:
         raise HTTPException(status_code=409, detail="already_decided")
     return _serialize(proposal)
-
-
-@app.post("/pilots/ml/lstm-attention-forecast", dependencies=[Depends(require_read_token)])
-def run_lstm_attention_forecast_endpoint(
-    symbol: str = Query(..., min_length=1),
-) -> Dict[str, Any]:
-    """Diagnostic endpoint to trigger the LSTM-Attention Phase 4 forecaster."""
-    from data.historical_store import HistoricalStore
-    from data.trends_store import TrendsStore
-    from ml.asvi_feature_engineering import resolve_sector_proxy
-    import numpy as np
-    import pandas as pd
-    from fastapi import HTTPException
-
-    try:
-        # Fetch 3 years to ensure enough sliding windows
-        bars = HistoricalStore().get_bars(symbol, lookback_days=1095)
-    except Exception:
-        bars = None
-
-    if bars is None or bars.empty or len(bars) < 60:
-        raise HTTPException(
-            status_code=422,
-            detail={"error": f"Insufficient history for {symbol}"}
-        )
-
-    # Technical indicators
-
-    # Sector Proxy
-    #
-    # data.trends_stitcher.FMPDataLoader has no get_fundamentals method at all
-    # (it only generates synthetic OHLCV bars for the standalone stitching
-    # demo/tests) -- calling it here always raised AttributeError, silently
-    # swallowed by the bare except below, so `sector` was unconditionally
-    # None and every real forecast quietly used SPY as its sector proxy
-    # regardless of the target symbol's actual sector. The real, cached
-    # fundamentals provider is data.market_data.get_provider() (already
-    # imported at module top and used elsewhere in this file).
-    try:
-        fund = get_provider().get_fundamentals(symbol)
-        sector = fund.get("sector")
-    except Exception:
-        sector = None
-        
-    sector_proxy = resolve_sector_proxy(sector)
-    try:
-        sector_bars = HistoricalStore().get_bars(sector_proxy, lookback_days=1095)
-    except Exception:
-        sector_bars = pd.DataFrame()
-        
-    # ASVI Data
-    trends_store = TrendsStore()
-    asvi_sym = trends_store.get_stitched_series(symbol)
-    asvi_sec = trends_store.get_stitched_series(sector_proxy)
-    
-    if asvi_sym is None:
-        asvi_sym = pd.Series(dtype=float)
-    if asvi_sec is None:
-        asvi_sec = pd.Series(dtype=float)
-
-    from pilots.lstm_diagnostic import run_lstm_diagnostic
-    
-    result = run_lstm_diagnostic(
-        symbol=symbol,
-        bars=bars,
-        sector_bars=sector_bars,
-        asvi_sym=asvi_sym,
-        asvi_sec=asvi_sec
-    )
-    
-    pred_val = result.get("prediction", float('nan'))
-    if np.isnan(pred_val):
-        raise HTTPException(
-            status_code=422,
-            detail={"error": f"LSTM-Attention model skipped or failed for {symbol}"}
-        )
-        
-    return {
-        "symbol": symbol,
-        "predicted_return": pred_val,
-        "attention_weights": result.get("attention_weights", []),
-        "sector_proxy_used": sector_proxy,
-        "status": "success"
-    }

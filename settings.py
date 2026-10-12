@@ -1983,25 +1983,6 @@ class Settings(BaseSettings):
             "units.md). None restores fully non-deterministic sampling."
         ),
     )
-    FORECAST_DRIFT_SHRINKAGE: float = Field(
-        default=0.0,
-        ge=0.0,
-        le=1.0,
-        description=(
-            "Shrinks run_monte_carlo's log-return drift mu toward zero: "
-            "mu_used = mu * (1 - FORECAST_DRIFT_SHRINKAGE). 0.0 (the default) "
-            "uses the measured drift unshrunk -- today's exact behavior, "
-            "byte-identical aside from the F1 Ito-double-correction fix (see the "
-            "known-issues doc above), which is applied unconditionally regardless "
-            "of this setting. 1.0 zeroes the drift entirely (a pure random walk), "
-            "the defensible null given that the drift's standard error over a "
-            "typical 504-day lookback at 30% annualized vol (~7.6% at T=90) "
-            "dwarfs a realistic 10%/yr expected drift (~3.6% at T=90) -- the "
-            "measured mean is far noisier than the measured variance. This is a "
-            "modelling choice, not a bug fix, so it defaults to a no-op unlike "
-            "F1's unconditional correction."
-        ),
-    )
     FORECAST_CLAMP_SIGMA_K: float = Field(
         default=4.0,
         description=(
@@ -2237,72 +2218,6 @@ class Settings(BaseSettings):
             "cannot safely synthesize a default t1 across a MultiIndex -- while "
             "the flatten path keeps silently synthesizing a 'next row' default "
             "t1 when none is supplied, exactly as it always has."
-        ),
-    )
-    BERT_LLA_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Master switch for the BERT-LLA multi-horizon forecaster "
-            "(forecasting/bert_lla.py -- PyTorch dual-LSTM + self-attention, "
-            "three registered ablations: lstm_baseline, lstm_attention, "
-            "bert_lla). False (the default) is a complete no-op: "
-            "ForecastingEngine.run_bert_lla_forecast() returns the zero "
-            "sentinel without ever touching torch. Requires the optional "
-            "torch package (already in requirements-optional.txt for local "
-            "FinBERT inference) -- absent, the same zero-sentinel behavior "
-            "applies regardless of this flag."
-        ),
-    )
-    BERT_LLA_BLEND_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Whether the 'bert_lla' ablation's price (not lstm_baseline/"
-            "lstm_attention -- those are comparison-only and NEVER blend-"
-            "eligible regardless of this flag) is added to "
-            "ForecastingEngine's model_forecasts dict and therefore "
-            "influences the live skill-weighted blended forecast. False "
-            "(the default): bert_lla still RECORDS to forecast_errors for "
-            "the webapp's model-comparison chart, but its error history "
-            "accrues honestly before it can ever move a recommendation -- "
-            "mirrors FORECAST_SKILL_WEIGHTING_ENABLED's 'measure first, act "
-            "later' posture. Only consulted once BERT_LLA_ENABLED is True."
-        ),
-    )
-    BERT_LLA_ABLATION_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "When True, generate_forecast() runs all three BERT-LLA "
-            "ablations (lstm_baseline, lstm_attention, bert_lla) instead of "
-            "just 'bert_lla' alone -- three PyTorch trainings per ticker per "
-            "cycle instead of one. False (the default) keeps the marginal "
-            "compute cost to a single model. Only consulted once "
-            "BERT_LLA_ENABLED is True."
-        ),
-    )
-    BERT_LLA_WINDOW_SIZE: int = Field(
-        default=22,
-        description=(
-            "Lookback window (trading days) BERT-LLA's LSTM layers consume, "
-            "replacing the CNN-LSTM path's hardcoded LSTM_LOOKBACK=60 -- "
-            "matches the source methodology's 22-trading-day window. Only "
-            "consulted once BERT_LLA_ENABLED is True."
-        ),
-    )
-    BERT_LLA_MIN_SENTIMENT_COVERAGE: float = Field(
-        default=0.5,
-        description=(
-            "Hard gate for the 'bert_lla' ablation specifically (not "
-            "lstm_baseline/lstm_attention, which consume no sentiment): the "
-            "minimum fraction of rows in the feature window that must have "
-            "an OBSERVED composite-sentiment-index reading "
-            "(signals.sentiment_index) before training proceeds. Below this "
-            "threshold, run_bert_lla_forecast returns the zero sentinel "
-            "rather than training on a mostly mask-zeroed sentiment channel "
-            "(CONSTRAINT #4) -- SENTIMENT_INGESTION_ENABLED defaults False "
-            "and SENTIMENT_PIT_MIN_MONTHS=6 is this platform's own bar for "
-            "trusting sentiment history, so this gate will bind for months "
-            "after an operator first enables sentiment ingestion, by "
-            "design. Only consulted once BERT_LLA_ENABLED is True."
         ),
     )
     CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED: bool = Field(
@@ -2793,34 +2708,6 @@ class Settings(BaseSettings):
             "Keys are macro regime names ('RISK ON', 'RECESSION', etc.) or "
             "'_default' for catch-all. Empty dict (default) = flat weights for "
             "all regimes (backward-compatible)."
-        ),
-    )
-
-    # --- Per-Sector Forecast Model/Horizon Config (empirical walk-forward backtest) ---
-    # Replaces a hardcoded per-sector forecast-model heuristic in
-    # forecasting_engine.py with one derived from an offline walk-forward
-    # backtest (see validation/sector_forecast_backtest.py). The backtest writes
-    # a committed JSON artifact; ForecastingEngine loads it at init via
-    # SECTOR_FORECAST_CONFIG_PATH, with SECTOR_FORECAST_CONFIGS layered on top as
-    # an optional per-sector override, falling back to the hardcoded heuristic
-    # when both are absent/invalid.
-    SECTOR_FORECAST_CONFIG_PATH: Optional[str] = Field(
-        default="forecasting/sector_configs.json",
-        description=(
-            "Path to the committed per-sector forecast config artifact (model+horizon "
-            "per sector, derived from an offline walk-forward backtest — see "
-            "validation/sector_forecast_backtest.py). Loaded once at ForecastingEngine "
-            "init; the hardcoded default dict is used as fallback when the file is "
-            "missing or invalid. Offline/deterministic at runtime — no network."
-        ),
-    )
-    SECTOR_FORECAST_CONFIGS: dict[str, dict] = Field(
-        default_factory=dict,
-        description=(
-            "Optional per-sector override merged OVER the artifact/hardcoded default. "
-            "JSON dict in .env, e.g. {\"Technology\": {\"days\": 30, \"model\": \"MC\"}}. "
-            "Empty dict (the default) leaves the artifact/hardcoded default unchanged "
-            "(fully backward-compatible)."
         ),
     )
 
@@ -4919,35 +4806,6 @@ class Settings(BaseSettings):
             )
             return str(value or "")
         return f"{parsed[0]:02d}:{parsed[1]:02d}"
-
-    @field_validator("SECTOR_FORECAST_CONFIGS")
-    @classmethod
-    def _validate_sector_forecast_configs(cls, value: dict) -> dict:
-        """Fail-safe: drop any entry that doesn't validate. A malformed override can
-        never corrupt the engine — worst case is the artifact/hardcoded default is
-        used for that sector instead.
-
-        NOTE: ``validation/sector_config_io.py`` (owned by a concurrently-authored
-        agent) supplies the real ``validate_sector_config_entry`` normalizer. This
-        import is deliberately inside the function body (not module top) so a
-        missing/broken validation package can never crash settings.py's own
-        import — the except branch below treats the override as empty in that
-        case. End-to-end integration against the real sector_config_io.py is
-        exercised by a separate cross-cutting test outside this module's test
-        file.
-        """
-        try:
-            from validation.sector_config_io import validate_sector_config_entry
-        except Exception:
-            # validation package unavailable/broken — never let a settings import
-            # crash the whole process; treat the override as empty.
-            return {}
-        cleaned: dict = {}
-        for sector, raw in (value or {}).items():
-            entry = validate_sector_config_entry(raw)
-            if entry is not None:
-                cleaned[sector] = entry
-        return cleaned
 
     @field_validator("HMM_COVARIANCE_TYPE")
     @classmethod

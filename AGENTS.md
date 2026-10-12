@@ -452,6 +452,7 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
 
 ## Archived subsystems (in `legacy/`, not active)
 
+- **Forecasting extras (F4 part 1)** (2026-10): BERT-LLA, CNN-LSTM attention endpoint, ASVI feature engineering, drift shrinkage, and the dynamic `sector_configs.json` loader (`legacy/forecasting/{bert_lla.py,sector_configs.json}`). `forecasting_engine.py` now uses the frozen mapping `SECTOR_FORECAST_CONFIGS_FROZEN`.
 Don't build on these or cite them as live. `legacy/README.md` lists every moved file.
 
 - **`main.py` and its advisory path** (step 5.5): `legacy/main.py`, `legacy/pipeline/steps.py`,
