@@ -121,7 +121,6 @@ class TestRunMonteCarlo:
         
         # Ensure shrinkage is off for this test
         from unittest import mock
-        engine.settings = mock.Mock(FORECAST_DRIFT_SHRINKAGE=0.0)
         
         # Use a large number of simulations for stability, with a fixed seed
         mean, low, high = engine.run_monte_carlo(
@@ -140,7 +139,6 @@ class TestRunMonteCarlo:
         """F-05 guard: when |mu| > 0.05 or sigma > 0.20, normalize."""
         annualized_mu, annualized_sigma = 0.20, 0.30
         from unittest import mock
-        engine.settings = mock.Mock(FORECAST_DRIFT_SHRINKAGE=0.0)
         
         mean, low, high = engine.run_monte_carlo(
             100.0, annualized_mu, annualized_sigma, days_forward=30, simulations=10000, seed=42
@@ -376,10 +374,9 @@ class TestGenerateForecast:
         assert result["Target_Days"] == 60
 
     def test_real_estate_sector_uses_30_day_target(self, engine):
-        # forecasting/sector_configs.json (empirically-derived per-sector
-        # backtest overlay) supersedes the hardcoded _DEFAULT_SECTOR_CONFIGS
-        # 90-day/HW pick for Real Estate with 30-day/MC -- lowest measured
-        # MASE across the 30/60/90-day grid (see scripts/backtest_sector_configs.py).
+        # SECTOR_FORECAST_CONFIGS_FROZEN (the former walk-forward artifact,
+        # frozen in forecasting rebuild F4 part 1) gives Real Estate 30-day/MC
+        # instead of the old hand-picked 90-day/HW.
         row = pd.Series({"sector": "Real Estate", "Symbol": "O"})
         history = _price_series(90, seed=7)
         result = engine.generate_forecast(row, current_price=float(history.iloc[-1]), history_series=history)
@@ -444,8 +441,8 @@ class TestGenerateForecast:
         ForecastTracker.coverage_report()/interval_score_stats() have real
         data to measure calibration against. With 90 days of real history,
         Monte Carlo's point forecast is always > 0, so every horizon's
-        primary record_forecasts call (the `recordable_forecasts` one, not
-        the separate bert_lla-ablations call) must carry bounds."""
+        primary record_forecasts call (the `recordable_forecasts` one)
+        must carry bounds."""
         tracker = mock.MagicMock()
         tracker.get_skill_weights.return_value = {}
         engine._tracker = tracker
@@ -470,11 +467,9 @@ class TestGenerateForecast:
 
     def test_no_bounds_recorded_for_non_monte_carlo_models(self, engine):
         """Every non-Monte-Carlo model (arima, holt_winters, cnn_lstm,
-        prophet, naive, bert_lla ablations) has no genuine published
-        prediction interval and must never receive fabricated bounds --
-        model_bounds must have at most the single "monte_carlo" key on
-        every record_forecasts call, including the separate bert_lla-
-        ablations call which must never carry bounds at all."""
+        prophet, naive) has no genuine published prediction interval and
+        must never receive fabricated bounds -- model_bounds must have at
+        most the single "monte_carlo" key on every record_forecasts call."""
         tracker = mock.MagicMock()
         tracker.get_skill_weights.return_value = {}
         engine._tracker = tracker
@@ -565,31 +560,9 @@ class TestGenerateForecast:
         for h in (10, 30, 60, 90):
             assert result[f"Forecast_{h}"] > 0.0
 
-    def test_bert_lla_disabled_by_default_produces_byte_identical_output(self, engine):
-        """BERT_LLA_ENABLED defaults False -- generate_forecast's output
-        must be untouched by the feature existing in the codebase at all.
-        Compares against a second engine instance with the exact same
-        inputs, both under the (default, unpatched) flag. numpy's RNG is
-        reseeded identically before each call -- Monte Carlo simulation is
-        itself unseeded (pre-existing, unrelated to this change), so an
-        exact-equality comparison across two calls needs this to hold
-        everything else constant."""
-        row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
-        history = _price_series(90, seed=11)
-        price = float(history.iloc[-1])
-
-        engine_a = ForecastingEngine()
-        engine_b = ForecastingEngine()
-        np.random.seed(42)
-        result_a = engine_a.generate_forecast(row, current_price=price, history_series=history)
-        np.random.seed(42)
-        result_b = engine_b.generate_forecast(row, current_price=price, history_series=history)
-
-        for h in (10, 30, 60, 90):
-            assert result_a[f"Forecast_{h}"] == result_b[f"Forecast_{h}"]
-        assert engine_a.last_bert_lla_attention is None
-
-    def test_bert_lla_disabled_never_calls_tracker_for_ablation_names(self, engine):
+    def test_archived_bert_lla_ablation_names_are_never_recorded(self, engine):
+        """BERT-LLA was archived in forecasting rebuild F4 part 1: its three
+        ablation names must never reach the ledger."""
         tracker = mock.MagicMock()
         tracker.get_skill_weights.return_value = {}
         engine._tracker = tracker
@@ -600,28 +573,10 @@ class TestGenerateForecast:
         recorded_model_names = set()
         for call in tracker.record_forecasts.call_args_list:
             recorded_model_names.update(call.args[2].keys())
-        assert "lstm_baseline" not in recorded_model_names
-        assert "lstm_attention" not in recorded_model_names
-        assert "bert_lla" not in recorded_model_names
-
-    def test_bert_lla_enabled_but_torch_absent_still_byte_identical(self, engine):
-        """Even with the flag explicitly on, an environment without torch
-        installed must degrade to the exact same output as the flag being
-        off -- CONSTRAINT #6, never a partial/broken forecast. numpy's RNG
-        is reseeded identically before each call (see the sibling test
-        above for why)."""
-        row = pd.Series({"sector": "Technology", "Symbol": "AAPL"})
-        history = _price_series(90, seed=13)
-        price = float(history.iloc[-1])
-
-        np.random.seed(42)
-        baseline = engine.generate_forecast(row, current_price=price, history_series=history)
-        np.random.seed(42)
-        with mock.patch("settings.settings.BERT_LLA_ENABLED", True):
-            with_flag_on = engine.generate_forecast(row, current_price=price, history_series=history)
-
-        for h in (10, 30, 60, 90):
-            assert baseline[f"Forecast_{h}"] == with_flag_on[f"Forecast_{h}"]
+        assert not recorded_model_names & {"lstm_baseline", "lstm_attention", "bert_lla"}
+        assert not hasattr(engine, "last_bert_lla_attention")
+        assert not hasattr(engine, "run_bert_lla_forecast")
+        assert not hasattr(engine, "run_lstm_attention_forecast")
 
     def test_no_tracker_reproduces_static_blend_behavior(self):
         """ForecastingEngine() with no args must behave identically to the
@@ -1112,3 +1067,70 @@ class TestF1BlendRecordingNeverLeaksIntoBlend:
         assert tracker.record_forecasts.call_count > 0
         for call in tracker.record_forecasts.call_args_list:
             assert "blend" not in call.args[2]
+
+
+# ============================================================================
+# Frozen per-sector config (forecasting rebuild F4 part 1)
+# ============================================================================
+
+# The exact dict the former runtime loader (validation/sector_config_io.py,
+# now in legacy/) resolved to in the live deployment: the committed
+# walk-forward artifact (generated 2026-07-30) overlaid on the old hand-picked
+# defaults, with SECTOR_FORECAST_CONFIGS = {}. The artifact covered all 11
+# sectors, so this is its "sector_configs" block verbatim.
+_FORMER_ARTIFACT_RESOLUTION = {
+    "Basic Materials": {"days": 30, "model": "ARIMA"},
+    "Communication Services": {"days": 30, "model": "ARIMA"},
+    "Consumer Cyclical": {"days": 30, "model": "ARIMA"},
+    "Consumer Defensive": {"days": 30, "model": "MC"},
+    "Energy": {"days": 30, "model": "HW"},
+    "Financial Services": {"days": 30, "model": "MC"},
+    "Healthcare": {"days": 30, "model": "MC"},
+    "Industrials": {"days": 30, "model": "ARIMA"},
+    "Real Estate": {"days": 30, "model": "MC"},
+    "Technology": {"days": 30, "model": "MC"},
+    "Utilities": {"days": 30, "model": "HW"},
+}
+
+
+class TestFrozenSectorConfigs:
+    def test_frozen_constant_equals_former_artifact_resolution(self):
+        from forecasting_engine import SECTOR_FORECAST_CONFIGS_FROZEN
+        assert SECTOR_FORECAST_CONFIGS_FROZEN == _FORMER_ARTIFACT_RESOLUTION
+
+    def test_frozen_constant_matches_archived_artifact_file(self):
+        """Cross-check against the archived JSON itself (a file read, not an
+        import from legacy/). Skipped if the archive is ever deleted."""
+        import json
+        from pathlib import Path
+        from forecasting_engine import SECTOR_FORECAST_CONFIGS_FROZEN
+        path = Path(__file__).resolve().parent.parent / "legacy" / "forecasting" / "sector_configs.json"
+        if not path.exists():
+            pytest.skip("archived sector_configs.json no longer present")
+        artifact = json.loads(path.read_text(encoding="utf-8"))["sector_configs"]
+        assert SECTOR_FORECAST_CONFIGS_FROZEN == artifact
+
+    def test_engine_uses_frozen_constant_and_copies_it(self):
+        from forecasting_engine import SECTOR_FORECAST_CONFIGS_FROZEN
+        engine = ForecastingEngine()
+        assert engine.sector_configs == SECTOR_FORECAST_CONFIGS_FROZEN
+        engine.sector_configs["Technology"]["days"] = 999
+        assert SECTOR_FORECAST_CONFIGS_FROZEN["Technology"]["days"] == 30
+
+    def test_retired_settings_fields_are_gone(self):
+        from settings import Settings
+        for name in (
+            "SECTOR_FORECAST_CONFIG_PATH", "SECTOR_FORECAST_CONFIGS",
+            "FORECAST_DRIFT_SHRINKAGE", "BERT_LLA_ENABLED", "BERT_LLA_BLEND_ENABLED",
+            "BERT_LLA_ABLATION_ENABLED", "BERT_LLA_WINDOW_SIZE",
+            "BERT_LLA_MIN_SENTIMENT_COVERAGE",
+        ):
+            assert name not in Settings.model_fields
+
+    def test_engine_construction_is_cwd_independent(self, tmp_path, monkeypatch):
+        """The former loader resolved a CWD-relative artifact path, so a
+        process started outside the repo silently got the old hand-picked
+        dict. The frozen constant has no such dependence."""
+        from forecasting_engine import SECTOR_FORECAST_CONFIGS_FROZEN
+        monkeypatch.chdir(tmp_path)
+        assert ForecastingEngine().sector_configs == SECTOR_FORECAST_CONFIGS_FROZEN

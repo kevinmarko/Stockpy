@@ -25,7 +25,17 @@ has reviewed this plan.**
 is not**: it moves published `Forecast_{h}` for live symbols. Per the brief I am stopping here and
 reporting that instead of absorbing it. See decision D1.
 
-## 1. Decisions I need from you
+## 1. Decisions
+
+> **Operator decisions (2026-10-12, relayed by Claude Code):** D1 = **(b) split**: freeze the
+> artifact's current mapping (`model` + `days`) as an in-code constant so no published forecast moves.
+> The preference branch goes with the F3 flip. The frozen-input diff must show **zero** moved symbols;
+> any move is a bug (stop and report). D2 = recommended (leave the two worker functions and their
+> test for F4 part 2). D3 = recommended (one bullet). **Do not install `torch` into the main
+> checkout's `.venv`**: the live `.env` has `BERT_LLA_ENABLED`/`BLEND` true, and the missing torch is
+> the only thing keeping BERT-LLA off until this PR merges. Don't merge the PR.
+
+The options as originally put to the operator:
 
 **D1 — the sector static-preference blend (the only decision-changing item).**
 - **(a) Recommended: remove it in this PR, but don't merge until you've accepted the frozen-input diff.**
@@ -106,13 +116,19 @@ and I'll rebase if it collides.
   endpoint row in `docs/settings_field_census.json` (regenerated).
 - Per D2, `cnn_lstm_worker.py` and `tests/test_lstm_attention_worker.py` stay untouched.
 
-### 2.3 Sector static-preference blend, `SECTOR_FORECAST_CONFIGS`, `FORECAST_DRIFT_SHRINKAGE`
-(written for D1 (a); under (b) I keep `preferred_model` and freeze the artifact's mapping instead)
-- `forecasting_engine.py`: remove `_DEFAULT_SECTOR_CONFIGS`, `_load_sector_configs`,
-  `self.sector_configs`, the per-row config lookup (`Target_Days` = module constant
-  `_PRIMARY_TARGET_DAYS = 30`), the `preferred_model` parameter and its ARIMA/HW branches in
-  `_blend_with_skill` (the remaining static branches are unchanged), and the drift-shrinkage lines in
-  `run_monte_carlo`.
+### 2.3 `SECTOR_FORECAST_CONFIGS`, the sector-config pipeline, `FORECAST_DRIFT_SHRINKAGE` (D1 = (b))
+- `forecasting_engine.py`: replace `_DEFAULT_SECTOR_CONFIGS` (the pre-backtest hand-picked dict) and
+  `_load_sector_configs` (default ← artifact ← settings override) with one frozen constant,
+  `SECTOR_FORECAST_CONFIGS_FROZEN`, holding exactly what `_load_sector_configs` resolves to today: the
+  artifact's 11 entries (`days` 30 for every sector; `model` ARIMA for Basic Materials,
+  Communication Services, Consumer Cyclical, Industrials; HW for Energy, Utilities; MC for the rest).
+  `self.sector_configs = dict(SECTOR_FORECAST_CONFIGS_FROZEN)`. The per-row lookup and its
+  `{"days": 60, "model": "MC"}` fallback for unknown sectors, `preferred_model` and every
+  `_blend_with_skill` branch stay **unchanged**. Remove the drift-shrinkage lines in `run_monte_carlo`
+  (identity at the live value 0.0). The preference branch itself is removed with the F3 flip.
+- A new test pins the frozen constant to the exact dict origin/main's loader produced from the
+  artifact (literal copy), plus a no-settings-read check (the engine no longer reads the 2 sector keys).
+
 - `settings.py`: remove `SECTOR_FORECAST_CONFIG_PATH`, `SECTOR_FORECAST_CONFIGS` (+ its
   `field_validator`), `FORECAST_DRIFT_SHRINKAGE`, then: `shared/env_io.py` `ALLOWED_KEYS` (3) and
   `_JSON_KEYS` (1), `api/pilots_api.py` tunables (2 rows + the comment at ~4265), `.env.example`
@@ -166,9 +182,8 @@ and stay as written. `cnn_lstm_worker.py` (D2).
    `ForecastTracker(readonly=True)` with the operator's skill settings, a capturing tracker so nothing is
    written. Run `generate_forecast` per symbol with origin/main's engine and with the branch engine on
    the same inputs. List every symbol whose `Forecast_{10,30,60,90}`, `Target_Days`, `MC_*`,
-   `forecast_alignment` points, action or sellRange moved, with the cause. Expected: BERT-LLA /
-   endpoint / shrinkage / overrides move nothing; under D1 (a) only static-fallback pairs in ARIMA/HW
-   sectors and `Unknown`-sector `Target_Days`/`MC_*` move.
+   `forecast_alignment` points, action or sellRange moved, with the cause. **Expected (D1 = (b)):
+   zero moved symbols, on every result column; any move is a bug: stop and report.**
 
 ## 5. PR
 Open the PR with the moved-symbols table in the body. **Don't merge** until you've reviewed the plan and

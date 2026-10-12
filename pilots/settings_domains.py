@@ -226,7 +226,6 @@ def classify_field(key: str) -> str:
         or key.startswith("ATTENTION_")
         or key.startswith("ASVI_")
         or key.startswith("STOCKTWITS_")
-        or key.startswith("BERT_LLA_")
     ):
         return "Sentiment/News/Attention"
 
@@ -300,7 +299,6 @@ def classify_field(key: str) -> str:
 
     if (
         key.startswith("SECTOR_SELECTION_")
-        or key.startswith("SECTOR_FORECAST_")
         or key.startswith("CORRELATION_CLUSTER_")
         or key.startswith("PAIRS_")
         or key.startswith("DUAL_MOMENTUM_")

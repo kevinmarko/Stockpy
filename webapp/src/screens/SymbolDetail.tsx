@@ -649,14 +649,6 @@ export function SymbolDetail() {
                     </>
                   )}
                   <ForecastErrorChart rows={forecast.data.error_by_model} />
-                  {forecast.data.error_by_model.some((r) => r.model_name.startsWith("lstm_") || r.model_name === "bert_lla") && (
-                    <p style={{ color: theme.textMuted, fontSize: "var(--t-micro)", marginTop: "var(--s-1-5)", lineHeight: 1.5 }}>
-                      lstm_baseline / lstm_attention / bert_lla are three ablations
-                      of one architecture (dual-layer LSTM, with and without
-                      self-attention and sentiment) — a direct comparison, not
-                      three unrelated models.
-                    </p>
-                  )}
                 </>
               )}
             </div>

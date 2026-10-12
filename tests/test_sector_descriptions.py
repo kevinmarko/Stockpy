@@ -1,19 +1,19 @@
 """Tests for data/sector_descriptions.yaml -- pins its key set as a
 superset of forecasting/data/ticker_sectors.csv's distinct sectors AND
-forecasting/sector_configs.json's sector_configs keys. A mismatch here
+forecasting_engine.SECTOR_FORECAST_CONFIGS_FROZEN's keys (the former
+forecasting/sector_configs.json artifact, frozen in forecasting rebuild F4
+part 1). A mismatch here
 would silently produce empty joins and an all-NaN correlation matrix that
 looks like a data outage rather than a typo."""
 from __future__ import annotations
 
 import csv
-import json
 from pathlib import Path
 
 from data.sector_embeddings import load_sector_descriptions
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _TICKER_SECTORS_CSV = _REPO_ROOT / "forecasting" / "data" / "ticker_sectors.csv"
-_SECTOR_CONFIGS_JSON = _REPO_ROOT / "forecasting" / "sector_configs.json"
 
 
 def _csv_distinct_sectors() -> set:
@@ -23,9 +23,8 @@ def _csv_distinct_sectors() -> set:
 
 
 def _sector_configs_keys() -> set:
-    with open(_SECTOR_CONFIGS_JSON) as f:
-        data = json.load(f)
-    return set(data["sector_configs"].keys())
+    from forecasting_engine import SECTOR_FORECAST_CONFIGS_FROZEN
+    return set(SECTOR_FORECAST_CONFIGS_FROZEN.keys())
 
 
 class TestSectorDescriptionsKeySuperset:
@@ -38,10 +37,10 @@ class TestSectorDescriptionsKeySuperset:
         missing = _csv_distinct_sectors() - set(descriptions.keys())
         assert not missing, f"sector_descriptions.yaml missing sectors from ticker_sectors.csv: {missing}"
 
-    def test_superset_of_sector_configs_json(self):
+    def test_superset_of_frozen_sector_configs(self):
         descriptions = load_sector_descriptions()
         missing = _sector_configs_keys() - set(descriptions.keys())
-        assert not missing, f"sector_descriptions.yaml missing sectors from sector_configs.json: {missing}"
+        assert not missing, f"sector_descriptions.yaml missing sectors from SECTOR_FORECAST_CONFIGS_FROZEN: {missing}"
 
     def test_every_description_is_non_empty_text(self):
         descriptions = load_sector_descriptions()
