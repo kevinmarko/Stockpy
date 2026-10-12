@@ -21,9 +21,11 @@ behaviour, no new capability. No new settings flags.
 
 ## Operator decisions (this session + step-5 plan)
 
-- ~~Live is **primary**: delete the daily-advisory launchd plist; rewrite RUNBOOK rollback text.~~ **Withdrawn 2026-10-12:** this rested on an
-  "already cut over" answer that `main` (#1119) contradicts: the live daemon is still on `shadow` until the 10-12..10-16 review ends. The
-  plist deletion, the RUNBOOK rollback rewrite and every other cutover-dependent item in PR 5.4b are held until after the cutover.
+- Live is **primary**: delete the daily-advisory launchd plist; rewrite RUNBOOK rollback text. *(History: briefly withdrawn on
+  2026-10-12 when `main` (#1119) showed the live daemon still on `shadow` pending a second review; reinstated the same day when #1120
+  recorded that the operator cut over to `primary` without waiting for it. One part is now in conflict with the operator's own docs:
+  #1120 says the `com.investyo.daily-advisory` plist is **kept for rollback**, whereas this plan deletes it. Deleting it needs the
+  operator's explicit call in 5.4b-ii.)*
 - `/dead-letter/retry`: **repoint to a daemon cycle** (keep endpoint + `DEAD_LETTER_RETRY_ENABLED`).
 - `launch.command`: **delete**.
 - **Two PRs** (5.4a runtime, 5.4b shell/docs).
@@ -98,13 +100,15 @@ All verification below depends on this. Establish a green baseline for the targe
 
 ## PR 5.4b — shell, schedulers, skills, docs
 
-> **Re-split 2026-10-12.** The live daemon is still on `shadow` (see the withdrawn decision above), so 5.4b is two PRs:
-> **5.4b-i (cutover-neutral, goes first):** item 1 (`make verify` helper + Makefile + `verify.command`), the corrected `--dry-run` /
-> keyless-run warnings, the `ORCHESTRATOR_DAEMON_ENABLED` description fix and the `weekly-edgar.plist` XML fix.
-> **5.4b-ii (after the 10-12..10-16 review and the cutover):** deleting `launch.command` and the daily-advisory plist, the
-> installer-script and README changes, the `robinhood-execution`/`rh-execute` rewrite, RUNBOOK 3.15 DONE + rollback + 5.1, the
-> CLAUDE.md/AGENTS.md status lines. The full 5.4b change set already exists on the local branch `step5-4b-callers-shell-docs`
-> (commit `08f0630`) and is kept for 5.4b-ii.
+> **Re-split 2026-10-12.** When 5.4b was being integrated the live daemon looked to be still on `shadow` (#1119), so 5.4b was split in
+> two. **5.4b-i (cutover-neutral, goes first, PR #1121):** item 1 (`make verify` helper + Makefile + `verify.command`), the corrected
+> `--dry-run` / keyless-run warnings, the `ORCHESTRATOR_DAEMON_ENABLED` description fix and the `weekly-edgar.plist` XML fix.
+> **5.4b-ii (the rest):** deleting `launch.command` and the daily-advisory plist, the installer-script and README changes, the
+> `robinhood-execution`/`rh-execute` rewrite, RUNBOOK 3.15 DONE + rollback + 5.1, the CLAUDE.md/AGENTS.md status lines. #1120 then
+> recorded the operator's cutover to `primary` (2026-10-12), so 5.4b-ii is no longer waiting on the review. It still waits for 5.4a and
+> 5.4b-i to merge, and for the operator's call on the plist (#1120 keeps it for rollback). The full 5.4b change set exists on the local
+> branch `step5-4b-ii-cutover-dependent-full` (commit `08f0630`); it must be rebased onto the merged result and every sentence about
+> the live state re-checked against `main`'s RUNBOOK 3.15, which now has the cutover record.
 
 1. **`make verify` / `verify.command`**: replace `import main; main.run_once()` with a new task-scoped helper
    `scripts/step5_4_verify_cycle.py` (not a generic name), used by both: load `.env`, `alerting.setup_logging()`
