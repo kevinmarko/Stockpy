@@ -21,7 +21,9 @@ behaviour, no new capability. No new settings flags.
 
 ## Operator decisions (this session + step-5 plan)
 
-- Live is **primary**: delete the daily-advisory launchd plist; rewrite RUNBOOK rollback text.
+- ~~Live is **primary**: delete the daily-advisory launchd plist; rewrite RUNBOOK rollback text.~~ **Withdrawn 2026-10-12:** this rested on an
+  "already cut over" answer that `main` (#1119) contradicts: the live daemon is still on `shadow` until the 10-12..10-16 review ends. The
+  plist deletion, the RUNBOOK rollback rewrite and every other cutover-dependent item in PR 5.4b are held until after the cutover.
 - `/dead-letter/retry`: **repoint to a daemon cycle** (keep endpoint + `DEAD_LETTER_RETRY_ENABLED`).
 - `launch.command`: **delete**.
 - **Two PRs** (5.4a runtime, 5.4b shell/docs).
@@ -95,6 +97,14 @@ All verification below depends on this. Establish a green baseline for the targe
    13929-14085). The `main.py`-source reads (7140… ) stay for 5.5.
 
 ## PR 5.4b — shell, schedulers, skills, docs
+
+> **Re-split 2026-10-12.** The live daemon is still on `shadow` (see the withdrawn decision above), so 5.4b is two PRs:
+> **5.4b-i (cutover-neutral, goes first):** item 1 (`make verify` helper + Makefile + `verify.command`), the corrected `--dry-run` /
+> keyless-run warnings, the `ORCHESTRATOR_DAEMON_ENABLED` description fix and the `weekly-edgar.plist` XML fix.
+> **5.4b-ii (after the 10-12..10-16 review and the cutover):** deleting `launch.command` and the daily-advisory plist, the
+> installer-script and README changes, the `robinhood-execution`/`rh-execute` rewrite, RUNBOOK 3.15 DONE + rollback + 5.1, the
+> CLAUDE.md/AGENTS.md status lines. The full 5.4b change set already exists on the local branch `step5-4b-callers-shell-docs`
+> (commit `08f0630`) and is kept for 5.4b-ii.
 
 1. **`make verify` / `verify.command`**: replace `import main; main.run_once()` with a new task-scoped helper
    `scripts/step5_4_verify_cycle.py` (not a generic name), used by both: load `.env`, `alerting.setup_logging()`

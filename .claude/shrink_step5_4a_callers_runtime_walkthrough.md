@@ -3,9 +3,23 @@
 Plan: `.claude/shrink_step5_4_callers_implementation_plan.md` (PR 5.4a section). Tracker:
 `.claude/shrink_step5_4a_callers_runtime_task.md`. Branch `claude/ecstatic-maxwell-f6ruct`, cut from `origin/main` @ `2f53931`.
 
-**Code only.** Nothing here changes the live `.env`, `runtime_flags.json` or `~/.stockpy_local`. The operator confirmed the live
-system is already cut over (`DAEMON_AGENTIC_QUEUE_MODE=primary`, `com.investyo.stack` installed). 5.4b (shell/launchd/`make verify`/
-skills/docs) is a separate PR; 5.5 archives `main.py`.
+**Code only.** Nothing here changes the live `.env`, `runtime_flags.json` or `~/.stockpy_local`. 5.4b (shell/`make verify`/skills/
+docs) is a separate PR; 5.5 archives `main.py`.
+
+**Correction (2026-10-12).** An earlier version of this walkthrough, the plan and the PR text said the operator had confirmed the live
+system was already cut over (`DAEMON_AGENTIC_QUEUE_MODE=primary`). That premise was wrong: `main` (#1119, merged 2026-10-12 10:07Z)
+records that the first shadow review "wasn't clean" and that a second 5-trading-day review runs 2026-10-12..10-16, with cutover after
+day 5. **The live daemon is still on `shadow`.** Nothing in 5.4a depends on the cutover (see the next section for the one behaviour
+change), but the parts of step 5.4 that do (deleting the 08:45 launchd job and `launch.command`, marking RUNBOOK 3.15 done, skills that
+stop when the mode is not `primary`) are held until after the review.
+
+## Behaviour change while the live daemon is on `shadow`
+
+The Console "Advisory Pipeline" job, the MCP `generate_html_report` tool and `POST /dead-letter/retry` used to run `main.py`. While
+the queue mode is not `primary`, `main.py` is the REAL queue writer, so those three actions refreshed the live `execution_queue.json`,
+ran the watch engine and sent pushes. They now trigger a daemon cycle, and in `shadow` a daemon cycle writes only the review copy under
+`OUTPUT_DIR/shadow/` and sends nothing. So until cutover the only things that refresh the real queue are the 08:45 `main.py` launchd
+job and a hand-run `python3 main.py`; pressing those three buttons no longer does. Manual `main.py` runs are unaffected (5.5 archives it).
 
 ## What changed
 
