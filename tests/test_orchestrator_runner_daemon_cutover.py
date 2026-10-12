@@ -340,6 +340,20 @@ class TestLaunchOrchestratorDaemonFastPath:
         assert handle.pid == -1
         assert handle._popen is None
 
+    def test_flag_on_202_without_a_run_id_still_returns_a_daemon_handle(
+        self, monkeypatch, runner,
+    ):
+        """The daemon ACCEPTED the run; a missing id must not drop through to
+        the subprocess fallback and start a second, parallel cycle."""
+        self._patch_fast_path(
+            monkeypatch, runner, _trigger_response(ok=True, run_id=None, state="queued"),
+        )
+
+        handle = runner.launch_orchestrator()
+
+        assert handle.backend == "daemon"
+        assert handle.daemon_run_id is None
+
     def test_flag_on_409_attaches_to_a_full_run(self, monkeypatch, runner):
         self._patch_fast_path(
             monkeypatch, runner,

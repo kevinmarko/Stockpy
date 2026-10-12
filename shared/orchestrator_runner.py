@@ -331,8 +331,13 @@ def launch_orchestrator(dry_run: bool = False) -> RunHandle:
             if daemon_available():
                 result = trigger_run()
                 attach_run_id: Optional[str] = None
+                # True once the daemon owns a run for this request. A 202 counts
+                # even without a run id: the daemon accepted it, so spawning a
+                # subprocess would duplicate the cycle.
+                use_daemon = False
                 if result.ok:
                     attach_run_id = result.run_id
+                    use_daemon = True
                     logger.info(
                         "Triggered orchestrator cycle via daemon Control API: run_id=%s",
                         attach_run_id,
@@ -357,6 +362,7 @@ def launch_orchestrator(dry_run: bool = False) -> RunHandle:
                             )
                             attach_run_id = None
                         if attach_run_id:
+                            use_daemon = True
                             logger.info(
                                 "Daemon cycle already in flight; attaching to run_id=%s",
                                 attach_run_id,
@@ -371,7 +377,7 @@ def launch_orchestrator(dry_run: bool = False) -> RunHandle:
                         "Daemon reachable but trigger_run failed (%s); falling back "
                         "to subprocess launch.", result.error,
                     )
-                if attach_run_id:
+                if use_daemon:
                     return RunHandle(
                         pid=-1,  # no local process — the daemon owns this run
                         started_at=time.time(),
