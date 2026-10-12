@@ -5,25 +5,21 @@
 #
 # Double-click this file from Finder (or the Dock) to install the macOS
 # launchd timers:
-#   • com.investyo.daily-advisory  — runs `main.py` each weekday 08:45 local
-#                                    (ROLLBACK ONLY, see the NOTE below)
 #   • com.investyo.monthly-retrain — runs `python -m scripts.retrain_models`
 #                                    on the 1st of each month at 04:00 local
 #   • com.investyo.weekly-edgar    — runs `python -m scripts.backfill_edgar_
 #                                    fundamentals --tickers all` each Sunday 02:00 local
 #
+# NOT installed by default: com.investyo.daily-advisory (`main.py` each weekday
+# 08:45). The orchestrator daemon (com.investyo.stack) has been the advisory
+# runtime and execution-queue writer since the 2026-10-12 cutover; reloading the
+# old job would bring back a second writer. It is kept for rollback only
+# (docs/RUNBOOK.md §3.15):
+#   ./scripts/install_schedule.command --with-daily-advisory
+#
 # These are OS timers ONLY — they invoke the scripts on a schedule. They do
 # NOT create any autonomous self-invoking agent loop. Retraining deliberately
-# runs OUTSIDE the daemon's advisory pipeline cycle.
-#
-# NOTE on com.investyo.daily-advisory: that is the old scheduled `main.py` run.
-# Per docs/RUNBOOK.md §3.15 (cutover record, 2026-10-12) the job was unloaded on
-# the live machine and the always-on orchestrator daemon is the one runtime; with
-# DAEMON_AGENTIC_QUEUE_MODE=primary the daemon, not main.py, writes the real
-# execution queue. The plist is kept in this repo for rollback only, and this
-# installer still installs it, so re-running the installer RELOADS that job
-# (it prints a warning when it reaches that label). Install the daemon itself
-# with scripts/install_stack_service.command (the com.investyo.stack job).
+# runs OUTSIDE the daily advisory cycle.
 #
 # ONE-TIME SETUP — run this once in any Terminal:
 #   chmod +x /Users/kevinlee/Desktop/Stockpy/scripts/install_schedule.command
@@ -37,8 +33,6 @@
 #   4. Prints status and pauses so you can read the output.
 #
 # TO UNINSTALL (per job):
-#   launchctl unload ~/Library/LaunchAgents/com.investyo.daily-advisory.plist
-#   rm ~/Library/LaunchAgents/com.investyo.daily-advisory.plist
 #   launchctl unload ~/Library/LaunchAgents/com.investyo.monthly-retrain.plist
 #   rm ~/Library/LaunchAgents/com.investyo.monthly-retrain.plist
 #   launchctl unload ~/Library/LaunchAgents/com.investyo.weekly-edgar.plist
@@ -50,12 +44,20 @@ set -o pipefail
 
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 
-# Every launchd job this installer manages. Add a label here to install more.
+# Every launchd job this installer manages by default. Add a label here to install more.
 LABELS=(
-    "com.investyo.daily-advisory"
     "com.investyo.monthly-retrain"
     "com.investyo.weekly-edgar"
 )
+ROLLBACK_LABEL="com.investyo.daily-advisory"
+
+WITH_DAILY_ADVISORY=0
+for _arg in "$@"; do
+    case "$_arg" in
+        --with-daily-advisory) WITH_DAILY_ADVISORY=1 ;;
+        *) echo "Unknown argument: $_arg (only --with-daily-advisory is accepted)"; exit 2 ;;
+    esac
+done
 
 # ── Always pause before the window auto-closes so errors are visible ─────────
 _on_exit() {
@@ -98,6 +100,25 @@ if [[ "$PY_VER" != *"3.12."* ]]; then
 fi
 echo "Using $PY_VER"
 
+if [[ "$WITH_DAILY_ADVISORY" == "1" ]]; then
+    # Rollback path (docs/RUNBOOK.md §3.15). Only safe once the daemon is no
+    # longer the queue writer, or main.py and the daemon both write the queue.
+    QUEUE_MODE="$(cd "$REPO_ROOT" && NO_VENV_REEXEC=1 "$PYTHON" -c \
+        'from settings import settings; print(settings.DAEMON_AGENTIC_QUEUE_MODE)' 2>/dev/null)"
+    # Fail closed: anything but off/shadow (incl. primary, or empty when
+    # settings could not be read) refuses.
+    case "$QUEUE_MODE" in
+        off|shadow)
+            echo "DAEMON_AGENTIC_QUEUE_MODE=$QUEUE_MODE: installing $ROLLBACK_LABEL (rollback)."
+            LABELS+=("$ROLLBACK_LABEL") ;;
+        *)
+            echo "REFUSED: --with-daily-advisory needs DAEMON_AGENTIC_QUEUE_MODE=off or shadow"
+            echo "(read: '${QUEUE_MODE:-<could not read settings>}'). Set the mode first so the"
+            echo "daemon stops writing the queue (docs/RUNBOOK.md §3.15), then re-run this."
+            exit 1 ;;
+    esac
+fi
+
 mkdir -p "$LAUNCH_AGENTS_DIR"
 mkdir -p "$REPO_ROOT/output"
 
@@ -111,10 +132,6 @@ for LABEL in "${LABELS[@]}"; do
     if [[ ! -f "$SOURCE_PLIST" ]]; then
         echo "ERROR: plist not found at $SOURCE_PLIST"
         exit 1
-    fi
-
-    if [[ "$LABEL" == "com.investyo.daily-advisory" ]]; then
-        echo "WARNING: daily-advisory was deliberately UNLOADED at the 2026-10-12 cutover (the daemon is the queue writer); installing it RELOADS the old main.py job. Rollback only: see docs/RUNBOOK.md §3.15, and if this was not intended run 'launchctl unload $INSTALLED_PLIST'."
     fi
 
     # Rewrite every occurrence of the canonical repo path in the template with
@@ -145,12 +162,16 @@ done
 echo ""
 echo "══════════════════════════════════════════════════════════════"
 echo "Installed. Schedules:"
-echo "  • daily-advisory  — each weekday 08:45 local time (rollback only; not the live queue writer, see docs/RUNBOOK.md §3.15)"
+if [[ "$WITH_DAILY_ADVISORY" == "1" ]]; then
+    echo "  • daily-advisory  — each weekday 08:45 local time (ROLLBACK: main.py writes the queue)"
+fi
 echo "  • monthly-retrain — 1st of the month, 04:00 local time"
 echo "  • weekly-edgar    — each Sunday, 02:00 local time"
 echo ""
 echo "Logs:"
-echo "  $REPO_ROOT/output/scheduled_advisory.out (and .err)"
+if [[ "$WITH_DAILY_ADVISORY" == "1" ]]; then
+    echo "  $REPO_ROOT/output/scheduled_advisory.out (and .err)"
+fi
 echo "  $REPO_ROOT/output/scheduled_retrain.out (and .err)"
 echo "  $REPO_ROOT/output/scheduled_edgar.out (and .err)"
 echo ""

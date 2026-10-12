@@ -42,10 +42,8 @@ cp .env.example .env
 # 4. Verify everything works before relying on it
 make verify           # env check + tests + one dry-run cycle (or double-click verify.command)
 
-# 5. Launch the Pilots PWA and its backend (asks for mock or live data)
-./launch_webapp.command   # double-click from Finder, or run in terminal
-#    For the always-on backend (orchestrator daemon + APIs, started at login),
-#    run scripts/install_stack_service.command once. See "Launching" below.
+# 5. Launch
+./launch_webapp.command   # web app + backend; or install the always-on stack (docs/RUNBOOK.md §0.1)
 ```
 
 ---
@@ -62,7 +60,7 @@ Copy [`.env.example`](.env.example) to `.env` and fill in the values. **Never co
 | `RH_PASSWORD` | Optional | Robinhood login is device-approval push — after these two are set, you approve the login by tapping "approve" in the Robinhood app on your phone; no MFA/TOTP secret is configured or needed anywhere in this codebase |
 | `PAPER_TRADING` | Optional | `true` (default) = paper trading on the local FMP paper ledger (an old `ALPACA_PAPER` in `.env` still works as an alias). With `PAPER_TRADING=false` and `ADVISORY_ONLY=false` the automated pipeline places **no orders** (real orders go only through the Robinhood queue). Has no effect while `ADVISORY_ONLY=true` |
 | `NTFY_TOPIC` | Optional | Phone push alerts via ntfy.sh — set a random string, subscribe in the ntfy app |
-| `WATCHLIST` | Optional | Comma-separated tickers (alternative: `watchlist.txt`, one per line — see "Ticker universe" below) |
+| `WATCHLIST` | Optional | Comma-separated tickers (alternatives: `watchlist.txt` one per line, or Sheet2 column A — see "Ticker universe" below) |
 | `DISCORD_WEBHOOK_URL` | Optional | Discord channel alerts |
 | `SLACK_WEBHOOK_URL` | Optional | Slack channel alerts |
 | `MACRO_REGIME_GATE_ENABLED` | Optional | `true` (default). When `false`, the orchestrator's macro kill-switch check is bypassed (hybrid mode) |
@@ -75,20 +73,17 @@ safe defaults — see the full list in [`.env.example`](.env.example).
 
 ## Ticker universe
 
-The evaluation universe is built by one shared function,
-`pipeline/advisory_inputs.py::build_universe_detailed()`, which the orchestrator daemon
-(and `main_orchestrator.py`) call every cycle. It combines these sources, in priority order:
+The pipeline (`pipeline/advisory_inputs.py::build_universe_detailed()`) builds its evaluation universe from up to three sources, in priority order:
 
 1. **Robinhood held positions** — always included when the snapshot is available.
 2. **`WATCHLIST` env var or `watchlist.txt`** — merged in whenever present.
-3. **Discovered scan candidates** (`scan_candidates.json`) — merged in whenever present.
-4. **`settings.DEFAULT_TICKERS`** — used **only as a fallback** when sources 1–3 are all empty.
-5. **Recently-closed positions** (`CLOSED_POSITION_RETENTION_DAYS`) — merged in last, so a
-   just-sold symbol keeps being tracked for a while.
+3. **Google Sheet → "Sheet2" column A** — consulted **only as a last-resort fallback**
+   when sources 1 and 2 are both empty (e.g. Robinhood is unreachable and no
+   watchlist is configured). Requires `credentials.json`; silently skipped if the
+   sheet, tab, or credential is missing.
 
-When `SYMBOL_RATING_AUTO_DROP_ENABLED` is on, non-held symbols on a long enough
-consecutive-BAD rating streak are dropped from the union; held symbols never are. If
-every source is empty the universe is empty and nothing is evaluated.
+If all three are empty, the run logs a warning naming every remediation path and
+exits cleanly without evaluating anything.
 
 ---
 
@@ -163,23 +158,13 @@ See [`webapp/README.md`](webapp/README.md) for the full mock↔live flag referen
 [`docs/architecture/webapp-and-gui.md`](docs/architecture/webapp-and-gui.md) for what each
 backend service does.
 
-**Pipeline (the data/compute layer the web app's backend depends on):**
-
-The orchestrator daemon is the one runtime. It keeps the pipeline engines warm, runs the
-advisory pipeline on its own timer (`ORCHESTRATOR_INTERVAL_SECONDS`, default `0` = on-demand)
-or on request, and hosts the Control API (`:8601`) and, when `PILOTS_API_ENABLED` is set, the
-Pilots API (`:8602`).
+**Pipeline (unchanged — the data/compute layer the web app's backend depends on):**
 
 ```bash
-.venv/bin/python3 -m desktop.orchestrator_daemon   # the daemon (Control API + pipeline timer; + Pilots API if PILOTS_API_ENABLED)
-.venv/bin/python3 main_orchestrator.py             # one async pipeline run without the daemon (HTML report)
-scripts/install_stack_service.command              # always-on: installs the launchd job that runs the daemon + APIs at login
+.venv/bin/python3 -m desktop.orchestrator_daemon   # the daemon: Control API + Pilots API + pipeline timer
+.venv/bin/python3 -c "from shared import daemon_client as d; print(d.trigger_run())"   # one cycle (POST /run)
+.venv/bin/python3 main_orchestrator.py    # one async pipeline run without the daemon
 ```
-
-Trigger a cycle with `POST /run` or the Pipeline Dashboard's "Run full advisory pipeline"
-button (daemon: `python -m desktop.orchestrator_daemon`). To get a fresh Robinhood
-snapshot: Open Settings → Brokers and press Refresh (approve the device prompt on your
-phone), or enable `ROBINHOOD_SCHEDULED_LOGIN_ENABLED` for the daemon's weekday-morning login.
 
 The old Streamlit desktop app (`launch_app.command`, `launch_gui.command`, and
 everything under `legacy/streamlit_command_center/`) was deleted in 2026-09. Use the web
@@ -275,7 +260,7 @@ source completions/investyo.zsh                  # zsh — shows flag descriptio
 source completions/investyo.bash                 # bash
 
 # Then tab-complete any known entry point, e.g.:
-#   python main_orchestrator.py --<TAB>  → --dry-run  --strict
+#   python main_orchestrator.py --<TAB>   → --dry-run  --strict
 #   python -m prompt_registry <TAB>   → list  get  sync  pin  rollback  diff  verify  publish
 ```
 

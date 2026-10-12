@@ -20,8 +20,9 @@
   non-zero only on a hard training crash.
 
   INSTALL (recommended): double-click scripts/install_schedule.command (which
-  installs this monthly-retrain job, the weekly-edgar job and the rollback-only
-  daily-advisory job), or run
+  installs this monthly-retrain job and the weekly-edgar job; the rollback-only
+  daily-advisory job is installed only when the installer is given its
+  with-daily-advisory flag), or run
       launchctl load  ~/Library/LaunchAgents/com.investyo.monthly-retrain.plist
 
   UNINSTALL:

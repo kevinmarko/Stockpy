@@ -61,7 +61,7 @@ comes back empty (see below).
 `settings.ALERT_NTFY_TOPIC`) and listed the wrong push senders; `incident-triage` verified a fix by running `main.py` and did not know
 `POST /run` answers 423 while the kill switch is on; `agentic-discovery` named `main._load_watchlist()` instead of the shared universe
 builder. The `ORCHESTRATOR_DAEMON_ENABLED` description (it described the deleted desktop shell and Launcher tab) is corrected, mirrored
-in `webapp/src/api/mock.ts`. `scripts/com.investyo.weekly-edgar.plist` did not parse (`--` inside an XML comment is illegal); the two
+in `webapp/src/api/mock.ts`. `scripts/com.investyo.weekly-edgar.plist` was not well-formed XML (`--` inside an XML comment is illegal, so strict parsers such as Python's reject it; macOS's own parser, which launchd uses, accepts it, so this was cosmetic); the two
 comment lines were reworded, no key or value changed. `scripts/daily_briefing.py`'s footer linked the retired `daily_report.html`.
 
 ## Found while verifying (documented, not fixed)

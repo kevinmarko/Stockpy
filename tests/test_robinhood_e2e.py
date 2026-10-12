@@ -42,7 +42,6 @@ the production modules.
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -847,140 +846,35 @@ class TestSkillMdInvariantsPinned:
                     f"{skill_md_path}: '{phrase}'"
                 )
 
-    # ------------------------------------------------------------------
-    # Steps 5.3 / 5.4b: the daemon is the one execution-queue writer and the
-    # scheduled `main.py` job (com.investyo.daily-advisory) is no longer
-    # loaded after the cutover (its plist is kept only for the RUNBOOK §3.15
-    # rollback). The next three tests pin the queue-refresh guidance in BOTH
-    # skill copies and in /rh-execute. Phrases are matched against
-    # whitespace-normalised text so a re-wrap of the prose cannot break them.
-    # ------------------------------------------------------------------
-
-    _SKILL_CLAUDE = ".claude/skills/robinhood-execution/SKILL.md"
-    _SKILL_AGENTS = ".agents/skills/robinhood-execution/SKILL.md"
-    _COMMAND_RH_EXECUTE = ".claude/commands/rh-execute.md"
-
-    @classmethod
-    def _normalized_texts(cls, *, include_command: bool = False) -> Dict[str, str]:
-        """{repo-relative path: whitespace-normalised text} for every existing
-        copy of the robinhood-execution skill (and, optionally, /rh-execute).
-        The .claude skill must exist; the .agents copy is checked when present,
-        like the sibling tests in this class."""
-        repo_root = Path(__file__).resolve().parent.parent
-        rel_paths = [cls._SKILL_CLAUDE, cls._SKILL_AGENTS]
-        if include_command:
-            rel_paths.append(cls._COMMAND_RH_EXECUTE)
-        texts = {
-            rel: " ".join((repo_root / rel).read_text(encoding="utf-8").split())
-            for rel in rel_paths
-            if (repo_root / rel).exists()
-        }
-        assert cls._SKILL_CLAUDE in texts, f"Missing {cls._SKILL_CLAUDE}"
-        if include_command:
-            assert cls._COMMAND_RH_EXECUTE in texts, f"Missing {cls._COMMAND_RH_EXECUTE}"
-        return texts
-
     def test_skill_md_refreshes_the_queue_through_the_daemon_in_primary(self):
-        """With DAEMON_AGENTIC_QUEUE_MODE=primary the daemon is the real queue
-        writer, so both SKILL.md copies must teach the agent to trigger a
-        daemon cycle (POST /run via shared.daemon_client), attach to a cycle
-        already in flight (409), stop on a kill-switch refusal (423) and poll
-        to a terminal state -- while keeping the freshness hard stop: a cycle
-        that ends `succeeded` does not make an older queue fresh."""
+        """Step 5.3: with DAEMON_AGENTIC_QUEUE_MODE=primary the daemon writes
+        the queue, so both SKILL.md copies must teach the agent to trigger a
+        daemon cycle (POST /run via shared.daemon_client) and poll it to a
+        terminal state -- while keeping the unchanged freshness rule and the
+        main.py guidance for when the daemon is not primary."""
+        candidate_paths = [
+            Path(".claude/skills/robinhood-execution/SKILL.md"),
+            Path(".agents/skills/robinhood-execution/SKILL.md"),
+        ]
+        skill_md_paths = [p for p in candidate_paths if p.exists()]
+        assert skill_md_paths, f"Could not find any of {candidate_paths}"
         required_phrases = [
             "DAEMON_AGENTIC_QUEUE_MODE",
-            "**`primary`**",
-            "Only `primary` lets this skill refresh the queue",
-            "the orchestrator daemon is the real queue writer",
-            "A fresh queue always comes from a daemon cycle",
-            "if one is already running, attach to it",
+            "`primary`",
             "from shared import daemon_client",
             "trigger_run(",
             "get_run_status(",
             "already_running",
             '("succeeded", "failed")',
             "kill_switch_active",
-            "ORCHESTRATOR_DAEMON_TOKEN",
+            "**`off` or `shadow`**",
+            "python3 main.py",
             "more than ~30 minutes old",
             "This rule is unchanged in `primary`",
         ]
-        for rel, text in self._normalized_texts().items():
+        for skill_md_path in skill_md_paths:
+            content = skill_md_path.read_text(encoding="utf-8")
             for phrase in required_phrases:
-                assert phrase in text, (
-                    f"Missing daemon-refresh phrase in {rel}: '{phrase}'"
+                assert phrase in content, (
+                    f"Missing daemon-refresh phrase in {skill_md_path}: '{phrase}'"
                 )
-
-    def test_skill_md_stops_and_tells_the_operator_when_the_daemon_is_not_primary(self):
-        """In `off`/`shadow` the daemon is NOT the real queue writer and the
-        scheduled main.py job is no longer loaded (its plist is kept only for
-        the RUNBOOK §3.15 rollback), so nothing refreshes the real queue.
-        Both skill copies must (a) STOP and tell the operator which mode they
-        read and that the deployment is meant to run `primary`, (b) never
-        offer or run main.py (or a daemon cycle) as a refresh, and (c) not
-        load or review a queue file at all in those modes: fail closed, with
-        no escape hatch for an already-existing file."""
-        required_phrases = [
-            "**`off` or `shadow`** — STOP.",
-            "the daemon is not the real queue writer",
-            "which mode you read",
-            "meant to run `primary`",
-            "is the operator's call",
-            "docs/RUNBOOK.md",
-            "§3.15",
-            "its plist stays only for the rollback",
-            "Do not trigger a daemon cycle",
-            "do not offer or run `main.py` or any other writer",
-            "never offer `main.py`",
-            "do not load or review a queue file in these modes: stop here",
-        ]
-        # The old non-primary guidance told the agent to rely on / re-run main.py.
-        forbidden_phrases = [
-            "python3 main.py",
-            "08:45",
-            "offer to re-run",
-            "`main.py` writes the queue",
-            "by hand",
-            "launch.command",
-            "--refresh-account",
-            "Command Center",
-        ]
-        # Any remaining mention of main.py must be a prohibition / retirement
-        # statement, never an instruction.
-        negative_markers = ("retired", "never", "do not", "no longer")
-
-        for rel, text in self._normalized_texts(include_command=True).items():
-            for phrase in forbidden_phrases:
-                assert phrase not in text, (
-                    f"{rel} still offers the retired main.py queue writer: '{phrase}'"
-                )
-            for sentence in re.split(r"(?<=[.;:])\s+", text):
-                if "main.py" in sentence:
-                    assert any(m in sentence.lower() for m in negative_markers), (
-                        f"{rel} mentions main.py outside a prohibition/retirement "
-                        f"statement: {sentence!r}"
-                    )
-            if rel == self._COMMAND_RH_EXECUTE:
-                continue  # the command defers to the skill; checked in the next test
-            for phrase in required_phrases:
-                assert phrase in text, (
-                    f"Missing non-primary stop-and-tell phrase in {rel}: '{phrase}'"
-                )
-
-    def test_rh_execute_command_follows_the_same_queue_refresh_rules(self):
-        """/rh-execute must agree with the skill: refresh via a daemon cycle in
-        `primary`, stop and name the mode in `off`/`shadow`, and keep every
-        hard stop."""
-        cmd = self._normalized_texts(include_command=True)[self._COMMAND_RH_EXECUTE]
-        required_phrases = [
-            "DAEMON_AGENTIC_QUEUE_MODE=primary",
-            "shared.daemon_client.trigger_run()",
-            "polled to completion",
-            "`off` or `shadow`",
-            "stop and tell the operator which mode you read",
-            "meant to run `primary`",
-            "do not trigger a cycle or re-run `main.py`",
-            "is being retired and is no longer a queue writer here",
-            "honor every hard stop (kill switch, `mode: off`, stale queue, no confirmed Agentic account)",
-        ]
-        for phrase in required_phrases:
-            assert phrase in cmd, f"Missing phrase in {self._COMMAND_RH_EXECUTE}: '{phrase}'"

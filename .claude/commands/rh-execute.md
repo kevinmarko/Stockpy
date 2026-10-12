@@ -16,15 +16,12 @@ review (they may be arriving here because of an ntfy push
 `execution/queue_builder.py` sent, not just because they typed this command):
 
 1. Verify the `robinhood-trading` MCP is connected and the queue exists and is
-   fresh — when `DAEMON_AGENTIC_QUEUE_MODE=primary`, first refresh it with a
-   daemon cycle (`POST /run` via `shared.daemon_client.trigger_run()`, polled to
-   completion, attaching to a cycle already running), per the skill's
-   Prerequisites step 3; in `off` or `shadow` the daemon is not the real queue
-   writer, so stop and tell the operator which mode you read (the live
-   deployment is meant to run `primary`; see `docs/RUNBOOK.md` §3.15) and do
-   not trigger a cycle or re-run `main.py`, which is being retired and is no
-   longer a queue writer here; honor every hard stop (kill switch, `mode: off`,
-   stale queue, no confirmed Agentic account).
+   fresh — when `DAEMON_AGENTIC_QUEUE_MODE=primary` (live since 2026-10-12),
+   first refresh it with a daemon cycle (`POST /run` via
+   `shared.daemon_client.trigger_run()`, polled to completion), per the skill's
+   Prerequisites step 3. In `off`/`shadow` the daemon is not the writer: stop and
+   ask the operator whether this is a §3.15 rollback; never run `main.py`. Honor every hard stop
+   (kill switch, `mode: off`, stale queue, no confirmed Agentic account).
 2. Confirm the dedicated Agentic account via `get_accounts`.
 3. **Preview every intent with `review_equity_order`**, narrated one at a time
    (compute share count from a live `get_equity_quotes` for BUY intents,
