@@ -4,7 +4,7 @@ Plan: `.claude/shrink_step5_4_callers_implementation_plan.md` (PR 5.4b section, 
 `.claude/shrink_step5_4b_i_verify_helper_walkthrough.md`. Stacked on 5.4a (PR #1117): the branch contains 5.4a's commits, so its diff
 against `main` shows both until 5.4a merges.
 
-- [x] Re-split 5.4b after `main` (#1119) showed the live daemon is still on `shadow` until the 2026-10-12..10-16 review ends; the full cutover-dependent change set is parked on the local branch `step5-4b-ii-cutover-dependent-full` for 5.4b-ii
+- [x] Re-split 5.4b after `main` (#1119) showed the live daemon on `shadow` pending a second review; #1120 then recorded the operator's cutover to `primary` (2026-10-12). The full cutover-dependent change set stays parked on the local branch `step5-4b-ii-cutover-dependent-full` for 5.4b-ii
 - [x] `scripts/step5_4_verify_cycle.py` (new): one standalone dry-run cycle; queue mode, symbol-rating and cap-audit recording forced off; Robinhood account fetch cache-only; heartbeat task and every alert suppressed; all restored on exit; fail closed if an override cannot be applied
 - [x] Exit codes: 0 ok, 1 cycle failed, 3 snapshot not refreshed by this run, 4 synthetic data / no signals
 - [x] `Makefile` (`&&`-chained recipe, `.PHONY`) and `verify.command` (propagates the status, `--dist loadgroup`)
@@ -18,4 +18,4 @@ against `main` shows both until 5.4a merges.
 - [x] Full offline suite on the final tree (12,060 passed, 37 skipped, 1 known wall-clock flake `TestPerfSmoke::test_tiny_window_completes_quickly`, passes alone)
 - [x] Commit; the operator chose a stacked draft PR on #1117 (base `claude/ecstatic-maxwell-f6ruct`)
 - [ ] CI green on the stacked PR; retarget to `main` once #1117 merges
-- [ ] 5.4b-ii (after the review and the operator's cutover): see "Deferred" in the walkthrough
+- [ ] 5.4b-ii (needs 5.4a and this PR merged, and the operator's call on the `daily-advisory` plist, which #1120 keeps for rollback): see "Why this is 5.4b-i" in the walkthrough

@@ -9,16 +9,21 @@ Plan: `.claude/shrink_step5_4_callers_implementation_plan.md` (PR 5.4b, re-split
 
 5.4b was planned, and fully built, on the premise that the live daemon was already cut over to `DAEMON_AGENTIC_QUEUE_MODE=primary`
 (that was the operator's answer at the start of the work). While integrating it, `main` moved: #1119 (merged 2026-10-12 10:07Z)
-records that the first shadow review "wasn't clean" and that a second 5-trading-day review runs 2026-10-12..10-16, with cutover after
-day 5. **The live daemon is still on `shadow`**, and the operator chose to split 5.4b:
+recorded that the first shadow review "wasn't clean" and that a second 5-trading-day review ran 2026-10-12..10-16, with the live daemon
+still on `shadow`, and the operator chose to split 5.4b. Later the same day #1120 (the operator's commit, after #1119) recorded that
+**the operator cut over to `primary` on 2026-10-12** without waiting for the extended review. So the split is no longer forced by the
+review, but this PR stays cutover-neutral on purpose: everything in it is true in any queue mode, and it can merge without waiting on
+the 5.4b-ii decisions below.
 
 - **5.4b-i (this PR, cutover-neutral):** the `make verify` helper, the `--dry-run` / keyless-run warnings, skill and settings text
   fixes that are true in any mode, and a plist that did not parse.
-- **5.4b-ii (held until after the review and the cutover):** deleting `launch.command` and `scripts/com.investyo.daily-advisory.plist`,
-  the `install_*` script and README changes, the `robinhood-execution` / `rh-execute` rewrite (stop when the mode is not `primary`),
-  RUNBOOK 3.15 "DONE" + rollback + 5.1, the CLAUDE.md/AGENTS.md status lines, `.env.example`. The complete, tested change set exists on
-  the local branch `step5-4b-ii-cutover-dependent-full` (commit `08f0630`); it must be rebased and every "live is primary" sentence
-  re-checked against the real state when the cutover happens. Hunks that landed in 5.4b-i will drop out.
+- **5.4b-ii (not started; no longer waiting for the review, still waiting for 5.4a and this PR to merge and for the operator):**
+  deleting `launch.command` and `scripts/com.investyo.daily-advisory.plist`, the `install_*` script and README changes, the
+  `robinhood-execution` / `rh-execute` rewrite (stop when the mode is not `primary`), RUNBOOK 3.15 "DONE" + rollback + 5.1, the
+  CLAUDE.md/AGENTS.md status lines, `.env.example`. **Open question for the operator:** #1120 says the `daily-advisory` plist is
+  *kept for rollback*, while the plan (and the full change set) deletes it. The complete, tested change set exists on the local branch
+  `step5-4b-ii-cutover-dependent-full` (commit `08f0630`, written before #1120); it must be rebased and reconciled with the cutover
+  record and the CLAUDE.md wording #1120 added to `main`. Hunks that landed in 5.4b-i will drop out.
 
 ## What changed
 
