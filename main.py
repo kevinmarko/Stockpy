@@ -91,7 +91,7 @@ from typing import Any, Dict, List, Optional
 #   imports main and triggers the loader.
 #
 # Why call it inside both main() AND run_once()?
-#   Production launchers (launch.command → `python main.py`) enter through
+#   Production launchers (e.g. the daily-advisory launchd job → `python main.py`) enter through
 #   main(), so the loader fires there.  `make verify` and `verify.command`
 #   import main and call `main.run_once()` directly without going through
 #   main() — so run_once() must also call the loader as a defensive backstop.

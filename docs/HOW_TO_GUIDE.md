@@ -225,7 +225,7 @@ at the project root from **Finder** or the **Dock**. It asks whether to use offl
 data (the default) or live data. In live mode it starts the backend APIs it needs (and the
 orchestrator daemon, when `ORCHESTRATOR_DAEMON_ENABLED=true`) if they aren't already
 running, then opens the web app. It does not run the pipeline for you — use the Pipeline
-screen (below) or `launch.command`.
+screen (below), or trigger a daemon cycle (`POST /run`).
 
 For a backend that keeps running with no Terminal window open, install the always-on stack
 service — see `docs/RUNBOOK.md` §0.1.
@@ -237,31 +237,19 @@ The old Streamlit desktop app (`launch_app.command`, `launch_gui.command`,
 
 ---
 
-### The headless way — double-click on macOS
+### The headless way — no web app
 
-Prefer a terminal-only loop with no web app, or need something scriptable for a scheduled task?
-`launch.command` at the project root is a macOS launcher you can double-click from **Finder** or the **Dock**. It:
-
-1. Navigates to the project root automatically.
-2. Verifies `.venv` exists — if not, prints exact instructions for creating it.
-3. Confirms the `.venv` Python is exactly **3.12.x** — if it's 3.14 or anything else, shows a clear error and exits rather than running with the wrong interpreter.
-4. Warns if `.env` is missing (non-fatal — the pipeline degrades gracefully).
-5. Runs `python main.py --interval 60` (keeps refreshing every 60 seconds) **or** `python main.py` (single run), depending on the `REFRESH_INTERVAL_SECONDS` variable at the top of the file.
-6. Pauses with **"Press any key to close"** on exit so you can always read the output.
-
-**One-time setup** (already done — listed here for reference if you ever recreate the file):
+The orchestrator daemon is the one runtime (`launch.command` and its `main.py` loop were removed in
+step 5.4b-ii). For a backend with no Terminal window, install the always-on stack service
+(`docs/RUNBOOK.md` §0.1). To run it in a Terminal instead:
 
 ```bash
-chmod +x launch.command
+.venv/bin/python3 -m desktop.orchestrator_daemon      # cycles on ORCHESTRATOR_INTERVAL_SECONDS (0 = on demand)
+.venv/bin/python3 -c "from shared import daemon_client as d; print(d.trigger_run())"   # one cycle now
 ```
 
-**To add to the Dock**: drag `launch.command` to your Dock → right-click → Options → Keep in Dock.
-
-**To switch between interval and single-run mode**: open `launch.command` in any text editor and change line:
-
-```bash
-REFRESH_INTERVAL_SECONDS=60   # change to 0 for a single run
-```
+`trigger_run()` returns a run id; poll it with `d.get_run_status(run_id)`. A 409 means a cycle is
+already running (attach to it), a 423 means the kill switch is on.
 
 ---
 
@@ -323,13 +311,15 @@ This is expected in development.
 
 **Note (2026-09):** this gate used to key off `os.path.exists("credentials.json")` (the Google Sheets service-account file). It was switched to a FRED-key check in step 4 prep, ahead of the Google Sheet publisher's retirement in step 4e (see [Section 18](#18-google-sheets-integration-legacy)) — deleting `credentials.json` no longer silently switches the daemon to fabricated data.
 
-### The advisory orchestrator
+### The advisory orchestrator (being retired)
 
 ```bash
 python3 main.py
 ```
 
-This is the original synchronous, clean advisory pipeline. Use `main_orchestrator.py` for everything that needs the full 50+ dashboard column set. `main.py` no longer writes to Google Sheets — that sink was retired in step 4e (2026-09); see [Section 18](#18-google-sheets-integration-legacy).
+This is the original synchronous, clean advisory pipeline. It is being retired (step 5): since the
+2026-10-12 cutover the daemon writes the execution queue, watch state and pushes, and `main.py` run by
+hand skips all of them and says so in a WARNING. Prefer a daemon cycle (`POST /run`). Use `main_orchestrator.py` for everything that needs the full 50+ dashboard column set. `main.py` no longer writes to Google Sheets — that sink was retired in step 4e (2026-09); see [Section 18](#18-google-sheets-integration-legacy).
 
 ---
 
@@ -1428,9 +1418,9 @@ RATIONALE_VERBOSITY=verbose
 Then restart the platform (`.env` is loaded at entry-point startup):
 
 ```bash
-python3 main.py         # advisory orchestrator (fastest refresh)
-# or
-python3 main_orchestrator.py  # full async pipeline
+launchctl kickstart -k gui/$(id -u)/com.investyo.stack   # the always-on daemon (RUNBOOK §0.1)
+# or, without the stack service:
+python3 main_orchestrator.py  # one full async pipeline run
 ```
 
 The `rationale` field in the HTML report and Google Sheet will now show the extended narrative.
@@ -1586,7 +1576,9 @@ requires it `> 0` or `preflight_check.py` fails.
 ### Running it
 
 ```bash
-python3 main.py                  # writes output/execution_queue.json when mode != off
+python3 -c "from shared import daemon_client as d; print(d.trigger_run())"
+# one daemon cycle writes $OUTPUT_DIR/execution_queue.json when the mode != off
+# (DAEMON_AGENTIC_QUEUE_MODE=primary, live since 2026-10-12); /rh-execute does this refresh itself
 # then in Claude Code:
 /rh-execute                      # previews every order; in live mode, places with confirmation
 ```
