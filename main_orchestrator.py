@@ -251,6 +251,13 @@ def compute_xsec_momentum_ranks(
     return ret_series.rank(pct=True, ascending=True)
 
 
+# Benchmark history fetched into tech_raw alongside the universe: the HMM,
+# RS-vs-SPY/beta and Dual Momentum read it. It is benchmark DATA, not a
+# universe row -- ProcessingStep drops it from dashboard_df unless it is also
+# in the cycle universe (docs/known_issues/daemon_benchmark_spy_leak.md).
+BENCHMARK_SYMBOLS = ("SPY",)
+
+
 async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
     """
     Fetches macroeconomic, fundamental, and technical pricing data concurrently
@@ -276,7 +283,7 @@ async def fetch_all_data_async(de: DataEngine, tickers: list) -> tuple:
     # main.py's _fetch_bars_for_universe() already used HistoricalStore; this
     # closed the one remaining tech-bars call site that bypassed it.
     tech_task = asyncio.wait_for(
-        asyncio.to_thread(de.fetch_technical_raw_cached, list(set(tickers + ["SPY"]))),
+        asyncio.to_thread(de.fetch_technical_raw_cached, list(set(tickers + list(BENCHMARK_SYMBOLS)))),
         timeout=_timeout,
     )
 
