@@ -2109,7 +2109,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "data/sector_embeddings.py:53",
+        "site": "data/sector_embeddings.py:62",
         "via": []
       },
       {
