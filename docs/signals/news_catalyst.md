@@ -157,10 +157,8 @@ Both paths ultimately collapse to a directional score ∈ [−1, +1] via
 `positive − negative` net probability mass (`_distribution_to_signed`) wherever a single
 scalar is needed (e.g. averaging a symbol's headlines, or the legacy `_score_headline()`
 contract). The FinBERT path is significantly more accurate but requires a ~400 MB model
-download on first use and a CPU/GPU fast enough for batched inference — see
-`requirements-optional.txt` for the CPU-only PyTorch pin that activates it (`torch>=2.0`;
-`transformers>=4.35.0` alone, already in `requirements.txt`, has no backend to run without
-it and silently falls back to the lexicon).
+download on first use and a CPU/GPU fast enough for batched inference (`torch>=2.0`
+in `requirements.txt` provides the backend for `transformers>=4.35.0`).
 
 ### Batched scoring (`score_headlines()`)
 
