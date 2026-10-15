@@ -992,6 +992,17 @@ def _write_state_snapshot(
                     # Parity with reporting.state_snapshot's
                     # "forecast_is_fallback" (advisory path).
                     "forecast_is_fallback": _safe_float_or_none(row.get("Forecast_30_Is_Fallback")),
+                    # Forecasting rebuild F4 part 2a: per-horizon Monte-Carlo
+                    # p5/p95 bounds from ForecastingStep (JSON null when NaN
+                    # or absent, never a fabricated 0.0 -- CONSTRAINT #4).
+                    "forecast_10_lower": _safe_float_or_none(row.get("Forecast_10_Lower")),
+                    "forecast_10_upper": _safe_float_or_none(row.get("Forecast_10_Upper")),
+                    "forecast_30_lower": _safe_float_or_none(row.get("Forecast_30_Lower")),
+                    "forecast_30_upper": _safe_float_or_none(row.get("Forecast_30_Upper")),
+                    "forecast_60_lower": _safe_float_or_none(row.get("Forecast_60_Lower")),
+                    "forecast_60_upper": _safe_float_or_none(row.get("Forecast_60_Upper")),
+                    "forecast_90_lower": _safe_float_or_none(row.get("Forecast_90_Lower")),
+                    "forecast_90_upper": _safe_float_or_none(row.get("Forecast_90_Upper")),
                     # Buy- and sell-side execution corridors surfaced so the
                     # Streamlit observability dashboard can render the full
                     # tactical plan without re-reading the SQLite DB.

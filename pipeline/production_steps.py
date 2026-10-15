@@ -21,6 +21,7 @@ except ImportError:
 
 import asyncio
 import logging
+import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -532,7 +533,16 @@ class ForecastingStep(PipelineStep):
                          # populate it, which is out of scope for this change
                          # (see docs/known_issues/forecast_fallback_current_price_disclosure.md).
                          'Forecast_10_Is_Fallback', 'Forecast_30_Is_Fallback',
-                         'Forecast_60_Is_Fallback', 'Forecast_90_Is_Fallback']
+                         'Forecast_60_Is_Fallback', 'Forecast_90_Is_Fallback',
+                         # Forecasting rebuild F4 part 2a: per-horizon Monte-Carlo
+                         # p5/p95 bounds from ForecastingEngine.generate_forecast.
+                         # Also deliberately kept out of config.COLUMN_SCHEMA so
+                         # missing/suppressed bounds stay NaN on dashboard_df
+                         # (never 0.0, CONSTRAINT #4).
+                         'Forecast_10_Lower', 'Forecast_10_Upper',
+                         'Forecast_30_Lower', 'Forecast_30_Upper',
+                         'Forecast_60_Lower', 'Forecast_60_Upper',
+                         'Forecast_90_Lower', 'Forecast_90_Upper']
         # Forecasting rebuild F3: the gate's "published naive" disclosure
         # columns exist only when the gate drives the published forecast, so
         # the flag-off dashboard keeps exactly its pre-F3 columns.
@@ -576,12 +586,12 @@ class ForecastingStep(PipelineStep):
                     sigma = float(returns.std())
 
                 mc_target, mc_low, mc_high = fe.run_monte_carlo(price, mu, sigma, 30)
-                mc_10, _, _ = fe.run_monte_carlo(price, mu, sigma, 10)
-                mc_60, _, _ = fe.run_monte_carlo(price, mu, sigma, 60)
-                mc_90, _, _ = fe.run_monte_carlo(price, mu, sigma, 90)
+                mc_10, mc_10_low, mc_10_high = fe.run_monte_carlo(price, mu, sigma, 10)
+                mc_60, mc_60_low, mc_60_high = fe.run_monte_carlo(price, mu, sigma, 60)
+                mc_90, mc_90_low, mc_90_high = fe.run_monte_carlo(price, mu, sigma, 90)
                 if ctx.progress is not None:
                     ctx.progress.advance_symbol(f"Forecasting: {ticker} (fallback)")
-                return ticker, {
+                fallback_forecasts = {
                     'Target_Days': 30,
                     'ARIMA': price,
                     'MC_Target': mc_target,
@@ -607,6 +617,17 @@ class ForecastingStep(PipelineStep):
                     'Forecast_60_Is_Fallback': True,
                     'Forecast_90_Is_Fallback': True,
                 }
+                for h, lo, hi in (
+                    (10, mc_10_low, mc_10_high),
+                    (30, mc_low, mc_high),
+                    (60, mc_60_low, mc_60_high),
+                    (90, mc_90_low, mc_90_high),
+                ):
+                    if lo is not None and math.isfinite(lo) and lo > 0:
+                        fallback_forecasts[f'Forecast_{h}_Lower'] = lo
+                    if hi is not None and math.isfinite(hi) and hi > 0:
+                        fallback_forecasts[f'Forecast_{h}_Upper'] = hi
+                return ticker, fallback_forecasts
 
         workers = max(1, int(getattr(settings, "FORECAST_MAX_CONCURRENCY", 8)))
         rows = ctx.dashboard_df.to_dict('records')
