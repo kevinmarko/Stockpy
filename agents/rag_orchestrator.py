@@ -158,6 +158,15 @@ def retrieve_documents(state: RAGState) -> Dict[str, Any]:
         # every other "optional dependency missing" path in this codebase
         # (e.g. data/rag_index.py's own faiss-absent no-op).
         try:
+            try:
+                import lightgbm  # noqa: F401
+            except ImportError:
+                pass
+            try:
+                import torch
+                torch.set_num_threads(1)
+            except Exception:
+                pass
             from sentence_transformers import SentenceTransformer  # type: ignore
         except ImportError:
             logger.warning(

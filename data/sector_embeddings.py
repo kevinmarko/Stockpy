@@ -38,18 +38,23 @@ from settings import settings
 
 logger = logging.getLogger(__name__)
 
+import importlib.util
+
 try:
-    try:
-        import lightgbm  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import torch
-        torch.set_num_threads(1)
-    except Exception:
-        pass
-    from sentence_transformers import SentenceTransformer, models  # noqa: F401
-    SBERT_AVAILABLE = True
+    if importlib.util.find_spec("sentence_transformers") is not None:
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError:
+            pass
+        try:
+            import torch
+            torch.set_num_threads(1)
+        except Exception:
+            pass
+        from sentence_transformers import SentenceTransformer, models  # noqa: F401
+        SBERT_AVAILABLE = True
+    else:
+        SBERT_AVAILABLE = False
 except ImportError:
     SBERT_AVAILABLE = False
 
