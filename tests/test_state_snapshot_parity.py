@@ -134,6 +134,17 @@ ORCHESTRATOR_ONLY_FIELDS: set[str] = {
     # or reads a stitched TrendsStore series. Revisit if/when the advisory
     # path grows one.
     "google_trends_asvi",
+    # Forecasting rebuild F4 part 2a: per-horizon Monte-Carlo p5/p95 bounds
+    # from pipeline/production_steps.py::ForecastingStep (daemon-only; main.py
+    # is being retired under shrink step 5).
+    "forecast_10_lower",
+    "forecast_10_upper",
+    "forecast_30_lower",
+    "forecast_30_upper",
+    "forecast_60_lower",
+    "forecast_60_upper",
+    "forecast_90_lower",
+    "forecast_90_upper",
 }
 
 
@@ -196,6 +207,14 @@ def orchestrator_signals(tmp_path, monkeypatch):
             "Sizing_Was_Capped": "Yes",
             "Sizing_Binding_Constraint": "kelly_cap",
             "Forecast_30_Is_Fallback": True,
+            "Forecast_10_Lower": 142.0,
+            "Forecast_10_Upper": 158.0,
+            "Forecast_30_Lower": 135.0,
+            "Forecast_30_Upper": 165.0,
+            "Forecast_60_Lower": 128.0,
+            "Forecast_60_Upper": 172.0,
+            "Forecast_90_Lower": 120.0,
+            "Forecast_90_Upper": 180.0,
         },
         {
             "Symbol": "MSFT",
@@ -445,3 +464,34 @@ class TestOrchestratorStrategyScore:
         snap = json.loads(raw)
         assert snap["signals"][0]["score"] is None
         assert '"score": NaN' not in raw
+
+
+class TestOrchestratorForecastBands:
+    """Forecasting rebuild F4 part 2a: per-horizon Forecast_{10,30,60,90}_{Lower,Upper}
+    bands persist onto state_snapshot.json signals[] as forecast_{h}_{lower,upper}
+    when present and serialize as JSON null (never 0.0) when absent or NaN."""
+
+    _BAND_KEYS = (
+        "forecast_10_lower", "forecast_10_upper",
+        "forecast_30_lower", "forecast_30_upper",
+        "forecast_60_lower", "forecast_60_upper",
+        "forecast_90_lower", "forecast_90_upper",
+    )
+
+    def test_round_trips_when_present(self, orchestrator_signals):
+        sig = _by_symbol(orchestrator_signals, "AAPL")
+        assert sig["forecast_10_lower"] == pytest.approx(142.0)
+        assert sig["forecast_10_upper"] == pytest.approx(158.0)
+        assert sig["forecast_30_lower"] == pytest.approx(135.0)
+        assert sig["forecast_30_upper"] == pytest.approx(165.0)
+        assert sig["forecast_60_lower"] == pytest.approx(128.0)
+        assert sig["forecast_60_upper"] == pytest.approx(172.0)
+        assert sig["forecast_90_lower"] == pytest.approx(120.0)
+        assert sig["forecast_90_upper"] == pytest.approx(180.0)
+
+    def test_is_null_when_absent(self, orchestrator_signals):
+        sig = _by_symbol(orchestrator_signals, "MSFT")
+        for key in self._BAND_KEYS:
+            assert sig[key] is None, f"{key} must be null when absent"
+            assert sig[key] != 0.0
+

@@ -17,7 +17,7 @@ Data sources
 Sentiment scorer
 ----------------
 If ``transformers`` is installed (with a PyTorch or TensorFlow backend --
-see ``requirements-optional.txt`` for a CPU-only torch pin), uses
+see ``requirements.txt`` for ``torch>=2.0``), uses
 `ProsusAI/finbert <https://huggingface.co/ProsusAI/finbert>`_ — a BERT
 model fine-tuned on 10 000 financial news sentences.  Loaded once per
 process and cached as a module-level singleton.
@@ -97,6 +97,19 @@ def _get_finbert_pipeline() -> Optional[Any]:
         return _FINBERT_PIPELINE
     _FINBERT_LOAD_ATTEMPTED = True
     try:
+        # Pre-empt OpenMP runtime initialization on macOS before transformers
+        # imports torch, and cap PyTorch intra-op threads to 1 so subsequent
+        # or prior LightGBM calls never collide on libomp.dylib (see
+        # docs/known_issues/pytorch_lightgbm_libomp_collision.md).
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError:
+            pass
+        try:
+            import torch
+            torch.set_num_threads(1)
+        except Exception:
+            pass
         from transformers import pipeline as _hf_pipeline  # type: ignore
         _FINBERT_PIPELINE = _hf_pipeline(
             "sentiment-analysis",

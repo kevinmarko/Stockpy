@@ -65,7 +65,7 @@ One forecasting service that:
 - **Shadow mode:** for 2 weeks the gated blend is recorded as `gated_blend` next to the live `blend`, without driving decisions. Then I show you the side-by-side skill and flip `FORECAST_NAIVE_GATE_ENABLED` on. Default off → on only after your review of the shadow numbers.
 
 ### F4: Streamline (archive what the gate or the data rules out)
-*(Status, 2026-10: Part 1 completed: BERT-LLA, LSTM-attention endpoint, FORECAST_DRIFT_SHRINKAGE, and sector_configs.json archived. Sector static-preference blend stays for Part 2 pending the F3 flip.)*
+*(Status, 2026-10: Part 1 completed: BERT-LLA, LSTM-attention endpoint, FORECAST_DRIFT_SHRINKAGE, and sector_configs.json archived. Part 2a completed: per-horizon `Forecast_{10,30,60,90}_{Lower,Upper}` bands persisted through `ForecastingStep` and `state_snapshot.json`. Sector static-preference blend stays for Part 2 pending the F3 flip.)*
 - Archive to `legacy/`:
   - BERT-LLA (+ its settings)
   - the LSTM-attention endpoint
@@ -77,7 +77,7 @@ One forecasting service that:
   - `/metrics/forecast` and the advisory path read the pipeline's persisted forecast instead of refitting.
   - `main.py`'s own forecasting goes away with `main.py` in step 5.
   - The daemon's `ForecastingStep` becomes the only producer.
-- Persist per-horizon `Forecast_{h}_Lower/Upper` quantiles (computed today, dropped by the pipeline).
+- Persist per-horizon `Forecast_{h}_Lower/Upper` quantiles (computed today, dropped by the pipeline). *(Done in F4 part 2a.)*
 
 ### F5: Decisions in units of forecast error (the real rebuild; validated before switching)
 - Replace the fixed ±1.5% / ±3% thresholds with **z = expected log-return ÷ that model-horizon's measured error**. Bullish/bearish means |z| above a threshold.

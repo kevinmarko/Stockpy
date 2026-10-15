@@ -32,22 +32,9 @@
 # churn, so it is intentionally omitted.
 tensorflow>=2.19
 
-# CPU-only PyTorch — activates real local ProsusAI/FinBERT inference in
-# signals/news_catalyst.py (see _get_finbert_pipeline / score_headlines)
-# instead of the built-in keyword-lexicon fallback. requirements.txt already
-# pins `transformers>=4.35.0`, but transformers needs a PyTorch OR
-# TensorFlow backend to actually run a model -- without one, FinBERT
-# silently falls back to the lexicon on every install, which is why this
-# lives here rather than in requirements.txt. `torch>=2.0` is a broad,
-# CPU-friendly floor (this repo has no CUDA/GPU requirement -- FinBERT is a
-# small BERT-base model, CPU inference is fast enough for a batched,
-# per-cycle headline-scoring workload); pip resolves the correct CPU wheel
-# for the host platform automatically for a plain `torch` install (no
-# `--index-url` / `+cpu` suffix needed on macOS or Linux x86_64/arm64).
-# Everything else in the platform runs identically whether or not this file
-# is installed -- see FINBERT_ENABLED / FINBERT_SCORE_CACHE_ENABLED in
-# settings.py for the graceful-degradation contract.
-torch>=2.0
+# Note: PyTorch (torch>=2.0) was previously listed here and has been promoted
+# to core requirements.txt to back FinBERT headline scoring in signals/news_catalyst.py.
+
 
 # faiss-cpu activates the embedded local vector store used by the RAG-Powered
 # Portfolio Contextualizer (data/rag_index.py, gated behind
@@ -73,7 +60,7 @@ faiss-cpu>=1.8.0
 # read-only in April 2025 (no further maintenance, ever) and it scrapes an
 # undocumented, unstable Google endpoint that is well known to return
 # frequent HTTP 429s even under light, single-operator use -- matching this
-# file's own tensorflow/torch/faiss-cpu precedent of keeping a fragile or
+# file's own tensorflow/faiss-cpu precedent of keeping a fragile or
 # heavy opt-in dependency out of the pinned, CI-installed requirements.
 # Without it, data/attention_sources.py's `_fetch_pytrends_attention_score()`
 # lazily imports pytrends inside the function body and degrades to a
@@ -87,8 +74,8 @@ pytrends>=4.9.2
 # Related Sector Selection feature (data/sector_embeddings.py, gated behind
 # settings.SECTOR_SELECTION_ENABLED, default False, plus
 # settings.SECTOR_SIMILARITY_EMBEDDER="sbert", the default embedder choice).
-# It sits on top of `torch>=2.0` (already above, for FinBERT) and
-# `transformers>=4.35.0` (already in requirements.txt) -- the marginal
+# It sits on top of `torch>=2.0` and `transformers>=4.35.0` (both already in
+# requirements.txt, for FinBERT) -- the marginal
 # dependency cost of adding this package is small, not a new heavy runtime.
 # Kept out of requirements.txt for the same reason as the other entries in
 # this file: it is a local, opt-in model, and CI should stay lean. Without
