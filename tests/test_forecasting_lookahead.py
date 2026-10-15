@@ -5,12 +5,16 @@ import pandas as pd
 
 import types
 
+import importlib.machinery
+
 # Create mock modules for TensorFlow before importing any engine that imports tf
 mock_tf = types.ModuleType('tensorflow')
 mock_keras = types.ModuleType('tensorflow.keras')
 mock_models = types.ModuleType('tensorflow.keras.models')
 mock_layers = types.ModuleType('tensorflow.keras.layers')
 mock_callbacks = types.ModuleType('tensorflow.keras.callbacks')
+for _m in (mock_tf, mock_keras, mock_models, mock_layers, mock_callbacks):
+    _m.__spec__ = importlib.machinery.ModuleSpec(_m.__name__, None)
 
 # Wire them together just in case
 mock_tf.keras = mock_keras
