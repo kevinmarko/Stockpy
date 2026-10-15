@@ -28,6 +28,7 @@ TestFmpOnlyDispatchers — FMP-only dispatcher functions
 """
 
 import math
+import sys
 import types
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -1990,6 +1991,19 @@ class TestFinbertOpenMPCoexistence:
         import lightgbm as lgb
         import torch
         import torch.nn as nn
+
+        # Other test modules (test_cnn_lstm_worker.py, test_forecasting_lookahead.py,
+        # test_lstm_attention_worker.py) install spec-less ``types.ModuleType``
+        # tensorflow stubs in sys.modules at import time. transformers probes
+        # tensorflow with importlib.util.find_spec, which raises
+        # "ValueError: tensorflow.__spec__ is None" on such a stub, so this test
+        # failed whenever one of those modules shared its xdist worker. Hide the
+        # stubs for this test only (monkeypatch restores them afterwards).
+        for _mod_name, _mod in list(sys.modules.items()):
+            if (_mod_name == "tensorflow" or _mod_name.startswith("tensorflow.")) and getattr(
+                _mod, "__spec__", None
+            ) is None:
+                monkeypatch.delitem(sys.modules, _mod_name)
 
         monkeypatch.setattr(nc, "_FINBERT_LOAD_ATTEMPTED", False)
         monkeypatch.setattr(nc, "_FINBERT_PIPELINE", None)
