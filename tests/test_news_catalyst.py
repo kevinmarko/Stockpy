@@ -28,6 +28,7 @@ TestFmpOnlyDispatchers — FMP-only dispatcher functions
 """
 
 import math
+import sys
 import types
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -1975,3 +1976,53 @@ class TestGetSymbolNewsCatalystDetails:
                 with patch("signals.news_catalyst.score_headlines", return_value=distributions):
                     result = get_symbol_news_catalyst_details("AAPL")
         assert result["provider_used"] == "none"
+
+
+class TestFinbertOpenMPCoexistence:
+    """Regression coverage for docs/known_issues/pytorch_lightgbm_libomp_collision.md."""
+
+    def test_get_finbert_pipeline_caps_torch_threads_and_coexists_with_lightgbm(
+        self, monkeypatch
+    ):
+        import numpy as np
+        import signals.news_catalyst as nc
+
+        pytest.importorskip("torch")
+        import lightgbm as lgb
+        import torch
+        import torch.nn as nn
+
+        # Other test modules (test_cnn_lstm_worker.py, test_forecasting_lookahead.py,
+        # test_lstm_attention_worker.py) install spec-less ``types.ModuleType``
+        # tensorflow stubs in sys.modules at import time. transformers probes
+        # tensorflow with importlib.util.find_spec, which raises
+        # "ValueError: tensorflow.__spec__ is None" on such a stub, so this test
+        # failed whenever one of those modules shared its xdist worker. Hide the
+        # stubs for this test only (monkeypatch restores them afterwards).
+        for _mod_name, _mod in list(sys.modules.items()):
+            if (_mod_name == "tensorflow" or _mod_name.startswith("tensorflow.")) and getattr(
+                _mod, "__spec__", None
+            ) is None:
+                monkeypatch.delitem(sys.modules, _mod_name)
+
+        monkeypatch.setattr(nc, "_FINBERT_LOAD_ATTEMPTED", False)
+        monkeypatch.setattr(nc, "_FINBERT_PIPELINE", None)
+        with patch("transformers.pipeline", return_value=MagicMock()):
+            pipe = nc._get_finbert_pipeline()
+            assert pipe is not None
+
+        assert torch.get_num_threads() == 1
+
+        # LightGBM train + predict after FinBERT loader must not SIGSEGV
+        X = np.random.randn(40, 5).astype(np.float32)
+        y = np.random.randn(40).astype(np.float32)
+        ds = lgb.Dataset(X, label=y)
+        booster = lgb.train({"verbosity": -1, "num_threads": 2}, ds, num_boost_round=3)
+        preds = booster.predict(X)
+        assert preds.shape == (40,)
+
+        # PyTorch multi-op forward pass after LightGBM must not deadlock
+        layer = nn.Linear(5, 3)
+        out = torch.softmax(layer(torch.randn(4, 5)), dim=-1)
+        assert out.shape == (4, 3)
+

@@ -139,6 +139,9 @@ robin_stocks>=3.1.0
 # signals/news_catalyst.py.  Requires either PyTorch or TensorFlow backend.
 # Without it, a built-in keyword lexicon is used automatically (no crash).
 transformers>=4.35.0
+# PyTorch backend: powers FinBERT neural headline sentiment in signals/news_catalyst.py
+# (via transformers). CPU wheel is resolved automatically by pip across macOS and Linux x86_64/arm64.
+torch>=2.0
 
 
 # Read-only web-API scaffold (api/state_api.py) — future web/mobile frontend foundation

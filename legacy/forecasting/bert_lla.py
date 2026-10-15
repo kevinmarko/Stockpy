@@ -49,10 +49,26 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Pre-empt OpenMP runtime initialization on macOS: if PyTorch initializes its
+# bundled libomp before LightGBM initializes its OpenMP context, subsequent
+# lightgbm.predict() calls crash with SIGSEGV. Importing lightgbm first
+# establishes the OpenMP runtime context safely across platforms.
+try:
+    import lightgbm  # noqa: F401
+except ImportError:
+    pass
+
 try:
     import torch
     import torch.nn as nn
     TORCH_AVAILABLE = True
+    try:
+        # Cap intra-op parallelism to 1 thread on import to prevent OpenMP threadpool
+        # collision/deadlock with LightGBM on macOS. For lightweight LSTM and attention
+        # models, single-thread execution is also faster and avoids synchronization overhead.
+        torch.set_num_threads(1)
+    except Exception:
+        pass
 except ImportError:
     TORCH_AVAILABLE = False
 

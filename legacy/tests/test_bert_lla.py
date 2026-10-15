@@ -1,21 +1,16 @@
 """Tests for forecasting/bert_lla.py -- the BERT-LLA PyTorch dual-LSTM +
 self-attention forecaster and its three registered ablations.
 
-torch is NOT installed in this environment (it's an optional dependency,
-requirements-optional.txt) -- TORCH_AVAILABLE is genuinely False here. Two
-tiers of coverage accordingly:
+Supports both environments where torch is installed (core requirements.txt)
+and lean environments where torch might be absent:
 
 1. Pure numpy/logic helpers (build_masked_sentiment_channel,
-   sentiment_coverage) and the absent-dependency degradation path run
-   unconditionally -- they need no torch import at all.
+   sentiment_coverage) run unconditionally.
 2. Actual model architecture/forward-pass tests (LLAAttention,
-   BertLLARegressor, fit_predict_bert_lla) are skipped here
-   (@pytest.mark.skipif) rather than faked with a hand-rolled tensor mock --
-   a fake mock would not validate real matrix arithmetic (attention softmax,
-   LSTM state) and would be closer to pretending to test than honest
-   coverage. These tests are correct and will run in an environment with
-   torch installed; see the PR's own risk register for this sandbox
-   limitation.
+   BertLLARegressor, fit_predict_bert_lla) run when torch is installed
+   (@_skip_no_torch).
+3. Absent-torch degradation checks verify that without torch, sentinel
+   fallbacks and RuntimeError guards fire as expected.
 """
 from __future__ import annotations
 
@@ -33,6 +28,9 @@ from forecasting.bert_lla import (
 
 _skip_no_torch = pytest.mark.skipif(
     not TORCH_AVAILABLE, reason="torch not installed in this environment"
+)
+_skip_with_torch = pytest.mark.skipif(
+    TORCH_AVAILABLE, reason="torch is installed in this environment"
 )
 
 
@@ -101,29 +99,40 @@ class TestSentimentCoverage:
 
 
 class TestAbsentTorchDegradation:
+    @_skip_with_torch
     def test_torch_unavailable_in_this_environment(self):
-        """Documents the actual sandbox state this test suite runs
-        under -- see this module's docstring."""
+        """Documents absent-torch state when running in an unequipped environment."""
         assert TORCH_AVAILABLE is False
 
+    @_skip_with_torch
     def test_bert_lla_regressor_is_none_when_torch_absent(self):
         from forecasting.bert_lla import BertLLARegressor
         assert BertLLARegressor is None
 
+    @_skip_with_torch
     def test_lla_attention_is_none_when_torch_absent(self):
         from forecasting.bert_lla import LLAAttention
         assert LLAAttention is None
 
-    def test_fit_predict_raises_runtime_error_when_torch_absent(self):
+    def test_fit_predict_raises_runtime_error_when_torch_absent(self, monkeypatch):
         """The caller (ForecastingEngine.run_bert_lla_forecast) is
         responsible for catching this and degrading to the zero sentinel
         -- this function itself raises rather than silently no-op'ing."""
-        from forecasting.bert_lla import fit_predict_bert_lla
-        with pytest.raises(RuntimeError):
-            fit_predict_bert_lla(
+        import forecasting.bert_lla as bert_lla
+        monkeypatch.setattr(bert_lla, "TORCH_AVAILABLE", False)
+        with pytest.raises(RuntimeError, match="torch is not available"):
+            bert_lla.fit_predict_bert_lla(
                 np.zeros((2, 5, 10)), np.zeros((2, 4)), np.zeros((1, 5, 10)),
                 use_attention=True,
             )
+
+    @_skip_no_torch
+    def test_torch_available_when_installed(self):
+        """Documents that torch is available and model classes are defined when installed."""
+        assert TORCH_AVAILABLE is True
+        from forecasting.bert_lla import BertLLARegressor, LLAAttention
+        assert BertLLARegressor is not None
+        assert LLAAttention is not None
 
 
 @_skip_no_torch
@@ -216,3 +225,34 @@ class TestFitPredictBertLLA:
         )
         assert pred.shape == (n_horizons,)
         assert alpha is None
+
+
+@_skip_no_torch
+class TestOpenMPCoexistence:
+    def test_torch_intraop_threads_capped_to_one(self):
+        """Documents that forecasting/bert_lla caps torch intra-op threads to 1
+        to avoid OpenMP collisions with LightGBM on macOS (Apple Silicon)."""
+        import torch
+        assert torch.get_num_threads() == 1
+
+    def test_lightgbm_and_torch_sequential_execution_no_segfault(self):
+        """Verifies LightGBM and PyTorch can train and infer sequentially in the
+        same process without OpenMP collision deadlocks or SIGSEGV."""
+        import lightgbm as lgb
+        import torch
+        import torch.nn as nn
+
+        # Run LightGBM train/predict
+        X = np.random.randn(50, 5).astype(np.float32)
+        y = np.random.randn(50).astype(np.float32)
+        ds = lgb.Dataset(X, label=y)
+        booster = lgb.train({"verbosity": -1, "num_threads": 2}, ds, num_boost_round=3)
+        lgb_preds = booster.predict(X)
+        assert lgb_preds.shape == (50,)
+
+        # Run PyTorch LSTM forward pass
+        lstm = nn.LSTM(5, 16, batch_first=True)
+        x_tensor = torch.randn(2, 10, 5)
+        out, _ = lstm(x_tensor)
+        assert out.shape == (2, 10, 16)
+
