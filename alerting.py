@@ -50,7 +50,7 @@ used by strategy/risk/execution-layer code, ``prompt_registry``, and
 personal phone push (this module's ``notify()``) and a team/ops-channel
 dispatcher (``observability/alerts.py``) serve genuinely different audiences
 and have no shared code path. If you are adding a new alert trigger outside
-``main.py``'s advisory loop, use ``observability.alerts.send_alert()``
+the daemon's advisory/queue steps, use ``observability.alerts.send_alert()``
 instead of this module. See ``observability/alerts.py``'s module docstring
 for its own side of this cross-reference.
 """

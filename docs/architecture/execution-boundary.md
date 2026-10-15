@@ -31,19 +31,19 @@ checkout*, not a running system:
 
 ## 1. Autopilot's autonomous per-cycle universe
 
-**[Traced against live code.]** Two independent orchestrator entry points
-exist in this codebase, and both resolve their per-cycle symbol universe
-through the same shared function:
+**[Traced against live code; step 5.5 update.]** The per-cycle symbol universe
+is built by one function chain. The traced entry points were:
 
-- **`main.py::_build_universe()`** (`main.py:343-421`) — the advisory
-  orchestrator's (`main.py --interval`/`--agent`) universe builder.
-- **`pipeline/production_steps.py::AsyncDataFetchStep.run()`**
-  (`pipeline/production_steps.py:79-125`) — the universe builder the
-  **persistent orchestrator daemon** (`main_orchestrator.py` /
+- **`pipeline/production_steps.py::AsyncDataFetchStep.run()`** — the universe
+  builder the **persistent orchestrator daemon** (`main_orchestrator.py` /
   `desktop/daemon_runtime.py`, the backend the Pilots PWA talks to) executes
-  every cycle.
+  every cycle; it calls `pipeline/advisory_inputs.py::build_universe_detailed()`.
+- *(archived in step 5.5)* `main.py::_build_universe()`, the advisory
+  orchestrator's (`--interval`/`--agent`) universe builder, wrapped the same
+  `build_universe_detailed()` before `main.py` moved to `legacy/main.py`. The
+  line numbers cited below for it describe the pre-archive file.
 
-Both call **`data.portfolio_sync.compute_tracked_universe()`**
+Both called **`data.portfolio_sync.compute_tracked_universe()`**
 (`data/portfolio_sync.py:682-741`) — the literal same Python function object,
 imported at both call sites, not two implementations that happen to agree.
 Its signature takes exactly four named parameters:
@@ -69,13 +69,11 @@ Quick-Trade session state.
 
 `watchlist` for both entry points comes from **`load_env_watchlist()`**
 (`data/portfolio_sync.py:618-643`) — a shared reader of the `WATCHLIST` env
-var and a plain-text watchlist file (`main.py` passes `watchlist.txt`; the
-daemon path passes `ctx.watchlist_file`, wired to the same filename by
-`main_orchestrator.py`'s `RunContext(...)` construction). `main.py` layers
-its own Robinhood-snapshot `held` set, its own `discovery()` call (§2 below),
-and a Google-Sheet last-resort fallback tier (`main.py`-only) on top of
-`compute_tracked_universe()`'s result; the daemon path layers held positions
-on afterward the same way. Neither path can add a symbol to this universe
+var and a plain-text watchlist file (the daemon path passes `ctx.watchlist_file`, wired to `watchlist.txt` by
+`main_orchestrator.py`'s `RunContext(...)` construction; the archived `main.py`
+passed the same file). The daemon layers its Robinhood-snapshot `held` set and
+its `discovery()` call (§2 below) on top of `compute_tracked_universe()`'s result
+(the archived `main.py` also had a Google-Sheet last-resort fallback tier, retired in step 4e). Neither path can add a symbol to this universe
 except through `held`, `watchlist`, `discovered`, or `default_tickers` — the
 four parameters above, nothing else.
 
@@ -227,10 +225,10 @@ The fully-automated (no-override) path is a *different* call chain from §4,
 and does **not** inherit `compute_tracked_universe()`'s breadth. Traced end
 to end:
 
-> **2026-09 (step 3d):** nothing calls `run_automated_options_lifecycle()` any more — `main.py` and the daemon stopped running the options lifecycle when the options desk left core. The trace below describes the pre-3d behaviour and is kept until the module moves to `legacy/` in step 4.
+> **2026-09 (step 3d):** nothing calls `run_automated_options_lifecycle()` any more — `main.py` (since archived) and the daemon stopped running the options lifecycle when the options desk left core. The trace below describes the pre-3d behaviour and is kept until the module moves to `legacy/` in step 4.
 
 - **`execution/options_lifecycle.py::run_automated_options_lifecycle()`**
-  — called from both `main.py`'s cycle and
+  — called from both the (since archived) `main.py` cycle and
   `desktop/daemon_runtime.py::OrchestratorDaemon.trigger_run()`
   (`desktop/daemon_runtime.py:570-571`) — gates the whole step on
   `settings.PAPER_OPTIONS_AUTO_EXECUTE_ENABLED` (`execution/options_lifecycle.py:161`,
@@ -321,9 +319,9 @@ default-scope finding below.
 - This trace did **not** exhaustively re-audit `pipeline/steps.py` (the
   legacy synchronous pipeline runner) line-by-line. It was confirmed to
   import `data.portfolio_sync`/`execution.*` the same way the two canonical
-  entry points do, but this document's conclusions target `main.py` and
-  `AsyncDataFetchStep` specifically, not an assumption that `pipeline/steps.py`
-  is (or isn't) still live-reachable in production.
+  entry points do, but this document's conclusions targeted `main.py` and
+  `AsyncDataFetchStep` specifically. `pipeline/steps.py` has since been
+  archived to `legacy/pipeline/steps.py` (step 5.5) and is not live-reachable.
 - This document does not itself re-derive the §6 structural test's pass/fail
   status from first principles — it relies on this document's author having
   independently run it after it landed (see §6) rather than re-proving the
@@ -346,7 +344,7 @@ Every `file:line` citation in §1-§5 above was either:
    header note); or
 2. Independently re-read this session while writing this document, as a
    spot-check on every load-bearing claim before restating it here more
-   formally — specifically: `main.py:280-425`, `data/portfolio_sync.py:600-745`,
+   formally — specifically: `main.py:280-425` (pre-archive; now `legacy/main.py`), `data/portfolio_sync.py:600-745`,
    `pipeline/production_steps.py:70-130`, `pilots/discovery.py:1-140`,
    `execution/options_paper_executor.py:175-330`,
    `execution/options_queue_builder.py:385-410`,

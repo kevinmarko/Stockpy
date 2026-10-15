@@ -26,8 +26,8 @@ orchestrator daemon (Control API `:8601` + Pilots API `:8602`) when
 the app points at them. It does not run the pipeline for you. For a backend that keeps
 running with no Terminal window open, see §0.1.
 
-`launch.command` (the old headless `main.py --interval 60` loop) was removed in step 5.4b-ii:
-the orchestrator daemon is the one runtime. For a headless backend use the always-on stack
+`launch.command` (the old headless `main.py --interval 60` loop) was removed in step 5.4b-ii, and
+`main.py` itself was archived to `legacy/main.py` in step 5.5: the orchestrator daemon is the one runtime. For a headless backend use the always-on stack
 service (§0.1), or run `.venv/bin/python3 -m desktop.orchestrator_daemon` in a Terminal.
 
 **If `.venv` is missing** (e.g., fresh clone), run `./setup.sh` (creates `.venv` with Python 3.12
@@ -251,7 +251,7 @@ platform to the default quarantine state regardless of `PAPER_TRADING`.
 
 ## 1.1 Phone Push Alerts (ntfy.sh)
 
-`main.py` sends push notifications via ntfy.sh (`alerting.py`). Configure once; no
+The daemon sends push notifications via ntfy.sh (`alerting.py`). Configure once; no
 account required.
 
 **Setup**:
@@ -296,7 +296,7 @@ Run this EVERY trading morning before 09:00 ET:
 | Account snapshot fresh | Approve the daemon's 08:40 ET Robinhood push (§5.1a); if the snapshot is still > 20 h old, web app **Portfolio** → Refresh |
 | Holdings & P&L sane | Web app **Portfolio** screen — equity, buying power, per-position unrealized P&L. If empty, force refresh above. |
 | No dead-letter failures | Web app **Pipeline** screen → Dead-Letter Queue (all symbols completed) |
-| Δ Since Last Run reviewed | Open `output/daily_report.html` — check top band for unexpected action flips or conviction drops |
+| Δ Since Last Run reviewed | Open `output/daily_report_dashboard.html` (or the webapp) — check top band for unexpected action flips or conviction drops |
 | Regime & VIX checked | Web app **Mission Control** → regime telemetry (Sahm Rule / HY OAS / VIX / regime) |
 | Conviction calibration glanced | Web app **Calibration** screen → Conviction Calibration (win-rate bars near the diagonal) |
 | **(post-deploy only)** DB tables landing in one place | After any deploy touching DB-path resolution (e.g. `settings.LOCAL_DATA_ROOT`-related changes): a daemon restart without error is NOT proof every code path picked up the new path — verify by direct inspection (`lsof` on the DB file, compare row counts/mtimes across old and new locations) that all tables are writing to the same, expected DB. See `docs/known_issues/forecast_tracker_local_data_root_split.md` for the concrete precedent (`forecast_errors` kept writing to the old DB for hours after a restart while every other table had moved). |
@@ -316,13 +316,9 @@ For systematic bug diagnosis, vulnerability classification, and root-cause inves
 
 **Immediate action**:
 
-```bash
-# Force a live Robinhood refresh (bypasses the 20-h daily cache)
-python3 main.py --refresh-account
-```
-
-Or from the web app: Settings → **🔑 Brokers & Keys** → Robinhood refresh (same
-`force=True` fetch, via the device-approval login flow).
+Force a live Robinhood refresh (bypasses the 20-h daily cache) from the web app: Settings → **🔑 Brokers & Keys** → Robinhood refresh (`POST /brokerage/refresh` on the Pilots API; same
+`force=True` fetch, via the device-approval login flow). The daemon's 08:40 ET scheduled login
+(§5.1a) does the same every weekday morning. (`main.py --refresh-account` no longer exists.)
 
 **Verify**:
 
@@ -338,7 +334,7 @@ print(f'Fetched at: {snap.fetched_at}  Positions: {len(snap.positions)}')
 
 | Cause | Fix |
 |-------|-----|
-| Robinhood device-approval challenge triggered | Run `python3 main.py --refresh-account` from a real terminal; approve the login on your phone within `RH_LOGIN_DEADLINE_SECONDS` (180s default) — or use the webapp's Settings → Connect/Refresh, which drives the same isolated login worker |
+| Robinhood device-approval challenge triggered | Use the webapp's Settings → Brokers → Refresh (`POST /brokerage/refresh`; the daemon's 08:40 ET scheduled login drives the same isolated login worker) and approve the login on your phone within `RH_LOGIN_DEADLINE_SECONDS` (180s default) |
 | No approval arrived before the deadline | Nothing was saved (see `docs/known_issues/robinhood_device_approval_login_hang_risk.md`); just retry — the login worker never leaves a half-authenticated state behind |
 | `RH_USERNAME` / `RH_PASSWORD` invalid | Verify credentials; Robinhood sometimes forces a password reset after a security event |
 | Network partition during overnight run | Retry manually; stale cache is returned (not an error) on live-fetch failure — the platform degrades gracefully |
@@ -521,8 +517,8 @@ value at all.
 file, correctly reported as "missing" for a key that was only ever set in the *real*
 `.env`. Fixed: `settings.ENV_PATH` (`Path(__file__).resolve().parent / ".env"`, anchored
 at `settings.py`'s own location, not the process CWD or a directory walk) is now the
-single anchor every `.env` locator in the codebase imports — `main.py`,
-`main_orchestrator.py`, `desktop/orchestrator_daemon.py`, all five
+single anchor every `.env` locator in the codebase imports — `main_orchestrator.py`
+(and, until its step 5.5 archival, `main.py`), `desktop/orchestrator_daemon.py`, all five
 standalone `api/*.py` FastAPI services, and every `scripts/*.py` entry point (via the new
 `scripts/_bootstrap.py::bootstrap()` — see §3.5c below) all pass `ENV_PATH` explicitly.
 
@@ -572,13 +568,13 @@ in `.venv` behaves as if it's "not installed" (e.g. a `pandas`/`yfinance` import
 even though it is present in `.venv`).
 
 **Root cause**: the invoking `python3` is not `.venv`'s interpreter (e.g. Homebrew or
-system Python), which lacks project-only dependencies. `main.py`/`main_orchestrator.py`
-self-correct via their own venv-reexec guard at module top; before 2026-08, no script
+system Python), which lacks project-only dependencies. `main_orchestrator.py`
+self-correct via its own venv-reexec guard at module top; before 2026-08, no script
 under `scripts/` did.
 
 **Fix**: every `scripts/*.py` entry point now calls `scripts/_bootstrap.py::bootstrap()`,
 which re-execs the process under `.venv`'s interpreter (if not already there) before
-loading `.env`, mirroring `main.py`'s guard exactly. Running any script with a bare
+loading `.env`, mirroring `main_orchestrator.py`'s guard exactly. Running any script with a bare
 `python3 scripts/whatever.py` now self-corrects automatically — no `source .venv/bin/
 activate` or `.venv/bin/python3` prefix required, though either still works.
 
@@ -783,24 +779,23 @@ whole stack were re-derived from ONE published budget,
 supervisor waits strictly longer than the daemon's own graceful-teardown needs, instead of
 routinely SIGKILLing it mid-teardown as happened before this fix. The ladder:
 
-| Level | Who | Budget (`main.py --interval` backend) | Budget (persistent daemon backend) |
-|---|---|---|---|
-| 0 | An in-flight pipeline cycle | unbounded — never waited out | unbounded — never waited out |
-| 1 | Daemon `_teardown()` (`desktop/orchestrator_daemon.py`) | n/a | `DAEMON_SHUTDOWN_TIMEOUT_SECONDS` = 25s |
-| 2 | launchd `ExitTimeOut` (`scripts/com.investyo.stack.plist`) / systemd `TimeoutStopSec` (`deploy/investyo-daemon.service`) | n/a | 45s |
+| Level | Who | Budget (persistent daemon) |
+|---|---|---|
+| 0 | An in-flight pipeline cycle | unbounded — never waited out |
+| 1 | Daemon `_teardown()` (`desktop/orchestrator_daemon.py`) | `DAEMON_SHUTDOWN_TIMEOUT_SECONDS` = 25s |
+| 2 | launchd `ExitTimeOut` (`scripts/com.investyo.stack.plist`) / systemd `TimeoutStopSec` (`deploy/investyo-daemon.service`) | 45s |
 
 **Why an in-flight cycle is never waited out**: a full pipeline cycle can take minutes, and
 there is no safe way to abort one mid-flight (see `pipeline/runner.py`'s own docstring on
 why adding cancellation there would silently turn a crash into a swallowed error). So a
-`main.py --interval` process that's mid-cycle when asked to stop is simply killed — this is
-safe (advisory-only, no broker contact, and
-`output/state_snapshot.json` is now written atomically — see below — so a kill mid-write
-never corrupts it). What changed is the **persistent daemon** backend
-(`ORCHESTRATOR_DAEMON_ENABLED=true`), which now gets a genuinely bounded grace period long
+daemon that's mid-cycle when its outer supervisor gives up is killed — this is
+safe (no live broker contact, and
+`output/state_snapshot.json` is written atomically — see below — so a kill mid-write
+never corrupts it). The **persistent daemon** gets a genuinely bounded grace period long
 enough to drain its two API servers and let an in-flight run finish (or, past the budget,
 give up on it cleanly and log a warning) instead of being cut off mid-teardown.
 
-**If a wait genuinely seems stuck past the daemon backend's ~45s window**: check
+**If a wait genuinely seems stuck past the ~45s window**: check
 `logs/investyo.log` for `"Orchestrator daemon shut down cleanly."` (the terminal
 confirmation) or `"timeout=%.1fs elapsed while a run was still in flight"` (the honest
 give-up warning) — either one means teardown actually ran within budget. Its absence past
@@ -828,10 +823,10 @@ exit 0 = identical). These are operator steps; nothing in the code flips them.
    If the daily-advisory job is still listed, unload it by hand:
    `launchctl unload ~/Library/LaunchAgents/com.investyo.daily-advisory.plist`.
    The service `cd`s to the repo root, so `watch_rules.yaml` (a relative
-   `WATCH_RULES_FILE`) resolves exactly as it did for main.py.
+   `WATCH_RULES_FILE`) resolves from there.
 2. **Turn on the daemon's morning Robinhood login in the same change**
    (§5.1a): `ROBINHOOD_SCHEDULED_LOGIN_ENABLED=true`. Without it no 08:40
-   approval prompt arrives once the 08:45 main.py job is gone.
+   approval prompt arrives once the 08:45 `daily-advisory` job is gone.
 3. **Flip the writer:** `DAEMON_AGENTIC_QUEUE_MODE=primary` (Settings → Feature
    Flags with typed confirmation, or `.env` then restart the daemon). Leave
    `ROBINHOOD_EXECUTION_MODE` as it is.
@@ -851,9 +846,8 @@ exit 0 = identical). These are operator steps; nothing in the code flips them.
 and sends the summary push, watch alerts and new-intent push every cycle it
 runs (hourly with `ORCHESTRATOR_INTERVAL_SECONDS=3600`; the clean-run
 "Refresh Complete" push at most once per ET day, the error push every cycle
-with errors). `main.py` still runs if something launches it, but writes none
-of those, no `daily_report.html` and no state snapshot; it logs a WARNING
-saying so. `daily_report.html` is retired: use `daily_report_dashboard.html`
+with errors). `main.py` is archived (`legacy/main.py`, step 5.5) and no longer runs.
+`daily_report.html` is retired: use `daily_report_dashboard.html`
 or the webapp. A paused (kill-switch) cycle, or one whose price
 fetch came back empty and fell back to synthetic data, writes nothing and pushes nothing; the
 previous queue stays and the skill's ~30-minute freshness rule keeps it from being placed.
@@ -861,12 +855,15 @@ previous queue stays and the skill's ~30-minute freshness rule keeps it from bei
 `MockDataEngine` up front without the synthetic-data flag, so in `primary` it would write the
 real queue from flat-$10 mock data (a known gap, not fixed; keep the key set).
 
-**Rollback:** set `DAEMON_AGENTIC_QUEUE_MODE=off` (or `shadow`) and reload
-`com.investyo.daily-advisory` (`./scripts/install_schedule.command --with-daily-advisory`, or
-`launchctl load ~/Library/LaunchAgents/com.investyo.daily-advisory.plist`); main.py resumes as the
-writer on its next run. The plist stays in `scripts/` for this until 5.5 archives `main.py`. While
-rolled back, `/rh-execute` does not refresh the queue itself (it only does that in `primary`): it
-reads whatever the 08:45 job last wrote, under the same freshness stop.
+**Rollback (after step 5.5):** revert the step 5.5 PR (`git revert`; it restores `main.py`, the
+`com.investyo.daily-advisory` plist under `scripts/` and the moved tests), then set
+`DAEMON_AGENTIC_QUEUE_MODE=off` (or `shadow`) and reload `com.investyo.daily-advisory`
+(`./scripts/install_schedule.command --with-daily-advisory`, or
+`launchctl load ~/Library/LaunchAgents/com.investyo.daily-advisory.plist`); `main.py` resumes as the
+writer on its next run. Without the revert, only the daemon can write the queue, so setting the
+mode to `off` just stops queue writes. While rolled back, `/rh-execute` does not refresh the queue
+itself (it only does that in `primary`): it reads whatever the 08:45 job last wrote, under the same
+freshness stop.
 
 **Cutover record (2026-10-12).** Done in this order: `daily-advisory` unloaded, then
 `ROBINHOOD_SCHEDULED_LOGIN_ENABLED=true` and `DAEMON_AGENTIC_QUEUE_MODE=primary` written to the
@@ -874,7 +871,7 @@ runtime flags store (not `.env`), stack restarted, one `POST /run` verified (rea
 `execution_queue.json`, `queue_sources/advisory.json` and `watch_state.json` rewritten by the
 daemon; `shadow/` untouched).
 
-**How the shadow review was judged (read this before repeating it).** Exit 0 from
+**How the shadow review was judged (history, from when `main.py` still ran; read this before repeating it).** Exit 0 from
 `compare_shadow_queue` is not reachable while `ADVISORY_REUSE_PIPELINE_COMPUTE=true`: only the daemon
 honors it (it feeds `evaluate()` the pipeline's own `Forecast_30`/`GARCH_Vol`; `main.py` refits inline),
 so forecast targets differ on nearly every symbol and a symbol can cross a conviction bucket
@@ -971,12 +968,12 @@ force**. The warning lists each key with its reason.
 The daily advisory run is the always-on daemon now (§0.1, `com.investyo.stack`; it cycles on
 `ORCHESTRATOR_INTERVAL_SECONDS` inside the 04:00–20:00 ET weekday window). The old
 `com.investyo.daily-advisory` job (`.venv/bin/python3 main.py` at 08:45 weekdays) was unloaded at the
-2026-10-12 cutover and is kept **only for rollback** (§3.15).
+2026-10-12 cutover; since step 5.5 its plist lives in `legacy/scripts/` and `main.py` in `legacy/`
+(restore both by reverting the 5.5 PR, §3.15).
 
 `scripts/install_schedule.command` installs the remaining OS timers: `com.investyo.monthly-retrain`
-(1st of the month, 04:00) and `com.investyo.weekly-edgar` (Sundays, 02:00). It does **not** install
-`daily-advisory` unless you pass `--with-daily-advisory` (rollback only; it refuses while the daemon is
-the queue writer, see the script). These are OS timers invoking scripts, not an agent loop.
+(1st of the month, 04:00) and `com.investyo.weekly-edgar` (Sundays, 02:00). It no longer
+installs `daily-advisory` (the `--with-daily-advisory` option was removed in step 5.5). These are OS timers invoking scripts, not an agent loop.
 
 ```bash
 chmod +x scripts/install_schedule.command   # one-time
@@ -994,7 +991,7 @@ python scripts/track_record_status.py       # gate progress + calibration depth 
 
 Since the 2026-10-12 cutover the daemon's scheduled login is what triggers
 the day's Robinhood device-approval push (it used to be the 08:45 launchd
-`main.py` run, now unloaded). If you ever roll back (§3.15) or rebuild the
+`main.py` run, now archived). If you ever roll back (§3.15) or rebuild the
 config, keep it on, or no morning prompt will arrive:
 
 ```bash
@@ -1033,7 +1030,7 @@ harmless otherwise).
 - **One login across ALL processes:** the process that starts a login holds
   an OS lock on `~/.stockpy_local/output/robinhood_login.lock` until the
   login finishes. Any other process (the daemon, the standalone Data/Metrics
-  APIs, the MCP server, `main.py`) that tries to start one meanwhile is
+  APIs, the MCP server) that tries to start one meanwhile is
   refused: the webapp gets a 409 naming the other process, and a background
   auto-refresh just uses the cached snapshot. To see who holds it, read
   `~/.stockpy_local/output/robinhood_login_owner.json` (pid, job_id, mode,
@@ -1144,10 +1141,10 @@ In advisory mode there is no broker to halt, so an "emergency shutdown" means
 **pausing the recommendation engine** so the pipeline produces no new signals while
 you investigate an anomaly.
 
-The pause gate is implemented in `main.run_once()` (after universe build, before macro
-compute) and in `main_orchestrator._main_body()` (after data fetch, before `run_pipeline()`).
-When the sentinel is active, `RunResult.recommendations` is empty and the error list
-records `stage="kill_switch_gate"`.  The last written `state_snapshot.json` and HTML
+The pause gate is implemented in `main_orchestrator._main_body()` (after data fetch, before
+`run_pipeline()`; the archived `main.run_once()` had the same gate). When the sentinel is active,
+`RunResult.recommendations` is empty and the error list
+records `stage="kill_switch_gate"`.  The last written `state_snapshot.json` and dashboard
 report are untouched so the observability dashboard continues displaying the last known state.
 
 ### How to pause recommendations
@@ -1156,8 +1153,9 @@ report are untouched so the observability dashboard continues displaying the las
 # 1. Activate the pause gate (the same file the kill switch uses)
 python -m execution.kill_switch --activate --reason "advisory pause — investigating anomaly"
 
-# 2. Confirm the pipeline sees the pause on next run
-python3 main.py
+# 2. Confirm the pipeline sees the pause on next run (trigger one daemon cycle)
+python -c "from shared import daemon_client as d; print(d.trigger_run())"
+# (a paused run answers 423 from POST /automation/run; the cycle log shows:)
 # Expected: INFO — Advisory paused by kill-switch sentinel — skipping evaluation cycle.
 #           Reason: advisory pause — investigating anomaly  |  Universe would have been: ...
 ```
@@ -1192,8 +1190,8 @@ python -m execution.kill_switch --deactivate
 # Confirm preflight passes
 python scripts/preflight_check.py  # should exit 0
 
-# Restart the pipeline
-python3 main.py
+# Run one cycle to confirm the pipeline is back (the daemon keeps its own timer)
+python -c "from shared import daemon_client as d; print(d.trigger_run())"
 ```
 
 ### When to pause
@@ -1303,7 +1301,7 @@ claude mcp add robinhood-trading --transport http https://agent.robinhood.com/mc
 # Stage A — PAPER / DRY-RUN (review): emit the queue; the agent only simulates.
 #   .env:
 ROBINHOOD_EXECUTION_MODE=review
-python3 main.py                 # writes output/execution_queue.json (allow_place=false on all)
+python -c "from shared import daemon_client as d; print(d.trigger_run())"   # daemon cycle; writes output/execution_queue.json (allow_place=false on all)
 # In Claude Code:  /rh-execute  → previews each order via review_equity_order, then STOPS.
 
 # Stage B — LIVE (only after reviewing paper output and you are satisfied):
@@ -1311,7 +1309,7 @@ python3 main.py                 # writes output/execution_queue.json (allow_plac
 ROBINHOOD_EXECUTION_MODE=live
 ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500     # REQUIRED > 0 for live; preflight fails otherwise
 python scripts/preflight_check.py        # check_robinhood_execution_mode warns (live) / fails (no cap)
-python3 main.py                          # queue now carries allow_place=true where gated-OK
+python -c "from shared import daemon_client as d; print(d.trigger_run())"   # queue now carries allow_place=true where gated-OK
 # In Claude Code:  /rh-execute  → previews, then for each allow_place=true intent asks for an
 #   explicit per-order confirmation before calling place_equity_order.
 ```
@@ -1324,7 +1322,7 @@ python3 main.py                          # queue now carries allow_place=true wh
   AND a notional cap is set` — structurally false otherwise.
 - **Kill switch** pauses everything: `python -m execution.kill_switch --activate --reason "..."`
   blocks queue placement (checked at emit time and again before each order). The advisory
-  pause gate (§6) also short-circuits `run_once()`, so a paused cycle emits no queue.
+  pause gate (§6) also short-circuits the daemon cycle, so a paused cycle emits no queue.
 - **Per-trade human confirmation** is mandatory in `live`; the agent never batch-confirms and
   never operates against the non-Agentic account.
 - **Notional ceilings**: `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` (platform) + the Agentic account's
@@ -1334,10 +1332,11 @@ python3 main.py                          # queue now carries allow_place=true wh
 
 The end-to-end path has two actors and one hand-off file:
 
-1. **Platform (Python) writes the queue.** `python3 main.py` runs `run_once()`, which writes
+1. **Platform (Python) writes the queue.** A daemon cycle (`POST /run`; `DAEMON_AGENTIC_QUEUE_MODE=primary`)
+   runs `AgenticQueueStep`, which writes
    its own advisory source file (`output/queue_sources/advisory.json`) and calls
    `execution/compose.py::compose_and_emit` — the single writer of `output/execution_queue.json`
-   (2026-07: previously `main.py` called `execution/queue_builder.py::emit_execution_queue`
+   (2026-07: the old `main.py` called `execution/queue_builder.py::emit_execution_queue`
    directly; if you're following an older trace or log line referencing that call, this is why
    it now goes through `compose.py` first). If any Pilot is being actively Followed via the
    Pilots PWA/MCP (`POST /pilots/{id}/follow`), that follow's own source file
@@ -1371,7 +1370,7 @@ The end-to-end path has two actors and one hand-off file:
   before each order).
 - **Mode `off`** → nothing to do.
 - **Stale queue** — `generated_at` more than ~30 minutes old → refuse to place;
-  re-run `python3 main.py` first. (The queue's `generated_at` is an ISO-8601
+  trigger a fresh daemon cycle first (`POST /run`). (The queue's `generated_at` is an ISO-8601
   UTC timestamp precisely so this staleness check is computable from the file
   alone.)
 - **Agentic-account requirement** — `get_accounts` must show a dedicated,
@@ -1436,7 +1435,7 @@ ROBINHOOD_MAX_NOTIONAL_PER_ORDER=500     # $ ceiling per order; must be > 0 befo
 ### Step 1 — Emit the queue
 
 ```bash
-python3 main.py                          # runs run_once(); writes output/execution_queue.json
+python -c "from shared import daemon_client as d; print(d.trigger_run())"   # one daemon cycle; writes output/execution_queue.json
 ```
 
 In `review` the queue carries `allow_place: false` on every intent; in `live` it
@@ -1469,7 +1468,7 @@ Only after you are satisfied with the paper output:
 ROBINHOOD_EXECUTION_MODE=live
 ROBINHOOD_MAX_NOTIONAL_PER_ORDER=100     # start SMALL — raise the cap only after clean live fills
 python scripts/preflight_check.py        # check_robinhood_execution_mode: warns (live) / fails (cap unset)
-python3 main.py                          # queue now stamps allow_place=true where gated-OK
+python -c "from shared import daemon_client as d; print(d.trigger_run())"   # queue now stamps allow_place=true where gated-OK
 ```
 
 Then run `/rh-execute` again. For each `allow_place: true` intent it previews,
@@ -1495,8 +1494,8 @@ python -m execution.kill_switch --deactivate
 ```
 
 To disable the bridge entirely, set `ROBINHOOD_EXECUTION_MODE=off` — the next
-`python3 main.py` emits no queue. The advisory pause gate (§6) also short-
-circuits `run_once()`, so a paused cycle produces nothing to place.
+daemon cycle emits no queue. The advisory pause gate (§6) also short-
+circuits the cycle, so a paused cycle produces nothing to place.
 
 ### Preflight
 

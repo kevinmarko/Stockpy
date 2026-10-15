@@ -3,40 +3,32 @@ tests/test_progress_emission.py
 ================================
 Offline tests for progress-instrumentation wiring: ``ProgressReporter``
 (reporting/progress.py — the frozen, pre-existing public API this file does
-NOT redefine) is threaded through main.py's ``run_once()`` pipeline
-(pipeline/runner.py, pipeline/steps.py) and main_orchestrator.py's
-``_main_body()`` / ``run_pipeline()``.
+NOT redefine) is threaded through pipeline/runner.py, the daemon's advisory
+loop (pipeline/production_steps.py::AdvisoryOverlayStep) and
+main_orchestrator.py's ``_main_body()`` / ``run_pipeline()``.
 
-All network I/O is monkeypatched, mirroring the established conventions in
-tests/test_run_once.py (the ``main.run_once()`` mocking pattern —
-``_PATCH_SNAPSHOT``/``_PATCH_EVALUATE``/etc. below reuse the exact same patch
-targets) and tests/test_pipeline_defatalize.py (``main_orchestrator._main_body``
-fatal-path mocking, reused here for a fast failure-path progress check that
-never constructs a single heavy engine).
+The ``main.run_once()`` / ``pipeline/steps.py::AdvisoryEvalStep`` checks were
+archived to ``legacy/tests/test_progress_emission.py`` with ``main.py`` in
+shrink step 5.5.
 
 Coverage:
-  * main.run_once() writes output/progress.json reaching a terminal
-    finish("succeeded") on the happy path, and finish("failed") — while still
-    RE-RAISING the original exception unchanged — when an unguarded step
-    raises (mirrors pipeline/runner.py's documented "unguarded steps
-    propagate" contract).
-  * advance_symbol() is called exactly once per symbol in the advisory loop,
-    both at the main.py level (AdvisoryEvalStep, via a full run_once() cycle)
-    and in isolation (AdvisoryEvalStep.run() called directly).
-  * progress=None (the default added to every new parameter by this PR) is a
-    complete no-op — PipelineRunner.run(ctx) and AdvisoryEvalStep.run(ctx)
-    behave exactly as they did before this instrumentation existed.
+  * advance_symbol() is called exactly once per symbol in the daemon's
+    advisory loop (AdvisoryOverlayStep.run() called directly), sequential and
+    parallel, including a dead-lettered symbol.
+  * progress=None (the default on every progress parameter) is a complete
+    no-op — PipelineRunner.run(ctx) and AdvisoryOverlayStep.run(ctx) behave
+    exactly as they would without the instrumentation.
   * main_orchestrator._main_body()'s wrapper marks a cycle "failed" (not
     "succeeded") when the pipeline crashes during data fetch, still
-    re-raising the exact same PipelineFatalError unchanged.
+    re-raising the exact same PipelineFatalError unchanged
+    (tests/test_pipeline_defatalize.py's fatal-path mocking pattern).
   * main_orchestrator.run_pipeline() / _main_body_impl() both default
     `progress` to None — pinned via signature introspection; the full "None
     reproduces byte-identical behavior" claim for the (expensive) heavy
-    pipeline is empirically covered by the pre-existing, UNMODIFIED
-    main_orchestrator test suites (tests/test_main_orchestrator.py,
-    tests/test_engine_context.py, tests/test_orchestrator_e2e.py, ...), every
-    one of which calls run_pipeline()/_main_body() without ever passing
-    `progress` and all still pass after this instrumentation landed.
+    pipeline is empirically covered by the main_orchestrator test suites
+    (tests/test_main_orchestrator.py, tests/test_engine_context.py,
+    tests/test_orchestrator_e2e.py, ...), which call
+    run_pipeline()/_main_body() without passing `progress`.
 
 Nothing here touches the network.
 """
@@ -44,21 +36,19 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, List, Optional
-from unittest.mock import MagicMock, patch
+from typing import Any, Optional
+from unittest.mock import MagicMock
 
 import pytest
 
 from reporting.progress import ProgressReporter, read_progress
 from settings import settings as _settings
 
-import main as m
-from main import RunResult, run_once
 from engine.advisory import Recommendation
 
 
 # ---------------------------------------------------------------------------
-# Shared fixtures / factories (mirrors tests/test_run_once.py conventions)
+# Shared fixtures / factories
 # ---------------------------------------------------------------------------
 
 def _make_snapshot() -> MagicMock:
@@ -87,149 +77,6 @@ def _make_recommendation(symbol: str, action: str = "HOLD") -> Recommendation:
     )
 
 
-_PATCH_SNAPSHOT = "main.fetch_account_snapshot"
-_PATCH_EVALUATE = "main.advisory_evaluate"
-_PATCH_PROVIDER = "main.get_provider"
-_PATCH_MACRO = "main._build_macro_dto"
-_PATCH_BARS = "main._fetch_bars_for_universe"
-_PATCH_CTX = "main._build_context_extras"
-
-_WATCHLIST = "AAPL,MSFT,GOOG"
-_N_TICKERS = 3
-
-
-# ---------------------------------------------------------------------------
-# main.run_once() — full-cycle progress emission
-# ---------------------------------------------------------------------------
-
-class TestRunOnceProgressEmission:
-    """main.run_once() end-to-end progress-instrumentation checks."""
-
-    @pytest.fixture(autouse=True)
-    def _isolate_watchlist_file(self, monkeypatch, tmp_path):
-        """Point WATCHLIST_FILE at a nonexistent tmp path so this
-        class's universe-size assertions (``_N_TICKERS``) are deterministic
-        regardless of whether a real watchlist.txt happens to exist in the
-        repo root -- mirrors tests/test_pipeline_smoke.py's identical
-        ``_isolate_watchlist_file`` fixture. These tests intend to exercise
-        only the mocked snapshot positions / WATCHLIST env var, never
-        whatever real watchlist.txt file a given checkout has on disk.
-        Patched on pipeline.advisory_inputs (where load_watchlist() reads it
-        since step 5.0), not on main's re-export, which would not reach it.
-        """
-        import pipeline.advisory_inputs as ai
-        monkeypatch.setattr(ai, "WATCHLIST_FILE", str(tmp_path / "nonexistent_watchlist.txt"))
-
-    @patch(_PATCH_CTX, return_value={})
-    @patch(_PATCH_BARS, return_value={})
-    @patch(_PATCH_MACRO)
-    @patch(_PATCH_EVALUATE)
-    @patch(_PATCH_PROVIDER)
-    @patch(_PATCH_SNAPSHOT)
-    def test_writes_progress_json_reaching_terminal_succeeded(
-        self,
-        mock_snap: MagicMock,
-        mock_provider: MagicMock,
-        mock_eval: MagicMock,
-        mock_macro: MagicMock,
-        _bars: MagicMock,
-        _ctx: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Any,
-    ) -> None:
-        monkeypatch.setattr(_settings, "WATCHLIST", _WATCHLIST)
-        monkeypatch.setattr(_settings, "OUTPUT_DIR", tmp_path)
-        mock_snap.return_value = _make_snapshot()
-        mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
-        mock_eval.side_effect = lambda symbol, **kw: _make_recommendation(symbol, "HOLD")
-
-        result = run_once()
-
-        assert isinstance(result, RunResult)
-        assert len(result.recommendations) == _N_TICKERS
-
-        state = read_progress(tmp_path)
-        assert state is not None, "output/progress.json was not written"
-        assert state.is_terminal is True
-        assert state.state == "succeeded"
-        assert state.percent == pytest.approx(100.0)
-
-    @patch(_PATCH_CTX, return_value={})
-    @patch(_PATCH_BARS, return_value={})
-    @patch(_PATCH_MACRO)
-    @patch(_PATCH_EVALUATE)
-    @patch(_PATCH_PROVIDER)
-    @patch(_PATCH_SNAPSHOT)
-    def test_advance_symbol_called_exactly_once_per_ticker(
-        self,
-        mock_snap: MagicMock,
-        mock_provider: MagicMock,
-        mock_eval: MagicMock,
-        mock_macro: MagicMock,
-        _bars: MagicMock,
-        _ctx: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Any,
-    ) -> None:
-        monkeypatch.setattr(_settings, "WATCHLIST", _WATCHLIST)
-        monkeypatch.setattr(_settings, "OUTPUT_DIR", tmp_path)
-        mock_snap.return_value = _make_snapshot()
-        mock_macro.return_value = MagicMock(market_regime="NEUTRAL", vix_value=18.0)
-        mock_eval.side_effect = lambda symbol, **kw: _make_recommendation(symbol, "HOLD")
-
-        calls: List[str] = []
-        _original_advance = ProgressReporter.advance_symbol
-
-        def _counting_advance(self: ProgressReporter, message: str = "") -> None:
-            calls.append(message)
-            return _original_advance(self, message)
-
-        # Patches the CLASS attribute, so every ProgressReporter instance
-        # constructed inside run_once() (there is exactly one per cycle) picks
-        # up the wrapper via normal Python method resolution.
-        monkeypatch.setattr(ProgressReporter, "advance_symbol", _counting_advance)
-
-        run_once()
-
-        assert len(calls) == _N_TICKERS
-
-    @patch(_PATCH_CTX, return_value={})
-    @patch(_PATCH_BARS, return_value={})
-    @patch(_PATCH_EVALUATE)
-    @patch(_PATCH_PROVIDER)
-    @patch(_PATCH_SNAPSHOT)
-    def test_unguarded_step_failure_marks_progress_failed_and_reraises(
-        self,
-        mock_snap: MagicMock,
-        mock_provider: MagicMock,
-        mock_eval: MagicMock,
-        _bars: MagicMock,
-        _ctx: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Any,
-    ) -> None:
-        """MacroStep is unguarded (pipeline/runner.py's documented contract):
-        a raise there must propagate out of run_once() uncaught. Progress
-        instrumentation must mark the reporter "failed" BEFORE that exception
-        escapes, never swallow it (CONSTRAINT #6)."""
-        monkeypatch.setattr(_settings, "WATCHLIST", _WATCHLIST)
-        monkeypatch.setattr(_settings, "OUTPUT_DIR", tmp_path)
-        mock_snap.return_value = _make_snapshot()
-
-        def _boom() -> Any:
-            raise RuntimeError("simulated macro engine crash")
-
-        monkeypatch.setattr(m, "_build_macro_dto", _boom)
-
-        with pytest.raises(RuntimeError, match="simulated macro engine crash"):
-            run_once()
-
-        state = read_progress(tmp_path)
-        assert state is not None
-        assert state.is_terminal is True
-        assert state.state == "failed"
-
-
 # ---------------------------------------------------------------------------
 # progress=None default path — must be a complete no-op
 # ---------------------------------------------------------------------------
@@ -237,9 +84,9 @@ class TestRunOnceProgressEmission:
 class TestProgressNoneDefaultUnchanged:
     """progress=None (the implicit default on every new parameter this PR
     added) must reproduce byte-identical pre-instrumentation behavior at the
-    PipelineRunner / PipelineStep level — see pipeline/runner.py and
-    pipeline/steps.py docstrings for the "no new error handling" contract
-    this instrumentation must not violate."""
+    PipelineRunner / PipelineStep level — see pipeline/runner.py's docstring
+    for the "no new error handling" contract this instrumentation must not
+    violate."""
 
     def test_pipeline_runner_run_without_progress_arg(self) -> None:
         from pipeline.base import PipelineStep
@@ -315,26 +162,32 @@ class TestProgressNoneDefaultUnchanged:
 
 
 # ---------------------------------------------------------------------------
-# AdvisoryEvalStep — direct unit tests of advance_symbol() ticks
+# AdvisoryOverlayStep — direct unit tests of advance_symbol() ticks
 # ---------------------------------------------------------------------------
 
-class TestAdvisoryEvalStepProgressWiring:
-    """Direct unit tests of pipeline/steps.py::AdvisoryEvalStep's
-    advance_symbol() ticks, isolated from the rest of run_once()."""
+class TestAdvisoryOverlayStepProgressWiring:
+    """Direct unit tests of pipeline/production_steps.py::AdvisoryOverlayStep's
+    advance_symbol() ticks (the daemon's advisory loop, which replaced
+    main.py's AdvisoryEvalStep), with the input builders and evaluate() faked."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_inputs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _evaluate(**kw: Any) -> Recommendation:
+            if kw["symbol"] == "BAD":
+                raise RuntimeError("simulated failure")
+            return _make_recommendation(kw["symbol"])
+
+        monkeypatch.setattr("engine.advisory.evaluate", _evaluate)
+        monkeypatch.setattr("pipeline.advisory_inputs.fetch_bars_for_universe",
+                            lambda symbols, market: {})
+        monkeypatch.setattr("pipeline.advisory_inputs.build_context_extras",
+                            lambda symbols, bars, macro, market: {})
+        monkeypatch.setattr("data.market_data.get_provider", lambda: object())
 
     def _make_ctx(self, progress: Optional[ProgressReporter] = None) -> Any:
-        from pipeline.context import RunContext
+        import pandas as pd
 
-        def _evaluate(symbol: str, **_kw: Any) -> Any:
-            if symbol == "BAD":
-                raise RuntimeError("simulated failure")
-            rec = MagicMock()
-            rec.symbol = symbol
-            rec.action = "HOLD"
-            rec.conviction = 0.5
-            rec.data_quality = "OK"
-            rec.suggested_position_pct = 0.0
-            return rec
+        from pipeline.context import RunContext
 
         ctx = RunContext(
             force_account=False,
@@ -346,30 +199,34 @@ class TestAdvisoryEvalStepProgressWiring:
             get_provider_fn=lambda: None,
             fetch_bars_fn=lambda symbols, market: {},
             build_context_extras_fn=lambda symbols, bars, macro_dto: {},
-            advisory_evaluate_fn=_evaluate,
+            advisory_evaluate_fn=lambda **_kw: None,
         )
         ctx.symbols = ["AAPL", "MSFT", "BAD"]
         ctx.snapshot = MagicMock(positions={})
-        ctx.market = object()
         ctx.macro_dto = object()
-        ctx.context_extras = {}
+        ctx.dashboard_df = pd.DataFrame({"Symbol": list(ctx.symbols)})
         ctx.progress = progress
+        return ctx
+
+    def _run_with_workers(
+        self, workers: int, monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
+    ) -> Any:
+        from pipeline.production_steps import AdvisoryOverlayStep
+
+        monkeypatch.setattr(_settings, "ADVISORY_MAX_CONCURRENCY", workers, raising=False)
+        reporter = ProgressReporter(["execution"], output_dir=tmp_path)
+        ctx = self._make_ctx(progress=reporter)
+        AdvisoryOverlayStep().run(ctx)
         return ctx
 
     def test_advance_symbol_ticks_once_per_symbol_sequential(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
-        from pipeline.steps import AdvisoryEvalStep
-
-        monkeypatch.setattr("pipeline.steps.settings.ADVISORY_MAX_CONCURRENCY", 1, raising=False)
-        reporter = ProgressReporter(["advisory_eval"], output_dir=tmp_path)
-        reporter.start_stage("advisory_eval", symbols_total=3)
-        ctx = self._make_ctx(progress=reporter)
-
-        AdvisoryEvalStep().run(ctx)
+        ctx = self._run_with_workers(1, monkeypatch, tmp_path)
 
         state = read_progress(tmp_path)
         assert state is not None
+        assert state.symbols_total == 3
         assert state.symbols_done == 3  # 2 ok + 1 dead-lettered, each ticks exactly once
         assert len(ctx.recommendations) == 2
         assert len(ctx.errors) == 1
@@ -377,25 +234,18 @@ class TestAdvisoryEvalStepProgressWiring:
     def test_advance_symbol_ticks_once_per_symbol_parallel(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
-        from pipeline.steps import AdvisoryEvalStep
-
-        monkeypatch.setattr("pipeline.steps.settings.ADVISORY_MAX_CONCURRENCY", 8, raising=False)
-        reporter = ProgressReporter(["advisory_eval"], output_dir=tmp_path)
-        reporter.start_stage("advisory_eval", symbols_total=3)
-        ctx = self._make_ctx(progress=reporter)
-
-        AdvisoryEvalStep().run(ctx)
+        self._run_with_workers(8, monkeypatch, tmp_path)
 
         state = read_progress(tmp_path)
         assert state is not None
         assert state.symbols_done == 3
 
     def test_progress_none_is_complete_noop(self) -> None:
-        from pipeline.steps import AdvisoryEvalStep
+        from pipeline.production_steps import AdvisoryOverlayStep
 
         ctx = self._make_ctx(progress=None)
 
-        AdvisoryEvalStep().run(ctx)  # must not raise with ctx.progress is None
+        AdvisoryOverlayStep().run(ctx)  # must not raise with ctx.progress is None
 
         assert len(ctx.recommendations) == 2
         assert len(ctx.errors) == 1

@@ -34,7 +34,7 @@ Scope and known, deliberate gaps (disclosed rather than silently omitted):
   a different file or line.
 
 Allowlist: the venv re-exec guard (``sys.exit(subprocess.call([venv_python]
-+ sys.argv))`` or an aliased equivalent) used by ``main.py``,
++ sys.argv))`` or an aliased equivalent) used by
 ``main_orchestrator.py``, ``"Gravity AI Review Suite.py"``, and
 ``scripts/_bootstrap.py`` is expected to run for the entire remaining
 lifetime of the process it re-execs into -- a timeout here would be
@@ -50,7 +50,6 @@ SUBPROCESS_METHODS = ("run", "call", "check_call", "check_output")
 REQUESTS_METHODS = ("get", "post", "put", "delete", "head", "patch", "request")
 
 ALLOWLIST = [
-    ("main.py", 68),
     ("main_orchestrator.py", 23),
     ("Gravity AI Review Suite.py", 39),
     ("_bootstrap.py", 123),

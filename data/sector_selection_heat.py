@@ -256,7 +256,7 @@ def _trailing_trading_days(end_day: str, n: int) -> List[str]:
     """Return ``n`` trading-day labels (``YYYY-MM-DD``, weekdays only,
     ascending) ending at and including ``end_day``. No holiday calendar --
     same documented limitation as ``HistoricalStore.resolve_trading_day``
-    and ``engine.advisory_agent.is_us_market_open``."""
+    and ``shared.market_hours.is_us_market_open``."""
     end = datetime.strptime(end_day, "%Y-%m-%d").date()
     days: List[str] = []
     cursor = end

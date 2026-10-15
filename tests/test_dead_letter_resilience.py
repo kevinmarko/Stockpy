@@ -14,9 +14,10 @@ universe_engine.py's Wikipedia-scrape / local-CSV failure modes (an area
 where the existing tests/test_universe.py makes only real, unmocked live
 network calls and never exercises any failure path at all).
 
-engine/trade_signals.py is deliberately excluded -- tests/test_trade_signals.py
-(396 lines, 30+ tests) already comprehensively covers NaN conviction, missing
-attributes, and broken-notify dead-lettering for that module.
+engine/trade_signals.py was deliberately excluded -- its own suite (now
+legacy/tests/test_trade_signals.py; the module was archived with main.py in
+shrink step 5.5) covered NaN conviction, missing attributes, and broken-notify
+dead-lettering for that module.
 """
 
 from __future__ import annotations

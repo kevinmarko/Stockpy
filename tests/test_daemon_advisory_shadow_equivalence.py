@@ -7,10 +7,13 @@ Step 5.2 of ``.claude/shrink_step5_retire_main_py_implementation_plan.md``
 splits the daemon's advisory overlay into ``AdvisoryOverlayStep`` and adds
 ``AgenticQueueStep`` behind ``settings.DAEMON_AGENTIC_QUEUE_MODE``.
 
-Gate (i): with frozen inputs, ``ADVISORY_REUSE_PIPELINE_COMPUTE`` off and the
-same universe and macro, the daemon's shadow ``queue_sources/advisory.json``
-and ``execution_queue.json`` must equal what ``main.run_once()`` + ``_run_cycle``
-write, byte for byte, and every per-symbol ``Recommendation`` field must match.
+Gate (i) was: with frozen inputs, ``ADVISORY_REUSE_PIPELINE_COMPUTE`` off and
+the same universe and macro, the daemon's shadow ``queue_sources/advisory.json``
+and ``execution_queue.json`` equal what ``main.run_once()`` + ``_run_cycle``
+write, byte for byte, with every per-symbol ``Recommendation`` field matching.
+It passed; with ``main.py`` archived (step 5.5) that side-by-side test lives in
+``legacy/tests/``, and ``TestDaemonShadowMatchesGolden`` pins the daemon against
+the committed goldens (captured from ``main.run_once()``) instead.
 
 How the daemon side is driven:
 
@@ -18,15 +21,15 @@ How the daemon side is driven:
   snapshot come from the daemon's own step. Only its account fetch, bulk data
   fetch and freshness marker are stubbed with the frozen fixtures.
 * ``RunPipelineStep`` is NOT run: it would fit the full forecasting ensemble.
-  Its outputs are stood in for: ``ctx.macro_dto`` is main.py's macro DTO (the
-  gate says "same macro"), and ``ctx.dashboard_df`` holds the universe symbols.
+  Its outputs are stood in for: ``ctx.macro_dto`` is
+  ``pipeline.advisory_inputs.build_macro_dto()``'s DTO, and ``ctx.dashboard_df``
+  holds the universe symbols.
   With reuse off, ``AdvisoryOverlayStep`` reads nothing else from it.
 * ``AdvisoryOverlayStep`` and ``AgenticQueueStep`` run through the real
   ``AsyncPipelineRunner``, so they take the same ``to_thread`` +
   ``PIPELINE_STEP_TIMEOUT_SECONDS`` path they take in the daemon.
 
-The frozen inputs are the ones ``tests/test_run_once_advisory_golden.py``
-uses (fake provider with seeded bars, fake forecasting engine, fake macro
+The frozen inputs come from ``tests/advisory_frozen_inputs.py`` (fake provider with seeded bars, fake forecasting engine, fake macro
 engines, in-memory trade history, network blocked, ``ADVISORY_MAX_CONCURRENCY=1``,
 a fixed ``now``).
 """
@@ -43,7 +46,7 @@ from unittest import mock
 import pandas as pd
 import pytest
 
-from tests.test_run_once_advisory_golden import (
+from tests.advisory_frozen_inputs import (
     _BARS,
     _NOW,
     _QUEUE_GOLDEN,
@@ -103,22 +106,6 @@ def _run_advisory_and_queue(ctx) -> None:
     ]).run(ctx))
 
 
-def _run_main(out: Path):
-    """main.run_once() then _run_cycle's queue block, into the REAL OUTPUT_DIR."""
-    import main
-    from execution.compose import compose_and_emit, write_advisory_source
-
-    try:
-        result = main.run_once()
-    finally:
-        main._reset_macro_engine_cache()
-    assert not result.errors, result.errors
-    write_advisory_source(result.recommendations, output_dir=out, now=_NOW)
-    assert compose_and_emit(result.snapshot, output_dir=out, now=_NOW,
-                            macro_dto=result.macro_dto) is not None
-    return result
-
-
 def _real_queue_files(out: Path) -> Dict[str, bytes]:
     files = {}
     for rel in ("queue_sources/advisory.json", "execution_queue.json",
@@ -128,8 +115,14 @@ def _real_queue_files(out: Path) -> Dict[str, bytes]:
     return files
 
 
-class TestGateIDaemonShadowEqualsMainPy:
-    def test_shadow_queue_and_recommendations_equal_main_run_once(self, tmp_path, monkeypatch):
+class TestDaemonShadowMatchesGolden:
+    """The daemon's advisory + shadow queue on the frozen inputs equal the
+    committed goldens. The goldens were captured from ``main.run_once()``; the
+    step 5.2 gate (archived to ``legacy/tests/`` with ``main.py``) proved the
+    daemon wrote the same bytes, so this pins the daemon path on its own."""
+
+    def test_shadow_queue_and_recommendations_match_golden(self, tmp_path, monkeypatch):
+        from pipeline.advisory_inputs import build_macro_dto, reset_macro_engine_cache
         from settings import settings
 
         out = _install_frozen_inputs(tmp_path, monkeypatch)
@@ -138,17 +131,19 @@ class TestGateIDaemonShadowEqualsMainPy:
         pushes: List[Any] = []
         monkeypatch.setattr("alerting.notify", lambda *a, **kw: pushes.append((a, kw)))
 
-        main_result = _run_main(out)
-        pushes_after_main = len(pushes)
+        try:
+            macro = build_macro_dto()
+        finally:
+            reset_macro_engine_cache()
         real_before = _real_queue_files(out)
 
         ctx = _make_daemon_ctx()
         _run_daemon_fetch(ctx, monkeypatch)
-        # Same universe: the daemon's own AsyncDataFetchStep built it.
-        assert ctx.symbols == [r.symbol for r in main_result.recommendations]
+        # The daemon's own AsyncDataFetchStep built the golden universe.
+        assert ctx.symbols == [r["symbol"] for r in json.loads(_REC_GOLDEN.read_text())]
         assert ctx.snapshot is not None and ctx.snapshot.total_equity == 100_000.0
         # Stand-ins for RunPipelineStep's outputs (see the module docstring).
-        ctx.macro_dto = main_result.macro_dto
+        ctx.macro_dto = macro
         ctx.dashboard_df = pd.DataFrame({
             "Symbol": list(ctx.symbols),
             "Price": [float(_BARS[s]["Close"].iloc[-1]) for s in ctx.symbols],
@@ -158,25 +153,16 @@ class TestGateIDaemonShadowEqualsMainPy:
         assert ctx.context_extras.get("advisory_overlay_ok") is True
         assert not ctx.errors, ctx.errors
         # Per-symbol Recommendation fields (action, conviction, sizing, exit,
-        # rationale, the full key_indicators dict). Both sides ran in this
-        # process, so even the GJR-GARCH-derived keys must match exactly; the
-        # tolerance only applies to the cross-platform committed golden.
-        assert _recommendation_bytes(ctx.recommendations) == \
-            _recommendation_bytes(main_result.recommendations)
+        # rationale, the full key_indicators dict) against the committed golden
+        # (GJR-GARCH-derived keys get the cross-platform tolerance).
         _assert_recommendations_match(
             _recommendation_bytes(ctx.recommendations), _REC_GOLDEN.read_bytes(),
         )
-        # The shadow files equal main.py's real ones byte for byte...
         shadow = out / "shadow"
-        assert (shadow / "queue_sources" / "advisory.json").read_bytes() == \
-            (out / "queue_sources" / "advisory.json").read_bytes()
-        assert (shadow / "execution_queue.json").read_bytes() == \
-            (out / "execution_queue.json").read_bytes()
-        # ...and the committed run_once golden.
         assert (shadow / "queue_sources" / "advisory.json").read_bytes() == _SOURCE_GOLDEN.read_bytes()
         assert (shadow / "execution_queue.json").read_bytes() == _QUEUE_GOLDEN.read_bytes()
         # The Advisory_* dashboard columns carry the same recommendations.
-        by_symbol = {r.symbol: r for r in main_result.recommendations}
+        by_symbol = {r.symbol: r for r in ctx.recommendations}
         for _, row in ctx.dashboard_df.iterrows():
             rec = by_symbol[row["Symbol"]]
             assert row["Advisory_Action"] == rec.action
@@ -186,22 +172,38 @@ class TestGateIDaemonShadowEqualsMainPy:
 
         # The shadow run touched none of the real queue files and sent no push.
         assert _real_queue_files(out) == real_before
-        assert len(pushes) == pushes_after_main
-        assert pushes_after_main >= 1, "main.py's compose should have pushed (fixture sanity)"
+        assert pushes == []
         assert not (shadow / "execution_queue_notified.json").exists()
         assert not (shadow / "risk_gate_blocks.jsonl").exists()
 
-        # The gate-(iii) diff script, run on these files, sees no difference.
-        from scripts import compare_shadow_queue as csq
 
-        comparison = csq.compare(out)
-        assert comparison.ok and comparison.shadow_origin.startswith("history/")
-        assert comparison.n_differences == 0
-        assert comparison.intents, "the comparison must cover real intents"
+def test_golden_is_not_vacuous():
+    """The golden must cover the whole universe (held, watchlist env,
+    watchlist.txt, discovery, retention) and put at least one real intent
+    through the queue gate, or a byte match would prove little. (Moved here
+    from the archived ``test_run_once_advisory_golden.py``.)"""
+    import math
+
+    recs = json.loads(_REC_GOLDEN.read_text(encoding="utf-8"))
+    assert [r["symbol"] for r in recs] == sorted(
+        ["AAPL", "MSFT", "KO", "NVDA", "JNJ", "XOM", "INTC"]
+    )
+    assert {r["action"] for r in recs} >= {"BUY", "SELL"}
+    # The pre-compute really ran: every symbol got a cross-sectional rank, a
+    # multifactor composite and the portfolio CoVaR proxy, and the closed MSFT
+    # trade produced a real excursion.
+    for r in recs:
+        ki = r["key_indicators"]
+        for key in ("xsec_12_1m", "xsec_momentum_rank", "multifactor_composite", "covar_proxy"):
+            assert math.isfinite(ki[key]), (r["symbol"], key)
+    msft = next(r for r in recs if r["symbol"] == "MSFT")
+    assert math.isfinite(msft["key_indicators"]["mfe"])
+    queue = json.loads(_QUEUE_GOLDEN.read_text(encoding="utf-8"))
+    assert queue["intents"], "the golden queue carries no intents"
 
 
 # ---------------------------------------------------------------------------
-# AgenticQueueStep behaviour (no main.py run needed)
+# AgenticQueueStep behaviour
 # ---------------------------------------------------------------------------
 
 def _rec(symbol: str, action: str = "BUY", conviction: float = 0.9, pct: float = 0.05):

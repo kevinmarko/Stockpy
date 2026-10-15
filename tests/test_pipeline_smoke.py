@@ -5,12 +5,13 @@ End-to-end smoke tests for the InvestYo advisory pipeline.
 
 All network I/O is monkeypatched — no live API calls are made in this file.
 
-TestRunOncePipeline
-    Orchestrator-level tests via main.run_once():
-      • Returns a valid RunResult with the expected shape and attributes.
+TestAdvisoryOverlayPipeline
+    The daemon's advisory loop via pipeline.production_steps.AdvisoryOverlayStep
+    (the main.run_once() version was archived to legacy/tests/ in step 5.5):
+      • Fills ctx.recommendations and the Advisory_* dashboard columns.
       • Dead-letter: one rigged symbol failure → 1 error + N-1 recommendations,
-        no unhandled exception propagates out of run_once().
-      • All-failure universe still returns a RunResult (never raises).
+        no unhandled exception propagates out of the step.
+      • All-failure universe never raises.
 
 TestAdvisoryTailoringRules
     Advisory engine holding-aware overlay via engine.advisory.evaluate():
@@ -158,51 +159,28 @@ _MOCK_TECH: Dict[str, Any] = {
 
 
 # ---------------------------------------------------------------------------
-# TestRunOncePipeline
+# TestAdvisoryOverlayPipeline
 # ---------------------------------------------------------------------------
 
-class TestRunOncePipeline:
+class TestAdvisoryOverlayPipeline:
     """
-    Orchestrator smoke tests for main.run_once().
+    Smoke tests for the daemon's advisory loop,
+    ``pipeline.production_steps.AdvisoryOverlayStep`` (which replaced
+    ``main.run_once()``'s advisory loop; the run_once() version of this class
+    was archived to ``legacy/tests/`` in shrink step 5.5).
 
-    Patches all network calls at the main-module boundary using monkeypatch so
-    each test runs fully offline without any live API contact.
+    The market provider, the input builders and ``engine.advisory.evaluate``
+    are patched at the seams the step imports them from, so each test runs
+    fully offline.
     """
-
-    # Canonical patch targets (mirrors test_run_once.py convention)
-    _P_SNAPSHOT = "main.fetch_account_snapshot"
-    _P_EVALUATE = "main.advisory_evaluate"
-    _P_PROVIDER = "main.get_provider"
-    _P_MACRO    = "main._build_macro_dto"
-    _P_BARS     = "main._fetch_bars_for_universe"
-    _P_CTX      = "main._build_context_extras"
 
     @pytest.fixture(autouse=True)
-    def _isolate_watchlist_file(self, monkeypatch, tmp_path):
-        """Point WATCHLIST_FILE at a nonexistent tmp path so these
-        tests' universe-building assertions are deterministic regardless of
-        whether a real watchlist.txt happens to exist in the repo root (e.g.
-        one written by the Live Inventory "Sync Now" feature) -- these tests
-        intend to exercise only the mocked positions / WATCHLIST env var,
-        never whatever real watchlist.txt file a given checkout has on disk.
-        Patched on pipeline.advisory_inputs (where load_watchlist() reads it
-        since step 5.0), not on main's re-export, which would not reach it.
-        """
-        import pipeline.advisory_inputs as ai
-        monkeypatch.setattr(ai, "WATCHLIST_FILE", str(tmp_path / "nonexistent_watchlist.txt"))
-
-    @pytest.fixture(autouse=True)
-    def _isolate_scan_discovery(self, monkeypatch):
-        """Neutralize discovery() for the same reason as
-        _isolate_watchlist_file above: _build_universe() unconditionally
-        unions discovery()'s scan candidates into the universe, and
-        pilots.discovery.discovery() reads settings.OUTPUT_DIR -- a
-        machine-global settings.LOCAL_DATA_ROOT path, not repo/test-scoped,
-        so a real ~/.stockpy_local/output/scan_candidates.json (e.g. from a
-        real agentic-discovery skill run) would otherwise leak extra
-        symbols into these tests' universe-size assertions."""
-        import pipeline.advisory_inputs as ai
-        monkeypatch.setattr(ai, "discovery", lambda *a, **kw: {"candidates": []})
+    def _offline_inputs(self, monkeypatch):
+        monkeypatch.setattr("data.market_data.get_provider", lambda: _make_market_provider())
+        monkeypatch.setattr("pipeline.advisory_inputs.fetch_bars_for_universe",
+                            lambda symbols, market: {})
+        monkeypatch.setattr("pipeline.advisory_inputs.build_context_extras",
+                            lambda symbols, bars, macro, market: {})
 
     def _neutral_macro(self) -> MagicMock:
         m = MagicMock()
@@ -225,109 +203,77 @@ class TestRunOncePipeline:
             data_quality="OK",
         )
 
-    @patch("main._build_context_extras", return_value={})
-    @patch("main._fetch_bars_for_universe", return_value={})
-    def test_returns_runresult_shape(
-        self,
-        _bars: MagicMock,
-        _ctx: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """run_once() returns a RunResult with the expected fields."""
-        import main as m
+    def _run(self, monkeypatch, positions: Dict[str, Any], evaluate):
+        from pipeline.context import RunContext
+        from pipeline.production_steps import AdvisoryOverlayStep
 
-        snap = _make_snapshot(positions={"AAPL": _make_position("AAPL")})
-        monkeypatch.setenv("WATCHLIST", "")
+        monkeypatch.setattr("engine.advisory.evaluate", evaluate)
+        ctx = RunContext(
+            force_account=False,
+            started_at=datetime.now(timezone.utc),
+            watchlist_file="watchlist.txt",
+            fetch_account_snapshot_fn=lambda *a, **kw: None,
+            build_universe_fn=lambda *a: [],
+            build_macro_dto_fn=lambda: None,
+            get_provider_fn=lambda: None,
+            fetch_bars_fn=lambda *a: {},
+            build_context_extras_fn=lambda *a: {},
+            advisory_evaluate_fn=lambda *a, **kw: None,
+        )
+        ctx.snapshot = _make_snapshot(positions=positions)
+        ctx.symbols = sorted(positions)
+        ctx.macro_dto = self._neutral_macro()
+        ctx.dashboard_df = pd.DataFrame({"Symbol": list(ctx.symbols)})
+        AdvisoryOverlayStep().run(ctx)
+        return ctx
 
-        with patch(self._P_SNAPSHOT, return_value=snap), \
-             patch(self._P_PROVIDER, return_value=_make_market_provider()), \
-             patch(self._P_MACRO, return_value=self._neutral_macro()), \
-             patch(self._P_EVALUATE, side_effect=lambda symbol, **kw: self._good_rec(symbol)):
+    def test_returns_recommendations_shape(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The step fills ctx.recommendations and the Advisory_* columns."""
+        ctx = self._run(monkeypatch, {"AAPL": _make_position("AAPL")},
+                        lambda symbol, **kw: self._good_rec(symbol))
 
-            result = m.run_once()
+        assert ctx.context_extras.get("advisory_overlay_ok") is True
+        assert len(ctx.recommendations) == 1
+        assert len(ctx.errors) == 0
+        assert ctx.recommendations[0].symbol == "AAPL"
+        assert list(ctx.dashboard_df["Advisory_Action"]) == ["HOLD"]
 
-        assert hasattr(result, "recommendations")
-        assert hasattr(result, "errors")
-        assert hasattr(result, "snapshot")
-        assert hasattr(result, "duration_seconds")
-        assert result.duration_seconds >= 0.0
-        assert len(result.recommendations) == 1
-        assert len(result.errors) == 0
-        assert result.recommendations[0].symbol == "AAPL"
-
-    @patch("main._build_context_extras", return_value={})
-    @patch("main._fetch_bars_for_universe", return_value={})
-    def test_dead_letter_on_symbol_failure(
-        self,
-        _bars: MagicMock,
-        _ctx: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
+    def test_dead_letter_on_symbol_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """
-        When advisory_evaluate raises for one symbol, that symbol is dead-
-        lettered: RunResult.errors contains it; the other symbol's
-        recommendation is unaffected.  No exception propagates out.
+        When evaluate() raises for one symbol, that symbol is dead-lettered:
+        ctx.errors contains it; the other symbol's recommendation is
+        unaffected. No exception propagates out.
         """
-        import main as m
-
-        snap = _make_snapshot(positions={
-            "AAPL": _make_position("AAPL"),
-            "FAIL": _make_position("FAIL"),
-        })
-        monkeypatch.setenv("WATCHLIST", "")
-
         def _eval(symbol: str, **kw: Any):
             if symbol == "FAIL":
                 raise RuntimeError("Simulated network error")
             return self._good_rec(symbol)
 
-        with patch(self._P_SNAPSHOT, return_value=snap), \
-             patch(self._P_PROVIDER, return_value=_make_market_provider()), \
-             patch(self._P_MACRO, return_value=self._neutral_macro()), \
-             patch(self._P_EVALUATE, side_effect=_eval):
+        ctx = self._run(monkeypatch, {"AAPL": _make_position("AAPL"),
+                                      "FAIL": _make_position("FAIL")}, _eval)
 
-            result = m.run_once()
-
-        assert len(result.recommendations) == 1, (
+        assert len(ctx.recommendations) == 1, (
             "Only the healthy symbol should appear in recommendations."
         )
-        assert len(result.errors) == 1, (
+        assert len(ctx.errors) == 1, (
             "The failed symbol should produce exactly one error entry."
         )
-        err = result.errors[0]
+        err = ctx.errors[0]
         assert err["symbol"] == "FAIL"
         assert "error_type" in err
         assert "stage" in err
         assert "message" in err
         assert "timestamp" in err
 
-    @patch("main._build_context_extras", return_value={})
-    @patch("main._fetch_bars_for_universe", return_value={})
-    def test_all_failures_still_returns_runresult(
-        self,
-        _bars: MagicMock,
-        _ctx: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """All symbols failing must never raise — run_once() always returns."""
-        import main as m
-
-        snap = _make_snapshot(positions={"BOOM": _make_position("BOOM")})
-        monkeypatch.setenv("WATCHLIST", "")
-
+    def test_all_failures_never_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """All symbols failing must never raise out of the step."""
         def _always_fail(symbol: str, **kw: Any):
             raise ValueError("catastrophic failure")
 
-        with patch(self._P_SNAPSHOT, return_value=snap), \
-             patch(self._P_PROVIDER, return_value=_make_market_provider()), \
-             patch(self._P_MACRO, return_value=self._neutral_macro()), \
-             patch(self._P_EVALUATE, side_effect=_always_fail):
+        ctx = self._run(monkeypatch, {"BOOM": _make_position("BOOM")}, _always_fail)
 
-            result = m.run_once()
-
-        assert result is not None
-        assert len(result.recommendations) == 0
-        assert len(result.errors) == 1
+        assert len(ctx.recommendations) == 0
+        assert len(ctx.errors) == 1
 
 
 # ---------------------------------------------------------------------------

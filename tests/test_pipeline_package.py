@@ -1,45 +1,33 @@
 """
 tests/test_pipeline_package.py
 ===============================
-Offline unit tests for the new ``pipeline/`` package (Part 2 of the
-"modularize the orchestrators" refactor) that extracts main.py's
-``run_once()`` function body into a command/mediator structure:
+Offline unit tests for the ``pipeline/`` package's shared core:
 
   - pipeline/context.py  -> RunContext (mutable per-cycle state carrier)
   - pipeline/base.py     -> PipelineStep ABC
-  - pipeline/steps.py    -> AccountStep, UniverseStep, KillSwitchGateStep,
-                            MacroStep, PrecomputeStep, AdvisoryEvalStep
   - pipeline/runner.py   -> PipelineRunner (ordered step executor)
+
+The ``pipeline/steps.py`` step classes (main.py's ``run_once()`` steps) and
+their tests were archived to ``legacy/`` in shrink step 5.5; the daemon's steps
+live in ``pipeline/production_steps.py``.
 
 All tests are fully offline: every injected dependency on RunContext is a
 plain lambda/mock, and no real network/Robinhood/market-data call is ever
-made. Mirrors the fixture/mocking style already established in
-tests/test_run_once.py (see _make_snapshot / _make_recommendation there).
+made.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-
-import pytest
+from typing import Any, Dict
 
 from pipeline.base import PipelineStep
 from pipeline.context import RunContext
 from pipeline.runner import PipelineRunner
-from pipeline.steps import (
-    AccountStep,
-    AdvisoryEvalStep,
-    KillSwitchGateStep,
-    MacroStep,
-    PrecomputeStep,
-    UniverseStep,
-)
-from data.robinhood_portfolio import AccountSnapshot
 
 
 # ---------------------------------------------------------------------------
-# Shared fixtures / factories (mirrors tests/test_run_once.py conventions)
+# Shared fixtures / factories
 # ---------------------------------------------------------------------------
 
 def _noop(*_args: Any, **_kwargs: Any) -> None:
@@ -66,21 +54,13 @@ def _make_ctx(**overrides: Any) -> RunContext:
 
 @dataclass
 class _FakeRecommendation:
-    """Lightweight stand-in for engine.advisory.Recommendation, carrying only
-    the attributes AdvisoryEvalStep.run()'s log line reads."""
+    """Lightweight stand-in for engine.advisory.Recommendation."""
 
     symbol: str
     action: str = "HOLD"
     conviction: float = 0.5
     data_quality: str = "OK"
     suggested_position_pct: float = 0.0
-
-
-class _FakeSnapshot:
-    """Minimal stand-in exposing only what AdvisoryEvalStep reads (.positions)."""
-
-    def __init__(self, positions: Optional[Dict[str, Any]] = None) -> None:
-        self.positions = positions or {}
 
 
 # ---------------------------------------------------------------------------
@@ -202,254 +182,3 @@ class TestPipelineRunner:
         PipelineRunner(steps).run(ctx)
         assert "first" in ctx._log  # type: ignore[attr-defined]
         assert "never" not in ctx._log  # type: ignore[attr-defined]
-
-
-# ---------------------------------------------------------------------------
-# TestAccountStep
-# ---------------------------------------------------------------------------
-
-class TestAccountStep:
-    """AccountStep must degrade to an empty AccountSnapshot (never raise) when
-    fetch_account_snapshot_fn fails, and pass through the real snapshot object
-    unchanged on the happy path."""
-
-    def test_exception_degrades_to_empty_snapshot(self) -> None:
-        def _boom(**_kw: Any) -> Any:
-            raise RuntimeError("Robinhood login failed")
-
-        ctx = _make_ctx(fetch_account_snapshot_fn=_boom)
-
-        AccountStep().run(ctx)  # must not raise
-
-        assert isinstance(ctx.snapshot, AccountSnapshot)
-        assert ctx.snapshot.positions == {}
-        assert ctx.snapshot.total_equity == 0.0
-        assert ctx.snapshot.buying_power == 0.0
-        assert ctx.snapshot.total_dividends == 0.0
-
-    def test_happy_path_passes_through_exact_snapshot(self) -> None:
-        real_snapshot = AccountSnapshot(
-            positions={"AAPL": object()},
-            buying_power=1000.0,
-            total_equity=5000.0,
-            total_dividends=12.5,
-            fetched_at=datetime.now(timezone.utc),
-        )
-        ctx = _make_ctx(fetch_account_snapshot_fn=lambda **_kw: real_snapshot)
-
-        AccountStep().run(ctx)
-
-        assert ctx.snapshot is real_snapshot
-
-
-# ---------------------------------------------------------------------------
-# TestUniverseStep
-# ---------------------------------------------------------------------------
-
-class TestUniverseStep:
-    """UniverseStep must stop the pipeline with stop_reason='empty_universe'
-    when the universe comes back empty, without appending to ctx.errors, and
-    otherwise just populate ctx.symbols."""
-
-    def test_empty_universe_stops_pipeline(self) -> None:
-        ctx = _make_ctx(build_universe_fn=lambda snapshot: [])
-        ctx.snapshot = AccountSnapshot(
-            positions={}, buying_power=0.0, total_equity=0.0,
-            total_dividends=0.0, fetched_at=datetime.now(timezone.utc),
-        )
-
-        UniverseStep().run(ctx)
-
-        assert ctx.stopped is True
-        assert ctx.stop_reason == "empty_universe"
-        assert ctx.errors == []
-
-    def test_nonempty_universe_populates_symbols(self) -> None:
-        ctx = _make_ctx(build_universe_fn=lambda snapshot: ["AAPL", "MSFT"])
-        ctx.snapshot = AccountSnapshot(
-            positions={}, buying_power=0.0, total_equity=0.0,
-            total_dividends=0.0, fetched_at=datetime.now(timezone.utc),
-        )
-
-        UniverseStep().run(ctx)
-
-        assert ctx.symbols == ["AAPL", "MSFT"]
-        assert ctx.stopped is False
-
-
-# ---------------------------------------------------------------------------
-# TestKillSwitchGateStep
-# ---------------------------------------------------------------------------
-
-class TestKillSwitchGateStep:
-    """KillSwitchGateStep must stop the pipeline (stop_reason='kill_switch')
-    and record exactly one 'AdvisoryPaused' error when the sentinel is active,
-    and be a complete no-op when it is not."""
-
-    class _FakeActiveKillSwitch:
-        def is_active(self) -> bool:
-            return True
-
-        def reason(self) -> str:
-            return "manual pause for maintenance"
-
-    class _FakeInactiveKillSwitch:
-        def is_active(self) -> bool:
-            return False
-
-        def reason(self) -> str:
-            return ""
-
-    def test_active_kill_switch_stops_pipeline_and_records_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "pipeline.steps.GlobalKillSwitch", self._FakeActiveKillSwitch
-        )
-        ctx = _make_ctx()
-        ctx.symbols = ["AAPL", "MSFT"]
-
-        KillSwitchGateStep().run(ctx)
-
-        assert ctx.stopped is True
-        assert ctx.stop_reason == "kill_switch"
-        assert len(ctx.errors) == 1
-        err = ctx.errors[0]
-        assert err["stage"] == "kill_switch_gate"
-        assert err["error_type"] == "AdvisoryPaused"
-
-    def test_inactive_kill_switch_is_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            "pipeline.steps.GlobalKillSwitch", self._FakeInactiveKillSwitch
-        )
-        ctx = _make_ctx()
-        ctx.symbols = ["AAPL", "MSFT"]
-
-        KillSwitchGateStep().run(ctx)
-
-        assert ctx.stopped is False
-        assert ctx.errors == []
-
-
-# ---------------------------------------------------------------------------
-# TestMacroStep
-# ---------------------------------------------------------------------------
-
-class TestMacroStep:
-    """MacroStep must set ctx.macro_dto to exactly what build_macro_dto_fn
-    returns, and must not raise even though it attempts (and dead-letter
-    swallows) the meta-labeler bootstrap import/registration."""
-
-    def test_macro_dto_set_to_sentinel(self) -> None:
-        sentinel = object()
-        ctx = _make_ctx(build_macro_dto_fn=lambda: sentinel)
-
-        MacroStep().run(ctx)  # must not raise regardless of ml.meta_bootstrap availability
-
-        assert ctx.macro_dto is sentinel
-
-
-# ---------------------------------------------------------------------------
-# TestPrecomputeStep
-# ---------------------------------------------------------------------------
-
-class TestPrecomputeStep:
-    """PrecomputeStep must wire ctx.market/bars_dict/context_extras to exactly
-    what the three injected callables return, and call fetch_bars_fn /
-    build_context_extras_fn with the documented positional argument shapes."""
-
-    def test_wires_market_bars_and_context_extras(self) -> None:
-        market_sentinel = object()
-        bars_sentinel = {"AAPL": object()}
-        extras_sentinel = {"xsec_percentile_ranks": {"AAPL": 0.5}}
-
-        fetch_bars_calls: List[Any] = []
-        build_extras_calls: List[Any] = []
-
-        def _fetch_bars(symbols: List[str], market: Any) -> Dict[str, Any]:
-            fetch_bars_calls.append((symbols, market))
-            return bars_sentinel
-
-        def _build_extras(symbols: List[str], bars: Dict[str, Any], macro_dto: Any, market: Any) -> Dict[str, Any]:
-            build_extras_calls.append((symbols, bars, macro_dto, market))
-            return extras_sentinel
-
-        macro_sentinel = object()
-        ctx = _make_ctx(
-            get_provider_fn=lambda: market_sentinel,
-            fetch_bars_fn=_fetch_bars,
-            build_context_extras_fn=_build_extras,
-        )
-        ctx.symbols = ["AAPL", "MSFT"]
-        ctx.macro_dto = macro_sentinel
-
-        PrecomputeStep().run(ctx)
-
-        assert ctx.market is market_sentinel
-        assert ctx.bars_dict is bars_sentinel
-        assert ctx.context_extras is extras_sentinel
-
-        assert len(fetch_bars_calls) == 1
-        called_symbols, called_market = fetch_bars_calls[0]
-        assert called_symbols == ["AAPL", "MSFT"]
-        assert called_market is market_sentinel
-
-        assert len(build_extras_calls) == 1
-        called_symbols2, called_bars, called_macro, called_market2 = build_extras_calls[0]
-        assert called_symbols2 == ["AAPL", "MSFT"]
-        assert called_bars is bars_sentinel
-        assert called_market2 is market_sentinel
-        assert called_macro is macro_sentinel
-
-
-# ---------------------------------------------------------------------------
-# TestAdvisoryEvalStep
-# ---------------------------------------------------------------------------
-
-class TestAdvisoryEvalStep:
-    """AdvisoryEvalStep must dead-letter per-symbol failures (never abort the
-    run) and this must hold true regardless of ADVISORY_MAX_CONCURRENCY —
-    exercise both the sequential (workers=1) and the parallel (workers>1)
-    code paths."""
-
-    def _make_ctx_for_eval(self) -> RunContext:
-        def _evaluate(symbol: str, **_kw: Any) -> _FakeRecommendation:
-            if symbol == "MSFT":
-                raise RuntimeError("Simulated network error")
-            return _FakeRecommendation(symbol=symbol, action="BUY")
-
-        ctx = _make_ctx(advisory_evaluate_fn=_evaluate)
-        ctx.symbols = ["AAPL", "MSFT"]
-        ctx.snapshot = _FakeSnapshot(positions={})
-        ctx.market = object()
-        ctx.macro_dto = object()
-        ctx.context_extras = {}
-        return ctx
-
-    def test_sequential_path_dead_letters_failing_symbol(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr("pipeline.steps.settings.ADVISORY_MAX_CONCURRENCY", 1, raising=False)
-        ctx = self._make_ctx_for_eval()
-
-        AdvisoryEvalStep().run(ctx)
-
-        assert len(ctx.recommendations) == 1
-        assert ctx.recommendations[0].symbol == "AAPL"
-        assert len(ctx.errors) == 1
-        assert ctx.errors[0]["symbol"] == "MSFT"
-        assert ctx.errors[0]["stage"] == "advisory_evaluate"
-
-    def test_parallel_path_dead_letters_failing_symbol(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr("pipeline.steps.settings.ADVISORY_MAX_CONCURRENCY", 8, raising=False)
-        ctx = self._make_ctx_for_eval()
-
-        AdvisoryEvalStep().run(ctx)
-
-        assert len(ctx.recommendations) == 1
-        assert ctx.recommendations[0].symbol == "AAPL"
-        assert len(ctx.errors) == 1
-        assert ctx.errors[0]["symbol"] == "MSFT"
-        assert ctx.errors[0]["stage"] == "advisory_evaluate"

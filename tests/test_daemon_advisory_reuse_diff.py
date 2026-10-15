@@ -38,7 +38,7 @@ import pandas as pd
 import pytest
 
 import tests.test_daemon_advisory_shadow_equivalence as eq
-from tests.test_run_once_advisory_golden import (
+from tests.advisory_frozen_inputs import (
     _BARS,
     _FakeForecastingEngine,
     _install_frozen_inputs,
@@ -57,9 +57,8 @@ class _PipelineFakeForecastingEngine(_FakeForecastingEngine):
 
 def _run(tmp_path: Path, monkeypatch, *, reuse: bool, engine_kind: str) -> Dict[str, Any]:
     import engine.advisory as adv
-    import main
     from main_orchestrator import EngineContext
-    from pipeline.advisory_inputs import build_macro_dto
+    from pipeline.advisory_inputs import build_macro_dto, reset_macro_engine_cache
     from pipeline.production_steps import (
         ForecastingStep,
         TrendVolatilityStep,
@@ -82,7 +81,7 @@ def _run(tmp_path: Path, monkeypatch, *, reuse: bool, engine_kind: str) -> Dict[
         engine = _PipelineFakeForecastingEngine()
 
     macro = build_macro_dto()
-    main._reset_macro_engine_cache()
+    reset_macro_engine_cache()
 
     ctx = eq._make_daemon_ctx()
     eq._run_daemon_fetch(ctx, monkeypatch)

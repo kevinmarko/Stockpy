@@ -124,7 +124,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 371,
+  "files_scanned": 367,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -445,9 +445,9 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 813,
+    "attr": 796,
     "factory_param": 4,
-    "getattr_const": 297,
+    "getattr_const": 294,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
@@ -2284,7 +2284,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "Gravity AI Review Suite.py:10750",
+        "site": "Gravity AI Review Suite.py:10639",
         "via": []
       }
     ],

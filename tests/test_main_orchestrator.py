@@ -494,7 +494,7 @@ class TestExecuteBrokerOrders:
         # test failed on weekends/holidays when FMP answered, or wherever the
         # `holidays` package is missing (that layer fails closed).
         with mock.patch(
-            "engine.advisory_agent.is_us_market_open_now", return_value=True,
+            "shared.market_hours.is_us_market_open_now", return_value=True,
         ), mock.patch(
             "execution.fmp_paper_broker.FMPPaperBroker",
             side_effect=RuntimeError("simulated broker connectivity failure"),

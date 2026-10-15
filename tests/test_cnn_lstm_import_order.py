@@ -27,7 +27,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 GUARDED_ENTRY_POINTS = [
-    "main.py",
     "main_orchestrator.py",
     "pipeline/production_steps.py",
 ]

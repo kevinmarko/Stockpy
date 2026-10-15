@@ -851,7 +851,9 @@ class TestSkillMdInvariantsPinned:
         the queue, so both SKILL.md copies must teach the agent to trigger a
         daemon cycle (POST /run via shared.daemon_client) and poll it to a
         terminal state -- while keeping the unchanged freshness rule and the
-        main.py guidance for when the daemon is not primary."""
+        guidance for when the daemon is not primary. (The ``python3 main.py``
+        fallback phrase was dropped from the required set when main.py was
+        archived in shrink step 5.5.)"""
         candidate_paths = [
             Path(".claude/skills/robinhood-execution/SKILL.md"),
             Path(".agents/skills/robinhood-execution/SKILL.md"),
@@ -868,7 +870,6 @@ class TestSkillMdInvariantsPinned:
             '("succeeded", "failed")',
             "kill_switch_active",
             "**`off` or `shadow`**",
-            "python3 main.py",
             "more than ~30 minutes old",
             "This rule is unchanged in `primary`",
         ]

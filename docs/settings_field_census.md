@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `d5c3f75128a4c7eb67ff593360c97599795e30cf`
+- Measured at commit: `f637e047c82da06ab764dea02ec2ffb396a71625`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -222,7 +222,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **371** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **367** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -235,8 +235,8 @@ _S.settings, _dsr_settings, _gravity_settings, _guard_settings, _mt_settings, _o
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 727 | 251 |
-| (b) `getattr(settings, "KEY", default)` | 297 | 172 |
+| (a) `settings.KEY` | 710 | 251 |
+| (b) `getattr(settings, "KEY", default)` | 294 | 172 |
 | (c) `getattr(settings, <var>)` (dynamic) | 15 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
@@ -258,7 +258,7 @@ referenced by name somewhere and is probably read dynamically.
 | `EDGAR_FULLTEXT_FORMS` | `api/pilots_api.py:4778` | likely read dynamically |
 | `FMP_ECON_INDICATORS` | `api/pilots_api.py:4899` | likely read dynamically |
 | `PROMPT_MAX_CHARS` | _none_ | no read and no name reference found |
-| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:10750` | likely read dynamically |
+| `PROMPT_REGISTRY_REFRESH_SECONDS` | `Gravity AI Review Suite.py:10639` | likely read dynamically |
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1624`, `pilots/feature_flags.py:49` | likely read dynamically |
 
@@ -268,7 +268,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 
 | Field | Reached via | (b) count | (d) count |
 |---|---|---|---|
-| `ADVISORY_MAX_CONCURRENCY` | b | 2 | 0 |
+| `ADVISORY_MAX_CONCURRENCY` | b | 1 | 0 |
 | `ADVISORY_REUSE_PIPELINE_COMPUTE` | b | 1 | 0 |
 | `AI_CHAT_DEFAULT_MODEL` | b | 1 | 0 |
 | `AI_CHAT_DEFAULT_PROVIDER` | b | 2 | 0 |
@@ -278,7 +278,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE` | b | 1 | 0 |
 | `CLOSED_POSITION_RETENTION_DAYS` | b | 2 | 0 |
 | `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` | b | 1 | 0 |
-| `DAEMON_AGENTIC_QUEUE_MODE` | b | 2 | 0 |
+| `DAEMON_AGENTIC_QUEUE_MODE` | b | 1 | 0 |
 | `DATABASE_URL` | b | 1 | 0 |
 | `DATA_FETCH_MAX_CONCURRENCY` | b | 3 | 0 |
 | `DB_MAX_OVERFLOW` | b | 2 | 0 |

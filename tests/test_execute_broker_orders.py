@@ -184,14 +184,14 @@ def _install_enabled_broker_stack(
 
     Patches the SOURCE modules that ``_execute_broker_orders`` imports locally:
       * execution.fmp_paper_broker.FMPPaperBroker -> factory returning ``broker``
-      * engine.advisory_agent.is_us_market_open_now -> ``market_open``
+      * shared.market_hours.is_us_market_open_now -> ``market_open``
       * transactions_store.TransactionsStore  -> factory returning ``ts_store``
       * execution.risk_gate.PreTradeRiskGate  -> pass-through gate
       * execution.order_manager.GlobalKillSwitch -> factory returning ``kill_switch``
     The REAL OrderManager / RiskContext / OrderIntent / KillSwitchActiveError are
     used unchanged.
     """
-    import engine.advisory_agent as agent_mod
+    import shared.market_hours as agent_mod
     import execution.fmp_paper_broker as fmp_mod
     import execution.risk_gate as risk_mod
     import execution.order_manager as om_mod
@@ -590,7 +590,7 @@ def test_priority_queue_enabled_kill_switch_still_aborts_remaining_drain(monkeyp
 def _install_going_live(monkeypatch):
     """ADVISORY_ONLY=False + PAPER_TRADING=False, with every broker seam wired
     to a recorder so any construction or submission is observable."""
-    import engine.advisory_agent as agent_mod
+    import shared.market_hours as agent_mod
     import execution.fmp_paper_broker as fmp_mod
 
     broker = MockBroker(positions=[_pos("MSFT", 5.0)], equity=100_000.0)

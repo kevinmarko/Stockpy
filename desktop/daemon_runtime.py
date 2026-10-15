@@ -53,7 +53,7 @@ import data_engine
 from data_engine import DataEngine, MockDataEngine
 from reporting.atomic_write import atomic_write_json
 from reporting.progress import read_progress
-from engine.advisory_agent import is_automatic_run_gated
+from shared.market_hours import is_automatic_run_gated
 
 logger = logging.getLogger("OrchestratorDaemon")
 
@@ -108,7 +108,7 @@ def _google_trends_due_terms(
     return [term for _, term in due[: max(1, int(max_terms))]]
 
 #: US/Eastern -- the scheduled Robinhood login's wall-clock zone (same zone
-#: engine.advisory_agent's market-hours gates use; no holiday calendar).
+#: shared.market_hours' gates use; no holiday calendar).
 _ET = ZoneInfo("America/New_York")
 
 #: Filename (under settings.OUTPUT_DIR) for the scheduled Robinhood login's

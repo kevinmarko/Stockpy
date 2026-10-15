@@ -98,7 +98,7 @@ def _paused_for_market_hours() -> bool:
     try:
         from datetime import datetime, timezone
 
-        from engine.advisory_agent import is_extended_hours
+        from shared.market_hours import is_extended_hours
         from settings import settings
 
         return bool(settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY) and not is_extended_hours(

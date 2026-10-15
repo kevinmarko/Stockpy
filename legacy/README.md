@@ -9,6 +9,25 @@ one you need to put the moved module back first.
 
 Add to this directory only when archiving, and record each move below.
 
+## Step 5.5: main.py retired (2026-10)
+
+Why: the orchestrator daemon (`python -m desktop.orchestrator_daemon`) has been the one runtime and the real execution-queue writer (`DAEMON_AGENTIC_QUEUE_MODE=primary`) since 2026-10-12, so `main.py` and the advisory-only code that only it called were archived after the soak. One cycle is now `POST /run` (or `shared.daemon_client.trigger_run()`); `main.py --refresh-account` is gone (use the daemon's 08:40 ET scheduled login or Settings -> Brokers -> Refresh).
+
+| Moved | Why |
+|---|---|
+| `main.py` -> `legacy/main.py` | The advisory cycle entry point (`run_once()`, `--interval`, `--agent`, `--refresh-account`). Replaced by the daemon. |
+| `pipeline/steps.py` -> `legacy/pipeline/steps.py` | The `main.py` step classes; the daemon uses `pipeline/production_steps.py`. |
+| `reporting/html_publisher.py` -> `legacy/reporting/html_publisher.py` | Wrote `output/daily_report.html` (retired). Use `daily_report_dashboard.html` or the webapp. |
+| `engine/trade_signals.py` -> `legacy/engine/trade_signals.py` | Advisory push-notification sender used only by `main.py` and the agent loop. |
+| `engine/advisory_agent.py` -> `legacy/engine/advisory_agent.py` | The `main.py --agent` market-hours loop. Its market-hours helpers moved to the active `shared/market_hours.py`. |
+| `reporting/state_snapshot.py` -> `legacy/reporting/state_snapshot.py` | The advisory `write_state_snapshot` / `load_snapshot_diff`. The active `reporting/state_snapshot.py` is a new, smaller file that keeps only the symbol-rating helpers. |
+| `scripts/com.investyo.daily-advisory.plist` -> `legacy/scripts/` | The rollback-only 08:45 launchd job. `scripts/install_schedule.command` no longer has `--with-daily-advisory`. |
+| Test files whose subject was archived -> `legacy/tests/` | The suites for the modules above (they still import the original paths; restore the module first to run one). |
+
+New active files: `shared/market_hours.py` (the market-hours helpers split out of the agent loop), with `tests/test_shared_market_hours.py` and `tests/test_main_py_archive_import_smoke.py`.
+
+To restore: `git revert` the step 5.5 PR (puts `main.py`, the plist and the moved tests back in one step), or `git mv` the individual files back to their original paths. A rollback of the queue-writer cutover also needs RUNBOOK section 3.15's steps (set `DAEMON_AGENTIC_QUEUE_MODE` to `off`/`shadow`, reload `com.investyo.daily-advisory`).
+
 ## Step 4d: ETF volatility transmission (2026-09)
 
 Why: the operator decided to archive it. Every ETF flag

@@ -21,7 +21,6 @@ config.py                   @kevinmarko
 dto_models.py               @kevinmarko
 data/                       @kevinmarko
 data_engine.py              @kevinmarko
-main.py                     @kevinmarko
 main_orchestrator.py        @kevinmarko
 requirements.txt            @kevinmarko
 CLAUDE.md                   @kevinmarko

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "d5c3f75128a4c7eb67ff593360c97599795e30cf",
+    "git_commit": "f637e047c82da06ab764dea02ec2ffb396a71625",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2943,7 +2943,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 371,
+    "files_scanned": 367,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -2971,10 +2971,10 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 727,
+      "total_reads": 710,
       "distinct_fields": 251,
       "counts": {
-        "OUTPUT_DIR": 111,
+        "OUTPUT_DIR": 103,
         "LOCAL_DATA_ROOT": 25,
         "SIGNAL_WEIGHTS": 18,
         "FRED_API_KEY": 13,
@@ -3006,18 +3006,14 @@
         "HMM_N_ITER": 4,
         "HMM_RETRAIN_FREQ_DAYS": 4,
         "JULES_API_KEY": 4,
-        "MACRO_REGIME_GATE_ENABLED": 4,
         "MCP_DATABASE_URL_RO": 4,
         "META_LABEL_MIN_CONFIDENCE": 4,
-        "ORCHESTRATOR_EXTENDED_HOURS_ONLY": 4,
         "PROMPT_REGISTRY_ENABLED": 4,
         "PROMPT_REGISTRY_SIGNING_KEY": 4,
         "RH_LOGIN_DEADLINE_SECONDS": 4,
         "SIZING_CAP_ALERT_THRESHOLD_PCT": 4,
         "SIZING_CAP_ESCALATION_FACTOR": 4,
         "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES": 4,
-        "SYMBOL_RATING_ENABLED": 4,
-        "WATCH_RULES_FILE": 4,
         "ALERT_EMAIL_FROM": 3,
         "ALERT_EMAIL_TO": 3,
         "ALERT_NTFY_TOPIC": 3,
@@ -3031,12 +3027,13 @@
         "GOOGLE_TRENDS_REFRESH_INTERVAL_HOURS": 3,
         "HMM_CREDIT_SPREAD_FEATURE_ENABLED": 3,
         "HMM_TOL": 3,
+        "MACRO_REGIME_GATE_ENABLED": 3,
         "MAX_PORTFOLIO_HEAT": 3,
         "MCP_OAUTH_ISSUER_URL": 3,
         "MULTIFACTOR_MICROCAP_THRESHOLD": 3,
         "NEWS_EARNINGS_DAMPEN_DAYS": 3,
         "NEWS_EARNINGS_SUPPRESS_HOURS": 3,
-        "NTFY_DASHBOARD_URL": 3,
+        "ORCHESTRATOR_EXTENDED_HOURS_ONLY": 3,
         "RISK_FREE_RATE": 3,
         "ROBINHOOD_AUTO_REFRESH_ENABLED": 3,
         "RUNTIME_FLAGS_REFRESH_ENABLED": 3,
@@ -3044,8 +3041,9 @@
         "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE": 3,
         "SENTIMENT_SOURCES": 3,
         "SIZING_CAP_AUDIT_ENABLED": 3,
-        "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 3,
+        "SYMBOL_RATING_ENABLED": 3,
         "WATCHLIST": 3,
+        "WATCH_RULES_FILE": 3,
         "WEEKLY_DIGEST_ENABLED": 3,
         "AGENTIC_DISCOVERY_ENABLED": 2,
         "AGENTIC_MAX_CANDIDATES": 2,
@@ -3118,10 +3116,9 @@
         "SECTOR_SIMILARITY_POOLING": 2,
         "SENTIMENT_AUDIT_ENABLED": 2,
         "SLACK_WEBHOOK_URL": 2,
-        "SNAPSHOT_HISTORY_DAYS": 2,
+        "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 2,
         "STRATEGY_WRITES_ENABLED": 2,
         "SYMBOL_RATING_AUTO_DROP_ENABLED": 2,
-        "SYMBOL_RATING_BAD_SCORE_THRESHOLD": 2,
         "WIKIPEDIA_ATTENTION_LOOKBACK_DAYS": 2,
         "ALERT_CHANNELS": 1,
         "ALERT_DEDUP_WINDOW_SECONDS": 1,
@@ -3165,6 +3162,7 @@
         "MAX_CORRELATION": 1,
         "MAX_ORDER_RATE_PER_MIN": 1,
         "MCP_HTTP_BEARER_TOKEN": 1,
+        "NTFY_DASHBOARD_URL": 1,
         "OPENAI_API_KEY": 1,
         "ORCHESTRATOR_DAEMON_ENABLED": 1,
         "OVERNIGHT_LIQUIDITY_DEPTH_HEURISTIC": 1,
@@ -3220,7 +3218,9 @@
         "SENTIMENT_MAX_DOCUMENTS_PER_CYCLE": 1,
         "SENTIMENT_SOCIAL_BLEND_WEIGHT": 1,
         "SIZING_CAP_ALERT_ENABLED": 1,
+        "SNAPSHOT_HISTORY_DAYS": 1,
         "STOCKTWITS_ENABLED": 1,
+        "SYMBOL_RATING_BAD_SCORE_THRESHOLD": 1,
         "SYNC_WATCHLIST_FILES": 1,
         "USE_DUAL_MOMENTUM_OVERLAY": 1,
         "WEEKLY_DIGEST_INTERVAL_HOURS": 1,
@@ -3228,7 +3228,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 297,
+      "total_reads": 294,
       "distinct_fields": 172,
       "counts": {
         "FMP_API_KEY": 13,
@@ -3237,8 +3237,8 @@
         "LLM_COMMENTARY_TIMEOUT_SECONDS": 7,
         "OPENAI_API_KEY": 7,
         "ADVISORY_ONLY": 6,
-        "LLM_COMMENTARY_ENABLED": 6,
         "FMP_MAX_SECONDS_PER_CYCLE": 5,
+        "LLM_COMMENTARY_ENABLED": 5,
         "OPAL_RESEARCH_ENABLED": 5,
         "PROMPT_REGISTRY_ENABLED": 5,
         "ANTHROPIC_API_KEY": 4,
@@ -3256,11 +3256,9 @@
         "PAPER_TRADES_BRIDGE_TO_TRANSACTIONS_ENABLED": 3,
         "RAG_PORTFOLIO_CONTEXT_ENABLED": 3,
         "ROBINHOOD_EXECUTION_MODE": 3,
-        "ADVISORY_MAX_CONCURRENCY": 2,
         "AI_CHAT_DEFAULT_PROVIDER": 2,
         "BARS_BACKFILL_DAYS": 2,
         "CLOSED_POSITION_RETENTION_DAYS": 2,
-        "DAEMON_AGENTIC_QUEUE_MODE": 2,
         "DB_MAX_OVERFLOW": 2,
         "DB_POOL_SIZE": 2,
         "FMP_FALLBACK_ENABLED": 2,
@@ -3285,6 +3283,7 @@
         "SENTIMENT_LLM_VERIFICATION_ENABLED": 2,
         "SNAPSHOT_CONVICTION_DELTA_THRESHOLD": 2,
         "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED": 2,
+        "ADVISORY_MAX_CONCURRENCY": 1,
         "ADVISORY_REUSE_PIPELINE_COMPUTE": 1,
         "AI_CHAT_DEFAULT_MODEL": 1,
         "AI_GENERATION_API_ENABLED": 1,
@@ -3295,6 +3294,7 @@
         "CNN_LSTM_PROCESS_POOL_WORKERS": 1,
         "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED": 1,
         "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS": 1,
+        "DAEMON_AGENTIC_QUEUE_MODE": 1,
         "DATABASE_URL": 1,
         "DUAL_MOMENTUM_RISKY_ASSETS": 1,
         "DUAL_MOMENTUM_SAFE_ASSET": 1,
@@ -3839,7 +3839,7 @@
       {
         "field": "PROMPT_REGISTRY_REFRESH_SECONDS",
         "name_literal_sites": [
-          "Gravity AI Review Suite.py:10750"
+          "Gravity AI Review Suite.py:10639"
         ],
         "name_literal_site_count": 1,
         "likely_dynamic_read": true

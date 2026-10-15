@@ -1644,7 +1644,7 @@ class TestStateSnapshotFresh:
         stale_ts = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
         snapshot.write_text(json.dumps({"timestamp": stale_ts}), encoding="utf-8")
         s = _settings(tmp_path, OUTPUT_DIR=tmp_path, ORCHESTRATOR_EXTENDED_HOURS_ONLY=True)
-        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: False)
+        monkeypatch.setattr("shared.market_hours.is_extended_hours", lambda now: False)
         with patch("scripts.preflight_check.settings", s):
             r = check_state_snapshot_fresh(max_age_hours=2.0)
         assert r.passed
@@ -1659,7 +1659,7 @@ class TestStateSnapshotFresh:
         stale_ts = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
         snapshot.write_text(json.dumps({"timestamp": stale_ts}), encoding="utf-8")
         s = _settings(tmp_path, OUTPUT_DIR=tmp_path, ORCHESTRATOR_EXTENDED_HOURS_ONLY=True)
-        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: True)
+        monkeypatch.setattr("shared.market_hours.is_extended_hours", lambda now: True)
         with patch("scripts.preflight_check.settings", s):
             r = check_state_snapshot_fresh(max_age_hours=2.0)
         assert not r.passed
@@ -1672,7 +1672,7 @@ class TestStateSnapshotFresh:
         stale_ts = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
         snapshot.write_text(json.dumps({"timestamp": stale_ts}), encoding="utf-8")
         s = _settings(tmp_path, OUTPUT_DIR=tmp_path, ORCHESTRATOR_EXTENDED_HOURS_ONLY=False)
-        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: False)
+        monkeypatch.setattr("shared.market_hours.is_extended_hours", lambda now: False)
         with patch("scripts.preflight_check.settings", s):
             r = check_state_snapshot_fresh(max_age_hours=2.0)
         assert not r.passed
@@ -1689,7 +1689,7 @@ class TestStateSnapshotFresh:
         def _raise(now):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", _raise)
+        monkeypatch.setattr("shared.market_hours.is_extended_hours", _raise)
         with patch("scripts.preflight_check.settings", s):
             r = check_state_snapshot_fresh(max_age_hours=2.0)
         assert not r.passed

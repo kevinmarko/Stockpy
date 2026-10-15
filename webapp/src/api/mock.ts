@@ -2831,7 +2831,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     value: true,
     default: true,
     description:
-      "Skip automatic interval-triggered pipeline cycles (the daemon's timer) outside the 4am-8pm ET weekday window (engine.advisory_agent.is_extended_hours) -- not strict 9:30-16:00 RTH. Manual/on-demand triggers (webapp buttons, API calls) are never gated. No holiday calendar is applied (same known limitation as is_us_market_open); default True fixes previously-unconditional 24/7 automatic runs.",
+      "Skip automatic interval-triggered pipeline cycles (the daemon's timer) outside the 4am-8pm ET weekday window (shared.market_hours.is_extended_hours) -- not strict 9:30-16:00 RTH. Manual/on-demand triggers (webapp buttons, API calls) are never gated. No holiday calendar is applied (same known limitation as is_us_market_open); default True fixes previously-unconditional 24/7 automatic runs.",
   },
   {
     group: "Advanced / Config",
@@ -7607,7 +7607,7 @@ const MOCK_DISCOVERY_CANDIDATES: DiscoveryCandidate[] = [
 ];
 
 /** Honest fixture for GET /agentic/status -> agent_loop. A populated,
- *  mid-cycle advisory-loop agent state (engine/advisory_agent.py). */
+ *  mid-cycle advisory-loop agent state (archived: legacy/engine/advisory_agent.py). */
 const MOCK_AGENT_LOOP: AgentLoopStatus = {
   cycle_count: 42,
   last_cycle_iso: new Date(Date.now() - 8 * 60_000).toISOString(),

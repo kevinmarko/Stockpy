@@ -745,22 +745,28 @@ class TestDispatchWatchAlerts:
 
 
 # ---------------------------------------------------------------------------
-# TestMainPyIntegration — structural guard
+# TestDaemonWatchIntegration — structural guard
 # ---------------------------------------------------------------------------
 
 
-class TestMainPyIntegration:
-    def test_main_py_references_watch_engine(self) -> None:
-        """main.py must import or reference watch_engine (no silent drop)."""
-        src = Path("main.py").read_text(encoding="utf-8")
-        assert "watch_engine" in src, "main.py must reference watch_engine"
+class TestDaemonWatchIntegration:
+    """The daemon runs the watch engine from pipeline/agentic_queue.py's
+    run_watch_engine() (AgenticQueueStep in primary). Until shrink step 5.5
+    these source guards pinned main.py, the previous caller."""
 
-    def test_main_py_calls_evaluate_watch_rules(self) -> None:
-        src = Path("main.py").read_text(encoding="utf-8")
+    _SRC = Path("pipeline/agentic_queue.py")
+
+    def test_agentic_queue_references_watch_engine(self) -> None:
+        """The daemon's queue module must import or reference watch_engine (no silent drop)."""
+        src = self._SRC.read_text(encoding="utf-8")
+        assert "watch_engine" in src, "pipeline/agentic_queue.py must reference watch_engine"
+
+    def test_agentic_queue_calls_evaluate_watch_rules(self) -> None:
+        src = self._SRC.read_text(encoding="utf-8")
         assert "evaluate_watch_rules" in src
 
-    def test_main_py_calls_save_watch_state(self) -> None:
-        src = Path("main.py").read_text(encoding="utf-8")
+    def test_agentic_queue_calls_save_watch_state(self) -> None:
+        src = self._SRC.read_text(encoding="utf-8")
         assert "save_watch_state" in src
 
     def test_settings_has_watch_rules_file(self) -> None:

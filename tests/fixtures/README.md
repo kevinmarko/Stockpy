@@ -22,8 +22,9 @@ underlying P&L math is intentionally changed — never to make a failing test pa
 ## Files
 
 ### `state_snapshot.json`
-Mirrors the schema written by **`reporting/state_snapshot.py::write_state_snapshot`**
-(and the twin `main_orchestrator.py::_write_state_snapshot`), i.e. what the pipeline
+Mirrors the schema written by **`main_orchestrator.py::_write_state_snapshot`** (the
+daemon's `StateSnapshotStep`; the advisory twin `reporting/state_snapshot.py::write_state_snapshot`
+was archived to `legacy/` with `main.py` in shrink step 5.5), i.e. what the pipeline
 persists to `output/state_snapshot.json`.
 
 Top-level keys: `timestamp`, `tickers`, `holdings`, `market_regime`, `vix`,

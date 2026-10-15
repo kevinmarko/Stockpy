@@ -1,11 +1,14 @@
 """
 tests/test_symbol_rating_wiring.py
 ===================================
-Wiring tests for PART 2 of the symbol-rating subsystem: the two per-cycle
-write sites (``pipeline/production_steps.py::_record_symbol_ratings`` for the
-orchestrator path, ``pipeline/steps.py::AdvisoryEvalStep.run`` for the
-advisory path) that persist ``rating.symbol_rating.classify_tier``'s
-GOOD/BAD verdict to ``rating.symbol_rating_store.SymbolRatingStore``.
+Wiring tests for PART 2 of the symbol-rating subsystem: the per-cycle write
+site (``pipeline/production_steps.py::_record_symbol_ratings``, the daemon's
+only rating writer) that persists ``rating.symbol_rating.classify_tier``'s
+GOOD/BAD verdict to ``rating.symbol_rating_store.SymbolRatingStore``, and the
+daemon's once-per-trading-day cadence gate. (The second write site,
+``pipeline/steps.py::AdvisoryEvalStep.run`` on main.py's advisory path, was
+archived with ``main.py`` in shrink step 5.5; its tests are in
+``legacy/tests/test_symbol_rating_wiring.py``.)
 
 Deliberately targets ``_record_symbol_ratings`` directly (same pattern as
 ``legacy/tests/test_production_steps_etf_transmission.py``) rather than the whole of
@@ -18,28 +21,21 @@ An AST-based structural check confirms the StrategyEvalStep.run() call site
 still wraps ``_record_symbol_ratings(...)`` in a broad ``try/except`` --
 CONSTRAINT #6 dead-letter resilience for the one call site too heavy to
 invoke end-to-end here.
-
-The AdvisoryEvalStep.run() path IS invoked end-to-end (it is lightweight --
-no main_orchestrator import, see tests/test_pipeline_package.py's own
-TestAdvisoryEvalStep for the precedent).
 """
 from __future__ import annotations
 
 import ast
 import inspect
 import textwrap
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pandas as pd
 import pytest
 
 import pipeline.production_steps as ps_mod
 import rating.symbol_rating_store as rating_store_mod
-from pipeline.context import RunContext
 from pipeline.production_steps import _record_symbol_ratings
-from pipeline.steps import AdvisoryEvalStep
 from settings import settings
 
 
@@ -69,28 +65,6 @@ def _reset_fake_store_calls():
     _FakeRatingStore.calls = []
     yield
     _FakeRatingStore.calls = []
-
-
-@dataclass
-class _FakeSnapshot:
-    positions: Dict[str, Any] = field(default_factory=dict)
-
-
-def _make_ctx(**overrides: Any) -> RunContext:
-    defaults: Dict[str, Any] = dict(
-        force_account=False,
-        started_at=datetime.now(timezone.utc),
-        watchlist_file="watchlist.txt",
-        fetch_account_snapshot_fn=lambda *a, **k: None,
-        build_universe_fn=lambda snapshot: [],
-        build_macro_dto_fn=lambda *a, **k: None,
-        get_provider_fn=lambda *a, **k: None,
-        fetch_bars_fn=lambda symbols, market: {},
-        build_context_extras_fn=lambda symbols, bars, macro_dto: {},
-        advisory_evaluate_fn=lambda *a, **k: None,
-    )
-    defaults.update(overrides)
-    return RunContext(**defaults)
 
 
 # ---------------------------------------------------------------------------
@@ -208,105 +182,6 @@ class TestCallSiteDeadLetterSafety:
         assert found_call, "StrategyEvalStep.run() no longer calls _record_symbol_ratings(...)"
 
 
-# ---------------------------------------------------------------------------
-# Advisory path -- pipeline/steps.py::AdvisoryEvalStep.run
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class _FakeRecommendation:
-    symbol: str
-    action: str = "HOLD"
-    conviction: float = 0.5
-    data_quality: str = "OK"
-    suggested_position_pct: float = 0.0
-    key_indicators: Optional[Dict[str, float]] = None
-
-
-class TestAdvisoryEvalStepSymbolRatingWrite:
-    def _ctx(self, recs_by_symbol: Dict[str, _FakeRecommendation], held: Optional[Dict[str, Any]] = None) -> RunContext:
-        def _evaluate(symbol: str, **_kw: Any) -> _FakeRecommendation:
-            return recs_by_symbol[symbol]
-
-        ctx = _make_ctx(advisory_evaluate_fn=_evaluate)
-        ctx.symbols = list(recs_by_symbol.keys())
-        ctx.snapshot = _FakeSnapshot(positions=held or {})
-        ctx.market = object()
-        ctx.macro_dto = object()
-        ctx.context_extras = {}
-        return ctx
-
-    def test_derives_bad_tier_and_is_held_correctly(self, monkeypatch):
-        monkeypatch.setattr(settings, "SYMBOL_RATING_ENABLED", True)
-        monkeypatch.setattr(settings, "SYMBOL_RATING_BAD_SCORE_THRESHOLD", 35.0)
-        monkeypatch.setattr(rating_store_mod, "SymbolRatingStore", _FakeRatingStore)
-
-        recs = {
-            "AAPL": _FakeRecommendation("AAPL", action="SELL", key_indicators={"score": 20.0}),
-            "MSFT": _FakeRecommendation("MSFT", action="BUY", key_indicators={"score": 60.0}),
-        }
-        ctx = self._ctx(recs, held={"AAPL": object()})
-
-        AdvisoryEvalStep().run(ctx)
-
-        assert len(_FakeRatingStore.calls) == 1
-        events = {e["symbol"]: e for e in _FakeRatingStore.calls[0]["events"]}
-        assert events["AAPL"]["tier"] == "BAD"
-        assert events["AAPL"]["is_held"] is True
-        assert events["AAPL"]["action_signal"] == "SELL"
-        assert events["MSFT"]["tier"] == "GOOD"
-        assert events["MSFT"]["is_held"] is False
-
-    def test_missing_or_nonfinite_score_is_skipped(self, monkeypatch):
-        monkeypatch.setattr(settings, "SYMBOL_RATING_ENABLED", True)
-        monkeypatch.setattr(rating_store_mod, "SymbolRatingStore", _FakeRatingStore)
-
-        recs = {
-            "AAPL": _FakeRecommendation("AAPL", key_indicators={"score": float("nan")}),
-            "MSFT": _FakeRecommendation("MSFT", key_indicators=None),
-            "GOOG": _FakeRecommendation("GOOG", key_indicators={"score": 60.0}),
-        }
-        ctx = self._ctx(recs)
-
-        AdvisoryEvalStep().run(ctx)
-
-        symbols = {e["symbol"] for e in _FakeRatingStore.calls[0]["events"]}
-        assert symbols == {"GOOG"}
-
-    def test_disabled_flag_makes_zero_write_attempts(self, monkeypatch):
-        monkeypatch.setattr(settings, "SYMBOL_RATING_ENABLED", False)
-
-        def _boom(*a, **k):  # pragma: no cover - must never run
-            raise AssertionError("store must not be constructed when disabled")
-
-        monkeypatch.setattr(rating_store_mod, "SymbolRatingStore", _boom)
-
-        recs = {"AAPL": _FakeRecommendation("AAPL", key_indicators={"score": 20.0})}
-        ctx = self._ctx(recs)
-
-        AdvisoryEvalStep().run(ctx)  # must not raise, must not construct the store
-        assert len(ctx.recommendations) == 1  # the recommendation itself is unaffected
-
-    def test_store_failure_never_raises_out_of_run(self, monkeypatch):
-        """CONSTRAINT #6: a rating-store DB hiccup on the advisory path must
-        never propagate out of AdvisoryEvalStep.run() -- the recommendations
-        already assembled must survive intact."""
-        monkeypatch.setattr(settings, "SYMBOL_RATING_ENABLED", True)
-        monkeypatch.setattr(
-            rating_store_mod, "SymbolRatingStore",
-            lambda **kw: _FakeRatingStore(boom=True, **kw),
-        )
-
-        recs = {"AAPL": _FakeRecommendation("AAPL", key_indicators={"score": 20.0})}
-        ctx = self._ctx(recs)
-
-        AdvisoryEvalStep().run(ctx)  # must not raise
-
-        assert len(ctx.recommendations) == 1
-        assert ctx.recommendations[0].symbol == "AAPL"
-        assert ctx.errors == []  # the write failure is logged, not surfaced as a symbol error
-
-
 class TestDaemonDailyRatingCadence:
     """The daemon records at most one rating cycle per trading day
     (production_steps._daemon_should_record_ratings): with auto-drop on, an
@@ -325,7 +200,7 @@ class TestDaemonDailyRatingCadence:
 
     @pytest.fixture
     def market(self, monkeypatch):
-        import engine.advisory_agent as agent
+        import shared.market_hours as agent
 
         state = {"open": True}
         monkeypatch.setattr(agent, "is_us_market_open_now", lambda now: state["open"])

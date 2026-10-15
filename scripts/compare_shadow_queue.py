@@ -1,7 +1,7 @@
 """
 scripts/compare_shadow_queue.py
 ===============================
-Read-only diff between main.py's real Robinhood execution queue and the
+Read-only diff between the real Robinhood execution queue and the
 orchestrator daemon's SHADOW queue (step 5.2, gate (iii) of
 ``.claude/shrink_step5_retire_main_py_implementation_plan.md``).
 
@@ -10,7 +10,7 @@ It never writes anything.
 What it compares
 ----------------
 * **Real side:** ``OUTPUT_DIR/queue_sources/advisory.json`` and
-  ``OUTPUT_DIR/execution_queue.json`` -- written by the 08:45 ``main.py`` run.
+  ``OUTPUT_DIR/execution_queue.json`` -- the real writer's (``main.py``, archived in 5.5).
   The advisory source's ``generated_at`` is the reference time.
 * **Shadow side:** the daemon's first shadow run AT OR AFTER that reference
   time. ``AgenticQueueStep`` (``DAEMON_AGENTIC_QUEUE_MODE=shadow``) keeps a

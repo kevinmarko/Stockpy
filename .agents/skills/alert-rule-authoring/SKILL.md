@@ -29,7 +29,7 @@ here.
 
 | System | Module | Audience / trigger | Channels |
 |---|---|---|---|
-| Advisory-cycle mobile push | `alerting.py` | The orchestrator daemon's `AgenticQueueStep` when `DAEMON_AGENTIC_QUEUE_MODE=primary` (run-summary push, symbol-watch alerts, new-intent push); `main.py` (being retired) sends the same pushes only when the mode is not `primary`, plus its `--agent` loop's backlog reminders and trade alerts | ntfy.sh (`notify()`) |
+| Advisory-cycle mobile push | `alerting.py` | The orchestrator daemon's `AgenticQueueStep` when `DAEMON_AGENTIC_QUEUE_MODE=primary` (run-summary push, symbol-watch alerts, new-intent push); in `off`/`shadow` the daemon sends none of them. The old `main.py` / `--agent` loop senders (including backlog reminders and trade alerts) were archived to `legacy/` in step 5.5 | ntfy.sh (`notify()`) |
 | General multi-channel dispatcher | `observability/alerts.py` | Strategy/risk/execution-layer code, `prompt_registry`, `validation/drift` | console, file, Discord, Slack, email |
 | MCP-tool-facing notifier | `alerting_mcp/notifier.py` | The `configure_alerts`/`send_test_alert` MCP tools (`investyo_mcp_server.py`) | ntfy, email, Slack |
 | Legacy reconciliation webhook | `execution/order_manager.py` (`_send_alert`, uses `settings.ALERT_WEBHOOK_URL`) | Broker-vs-internal position drift only | one Slack/Discord incoming webhook |
@@ -48,12 +48,10 @@ here.
   `side_effects=False` (no push) and `off` does nothing, so a daemon cycle in
   either mode pushes nothing; in `primary` the whole step is also skipped (no
   push) for a cycle that was stopped by the kill switch, ran on synthetic
-  data, or did not finish the advisory overlay. `main.py`
-  (being retired in step 5.5) still calls `notify()` for the same summary and
-  watch pushes, but skips them when the mode is `primary`; its `--agent` loop
-  also sends `engine/advisory_agent.py::dispatch_backlog_reminders` and
-  `engine/trade_signals.py::dispatch_trade_alerts`, which have no daemon
-  caller. Reads `settings.ALERT_NTFY_TOPIC` (not `NTFY_TOPIC`, and not
+  data, or did not finish the advisory overlay. The archived `main.py`
+  (step 5.5, `legacy/main.py`) and its `--agent` loop senders
+  (`dispatch_backlog_reminders`, `dispatch_trade_alerts`) no longer run and have no
+  daemon equivalent. Reads `settings.ALERT_NTFY_TOPIC` (not `NTFY_TOPIC`, and not
   `os.environ`). Silent no-op when it is unset. **Never pass secrets in
   `title`/`message`** — no `Authorization` header is added; ntfy topics are
   access-controlled by name alone.
@@ -62,10 +60,8 @@ here.
   above** →
   `observability.alerts.send_alert(level, message, channels=None, extra=None,
   dedup_key=None)`. `alerting.py`'s own module docstring still tells you:
-  *"If you are adding a new alert trigger outside `main.py`'s advisory loop,
-  use `observability.alerts.send_alert()` instead of this module"* (its
-  wording predates the daemon becoming the queue writer; the rule it states
-  — new triggers go to `send_alert()` — is unchanged).
+  *"If you are adding a new alert trigger outside the daemon's advisory/queue
+  steps, use `observability.alerts.send_alert()` instead of this module"*.
   - `level` is one of `"INFO"` / `"WARNING"` / `"CRITICAL"` (a `Literal`
     type, not a free string). The module docstring's own contract: CRITICAL
     = kill switch activated, reconciliation drift, broker connection lost,
@@ -174,7 +170,7 @@ time, so a value set after import is still picked up — this rules out an
 import-order bug); (2) for `alerting_mcp.notifier`, is the channel actually
 selected in `ALERT_CHANNELS` (default `ntfy`) and its `ALERT_*` setting
 populated; for `alerting.notify()`, is `ALERT_NTFY_TOPIC` set and was the
-call site reached at all (see the daemon-vs-`main.py` caller list in §1: in
+call site reached at all (see the caller list in §1: in
 `off`/`shadow` the daemon sends none of these pushes); (3) is a `dedup_key` silently
 suppressing it because a prior identical-key call fired within the last
 `ALERT_DEDUP_WINDOW_SECONDS`.

@@ -39,7 +39,7 @@ REPO_ROOT = Path(__file__).parent.parent
 
 # Entry-point modules that MUST call load_dotenv() before any project imports
 # read os.environ at import time.
-_ENTRY_POINTS = ("main.py", "main_orchestrator.py")
+_ENTRY_POINTS = ("main_orchestrator.py",)  # main.py archived to legacy/ in step 5.5
 
 
 def _module_calls_load_dotenv_anywhere(path: Path) -> bool:
@@ -82,7 +82,7 @@ def test_entrypoint_calls_load_dotenv(entry: str) -> None:
     """Every orchestrator entry point must invoke load_dotenv() somewhere.
 
     The canonical placement (since it caused test pollution at module top)
-    is inside the entry-point function (e.g. main(), run_once()).  Without
+    is inside the entry-point function (e.g. main()).  Without
     *any* such call, os.environ.get(...) in downstream modules returns ""
     even though .env is populated — breaking Robinhood auth and any other
     direct-environ readers.  See data/robinhood_portfolio.py:203.

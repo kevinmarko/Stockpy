@@ -1687,7 +1687,7 @@ def _get_forecast_direction_universe() -> list[str]:
     with whatever the operator is currently tracking (held Robinhood
     positions ∪ WATCHLIST/watchlist.txt ∪ DEFAULT_TICKERS, via
     ``data.portfolio_sync.compute_tracked_universe`` -- the same single
-    source of truth ``main.py``/``pipeline/production_steps.py`` use).
+    source of truth ``pipeline/production_steps.py`` uses).
 
     This is a UNION, never a substitute: an earlier version of this function
     returned ONLY ``compute_tracked_universe(...)``'s result (falling back to

@@ -38,7 +38,7 @@ Usage
     python scripts/track_record_status.py --output-dir /tmp/out
 
 Wired into the unattended scheduler indirectly: the launchd job runs
-``main.py``; run this report by hand (or from a cron/launchd job of your own)
+the daemon (com.investyo.stack); run this report by hand (or from a cron/launchd job of your own)
 to check progress.
 """
 

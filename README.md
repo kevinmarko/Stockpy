@@ -186,8 +186,8 @@ The platform's default mode is **advisory** (`ADVISORY_ONLY=true` in `.env`):
 ### Pause the recommendation engine
 
 Even in advisory mode you can fully pause signal generation with the kill switch (the
-sentinel file `output/KILL_SWITCH`). When active, `main.run_once()` and
-`main_orchestrator._main_body()` return immediately and the observability dashboard
+sentinel file `output/KILL_SWITCH`). When active, the daemon cycle
+(`main_orchestrator._main_body()`) returns immediately and the observability dashboard
 continues showing the last written state. CLI:
 
 ```bash

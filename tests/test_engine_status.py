@@ -163,17 +163,17 @@ class TestMarketHoursPausedBadge:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
-        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: False)
+        monkeypatch.setattr("shared.market_hours.is_extended_hours", lambda now: False)
         assert engine_status_module._paused_for_market_hours() is True
 
     def test_paused_for_market_hours_false_when_gate_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", False)
-        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: False)
+        monkeypatch.setattr("shared.market_hours.is_extended_hours", lambda now: False)
         assert engine_status_module._paused_for_market_hours() is False
 
     def test_paused_for_market_hours_false_when_inside_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
-        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", lambda now: True)
+        monkeypatch.setattr("shared.market_hours.is_extended_hours", lambda now: True)
         assert engine_status_module._paused_for_market_hours() is False
 
     def test_paused_helper_never_raises_on_a_broken_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -184,5 +184,5 @@ class TestMarketHoursPausedBadge:
             raise RuntimeError("boom")
 
         monkeypatch.setattr("settings.settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY", True)
-        monkeypatch.setattr("engine.advisory_agent.is_extended_hours", _raise)
+        monkeypatch.setattr("shared.market_hours.is_extended_hours", _raise)
         assert engine_status_module._paused_for_market_hours() is False
