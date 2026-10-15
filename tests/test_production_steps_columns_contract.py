@@ -53,6 +53,10 @@ FORECAST_COLS = [
     'Target_Days', 'ARIMA', 'MC_Target', 'MC_Lower', 'MC_Upper',
     'Forecast_10', 'Forecast_30', 'Forecast_60', 'Forecast_90',
     'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper',
+    'Forecast_10_Lower', 'Forecast_10_Upper',
+    'Forecast_30_Lower', 'Forecast_30_Upper',
+    'Forecast_60_Lower', 'Forecast_60_Upper',
+    'Forecast_90_Lower', 'Forecast_90_Upper',
 ]
 # Realized_Vol_Rank / True_IVR / VRP left this map with the step-4f schema trim.
 OPTIONS_COLUMNS = (
@@ -95,23 +99,38 @@ CASES = [
             'MC_Lower': 175.0, 'MC_Upper': 210.0, 'Forecast_10': 188.0,
             'Forecast_30': 192.5, 'Forecast_60': 196.0, 'Forecast_90': 199.0,
             'Forecast_30_Prophet_Lower': 180.0, 'Forecast_30_Prophet_Upper': 205.0,
+            'Forecast_10_Lower': 181.0, 'Forecast_10_Upper': 195.0,
+            'Forecast_30_Lower': 175.0, 'Forecast_30_Upper': 210.0,
+            'Forecast_60_Lower': 170.0, 'Forecast_60_Upper': 222.0,
+            'Forecast_90_Lower': 165.0, 'Forecast_90_Upper': 233.0,
         }},
         full_expected={
             'Target_Days': 30, 'ARIMA': 190.0, 'MC_Target': 192.5,
             'MC_Lower': 175.0, 'MC_Upper': 210.0, 'Forecast_10': 188.0,
             'Forecast_30': 192.5, 'Forecast_60': 196.0, 'Forecast_90': 199.0,
             'Forecast_30_Prophet_Lower': 180.0, 'Forecast_30_Prophet_Upper': 205.0,
+            'Forecast_10_Lower': 181.0, 'Forecast_10_Upper': 195.0,
+            'Forecast_30_Lower': 175.0, 'Forecast_30_Upper': 210.0,
+            'Forecast_60_Lower': 170.0, 'Forecast_60_Upper': 222.0,
+            'Forecast_90_Lower': 165.0, 'Forecast_90_Upper': 233.0,
         },
         partial_source_symbol="NOPROPHET",
         partial_source={"NOPROPHET": {
-            # Forecast_30_Prophet_Lower / _Upper deliberately absent (Prophet
-            # unavailable/didn't produce output this cycle).
+            # Forecast_30_Prophet_Lower / _Upper and per-horizon MC bands
+            # deliberately absent (e.g. Prophet unavailable and MC band dropped
+            # by an F2 guard this cycle).
             'Target_Days': 60, 'ARIMA': 50.0, 'MC_Target': 51.0,
             'MC_Lower': 45.0, 'MC_Upper': 57.0, 'Forecast_10': 49.5,
             'Forecast_30': 51.0, 'Forecast_60': 52.5, 'Forecast_90': 54.0,
         }},
         partial_expected_present={'ARIMA': 50.0, 'MC_Target': 51.0, 'Forecast_90': 54.0},
-        partial_expected_nan=('Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper'),
+        partial_expected_nan=(
+            'Forecast_30_Prophet_Lower', 'Forecast_30_Prophet_Upper',
+            'Forecast_10_Lower', 'Forecast_10_Upper',
+            'Forecast_30_Lower', 'Forecast_30_Upper',
+            'Forecast_60_Lower', 'Forecast_60_Upper',
+            'Forecast_90_Lower', 'Forecast_90_Upper',
+        ),
         mixed_healthy_symbol="OK",
         mixed_dead_symbol="DEADLETTERED",
         mixed_healthy_source={"OK": {
@@ -119,6 +138,10 @@ CASES = [
             'MC_Lower': 90.0, 'MC_Upper': 112.0, 'Forecast_10': 99.0,
             'Forecast_30': 101.0, 'Forecast_60': 103.0, 'Forecast_90': 105.0,
             'Forecast_30_Prophet_Lower': 95.0, 'Forecast_30_Prophet_Upper': 108.0,
+            'Forecast_10_Lower': 94.0, 'Forecast_10_Upper': 104.0,
+            'Forecast_30_Lower': 90.0, 'Forecast_30_Upper': 112.0,
+            'Forecast_60_Lower': 86.0, 'Forecast_60_Upper': 120.0,
+            'Forecast_90_Lower': 82.0, 'Forecast_90_Upper': 128.0,
         }},
         mixed_healthy_expected_col='Forecast_30',
         mixed_healthy_expected_value=101.0,
