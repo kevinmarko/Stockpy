@@ -313,7 +313,9 @@ class TestExistingEditorsAreNotBootstrap:
             # 90 -> 83 (2026-10, forecasting rebuild F4 part 1): the 5
             # BERT_LLA_* keys ("Forecasting") and SECTOR_FORECAST_CONFIG_PATH/
             # SECTOR_FORECAST_CONFIGS ("Advanced / Config") retired.
-            "_TUNABLE_INDEX": 83,
+            # 83 -> 82 (step 5.6): ORCHESTRATOR_DAEMON_ENABLED ("Advanced /
+            # Config") retired; the daemon is the only runtime.
+            "_TUNABLE_INDEX": 82,
             # 33 -> 31 (2026-09 vendor removal): REDDIT_BACKFILL_MAX_PAGES and
             # FINNHUB_RATE_LIMIT_PER_MIN retired with Reddit/Finnhub.
             "_SENTIMENT_INDEX": 31,
@@ -329,7 +331,8 @@ class TestExistingEditorsAreNotBootstrap:
         # 164 -> 163 (2026-09-30 Alpaca removal): MARKET_DATA_WS_ENABLED.
         # 163 -> 162 (2026-10 dead-tab cleanup): PAIRS_SNAPSHOT_ENABLED.
         # 162 -> 155 (forecasting rebuild F4 part 1): the 7 tunables above.
-        assert len(ALL_EDITOR_KEYS) == 155
+        # 155 -> 154 (step 5.6): ORCHESTRATOR_DAEMON_ENABLED.
+        assert len(ALL_EDITOR_KEYS) == 154
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {

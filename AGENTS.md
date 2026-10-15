@@ -127,7 +127,8 @@ reads a gated execution queue the pipeline writes.
   `com.investyo.daily-advisory` plist. The market-hours helpers it shared with the daemon live in
   `shared/market_hours.py`; `tests/test_main_py_archive_import_smoke.py` proves no entry point needs
   an archived module. Rolling the 2026-10-12 cutover back now means reverting the 5.5 PR
-  (`docs/RUNBOOK.md` §3.15). Step 5.6 (retire `ORCHESTRATOR_DAEMON_ENABLED`) is pending.
+  (`docs/RUNBOOK.md` §3.15). Step 5.6 removed the `ORCHESTRATOR_DAEMON_ENABLED` flag: non-dry
+  runs from `shared/orchestrator_runner.py::launch_orchestrator` always try the daemon first.
 - **Daemon pipeline steps** (`pipeline/production_steps.py`, assembled in `main_orchestrator.py`):
   `AsyncDataFetchStep` → `RunPipelineStep` (inner `MacroStep` → `TrendVolatilityStep` →
   `ProcessingStep` → `ForecastingStep` → `StrategyEvalStep`) → `AdvisoryOverlayStep` (runs

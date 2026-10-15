@@ -224,8 +224,7 @@ Every tracked symbol gets a GOOD/BAD rating from the platform's scoring engine e
 The platform's UI is the **Pilots PWA** (`webapp/`). Double-click `launch_webapp.command`
 at the project root from **Finder** or the **Dock**. It asks whether to use offline mock
 data (the default) or live data. In live mode it starts the backend APIs it needs (and the
-orchestrator daemon, when `ORCHESTRATOR_DAEMON_ENABLED=true`) if they aren't already
-running, then opens the web app. It does not run the pipeline for you — use the Pipeline
+orchestrator daemon) if they aren't already running, then opens the web app. It does not run the pipeline for you — use the Pipeline
 screen (below), or trigger a daemon cycle (`POST /run`).
 
 For a backend that keeps running with no Terminal window open, install the always-on stack

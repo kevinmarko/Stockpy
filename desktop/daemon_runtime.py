@@ -1250,8 +1250,8 @@ class OrchestratorDaemon:
         process's dispatch within one polling interval, narrowing (though
         not eliminating; there is no cross-process file lock here) the
         window for two co-existing daemon processes (a documented,
-        real-if-uncommon operational hazard -- see the
-        ``ORCHESTRATOR_DAEMON_ENABLED`` bullet in CLAUDE.md) to both
+        real-if-uncommon operational hazard -- see the stale-daemon note
+        on port 8601 in docs/FEATURE_TIER_HISTORY.md) to both
         independently decide to dispatch. The pre-existing ``dedup_key``
         passed to ``send_alert()`` is kept too, as defense in depth for a
         rapid duplicate call within one process's own short window -- but

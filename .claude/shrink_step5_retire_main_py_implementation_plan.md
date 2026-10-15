@@ -306,6 +306,7 @@ _Status (2026-10-12): 5.5 built on branch `step5-5-archive-main-py` (plan `.clau
 - Gate: the step-4 style check that nothing active imports the archived modules (AST import graph), plus `make ci` green.
 
 **5.6: Retire `ORCHESTRATOR_DAEMON_ENABLED`**
+_Status (2026-10-12): built on branch `step5-6-retire-daemon-enabled-flag`, stacked on 5.5 (plan `.claude/shrink_step5_6_retire_daemon_enabled_flag_implementation_plan.md`); merges after 5.5._
 - First remove the readers:
   - `launch_webapp.command:497-512` always starts the daemon;
   - the fast path in `orchestrator_runner.py:323` becomes unconditional, keeping the subprocess fallback;

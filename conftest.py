@@ -343,6 +343,23 @@ def _isolate_broker_fills_db_in_tests(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_daemon_control_api_in_tests(monkeypatch):
+    """Point ``shared.daemon_client`` at a closed port for every test.
+
+    ``daemon_client._base_url()`` is ``http://127.0.0.1:<ORCHESTRATOR_API_PORT>``,
+    and on the operator's machine the live daemon listens on the default 8601.
+    Since step 5.6 removed ``ORCHESTRATOR_DAEMON_ENABLED``,
+    ``shared.orchestrator_runner.launch_orchestrator()`` tries the daemon on every
+    non-dry run, so a test reaching it unpatched would ``POST /run`` a real cycle.
+    Port 1 is never served locally, so the probe fails fast and the code takes
+    its documented fallback. A test that needs a specific port sets its own.
+    """
+    from settings import settings as _settings
+
+    monkeypatch.setattr(_settings, "ORCHESTRATOR_API_PORT", 1)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_runtime_flags_store_in_tests(monkeypatch, tmp_path_factory):
     """Point the runtime-flags store (and its sibling audit log) at a per-test
     temp file for every test.

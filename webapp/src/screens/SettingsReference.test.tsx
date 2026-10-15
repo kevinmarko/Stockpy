@@ -102,12 +102,12 @@ const mockResponse: SettingsReferenceResponse = {
       editable_at: "/settings/tunables",
     },
     {
-      key: "ORCHESTRATOR_DAEMON_ENABLED",
+      key: "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
       category: "allowed",
       value: true,
       default: true,
       type: "boolean",
-      description: "Run the continuous background pipeline timer daemon.",
+      description: "Skip automatic daemon cycles outside the 4am-8pm ET weekday window.",
       domain: "Financial/Risk/Sizing",
       dangerous: false,
       writable: true,
@@ -217,7 +217,7 @@ describe("SettingsReference", () => {
 
     // writable: true fields get a switch.
     expect(screen.getByTestId("toggle-ADVISORY_ONLY")).toBeInTheDocument();
-    expect(screen.getByTestId("toggle-ORCHESTRATOR_DAEMON_ENABLED")).toBeInTheDocument();
+    expect(screen.getByTestId("toggle-ORCHESTRATOR_EXTENDED_HOURS_ONLY")).toBeInTheDocument();
     // writable: false fields (no_op boolean, secret string, ordinary number) do not.
     expect(screen.queryByTestId("toggle-EXAMPLE_NO_OP_ENABLED")).not.toBeInTheDocument();
     expect(screen.queryByTestId("toggle-FRED_API_KEY")).not.toBeInTheDocument();
@@ -227,10 +227,10 @@ describe("SettingsReference", () => {
   it("toggling an ordinary (non-dangerous) writable field writes directly and reloads", async () => {
     const user = userEvent.setup();
     const updateSpy = vi.spyOn(api, "updateSettingsReference").mockResolvedValue({
-      written: { ORCHESTRATOR_DAEMON_ENABLED: false },
+      written: { ORCHESTRATOR_EXTENDED_HOURS_ONLY: false },
       rejected: {},
       applies: "immediately",
-      per_key_applies: { ORCHESTRATOR_DAEMON_ENABLED: "immediately" },
+      per_key_applies: { ORCHESTRATOR_EXTENDED_HOURS_ONLY: "immediately" },
       note: "Saved to .env and applied to the running process — no restart needed.",
     });
 
@@ -241,13 +241,13 @@ describe("SettingsReference", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("toggle-ORCHESTRATOR_DAEMON_ENABLED")).toBeInTheDocument();
+      expect(screen.getByTestId("toggle-ORCHESTRATOR_EXTENDED_HOURS_ONLY")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByTestId("toggle-ORCHESTRATOR_DAEMON_ENABLED"));
+    await user.click(screen.getByTestId("toggle-ORCHESTRATOR_EXTENDED_HOURS_ONLY"));
 
     await waitFor(() => {
-      expect(updateSpy).toHaveBeenCalledWith({ ORCHESTRATOR_DAEMON_ENABLED: false });
+      expect(updateSpy).toHaveBeenCalledWith({ ORCHESTRATOR_EXTENDED_HOURS_ONLY: false });
     });
     // No confirmation dialog for a non-dangerous field.
     expect(screen.queryByTestId("reference-dangerous-confirm")).not.toBeInTheDocument();

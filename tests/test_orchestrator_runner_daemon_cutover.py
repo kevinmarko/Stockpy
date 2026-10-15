@@ -1,29 +1,25 @@
 """
 tests/test_orchestrator_runner_daemon_cutover.py
 ==================================================
-PR5 — persistent-daemon GUI cutover, behind settings.ORCHESTRATOR_DAEMON_ENABLED
-(default False). Three distinct cutover points, all in shared/orchestrator_runner.py:
+The daemon paths in shared/orchestrator_runner.py. Shrink step 5.6 retired
+settings.ORCHESTRATOR_DAEMON_ENABLED (and launch_daemon_engine, the desktop
+shell's always-on loop launcher that only that flag used), leaving two:
 
-1. launch_daemon_engine() — the always-on desktop-shell refresh loop, spawned
-   when the flag is True.
-   This reuses the same Popen/RunHandle/stop_run mechanics as every other
-   subprocess launcher (backend="subprocess") -- just a different
-   command. No dual-backend logic needed for this path.
+1. launch_orchestrator()'s HTTP fast path — a non-dry run triggers a cycle on
+   an already-running daemon via shared.daemon_client, producing a
+   backend="daemon" RunHandle. A 409 attaches to the in-flight full cycle (or
+   refuses for a data/metrics sub-run); other failures fall back to the
+   main_orchestrator.py subprocess. RunHandle.is_running()/returncode(),
+   stop_run(), read_log_tail(), and compute_stage_status() all branch on
+   handle.backend.
 
-2. launch_orchestrator()'s flag-gated HTTP fast path — the Launcher tab's
-   manual "Run Pipeline" button triggers a cycle against an already-running
-   daemon via shared.daemon_client instead of spawning a subprocess, producing
-   a backend="daemon" RunHandle. This DOES need dual-backend logic:
-   RunHandle.is_running()/returncode(), stop_run(), read_log_tail(), and
-   compute_stage_status() all branch on handle.backend.
-
-3. launch_daemon_cycle() — the Console's "Advisory Pipeline" job
-   (api/_jobs.py JobType.ADVISORY), which replaced the retired main.py
-   subprocess. Daemon-ONLY: same backend="daemon" handle as (2), but never
-   gated on the flag and never falling back to a subprocess.
+2. launch_daemon_cycle() — the Console's "Advisory Pipeline" job
+   (api/_jobs.py JobType.ADVISORY). Daemon-ONLY: same backend="daemon" handle
+   as (1), never falling back to a subprocess.
 
 All daemon_client calls are monkeypatched -- no real HTTP, no real daemon
-process. subprocess.Popen is monkeypatched via the same _FakePopen pattern
+process (the root conftest also points ORCHESTRATOR_API_PORT at a closed
+port). subprocess.Popen is monkeypatched via the same _FakePopen pattern
 tests/test_orchestrator_runner.py already uses.
 """
 from __future__ import annotations
@@ -40,7 +36,6 @@ def runner(monkeypatch, tmp_path):
     from shared import orchestrator_runner as runner
 
     monkeypatch.setattr(runner, "RUN_LOG_PATH", tmp_path / "gui_run.log")
-    monkeypatch.setattr(runner, "DAEMON_LOG_PATH", tmp_path / "gui_daemon.log")
     monkeypatch.setattr(runner, "DAEMON_CYCLE_LOG_PATH", tmp_path / "gui_daemon_cycle.log")
     monkeypatch.setattr(runner.settings, "OUTPUT_DIR", tmp_path)
     return runner
@@ -58,77 +53,7 @@ class _FakePopen:
 
 
 # ---------------------------------------------------------------------------
-# 1. launch_daemon_engine — always-on loop, subprocess backend (no dual-logic)
-# ---------------------------------------------------------------------------
-
-class TestLaunchDaemonEngine:
-    def test_spawns_daemon_module_with_interval(self, monkeypatch, runner):
-        captured = {}
-
-        def fake_popen(cmd, **kwargs):
-            captured["cmd"] = cmd
-            return _FakePopen(cmd, **kwargs)
-
-        monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
-        handle = runner.launch_daemon_engine(interval_seconds=60)
-
-        assert captured["cmd"] == [
-            sys.executable, "-m", "desktop.orchestrator_daemon", "--interval", "60",
-        ]
-        assert handle.mode == "daemon"
-        assert handle.backend == "subprocess"
-        assert handle.log_path == runner.DAEMON_LOG_PATH
-        assert runner.DAEMON_LOG_PATH.exists()
-
-    def test_interval_clamped_to_minimum_30(self, monkeypatch, runner):
-        captured = {}
-
-        def fake_popen(cmd, **kwargs):
-            captured["cmd"] = cmd
-            return _FakePopen(cmd, **kwargs)
-
-        monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
-        runner.launch_daemon_engine(interval_seconds=5)
-
-        assert "--interval" in captured["cmd"]
-        idx = captured["cmd"].index("--interval")
-        assert captured["cmd"][idx + 1] == "30"
-
-    def test_refresh_account_is_silently_ignored(self, monkeypatch, runner):
-        """The daemon entrypoint has no --refresh-account flag; the kwarg
-        must not appear in the spawned command, and must not raise."""
-        captured = {}
-
-        def fake_popen(cmd, **kwargs):
-            captured["cmd"] = cmd
-            return _FakePopen(cmd, **kwargs)
-
-        monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
-        handle = runner.launch_daemon_engine(interval_seconds=60, refresh_account=True)
-
-        assert "--refresh-account" not in captured["cmd"]
-        assert handle.refresh_account is False
-
-    def test_returned_handle_uses_ordinary_subprocess_mechanics(self, monkeypatch, runner):
-        """is_running()/returncode() for a daemon-engine handle must use the
-        plain Popen path -- no dual-backend branching applies here, since
-        backend defaults to "subprocess"."""
-        fake = _FakePopen(["x"])
-
-        def fake_popen(cmd, **kwargs):
-            return fake
-
-        monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
-        handle = runner.launch_daemon_engine(interval_seconds=60)
-
-        assert handle.is_running() is True
-        fake._polled = 0
-        assert handle.is_running() is False
-        assert handle.returncode() == 0
-
-
-# ---------------------------------------------------------------------------
-# 3. RunHandle dual-backend: is_running() / returncode()
+# RunHandle dual-backend: is_running() / returncode()
 # ---------------------------------------------------------------------------
 
 class TestRunHandleDaemonBackend:
@@ -217,28 +142,23 @@ class TestRunHandleDaemonBackend:
 
 
 # ---------------------------------------------------------------------------
-# 4. launch_orchestrator() — daemon fast path + fallback
+# launch_orchestrator() — daemon fast path + fallback
 # ---------------------------------------------------------------------------
 
 class TestLaunchOrchestratorDaemonFastPath:
-    def test_flag_off_uses_subprocess_path_unchanged(self, monkeypatch, runner):
-        monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", False)
+    def test_retired_flag_is_gone_from_settings_and_env_allowlist(self):
+        """Step 5.6: the daemon is the only runtime, so the cutover flag must
+        not come back as a setting or a GUI-writable .env key."""
+        from settings import Settings
+        from shared import env_io
 
-        def fake_popen(cmd, **kwargs):
-            return _FakePopen(cmd, **kwargs)
+        assert "ORCHESTRATOR_DAEMON_ENABLED" not in Settings.model_fields
+        assert "ORCHESTRATOR_DAEMON_ENABLED" not in env_io.ALLOWED_KEYS
 
-        monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
-        handle = runner.launch_orchestrator()
-
-        assert handle.backend == "subprocess"
-        assert handle.mode == "orchestrator"
-
-    def test_dry_run_always_uses_subprocess_path_even_with_flag_on(self, monkeypatch, runner):
+    def test_dry_run_always_uses_subprocess_path(self, monkeypatch, runner):
         """An explicit dry_run=True must never go through the daemon fast
         path -- an already-running daemon has a FIXED dry_run set at process
         launch with no per-trigger override."""
-        monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
-
         import shared.daemon_client as daemon_client
 
         def _should_not_be_called(*a, **k):
@@ -254,9 +174,7 @@ class TestLaunchOrchestratorDaemonFastPath:
 
         assert handle.backend == "subprocess"
 
-    def test_flag_on_daemon_available_and_trigger_succeeds(self, monkeypatch, runner):
-        monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
-
+    def test_daemon_available_and_trigger_succeeds(self, monkeypatch, runner):
         import shared.daemon_client as daemon_client
 
         monkeypatch.setattr(daemon_client, "daemon_available", lambda timeout=0.5: True)
@@ -279,9 +197,7 @@ class TestLaunchOrchestratorDaemonFastPath:
         assert handle.mode == "orchestrator"
         assert handle.pid == -1
 
-    def test_flag_on_daemon_unavailable_falls_back_to_subprocess(self, monkeypatch, runner):
-        monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
-
+    def test_daemon_unavailable_falls_back_to_subprocess(self, monkeypatch, runner):
         import shared.daemon_client as daemon_client
 
         monkeypatch.setattr(daemon_client, "daemon_available", lambda timeout=0.5: False)
@@ -298,11 +214,9 @@ class TestLaunchOrchestratorDaemonFastPath:
     @staticmethod
     def _patch_fast_path(monkeypatch, runner, response, *, latest=None, status=None,
                          allow_popen=False):
-        """Flag on, daemon reachable, trigger_run -> ``response``. ``latest`` is
+        """Daemon reachable, trigger_run -> ``response``. ``latest`` is
         GET /run/latest (default: reading it fails the test), ``status`` is
         GET /run/{id}/status. Popen fails the test unless ``allow_popen``."""
-        monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
-
         import shared.daemon_client as daemon_client
 
         def _latest_must_not_be_read(*a, **k):
@@ -324,7 +238,7 @@ class TestLaunchOrchestratorDaemonFastPath:
             (lambda cmd, **kw: _FakePopen(cmd, **kw)) if allow_popen else _popen_must_not_be_called,
         )
 
-    def test_flag_on_409_already_running_attaches_to_existing_run(self, monkeypatch, runner):
+    def test_409_already_running_attaches_to_existing_run(self, monkeypatch, runner):
         """A 409 means a cycle is already in flight on the daemon: attach to it,
         never spawn a second, parallel main_orchestrator.py cycle."""
         self._patch_fast_path(
@@ -340,7 +254,7 @@ class TestLaunchOrchestratorDaemonFastPath:
         assert handle.pid == -1
         assert handle._popen is None
 
-    def test_flag_on_202_without_a_run_id_still_returns_a_daemon_handle(
+    def test_202_without_a_run_id_still_returns_a_daemon_handle(
         self, monkeypatch, runner,
     ):
         """The daemon ACCEPTED the run; a missing id must not drop through to
@@ -354,7 +268,7 @@ class TestLaunchOrchestratorDaemonFastPath:
         assert handle.backend == "daemon"
         assert handle.daemon_run_id is None
 
-    def test_flag_on_409_attaches_to_a_full_run(self, monkeypatch, runner):
+    def test_409_attaches_to_a_full_run(self, monkeypatch, runner):
         self._patch_fast_path(
             monkeypatch, runner,
             _trigger_response(error="already_running", existing_run_id="run-full"),
@@ -366,7 +280,7 @@ class TestLaunchOrchestratorDaemonFastPath:
         assert handle.backend == "daemon"
         assert handle.daemon_run_id == "run-full"
 
-    def test_flag_on_409_without_body_id_attaches_to_verifiably_in_flight_latest_run(
+    def test_409_without_body_id_attaches_to_verifiably_in_flight_latest_run(
         self, monkeypatch, runner,
     ):
         self._patch_fast_path(
@@ -380,7 +294,7 @@ class TestLaunchOrchestratorDaemonFastPath:
         assert handle.backend == "daemon"
         assert handle.daemon_run_id == "run-latest"
 
-    def test_flag_on_409_without_any_verifiable_run_id_falls_back(self, monkeypatch, runner):
+    def test_409_without_any_verifiable_run_id_falls_back(self, monkeypatch, runner):
         """No id in the 409 body and /run/latest is not queued/running: nothing
         to attach to, so the pre-existing subprocess fallback applies."""
         self._patch_fast_path(
@@ -395,7 +309,7 @@ class TestLaunchOrchestratorDaemonFastPath:
         assert handle.backend == "subprocess"
 
     @pytest.mark.parametrize("sub_mode", ["data", "metrics"])
-    def test_flag_on_409_on_a_non_full_run_refuses_without_spawning(
+    def test_409_on_a_non_full_run_refuses_without_spawning(
         self, monkeypatch, runner, sub_mode,
     ):
         """A data/metrics sub-run in flight must be neither reported as this
@@ -414,7 +328,7 @@ class TestLaunchOrchestratorDaemonFastPath:
         "error", ["network_error", "unavailable", "kill_switch_active",
                   "command_disabled", "unauthorized", "unexpected_response"],
     )
-    def test_flag_on_non_409_trigger_failure_falls_back_to_subprocess(
+    def test_non_409_trigger_failure_falls_back_to_subprocess(
         self, monkeypatch, runner, error,
     ):
         self._patch_fast_path(
@@ -426,12 +340,10 @@ class TestLaunchOrchestratorDaemonFastPath:
         assert handle.backend == "subprocess"
         assert handle.mode == "orchestrator"
 
-    def test_flag_on_daemon_client_import_exception_falls_back(self, monkeypatch, runner):
+    def test_daemon_client_import_exception_falls_back(self, monkeypatch, runner):
         """Any unexpected exception in the fast-path block (e.g. a broken
         import) must degrade to the subprocess path, never propagate and
         block a manual run (CONSTRAINT #6)."""
-        monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", True)
-
         import shared.daemon_client as daemon_client
 
         def _boom(timeout=0.5):
@@ -503,13 +415,10 @@ def _patch_trigger(monkeypatch, response, latest=None, status=None):
 
 
 class TestLaunchDaemonCycle:
-    @pytest.mark.parametrize("flag", [False, True])
-    def test_ok_returns_daemon_backed_handle_regardless_of_cutover_flag(
-        self, monkeypatch, runner, no_subprocess, flag,
+    def test_ok_returns_daemon_backed_handle(
+        self, monkeypatch, runner, no_subprocess,
     ):
-        """Unlike launch_orchestrator's fast path this is NOT gated on
-        ORCHESTRATOR_DAEMON_ENABLED -- the daemon is the only runtime."""
-        monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", flag)
+        """Daemon-only: no subprocess fallback, unlike launch_orchestrator."""
         calls = _patch_trigger(
             monkeypatch, _trigger_response(ok=True, run_id="run-abc", state="queued"),
         )
@@ -778,7 +687,7 @@ class TestLaunchDaemonCycle:
 
 
 # ---------------------------------------------------------------------------
-# 5. stop_run() — daemon backend cannot be cancelled
+# stop_run() — daemon backend cannot be cancelled
 # ---------------------------------------------------------------------------
 
 class TestStopRunDaemonBackend:
@@ -800,7 +709,7 @@ class TestStopRunDaemonBackend:
 
 
 # ---------------------------------------------------------------------------
-# 6. read_log_tail() — daemon backend synthesizes a summary
+# read_log_tail() — daemon backend synthesizes a summary
 # ---------------------------------------------------------------------------
 
 class TestReadLogTailDaemonBackend:
@@ -840,7 +749,7 @@ class TestReadLogTailDaemonBackend:
 
 
 # ---------------------------------------------------------------------------
-# 7. compute_stage_status() — daemon backend coarse mapping
+# compute_stage_status() — daemon backend coarse mapping
 # ---------------------------------------------------------------------------
 
 class TestComputeStageStatusDaemonBackend:

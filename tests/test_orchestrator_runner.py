@@ -201,7 +201,11 @@ def test_launch_orchestrator_argv_only_carries_flags_its_argparse_accepts(
         captured["cmd"] = cmd
         return _FakePopen(cmd, **kwargs)
 
-    monkeypatch.setattr(runner.settings, "ORCHESTRATOR_DAEMON_ENABLED", False)
+    # Non-dry runs try the daemon first; make it unreachable so the
+    # subprocess command is what gets built.
+    import shared.daemon_client as daemon_client
+
+    monkeypatch.setattr(daemon_client, "daemon_available", lambda timeout=0.5: False)
     monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
     handle = runner.launch_orchestrator(dry_run=dry_run)
 

@@ -468,10 +468,8 @@ class Settings(BaseSettings):
             "(default) preserves today's exact behavior — pilots_api.py "
             "remains a manually-launched standalone `uvicorn` service, "
             "unaffected by the daemon's lifecycle. Only takes effect when the "
-            "daemon entrypoint itself is run — does not require "
-            "ORCHESTRATOR_DAEMON_ENABLED (that flag controls the DESKTOP "
-            "SHELL's choice of subprocess; this flag controls what the "
-            "daemon PROCESS hosts once launched, by either path)."
+            "daemon entrypoint itself is run (this flag controls what the "
+            "daemon PROCESS hosts once launched)."
         ),
     )
     PILOTS_API_PORT: int = Field(
@@ -1796,7 +1794,7 @@ class Settings(BaseSettings):
     # all (the console/file channels in observability.alerts.send_alert are
     # always-on, independent of whether discord/slack/email are configured).
     # Mirrors this repo's convention for new default-off behavior toggles
-    # (FORECAST_SKILL_WEIGHTING_ENABLED, ORCHESTRATOR_DAEMON_ENABLED, etc.).
+    # (FORECAST_SKILL_WEIGHTING_ENABLED, GRAVITY_AI_RUNNER_ENABLED, etc.).
     SIZING_CAP_ALERT_ENABLED: bool = Field(
         default=False,
         description="Opt-in: fires alert notifications when the fraction of capped names in a cycle exceeds threshold.",
@@ -2550,32 +2548,6 @@ class Settings(BaseSettings):
             "alert would ever need to."
         ),
     )
-    # Legacy cutover flag for the persistent orchestrator daemon (desktop/
-    # daemon_runtime.py + desktop/orchestrator_daemon.py + api/control_api.py);
-    # step 5.6 of the main.py retirement removes it. False (the default) keeps the
-    # subprocess behaviour: launch_webapp.command starts only the bare APIs and
-    # shared.orchestrator_runner.launch_orchestrator() spawns a fresh
-    # `main_orchestrator.py` subprocess. True makes launch_webapp.command start
-    # `python -m desktop.orchestrator_daemon`, and makes launch_orchestrator()
-    # trigger a cycle over the Control API (shared/daemon_client.py) against an
-    # already-running daemon (non-dry-run only; it falls back to the subprocess
-    # when the daemon is unreachable). The Console "Advisory Pipeline" job
-    # (launch_daemon_cycle) is daemon-only and ignores this flag.
-    ORCHESTRATOR_DAEMON_ENABLED: bool = Field(
-        default=False,
-        description=(
-            "Legacy flag (shrink step 5.6 retires it). When true, "
-            "./launch_webapp.command starts the real orchestrator daemon "
-            "(python -m desktop.orchestrator_daemon) instead of only the bare "
-            "APIs, and the 'orchestrator' job launcher triggers a cycle over "
-            "the Control API against an already-running daemon instead of "
-            "spawning a subprocess (it falls back to the subprocess if the "
-            "daemon is unreachable; dry-run runs always use the subprocess). "
-            "False (default) keeps the subprocess behaviour. The Console "
-            "'Advisory Pipeline' job always uses the daemon and ignores this "
-            "flag."
-        ),
-    )
     # Gate automatic interval-triggered pipeline cycles to extended market hours.
     ORCHESTRATOR_EXTENDED_HOURS_ONLY: bool = Field(
         default=True,
@@ -2854,8 +2826,7 @@ class Settings(BaseSettings):
             "-- Yahoo RSS/GDELT/EDGAR). False (the default) is a complete "
             "no-op: no network call is attempted for any symbol, matching this "
             "codebase's convention for opt-in networked features "
-            "(ORCHESTRATOR_DAEMON_ENABLED, GRAVITY_AI_RUNNER_ENABLED "
-            "default False the same way). This exists "
+            "(GRAVITY_AI_RUNNER_ENABLED defaults False the same way). This exists "
             "because two of the three sources (Yahoo RSS, GDELT) need no API key "
             "and so have no other way to stay quiet by default -- unlike "
             "EDGAR, which already degrades to a no-op when its "
@@ -5023,8 +4994,7 @@ class Settings(BaseSettings):
         default=False,
         description=(
             "Enable the weekly digest generation. Only takes effect when the "
-            "persistent orchestrator daemon (settings.ORCHESTRATOR_DAEMON_ENABLED, "
-            "also default False) is running -- desktop/daemon_runtime.py's "
+            "persistent orchestrator daemon is running -- desktop/daemon_runtime.py's "
             "OrchestratorDaemon.maybe_dispatch_weekly_digest() is the sole "
             "caller, and that class is never constructed outside the daemon "
             "process."

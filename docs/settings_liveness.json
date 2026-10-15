@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 311,
+    "live_safe": 310,
     "no_op": 2,
     "restart_required": 79,
-    "total": 392
+    "total": 391
   },
   "dynamic_sites": [
     {
@@ -56,21 +56,21 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4298,
+      "line": 4297,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4403,
+      "line": 4402,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5213,
+      "line": 5212,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -326,7 +326,6 @@
     "OPENAI_API_KEY",
     "OPTIONS_RISK_FREE_RATE",
     "ORCHESTRATOR_API_PORT",
-    "ORCHESTRATOR_DAEMON_ENABLED",
     "ORCHESTRATOR_EXTENDED_HOURS_ONLY",
     "OVERNIGHT_LIQUIDITY_DEPTH_HEURISTIC",
     "PAPER_BROKER_WRITES_ENABLED",
@@ -445,13 +444,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 796,
+    "attr": 793,
     "factory_param": 4,
     "getattr_const": 294,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 254,
+    "attr": 253,
     "factory_param": 4,
     "getattr_const": 172,
     "os_environ": 2
@@ -476,7 +475,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4828",
+        "site": "api/pilots_api.py:4827",
         "via": []
       },
       {
@@ -1223,7 +1222,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4779",
+        "site": "api/pilots_api.py:4778",
         "via": []
       }
     ],
@@ -1234,7 +1233,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4778",
+        "site": "api/pilots_api.py:4777",
         "via": []
       }
     ],
@@ -1280,7 +1279,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4899",
+        "site": "api/pilots_api.py:4898",
         "via": []
       }
     ],
@@ -1738,7 +1737,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:143",
+        "site": "shared/orchestrator_runner.py:136",
         "via": []
       },
       {
@@ -2190,7 +2189,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:95",
+        "site": "shared/orchestrator_runner.py:93",
         "via": []
       },
       {
@@ -2199,7 +2198,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:100",
+        "site": "shared/orchestrator_runner.py:99",
         "via": []
       },
       {
@@ -2208,7 +2207,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:106",
+        "site": "shared/orchestrator_runner.py:105",
         "via": []
       },
       {
@@ -2217,7 +2216,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:112",
+        "site": "shared/orchestrator_runner.py:111",
         "via": []
       },
       {
@@ -2226,7 +2225,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:118",
+        "site": "shared/orchestrator_runner.py:116",
         "via": []
       },
       {
@@ -2235,7 +2234,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:123",
+        "site": "shared/orchestrator_runner.py:125",
         "via": []
       },
       {
@@ -2244,7 +2243,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:132",
+        "site": "shared/orchestrator_runner.py:131",
         "via": []
       },
       {
@@ -2253,16 +2252,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:138",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "attr",
-        "rules": [
-          "module_level"
-        ],
-        "site": "shared/orchestrator_runner.py:1147",
+        "site": "shared/orchestrator_runner.py:1063",
         "via": []
       }
     ],
@@ -2499,7 +2489,7 @@
     "init_body": 8,
     "init_self_assign": 41,
     "method_self_assign": 5,
-    "module_level": 48,
+    "module_level": 47,
     "os_environ": 2
   },
   "restart_required_via_name_literal_only": [

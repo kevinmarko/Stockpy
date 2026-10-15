@@ -21,8 +21,8 @@ deleted in 2026-09; git history has it.
 **Double-click `launch_webapp.command`** in Finder or the Dock to start the web app. It asks
 whether to run against offline mock data (the default) or live data. In live mode it starts
 `data_api` (`:8603`) and `metrics_api` (`:8604`) if they aren't already up, starts the
-orchestrator daemon (Control API `:8601` + Pilots API `:8602`) when
-`ORCHESTRATOR_DAEMON_ENABLED=true` and neither port is up, and writes `webapp/.env.local` so
+orchestrator daemon (Control API `:8601` + Pilots API `:8602`) when neither port is up, and
+writes `webapp/.env.local` so
 the app points at them. It does not run the pipeline for you. For a backend that keeps
 running with no Terminal window open, see §0.1.
 
