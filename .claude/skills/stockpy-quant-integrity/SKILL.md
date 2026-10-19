@@ -32,7 +32,12 @@ already found by audit passes, not by the original author:
   `sizing/hrp_cvar_optimizer.py`) shipped hardcoded
   `"cvar_95": float(0.05), # placeholder` instead of the real computed
   value — the optimizer module's own math was correct, only the endpoint
-  wiring fabricated the number.
+  wiring fabricated the number. **Both are gone now, not just fixed**: the
+  `/pilots/portfolio/optimize/hrp-cvar` route was deleted in the 2026-09
+  options-desk retirement (step 3e) and `sizing/hrp_cvar_optimizer.py` was
+  archived to `legacy/sizing/hrp_cvar_optimizer.py` in the same retirement
+  (see `legacy/README.md`) — there is no live HRP/CVaR endpoint or module
+  left to re-check this exact pattern against.
 - `pilots/zero_dte_engine.py`'s mandatory 15:45 ET hard-exit gate sat fully
   implemented and unit-tested for a while with nothing calling it from any
   production path — the UI showed "15:45 ET Auto-Close" as if it were live
