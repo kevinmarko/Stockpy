@@ -5,11 +5,16 @@
 #                     (queue mode forced off: no queue write, orders or pushes;
 #                     fails on a failed cycle or one that ran on synthetic data)
 #   make test        pytest only (full suite -- no marker filter)
-#   make ci          offline pytest only (mirrors GitHub Actions `test` job:
+#   make ci          offline pytest only (what the retired GitHub Actions `test` job ran:
 #                     -m "not network and not slow" --dist loadgroup)
 #   make smoke       smoke tests only
 #
-#   make lint        ruff genuine-bug rules only (mirrors CI's Lint step)
+#   make lint        ruff genuine-bug rules only (the retired CI's Lint step)
+#   make local-ci    EVERYTHING the retired GitHub Actions workflows ran, on this machine:
+#                     lint, offline + slow suites, coverage floor, webapp, bandit,
+#                     pip-audit, ML leakage. GitHub Actions is no longer used, so this
+#                     (not a remote runner) is the pre-merge gate. Flags via ARGS, e.g.
+#                     make local-ci ARGS="--profile quick"   (see scripts/local_ci.py)
 #
 # All targets assume Python 3.12 lives in .venv; run ./setup.sh first.
 # A git worktree under .claude/worktrees/<name>/ has no .venv of its own, so
@@ -27,7 +32,7 @@ ifeq ($(_VENV_PYTHON),)
 $(warning No .venv found here or in the main checkout; using system python3 ($(shell python3 -V 2>&1)). Run ./setup.sh or pass PYTHON=...)
 endif
 
-.PHONY: verify test ci smoke lint _check_env _live_run
+.PHONY: verify test ci smoke lint local-ci _check_env _live_run
 
 # ── Main gate ─────────────────────────────────────────────────────────────────
 verify: _check_env test _live_run
@@ -55,7 +60,7 @@ test:
 
 ci:
 	@echo ""
-	@echo "=== Offline test suite (mirrors GitHub Actions CI's \`test\` job) ==="
+	@echo "=== Offline test suite (what the retired GitHub Actions \`test\` job ran) ==="
 	@$(PYTHON) -m pytest -m "not network and not slow" -v --tb=short -n auto --dist loadgroup
 
 smoke:
@@ -65,6 +70,11 @@ smoke:
 
 lint:
 	@$(PYTHON) -m ruff check . --select=F821,F822,F823,E9
+
+# GitHub Actions is no longer used; this runs the same jobs locally. ARGS passes flags through,
+# e.g. `make local-ci ARGS="--profile quick"` or `make local-ci ARGS="--list"`.
+local-ci:
+	@$(PYTHON) scripts/local_ci.py $(ARGS)
 
 _live_run:
 	@echo ""
