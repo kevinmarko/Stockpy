@@ -54,7 +54,7 @@ flowchart TD
         PE["ProcessingEngine\nprocessing_engine.py\nRSI, MACD, Aroon, ATR, Graham,\nGordon, momentum metrics,\nmultifactor raw inputs"]
         ME["MacroEngine\nmacro_engine.py\nRules-based regime +\nHMM second opinion"]
         HMM["HMMRegimeDetector\nregime/hmm_regime.py\n3-state Gaussian HMM\n(bull / sideways / bear)"]
-        TOE["TechnicalOptionsEngine\ntechnical_options_engine.py\nGJR-GARCH σ, IVR, Black-Scholes Greeks,\nAroon+Coppock trend bias"]
+        TOE["GARCH + trend helpers\nvolatility/garch.py · trend_indicators.py\nGJR-GARCH σ, Aroon+Coppock trend bias\n(options engine archived to legacy/)"]
         FE["ForecastingEngine\nforecasting_engine.py\nARIMA · Monte Carlo · Holt-Winters\nCNN-LSTM · skill-weighted ensemble"]
         FT["ForecastTracker\nforecasting/forecast_tracker.py\nInverse-RMSE skill weights\n(SQLite)"]
     end
@@ -135,7 +135,7 @@ flowchart TD
 
     %% ── Output / Sinks ────────────────────────────────────────────────────
     subgraph OUTPUT["Output Sinks"]
-        HTML["output/daily_report.html\nHoldings & P/L · Δ Since Last Run\nSignals table · Rationale · Gravity audit"]
+        HTML["output/daily_report_dashboard.html\nHoldings & P/L · Δ Since Last Run\nSignals table · Rationale · Gravity audit"]
         SS["output/state_snapshot.json\n(+ rotated history/ copies)"]
         DL["output/decision_log.jsonl\nOperator acted / passed / modified"]
         NTFY_OUT["Phone push notification\nntfy.sh topic"]
@@ -160,7 +160,7 @@ flowchart TD
     subgraph BROKER["⚠ Quarantined — ADVISORY_ONLY=true"]
         direction LR
         OM["OrderManager\nexecution/order_manager.py\nIdempotency · risk gate · retry"]
-        RG["PreTradeRiskGate\nexecution/risk_gate.py\n10-check pipeline"]
+        RG["PreTradeRiskGate\nexecution/risk_gate.py\n11-check pipeline"]
         BB["BrokerBase / FMPPaperBroker\nexecution/broker_base.py\nexecution/fmp_paper_broker.py"]
         KSW["GlobalKillSwitch\nexecution/kill_switch.py\noutput/KILL_SWITCH file"]
     end
@@ -222,18 +222,18 @@ misrepresent the actual arrangement. Any agent may touch any file for the task i
 
 | Entry point | When to use | Key difference |
 |-------------|-------------|----------------|
-| `python3 main.py` | Advisory refresh — fastest, broker-free | Calls `engine/advisory.py` directly; writes `output/daily_report.html` + `output/state_snapshot.json` |
-| `python3 main_orchestrator.py` | Full async pipeline with schema validation | Runs all 50+ dashboard columns through Pandera; writes `output/daily_report_dashboard.html` |
+| `python -m desktop.orchestrator_daemon` | The one runtime — keeps the engines warm, runs the pipeline on its timer or on `POST /run`, hosts the Control and Pilots APIs | Runs `main_orchestrator.py`'s async pipeline plus the advisory overlay (`engine/advisory.py`); writes `output/state_snapshot.json` and `output/daily_report_dashboard.html` |
+| `python3 main_orchestrator.py` | One full async pipeline run without the daemon | Runs all 50+ dashboard columns through Pandera; writes `output/daily_report_dashboard.html` |
 | `./launch_webapp.command` | Visual control panel (Pilots PWA, `webapp/`) | Starts the web app and, in live mode, the backend APIs it needs |
-| `python scripts/preflight_check.py` | Readiness gate | 17 checks; advisory-mode auto-skips 8 broker/false-positive checks |
+| `python scripts/preflight_check.py` | Readiness gate | 27 checks (`ALL_CHECKS`); advisory mode auto-skips 6 broker-dependent ones |
 
 ---
 
 ## Cross-cutting & extracted modules
 
 * **`reporting/progress.py`** — file-backed 0–100% pipeline-progress contract. `ProgressReporter(stages, …)` is instantiated once per cycle by the orchestrator (`start_stage` / `advance_symbol` / `finish`), atomically writing `output/progress.json`; module-level `read_progress()` is the dead-letter-safe read side (missing/malformed → `None`, never a fabricated partial). Read by `shared/orchestrator_runner.py::compute_run_progress`; the Streamlit Launcher tab's progress bar that displayed it was deleted in 2026-09.
-* **`reporting/html_publisher.py`** — the HTML publish layer extracted out of `main.py`, so the advisory orchestrator's report-writing path is a standalone, independently-testable module rather than an inline `main.py` helper.
-* **`pipeline/steps.py`** — `run_once()` recast as a command/mediator pipeline of discrete steps (including `KillSwitchGateStep`, the advisory pause gate) instead of one monolithic function body.
+* **`reporting/html_publisher.py`** — *archived to `legacy/reporting/html_publisher.py` with `main.py` (step 5.5, 2026-10).* It was the HTML publish layer extracted out of `main.py`; it wrote the retired `output/daily_report.html`. The daemon writes `output/daily_report_dashboard.html` via `diagnostics_and_visuals.generate_html_report`.
+* **`pipeline/steps.py`** — *archived to `legacy/pipeline/steps.py` with `main.py` (step 5.5, 2026-10).* It held `main.py`'s `run_once()` as a command/mediator pipeline of discrete steps (including `KillSwitchGateStep`). The daemon's steps live in `pipeline/production_steps.py`.
 
 ---
 

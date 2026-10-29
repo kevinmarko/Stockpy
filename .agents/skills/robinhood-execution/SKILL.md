@@ -33,7 +33,7 @@ always, placing only under strict conditions.**
 
 You may arrive here two ways: the operator asks you to run this skill, or
 `execution/queue_builder.py` pushed them an ntfy notification (if
-`NTFY_TOPIC` is configured) because the queue gained a new or newly-placeable
+`ALERT_NTFY_TOPIC` is configured) because the queue gained a new or newly-placeable
 intent since the last cycle. Either way, treat this as a **conversation, not a
 script**: narrate what you're seeing and why in plain English, and actively
 invite the operator to ask questions, request more detail (their existing

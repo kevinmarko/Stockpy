@@ -25,7 +25,7 @@ always, placing only under strict conditions.**
 
 You may arrive here two ways: the operator asks you to run this skill, or
 `execution/queue_builder.py` pushed them an ntfy notification (if
-`NTFY_TOPIC` is configured) because the queue gained a new or newly-placeable
+`ALERT_NTFY_TOPIC` is configured) because the queue gained a new or newly-placeable
 intent since the last cycle. Either way, treat this as a **conversation, not a
 script**: narrate what you're seeing and why in plain English, and actively
 invite the operator to ask questions, request more detail (their existing
@@ -76,8 +76,8 @@ not — read them a checklist only if they ask for one.
    ```
    (same `.venv/bin/python3` fallback as step 1).
    - **`primary`** (the live setting since 2026-10-12) — the orchestrator
-     daemon writes the queue. `main.py` no longer writes it, so never tell the
-     operator to run `python3 main.py` for a fresh queue. Before loading the queue, trigger a
+     daemon writes the queue. `main.py` was archived to `legacy/` (step 5.5), so
+     never tell the operator to run it for a fresh queue. Before loading the queue, trigger a
      daemon cycle and wait for it to finish:
      ```bash
      python3 - <<'EOF'
@@ -117,9 +117,9 @@ not — read them a checklist only if they ask for one.
      either a rollback (`docs/RUNBOOK.md` §3.15: the operator reloaded the
      08:45 `com.investyo.daily-advisory` job) or a misconfiguration. **Stop
      and ask the operator which.** Do not trigger `POST /run` (in these modes
-     it does not write the real queue) and do not run `python3 main.py` (it is
-     being retired; a hand run on a non-trading day also advances symbol-rating
-     streaks). If the operator confirms a rollback, you may continue with the
+     it does not write the real queue) and never run `main.py` (it is archived;
+     a rollback means the operator reverted the step 5.5 PR first, per
+     RUNBOOK §3.15). If the operator confirms a rollback, you may continue with the
      queue the 08:45 job last wrote, under every hard stop below; if it is
      stale, stop and say when the next 08:45 run will refresh it.
 

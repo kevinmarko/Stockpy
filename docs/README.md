@@ -41,7 +41,7 @@ The load-bearing docs also listed in CLAUDE.md's "Key documentation files" table
 | [`validation-and-signals.md`](architecture/validation-and-signals.md) | `validation/purged_cv.py`, `metrics.py`, `harness.py`, `stress_scenarios.py`, the `signals/` package |
 | [`ml-and-reports.md`](architecture/ml-and-reports.md) | `ml/` pipeline, `reports/*.html.j2` templates, `ai_verification_prompts.py` |
 | [`testing.md`](architecture/testing.md) | Index of every file under `tests/` and what each covers |
-| [`orchestration-entrypoints.md`](architecture/orchestration-entrypoints.md) | `engine/__init__.py`, `engine/advisory.py`, `.env` loading, `alerting.py`, `main.py`, `main_orchestrator.py` |
+| [`orchestration-entrypoints.md`](architecture/orchestration-entrypoints.md) | `engine/__init__.py`, `engine/advisory.py`, `.env` loading, `alerting.py`, `main_orchestrator.py`, and the archived `main.py` (now `legacy/main.py`) |
 
 ## Integration references
 

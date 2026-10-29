@@ -155,9 +155,12 @@ cwd-prefix test. That conservatism is correct for *stop*: a Stop click should no
 belonging to an active agent session in another worktree that the operator never started. With
 start-side auto-healing in place, Stop no longer needs to.
 
-## Unrelated finding, not fixed
+## Unrelated finding, since fixed (2026-10-29)
 
-`scripts/com.investyo.stack.plist` contains `--` inside XML comments, which `expat` rejects as
+`scripts/com.investyo.stack.plist` contained `--` inside XML comments, which `expat` rejects as
 malformed. macOS's own parser — the one `launchd` actually uses — accepts it (`plutil -lint`
-reports OK), so this has no runtime effect. Left alone rather than risk editing a live launchd
-plist for a cosmetic issue.
+reports OK), so it had no runtime effect, and it was first left alone rather than risk editing a
+live launchd plist for a cosmetic issue. The 2026-10-29 cleanup sweep reworded the four comments
+(`--` became a comma or semicolon). That edit was checked to be comment-only: with every
+`<!-- -->` block removed, the file is byte-identical to the previous version. All of
+`scripts/*.plist` now parse under Python's strict parser.
