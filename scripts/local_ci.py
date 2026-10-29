@@ -41,6 +41,14 @@ an ERROR/TIMEOUT, never a skip. The only legitimate skips are shown with their r
 ``offline``), and the path-gated ML-leakage steps when git says nothing watched changed
 (and when git cannot say, they RUN).
 
+Thread cap for parallel steps
+-----------------------------
+The ``offline``, ``slow`` and ``nightly`` steps fan out across pytest-xdist workers and run under
+``env OMP_THREAD_LIMIT=1`` (see ``XDIST_ENV``): without it LightGBM starts one OpenMP thread per
+core in every worker, oversubscribes the CPUs, and its training calls stall or crash workers. This
+was reproduced on a clean ``origin/main`` and is why a plain ``-n auto`` run could not finish on a
+4-core machine. It changes thread counts only, not which tests run.
+
 Exit codes: 0 every selected step passed or was legitimately skipped; 1 at least one
 step failed, errored or timed out; 2 bad usage.
 
@@ -89,6 +97,14 @@ ML_WATCHED_PATHS = (
 )
 
 BANDIT_EXCLUDES = "./tests,./webapp,./.venv,./node_modules,./legacy"
+# pytest-xdist runs one worker per core (`-n auto`). LightGBM, with no thread count set, starts one
+# OpenMP thread per core IN EACH WORKER, so N workers on N cores run N*N threads. On a 4-core
+# container that made LightGBM training stall for the full per-test timeout or crash the worker
+# (measured: 23 LightGBM tests took 7-12 minutes and 6-8 of them failed under `-n 4`, on a clean
+# origin/main too; with this cap they pass in 7 seconds; serial: 10 seconds). OMP_THREAD_LIMIT is
+# a hard cap that LightGBM's own num_threads cannot override. Only the xdist steps get it.
+XDIST_ENV = ("OMP_THREAD_LIMIT=1",)
+
 ML_LOOKAHEAD_TESTS = (
     "tests/test_lgbm_no_leakage.py",
     "tests/test_forecasting_lookahead.py",
@@ -107,6 +123,14 @@ class Step:
     needs: tuple[str, ...] = ()  # step ids that must PASS first, when they are selected
     only_if_paths: tuple[str, ...] = ()  # run only if a changed file matches; empty = always
     skip_reason: str = ""  # non-empty = reported SKIPPED with this reason
+    env: tuple[str, ...] = ()  # "KEY=VALUE" settings, applied by running the command under `env`
+
+    @property
+    def argv(self) -> tuple[str, ...]:
+        """What actually runs: the command, under ``env KEY=VALUE ...`` when ``env`` is set.
+        Done with the ``env`` program (not by copying the process environment) so the command
+        line shown by ``--list`` is the whole truth and this module never reads ``os.environ``."""
+        return (("env", *self.env) if self.env else ()) + tuple(self.cmd)
 
 
 @dataclass(frozen=True)
@@ -134,7 +158,7 @@ def build_steps(*, python: str, coverage: bool, site_packages: str) -> list[Step
              (python, "-m", "ruff", "check", ".", "--select=F821,F822,F823,E9"),
              300, "ci.yml / test shard 1 / Lint (ruff)", ("pr", "quick")),
         Step("offline", "offline test suite (not network, not slow)",
-             tuple(offline), 7200, "ci.yml / test shards 1-4", ("pr",)),
+             tuple(offline), 7200, "ci.yml / test shards 1-4", ("pr",), env=XDIST_ENV),
         Step("coverage", "coverage floor (fail_under in .coveragerc)",
              (python, "-m", "coverage", "report", "--skip-covered"),
              600, "ci.yml / test (offline suite)", ("pr",), needs=("offline",),
@@ -142,7 +166,7 @@ def build_steps(*, python: str, coverage: bool, site_packages: str) -> list[Step
         Step("slow", "slow-marked test suite",
              (python, "-m", "pytest", "-m", "slow and not network", "-q", "--tb=short",
               "-n", "auto", "--timeout=600", "--timeout-method=thread"),
-             3600, "ci.yml / test (slow suite)", ("pr",)),
+             3600, "ci.yml / test (slow suite)", ("pr",), env=XDIST_ENV),
         Step("webapp-typecheck", "webapp typecheck",
              ("npm", "--prefix", "webapp", "run", "typecheck"),
              600, "ci.yml / webapp (Pilots PWA)", ("pr", "quick")),
@@ -169,7 +193,7 @@ def build_steps(*, python: str, coverage: bool, site_packages: str) -> list[Step
              (python, "-m", "pytest", "-q", "--tb=short", "-n", "auto", "--timeout=600",
               "--timeout-method=thread"),
              10800, "nightly.yml (hits live upstreams; a red run can be upstream flake)",
-             ("nightly",)),
+             ("nightly",), env=XDIST_ENV),
     ]
 
 
@@ -265,13 +289,14 @@ def run_steps(steps: Sequence[Step], *, runner: Runner, changed: ChangedFiles, b
                 continue
         if note:
             print(f"   note: {note}", file=out, flush=True)
-        print(f"   $ {' '.join(step.cmd)}", file=out, flush=True)
+        print(f"   $ {' '.join(step.argv)}", file=out, flush=True)
         started = time.monotonic()
-        if shutil.which(step.cmd[0]) is None:
-            record(Result(step.id, ERROR, 0.0, f"executable not found: {step.cmd[0]}"))
+        missing = next((exe for exe in {step.argv[0], step.cmd[0]} if shutil.which(exe) is None), None)
+        if missing is not None:
+            record(Result(step.id, ERROR, 0.0, f"executable not found: {missing}"))
         else:
             try:
-                code = runner(step.cmd, step.timeout, REPO_ROOT)
+                code = runner(step.argv, step.timeout, REPO_ROOT)
             except subprocess.TimeoutExpired:
                 record(Result(step.id, TIMEOUT, time.monotonic() - started, f"exceeded {step.timeout}s"))
             except OSError as exc:
@@ -341,7 +366,7 @@ def main(argv: Optional[Sequence[str]] = None, *, runner: Runner = default_runne
             gate = f"  [only if changed: {', '.join(s.only_if_paths)}]" if s.only_if_paths else ""
             needs = f"  [needs: {', '.join(s.needs)}]" if s.needs else ""
             print(f"{s.id:<17} profiles={','.join(s.profiles):<9} timeout={s.timeout:>5}s  "
-                  f"{s.mirrors}{needs}{gate}\n{'':<17} $ {' '.join(s.cmd)}", file=out)
+                  f"{s.mirrors}{needs}{gate}\n{'':<17} $ {' '.join(s.argv)}", file=out)
         return 0
 
     results = run_steps(selected, runner=runner, changed=changed, base=args.base,

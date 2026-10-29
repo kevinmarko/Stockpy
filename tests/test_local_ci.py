@@ -43,7 +43,12 @@ class FakeRunner:
     def _key(self, cmd) -> str:
         """Map a command back to its step id, using the table the CLI itself builds
         (``sys.executable`` + this environment's site-packages), with and without coverage."""
-        text = " ".join(cmd)
+        argv = list(cmd)
+        if argv and argv[0] == "env":  # steps may run under `env KEY=VALUE ...`: look through it
+            argv = argv[1:]
+            while argv and "=" in argv[0] and not argv[0].startswith("/"):
+                argv = argv[1:]
+        text = " ".join(argv)
         for coverage in (True, False):
             for step in local_ci.build_steps(python=sys.executable, coverage=coverage,
                                              site_packages=sysconfig.get_paths()["purelib"]):
@@ -116,6 +121,20 @@ class TestStepTable:
         # The nightly job ran the COMPLETE suite: no `-m <marker>` filter after `python -m pytest`.
         assert nightly.cmd[:3] == ("/usr/bin/python3", "-m", "pytest")
         assert "-m" not in nightly.cmd[3:]
+
+    def test_xdist_steps_are_thread_capped_and_the_others_are_not(self):
+        """LightGBM starts one OpenMP thread per core in EVERY xdist worker; on a 4-core box,
+        4 workers x 4 threads stalled or crashed LightGBM training (reproduced on clean main).
+        Exactly the steps that fan out across workers carry the hard cap."""
+        steps = {s.id: s for s in _steps()}
+        for sid in ("offline", "slow", "nightly"):
+            assert "-n" in steps[sid].cmd, f"{sid} is expected to be an xdist step"
+            assert steps[sid].env == ("OMP_THREAD_LIMIT=1",), sid
+            assert steps[sid].argv[:2] == ("env", "OMP_THREAD_LIMIT=1"), sid
+            assert steps[sid].argv[2:] == steps[sid].cmd, sid
+        for sid in ("lint", "coverage", "webapp-test", "bandit", "pip-audit", "ml-audit",
+                    "ml-lookahead"):
+            assert steps[sid].env == () and steps[sid].argv == steps[sid].cmd, sid
 
     def test_coverage_arguments_only_when_enabled(self):
         on = {s.id: s for s in _steps(coverage=True)}
@@ -194,6 +213,30 @@ class TestRunning:
         assert _statuses(text)["bandit"] == local_ci.ERROR
         assert "executable not found: uvx" in text
         assert runner.calls == []  # never attempted
+
+
+class TestEnvPrefix:
+    def test_the_runner_receives_the_env_prefixed_command(self):
+        code, text, runner = _run(["--only", "offline"])
+        assert code == 0
+        assert runner.calls[0][:2] == ("env", "OMP_THREAD_LIMIT=1")
+        assert "OMP_THREAD_LIMIT=1" in text  # and it is visible in the printed command
+
+    def test_a_serial_step_runs_without_a_prefix(self):
+        code, text, runner = _run(["--only", "lint"])
+        assert runner.calls[0][0] == sys.executable
+
+    def test_list_shows_the_prefix(self):
+        code, text, _ = _run(["--list"])
+        assert "env OMP_THREAD_LIMIT=1" in text
+
+    def test_missing_env_program_is_an_error_not_a_skip(self, monkeypatch):
+        monkeypatch.setattr(local_ci.shutil, "which",
+                            lambda name: None if name == "env" else f"/usr/bin/{name}")
+        code, text, runner = _run(["--only", "offline"])
+        assert code == 1 and _statuses(text)["offline"] == local_ci.ERROR
+        assert "executable not found: env" in text
+        assert runner.calls == []
 
 
 class TestCoverageDependency:
