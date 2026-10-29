@@ -66,7 +66,7 @@ class MacroDataSchema(pa.DataFrameModel):
 # CPIAUCSL_YoY / DGS10 feed inflation/real_yield only and are deliberately
 # excluded -- this constant answers "is the killswitch safe-gate data
 # trustworthy," not "is macro_raw complete." DTO-construction call sites
-# (main.py, pipeline/production_steps.py) check the full set below; the two
+# (pipeline/advisory_inputs.py, pipeline/production_steps.py) check the full set below; the two
 # regime-classification-only keys (T10Y2Y, BAMLH0A0HYM2) are exposed
 # separately since run_macro_killswitch never receives VIXCLS as an argument
 # and must not be told data is unavailable purely because a key outside its
@@ -129,9 +129,9 @@ class MacroEngine:
         # Persists across calls within this MacroEngine instance's lifetime so the
         # retrain_freq_days gate (HMMRegimeDetector.fit) is meaningful for a
         # long-lived process. Callers that loop within a single process
-        # (main.py's --interval mode / agent loop) MUST reuse ONE MacroEngine
-        # instance across cycles -- see main.py's module-level
-        # `_get_macro_engine()` singleton -- otherwise a fresh, never-fitted
+        # (the daemon's repeated cycles) MUST reuse ONE MacroEngine
+        # instance across cycles -- see pipeline/advisory_inputs.py's module-level
+        # `get_macro_engine()` singleton -- otherwise a fresh, never-fitted
         # HMMRegimeDetector is constructed every cycle and the retrain gate is
         # meaningless. main_orchestrator.py constructs a fresh MacroEngine per
         # process invocation (one _main_body() call per launch, no internal
@@ -284,7 +284,7 @@ class MacroEngine:
         reading was returned (False).
 
         Callers that construct a MacroEconomicDTO (e.g.
-        pipeline/production_steps.py, main.py) need this second value to set
+        pipeline/production_steps.py, pipeline/advisory_inputs.py) need this second value to set
         data_unavailable=True when the Sahm input behind the kill switch was
         never a real reading -- calculate_sahm_rule()'s plain float return
         can't distinguish "FRED said 0.0" from "FRED was unreachable, so we

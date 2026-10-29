@@ -9,7 +9,7 @@ run_once() uncaught. Preserving that exactly means PipelineRunner must NOT add
 new error handling around steps that never had any — doing so would silently
 change a crash into a swallowed error. Any exception handling belongs INSIDE
 the individual step's own run() method, exactly where the original code had
-it (see pipeline/steps.py).
+it (see legacy/pipeline/steps.py, the original run_once() steps).
 """
 
 from __future__ import annotations
@@ -43,16 +43,16 @@ class PipelineRunner:
             ``progress.start_stage(step.name, symbols_total=len(ctx.symbols))``
             is called immediately before each NON-skipped step runs, so the
             stage list the reporter was constructed with should be exactly
-            ``[step.name for step in steps]`` (see ``main.run_once()``).
+            ``[step.name for step in steps]`` (see ``main_orchestrator.py``).
             ``symbols_total`` is sized off ``ctx.symbols`` for every step
-            (0 before ``UniverseStep`` populates it, which is harmless since
+            (0 before ``AsyncDataFetchStep`` populates it, which is harmless since
             no step before that point ticks ``advance_symbol()`` anyway) --
-            only ``AdvisoryEvalStep`` (pipeline/steps.py) actually calls
+            only the per-symbol steps in ``pipeline/production_steps.py`` call
             ``advance_symbol()`` per symbol; every other step's stage slice
             just holds at its starting boundary.
         """
         # Stamped onto ctx (not passed as a second run() argument) so steps
-        # needing per-symbol ticks -- currently only AdvisoryEvalStep -- can
+        # needing per-symbol ticks -- the per-symbol production steps -- can
         # reach it via ctx.progress without changing PipelineStep.run()'s
         # signature for every other step (see pipeline/context.py).
         ctx.progress = progress

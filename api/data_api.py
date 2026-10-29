@@ -52,8 +52,8 @@ from settings import ENV_PATH, settings
 
 # Load .env before any subsequent project import that reads credentials
 # (e.g. data.robinhood_portfolio). Standalone `uvicorn api.data_api:app` has
-# no main()-style entry point to hook this into the way main.py/
-# main_orchestrator.py/app_shell.py do, so it runs here, at true module top,
+# no main()-style entry point to hook this into the way
+# main_orchestrator.py does, so it runs here, at true module top,
 # anchored to ENV_PATH (settings.py) — a bare load_dotenv() walks UP from
 # this file's directory via find_dotenv() and, in a git worktree with no
 # .env of its own, silently finds a PARENT checkout's .env instead.
@@ -620,7 +620,7 @@ def get_universe() -> Dict[str, Any]:
     (see ``docs/known_issues/universe_count_reporting_mismatch.md``):
     ``data.portfolio_sync.compute_tracked_universe()`` — the function that
     actually builds each cycle's real evaluation universe for BOTH
-    ``main.py::_build_universe()`` and the daemon's
+    ``pipeline.advisory_inputs.build_universe_detailed()`` and the daemon's
     ``AsyncDataFetchStep`` — uses ``DEFAULT_TICKERS`` **only as a fallback**,
     consulted only when ``held ∪ watchlist ∪ discovered`` is completely empty.
     An operator who configures a wide ``DEFAULT_TICKERS`` list (e.g. an

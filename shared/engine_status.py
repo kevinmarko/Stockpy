@@ -1,20 +1,20 @@
 """
-gui/engine_status.py
-=====================
+shared/engine_status.py
+=======================
 Sidebar-facing badge for the always-on background refresh loop.
 
-The desktop shell (``app_shell.py``) drives ``main.py --interval N`` as a
-long-lived subprocess tied to its own lifecycle. The existing GUI has no
-visible indicator of whether that loop is alive or how fresh its data is.
+The desktop shell (``app_shell.py``) that drove ``main.py --interval N`` as a
+long-lived subprocess was deleted and ``main.py`` is archived (step 5.5); no
+production code imports this module any more (only its tests do).
 
 Two liveness signals exist, written by different entry points:
   - ``output/heartbeat.txt`` — ``main_orchestrator.py`` ONLY (its async
-    ``_heartbeat()`` task). ``main.py`` never writes this file, including in
-    ``--interval``/``--agent`` mode -- so relying on it alone means the badge
-    can never go green under the desktop shell's actual engine loop.
-  - ``output/state_snapshot.json`` — rewritten by every ``run_once()`` cycle
-    in ``main.py`` (interval/agent mode included) AND by
-    ``main_orchestrator.py``. **Since ``settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY``
+    ``_heartbeat()`` task). The persistent daemon runs the pipeline via
+    ``_main_body()`` directly and never writes this file -- so relying on it
+    alone means the badge can never go green under the daemon.
+  - ``output/state_snapshot.json`` — rewritten by every daemon cycle AND by
+    a standalone ``main_orchestrator.py`` run (the archived ``main.py`` did
+    too). **Since ``settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY``
     (default ``True``), automatic interval cycles are skipped outside the
     4am-8pm ET weekday window, so this file legitimately goes unwritten for
     long stretches every night/weekend -- see the market-hours check below.**
@@ -90,7 +90,7 @@ def engine_status(fresh_threshold_seconds: float = 600.0) -> tuple[str, str]:
 
 def _paused_for_market_hours() -> bool:
     """True when staleness is fully explained by ``settings.ORCHESTRATOR_EXTENDED_HOURS_ONLY``
-    (see ``main.py``/``desktop/daemon_runtime.py``'s automatic-trigger gate) rather than a
+    (see ``desktop/daemon_runtime.py``'s automatic-trigger gate) rather than a
     real stall. Lazy imports keep this module's own import graph unchanged for every caller
     that never hits this branch; dead-letter by design (CONSTRAINT #6) -- any failure here
     must never turn a real "idle" badge into a falsely-reassuring "paused" one, so it

@@ -134,7 +134,7 @@ class DataEngine(IDataProvider):
         # Which keys of the most recent fetch_macro_raw() return value are
         # fabricated placeholders rather than real FRED/FMP readings -- see
         # fetch_macro_raw_detailed()'s docstring. Read by callers building a
-        # MacroEconomicDTO (main.py, pipeline/production_steps.py,
+        # MacroEconomicDTO (pipeline/advisory_inputs.py, pipeline/production_steps.py,
         # investyo_mcp_server.py) via
         # getattr(de, "last_macro_raw_fabricated_keys", frozenset()) right
         # after calling fetch_macro_raw(), so they can feed
@@ -171,7 +171,7 @@ class DataEngine(IDataProvider):
         returned dict's keys hold a fabricated placeholder value rather than
         a real FRED/FMP reading.
 
-        Callers that construct a MacroEconomicDTO (main.py,
+        Callers that construct a MacroEconomicDTO (pipeline/advisory_inputs.py,
         pipeline/production_steps.py, investyo_mcp_server.py) need this
         second value because macro_engine.macro_killswitch_data_unavailable's
         plain key-presence check can't distinguish "a real reading" from "a
@@ -411,8 +411,8 @@ class DataEngine(IDataProvider):
         fetched instead of a full 2-year yfinance re-pull every cycle. This
         closes the one remaining tech-bars call site
         (``main_orchestrator.py::fetch_all_data_async``) that bypassed
-        ``HistoricalStore`` entirely, unlike ``main.py``'s
-        ``_fetch_bars_for_universe()`` which already routes through it.
+        ``HistoricalStore`` entirely, unlike ``pipeline/advisory_inputs.py``'s
+        ``fetch_bars_for_universe()`` (ex-``main.py``) which already routes through it.
 
         Falls back to the EXACT ``fetch_technical_raw()`` behavior (same
         ``{symbol: DataFrame}`` shape with Open/High/Low/Close/Volume columns

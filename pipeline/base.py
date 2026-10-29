@@ -1,7 +1,7 @@
-"""Abstract base class for one stage of the run_once() advisory pipeline.
+"""Abstract base class for one stage of the daemon's per-cycle pipeline.
 
-Each concrete step (see ``pipeline/steps.py``) implements ``run(ctx)`` and is
-invoked in a fixed order by ``pipeline.runner.PipelineRunner``. A step signals
+Each concrete step (see ``pipeline/production_steps.py``) implements ``run(ctx)`` and is
+invoked in a fixed order by ``pipeline.runner``'s runners. A step signals
 "stop the pipeline here" by setting ``ctx.stopped = True`` (and optionally
 ``ctx.stop_reason``); every step's default ``should_skip`` then causes all
 LATER steps to be skipped without needing individual per-step overrides.
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class PipelineStep(ABC):
-    """One named stage of the advisory run_once() pipeline."""
+    """One named stage of the daemon's per-cycle pipeline."""
 
     name: str = "step"
 

@@ -1,31 +1,31 @@
-"""Advisory-cycle input builders, moved out of ``main.py`` (step 5.0).
+"""Advisory-cycle input builders, moved out of the retired ``main.py`` (step 5.0).
 
 These are the functions that build what ``engine.advisory.evaluate()`` needs
 for one advisory cycle: the symbol universe, the macro DTO, the universe-wide
 bars/fundamentals pre-fetch, and the cross-sectional/multifactor pre-compute
 context. They used to be private helpers in ``main.py``. Step 5 of the shrink
-plan (``.claude/shrink_step5_retire_main_py_implementation_plan.md``) moves the
-agentic advisory into the orchestrator daemon, so the builders now live here
-where the daemon can import them without importing ``main``.
+plan (``.claude/shrink_step5_retire_main_py_implementation_plan.md``) moved the
+agentic advisory into the orchestrator daemon, so the builders live here
+where the daemon imports them without importing ``main``.
 
-The code is moved verbatim (PR 5.0 is a no-behaviour-change prep step); only
-the leading underscore was dropped from each name. ``main.py`` re-exports every
-old underscore name, and ``main.run_once()`` still binds the ``run_once``
-injection seams (``_build_universe``, ``_build_macro_dto``,
-``_fetch_bars_for_universe``, ``_build_context_extras``) from ``main``'s own
-module globals, so ``patch("main._build_universe")`` and friends keep working.
+The code was moved verbatim (PR 5.0 was a no-behaviour-change prep step); only
+the leading underscore was dropped from each name. ``main.py`` was archived to
+``legacy/main.py`` in step 5.5, together with its re-exports of the old underscore
+names and the ``run_once`` injection seams (``_build_universe`` and friends), so
+``patch("main._build_universe")`` and similar patches no longer apply to anything
+live.
 
 Patch seams for calls made INSIDE this module (``discovery``,
 ``recently_closed_universe_symbols``, ``load_watchlist``, ``WATCHLIST_FILE``,
 ``get_macro_engine``, ``get_provider``, ``fetch_fundamentals_for_universe``,
 ``build_realized_vol_60d_map``) resolve through this module's globals, so a
 test that wants to intercept one of them patches
-``pipeline.advisory_inputs.<name>``. Patching the ``main.<name>`` re-export
-would not reach these internal calls; ``tests/test_advisory_inputs_patch_seams.py``
-fails CI if a test tries.
+``pipeline.advisory_inputs.<name>``. (The old guard against patching through the
+``main.<name>`` re-export, ``test_advisory_inputs_patch_seams.py``, moved to
+``legacy/tests/`` with ``main.py``.)
 
 The logger keeps the ``InvestYo.main`` name so the advisory cycle's log output
-is unchanged (``pipeline/steps.py`` uses the same logger for the same reason).
+is unchanged (the archived ``pipeline/steps.py`` used the same logger for the same reason).
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ def load_watchlist(watchlist_file: Optional[str] = None) -> List[str]:
 
     ``watchlist_file`` overrides that module attribute for one call. The
     daemon's ``AsyncDataFetchStep`` passes its ``RunContext.watchlist_file``
-    here (step 5.1); ``main.py`` passes nothing and reads ``WATCHLIST_FILE``.
+    here (step 5.1); ``None`` (the default) reads ``WATCHLIST_FILE``.
     """
     from data.portfolio_sync import load_env_watchlist
 
@@ -197,12 +197,12 @@ class UniverseBuild:
 
 
 def build_universe(snapshot: AccountSnapshot) -> List[str]:
-    """Return the evaluation universe (``main.py``'s entry point).
+    """Return the evaluation universe (the former ``main.py`` entry point).
 
     Thin wrapper around :func:`build_universe_detailed`, which holds the
     logic and is documented there. Since step 5.1 the daemon's
-    ``AsyncDataFetchStep`` calls ``build_universe_detailed`` too, so the two
-    orchestrators resolve their universe through one function.
+    ``AsyncDataFetchStep`` calls ``build_universe_detailed`` directly; only
+    tests call this wrapper now that ``main.py`` is archived.
     """
     return build_universe_detailed(snapshot).symbols
 
@@ -236,8 +236,8 @@ def build_universe_detailed(
 ) -> UniverseBuild:
     """Return the evaluation universe: held symbols ∪ watchlist, deduped, sorted.
 
-    Shared by ``main.py`` (via :func:`build_universe`) and the persistent
-    daemon's ``pipeline/production_steps.py::AsyncDataFetchStep`` (step 5.1).
+    Called by the persistent daemon's
+    ``pipeline/production_steps.py::AsyncDataFetchStep`` (step 5.1); the archived ``main.py`` shared it.
     ``watchlist_file`` defaults to the module's ``WATCHLIST_FILE``; the
     daemon passes its ``RunContext.watchlist_file``. A ``None`` snapshot (or
     one without positions) is treated as an account with no holdings.
@@ -280,7 +280,7 @@ def build_universe_detailed(
 
     positions = getattr(snapshot, "positions", None) or {}
     held = set(positions.keys())
-    # Call load_watchlist() with no argument on main.py's path so a test
+    # Call load_watchlist() with no argument on the default path so a test
     # that patches pipeline.advisory_inputs.load_watchlist with a zero-arg
     # stub keeps working.
     watchlist = set(load_watchlist() if watchlist_file is None else load_watchlist(watchlist_file))
@@ -651,7 +651,7 @@ def build_context_extras(
         # ── Step 1b: fundamentals-derived multifactor raw inputs ─────────────
         # Mirrors main_orchestrator.py's calculate_fundamental_metrics() call so
         # signals/multifactor.py's Value/Quality/Low-Vol/Size composite gets real
-        # inputs in this (main.py) advisory path too, instead of silently scoring
+        # inputs in this (advisory) path too, instead of silently scoring
         # 0 for every symbol every cycle. Any failure here degrades to an empty
         # dict (below) rather than aborting the whole pre-compute pass.
         fund_metrics: Dict[str, Dict[str, Any]] = {}

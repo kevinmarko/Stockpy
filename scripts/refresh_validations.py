@@ -3921,7 +3921,7 @@ def run_validations(
         with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as executor:
             # executor.map preserves input order (matching this codebase's
             # established ThreadPoolExecutor convention — see e.g.
-            # data_engine.py/pipeline/steps.py/scripts/backfill_edgar_fundamentals.py)
+            # data_engine.py/scripts/backfill_edgar_fundamentals.py)
             # and results are assigned incrementally as each becomes
             # available, so an already-completed strategy's result is never
             # lost even if a later one raises while iterating.

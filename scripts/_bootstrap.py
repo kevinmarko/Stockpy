@@ -7,8 +7,8 @@ load ``.env`` before any project import reads a setting.
 
 Why this exists
 ----------------
-``main.py`` / ``main_orchestrator.py`` / ``app_shell.py`` each carry their own
-venv-reexec guard (``main.py``'s is the original: lines 52-64) and their own
+``main_orchestrator.py`` carries its own venv-reexec guard (the original, in the
+archived ``main.py``, was lines 52-64) and its own
 ``load_dotenv(ENV_PATH, ...)`` call — but no script under ``scripts/`` did
 either, which produced two related, easily-confused failure modes for a
 script launched with a bare ``python3 scripts/foo.py``:
@@ -88,17 +88,17 @@ def bootstrap() -> None:
     """Re-exec under ``.venv``'s interpreter (if not already there), then
     load ``.env`` via ``python-dotenv``, anchored at the repo root.
 
-    Mirrors ``main.py``'s venv-reexec guard exactly (same
+    Mirrors the archived ``main.py``'s venv-reexec guard exactly (same
     ``os.path.realpath`` comparison, same ``subprocess.call([...] +
     sys.argv)`` re-exec, same ``python3``-then-``python`` fallback) so a
-    script behaves identically to ``python3 main.py`` regardless of which
+    script behaves identically to ``python3 main_orchestrator.py`` regardless of which
     interpreter actually launched it.
 
     Degrades gracefully (CONSTRAINT #6 — never raises) rather than crashing
     a script over environment setup: a missing ``.venv`` or missing
     ``python-dotenv`` logs an actionable warning to stderr and lets the
     script continue under whatever interpreter/environment it already has —
-    the same posture ``main.py``'s own guard takes (it only re-execs when a
+    the same posture the archived ``main.py``'s own guard took (it only re-execs when a
     ``.venv`` interpreter is actually found; otherwise it silently proceeds
     under the current interpreter).
     """
@@ -142,5 +142,5 @@ def bootstrap() -> None:
         return
 
     # override=False: an explicit shell export always wins over .env,
-    # matching main.py's / main_orchestrator.py's identical convention.
+    # matching main_orchestrator.py's convention (and the archived main.py's).
     _load_dotenv(_REPO_ROOT / ".env", override=False)

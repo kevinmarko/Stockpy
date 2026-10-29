@@ -2621,8 +2621,8 @@ class Settings(BaseSettings):
     # launchd, runs with it on) -- so this default cannot make any existing
     # deployment's teardown budget shorter than it already was. Raising it
     # without ALSO raising the outer supervisor timeouts that must exceed it
-    # (launch_app.command's SHUTDOWN_GRACE_SECONDS, launchd's ExitTimeOut,
-    # systemd's TimeoutStopSec) makes shutdown WORSE, not better -- the
+    # (launchd's ExitTimeOut, systemd's TimeoutStopSec) makes shutdown WORSE,
+    # not better -- the
     # daemon would simply get SIGKILLed mid-teardown at a different point.
     # See docs/RUNBOOK.md's shutdown-budget-ladder table.
     DAEMON_SHUTDOWN_TIMEOUT_SECONDS: float = Field(
