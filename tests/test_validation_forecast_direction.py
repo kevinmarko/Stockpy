@@ -280,15 +280,47 @@ class TestBuildForecastDirectionAdapter:
 # ---------------------------------------------------------------------------
 
 class TestPerfSmoke:
-    def test_tiny_window_completes_quickly(self) -> None:
-        """2 tickers x ~3 months (a handful of weekly rebalances) must
-        complete in well under a minute -- a coarse guard against an
-        accidental daily-refit regression (which would 5x the fit count)."""
-        closes = _synthetic_closes(["AAPL", "JNJ"], n_days=65)
-        t0 = time.time()
-        _build_forecast_direction_adapter(closes)
-        elapsed = time.time() - t0
-        assert elapsed < 30.0, f"took {elapsed:.1f}s -- possible daily-refit regression"
+    def test_tiny_window_completes_quickly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """2 tickers x ~3 months must refit WEEKLY, not daily -- the guard against
+        an accidental daily-refit regression (which would ~5x the fit count).
+
+        The name is historical: this used to assert ``wall-clock < 30s``, which failed
+        intermittently under ``-n auto`` and passed alone, because a loaded machine
+        stretches wall-clock without doing more work. CPU time is no better (measured:
+        about 5 CPU-s alone, 24-27 CPU-s under contention, since the BLAS/OpenMP threads
+        spin-wait). What the guard protects is the NUMBER OF FITS, so it counts them,
+        delegating to the real fit functions so the build still runs end to end."""
+        from forecasting_engine import ForecastingEngine
+
+        calls = {"arima": 0, "hw": 0}
+        real_arima = ForecastingEngine.run_arima_fit
+        real_hw = ForecastingEngine.run_holt_winters_fit
+
+        def counting_arima(self, *args, **kwargs):
+            calls["arima"] += 1
+            return real_arima(self, *args, **kwargs)
+
+        def counting_hw(self, *args, **kwargs):
+            calls["hw"] += 1
+            return real_hw(self, *args, **kwargs)
+
+        monkeypatch.setattr(ForecastingEngine, "run_arima_fit", counting_arima)
+        monkeypatch.setattr(ForecastingEngine, "run_holt_winters_fit", counting_hw)
+
+        tickers, n_days = ["AAPL", "JNJ"], 65
+        _build_forecast_direction_adapter(_synthetic_closes(tickers, n_days=n_days))
+
+        weekly_dates_max = -(-n_days // 5) + 1  # ceil(n_days / 5) weekly dates, +1 for a partial week
+        assert calls["arima"] > 0 and calls["hw"] > 0, "no fits ran: the guard would be vacuous"
+        assert calls["arima"] <= len(tickers) * weekly_dates_max, (
+            f"{calls['arima']} ARIMA fits for {len(tickers)} tickers over {n_days} days "
+            f"(weekly ceiling {len(tickers) * weekly_dates_max}) -- possible daily-refit regression"
+        )
+        assert calls["hw"] <= len(tickers) * weekly_dates_max, (
+            f"{calls['hw']} Holt-Winters fits (weekly ceiling "
+            f"{len(tickers) * weekly_dates_max}) -- possible daily-refit regression"
+        )
+        assert calls["arima"] == calls["hw"], "the two models must be refit on the same dates"
 
 
 # ---------------------------------------------------------------------------
