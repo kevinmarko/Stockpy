@@ -63,8 +63,10 @@ known" (`last = 0.0`), i.e. do not throttle this call. See
 
 Regression tests: `tests/test_cross_process_throttle.py::TestStaleTimestampFromPriorBootSession`
 — a state file seeded with a `time.monotonic() + 900_000.0` "future" stamp
-must not sleep more than ~1s, must not deadlock a second real process racing
-for the same lock, and must overwrite the stale value with a fresh one.
+must request no sleep at all (asserted against a fake clock, so the check does
+not depend on how long the caller takes to regain control), must not deadlock a
+second real process racing for the same lock, and must overwrite the stale value
+with a fresh one.
 
 ## What this does NOT fix
 
