@@ -335,7 +335,7 @@ export function CreateDataApp() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--s-4)", marginTop: "var(--s-4)", alignItems: "start" }}>
+      <div className="split-cols" style={{ gap: "var(--s-4)", marginTop: "var(--s-4)", alignItems: "start" }}>
 
         {/* Left Column: Form & Selection */}
         <section className="card card-pad">

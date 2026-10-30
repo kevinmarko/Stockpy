@@ -16,19 +16,11 @@ export function SettingsLayout() {
     <div className="screen" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)", height: "100%" }}>
       <GlobalStatusBanner />
       
-      <div style={{ display: "flex", gap: "var(--s-6)", flex: 1, alignItems: "flex-start" }}>
+      {/* Layout lives in index.css (.split-*): stacked on phones, rail + content from 768px.
+          It was an inline fixed 250px sidebar, which left the content ~60px wide on a phone. */}
+      <div className="split-pane" style={{ flex: 1 }}>
         {/* Sidebar */}
-        <nav
-          style={{
-            width: "250px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "var(--s-2)",
-            flexShrink: 0,
-            position: "sticky",
-            top: "var(--s-4)"
-          }}
-        >
+        <nav className="split-rail">
           <h1 style={{ fontSize: "var(--t-title)", marginBottom: "var(--s-2)" }}>Settings</h1>
           {navItems.map((item) => (
             <NavLink
@@ -51,7 +43,7 @@ export function SettingsLayout() {
         </nav>
 
         {/* Content Area */}
-        <div style={{ flex: 1, minWidth: 0, paddingBottom: "var(--s-8)" }}>
+        <div className="split-content">
           <Outlet />
         </div>
       </div>

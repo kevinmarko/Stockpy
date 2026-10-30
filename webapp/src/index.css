@@ -1625,6 +1625,69 @@ button:focus-visible {
   }
 }
 
+/* ---- Split layouts (rail + content, or two equal columns) ----
+   These were inline styles (`display: flex` with a fixed 250px sidebar, or
+   `gridTemplateColumns: "1fr 1fr"`), and an inline style cannot carry a media
+   query. On a 390px phone the Settings sidebar took 250px and left the content
+   pane ~60px, and a bare `1fr` cannot shrink below its content's minimum width,
+   so every Settings page and Create Data App scrolled sideways. Mobile-first,
+   same 768px breakpoint as .dashboard-grid: stacked below it, side by side from it. */
+.split-pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  align-items: stretch;
+}
+
+.split-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+.split-rail > h1 {
+  flex: 1 0 100%;
+}
+
+.split-content {
+  min-width: 0;
+  padding-bottom: var(--s-8);
+}
+
+.split-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 768px) {
+  .split-pane {
+    flex-direction: row;
+    gap: var(--s-6);
+    align-items: flex-start;
+  }
+
+  .split-rail {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    width: 250px;
+    flex-shrink: 0;
+    position: sticky;
+    top: var(--s-4);
+  }
+
+  .split-rail > h1 {
+    flex: 0 0 auto;
+  }
+
+  .split-content {
+    flex: 1;
+  }
+
+  .split-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* ---- AI chat drawer ----
    Fixed positioning + the slide transform need a real (non-inline) CSS rule
    since an inline `style` transform can't be conditioned on a class toggle
@@ -1638,7 +1701,7 @@ button:focus-visible {
   width: min(400px, 100vw);
   z-index: 50;
   transform: translateX(100%);
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .chat-drawer.open {
   transform: translateX(0);
