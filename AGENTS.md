@@ -64,9 +64,11 @@ Applies to whichever agent does the work — Claude Code or Antigravity — with
 - **Verification is mandatory, not advisory.** A task is not done until the relevant check has been
   run and shown to pass — not "should pass." Python changes: the corresponding
   `tests/test_<module>.py` (or the fuller `make ci` gate) must show zero failures. GitHub Actions is
-  no longer used (2026-10-29) and `.github/workflows/` was deleted (2026-10-30; last copies:
-  `git show 652e9730:.github/workflows/ci.yml`): there is no remote CI, so `make local-ci` (it runs
-  what the old workflows ran) is the pre-merge gate and its result goes in the PR. `webapp/src/`
+  no longer used (2026-10-29) and `.github/workflows/` was deleted (2026-10-30; the last copy of
+  each file is in the parent of the commit that deleted it: `git show "$(git log --diff-filter=D -1
+  --format=%H -- .github/workflows/ci.yml)^:.github/workflows/ci.yml"`): there is no remote CI, so
+  `make local-ci` (it runs what the old workflows ran) is the pre-merge gate and its result goes in
+  the PR. `webapp/src/`
   changes: `npm run --prefix webapp typecheck` clean AND, for anything UI-visible, an actual
   `npm run dev` + browser check (console errors + visual confirmation) — a clean typecheck proves
   the code compiles, not that a screen renders or behaves as intended.

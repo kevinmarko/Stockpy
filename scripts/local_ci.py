@@ -8,8 +8,9 @@ and prints a pass/fail table. It is a convenience wrapper, not a new gate: every
 is a command you could type yourself, and ``--list`` shows exactly which.
 
 The workflow files themselves were deleted on 2026-10-30 (operator decision). The
-"was" column below names them as they were; the last copies are in git history, e.g.
-``git show 652e9730:.github/workflows/ci.yml``.
+"was" column below names them as they were; the last copy of each is in the parent of the
+commit that deleted it, e.g. ``git show "$(git log --diff-filter=D -1 --format=%H --
+.github/workflows/ci.yml)^:.github/workflows/ci.yml"``.
 
 What each step reproduces
 -------------------------

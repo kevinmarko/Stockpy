@@ -41,7 +41,9 @@ and no OpenMP thread cap. The test now runs in a fresh interpreter under a timeo
 What stops being checked by anything: **CodeQL** (bandit covers part of it) and the **daily network + slow run** (`make local-ci ARGS="--profile nightly"`
 runs it on demand; nothing schedules it). The Supabase preview check is a GitHub app, not a workflow, so it is unaffected by the deletion.
 Branch protection is a GitHub setting: any required checks from the old workflows must be removed there, or the PR will keep showing as blocked.
-Restore with `git show 652e9730:.github/workflows/ci.yml` (and the other four).
+Restore with the command in `CLAUDE.md` (`git show "$(git log --diff-filter=D -1 --format=%H -- <file>)^:<file>"`, for each of the five files). The commit
+SHAs named in this walkthrough are the pre-squash branch commits; after the squash merge they stop being commits on `main` and stay reachable only through
+`refs/pull/1133/head` on GitHub.
 
 ## The UI pass (`fdebcd97`)
 Method: `npm run dev` (mock mode), then a Playwright script that loaded all 54 routes at 1280 px and at 390 px, recording console errors, uncaught page
