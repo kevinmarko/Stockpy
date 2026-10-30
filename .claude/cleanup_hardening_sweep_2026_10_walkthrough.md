@@ -2,8 +2,11 @@
 
 Tracker: `.claude/cleanup_hardening_sweep_2026_10_task.md`. PR: kevinmarko/Stockpy#1133.
 
-**Scope.** Tests, test tooling, comments, docs and two review plans. No runtime logic changed: every `.py` file outside `tests/`
-and `scripts/local_ci.py` differs from `HEAD` in comments and docstrings only, which was proven mechanically (below).
+**Scope.** Tests, test tooling, comments, docs and two review plans, then (operator, 2026-10-30) the deletion of the GitHub workflows,
+a Pilots PWA layout fix, and a few stale user-visible strings. **No trading or runtime logic changed.** Through `652e9730`, every `.py`
+file outside `tests/` and `scripts/local_ci.py` differs from `HEAD` in comments and docstrings only (proved mechanically, below).
+The later commits add: webapp layout CSS and four small TSX edits (`fdebcd97`), and string-only edits (settings descriptions, three daemon
+log lines, one help entry, `.env.example`; `e807305d`). Those are line-count neutral, so the settings census stays valid.
 No setting was added, removed or renamed; nothing touches `.env`, the runtime-flags store or `~/.stockpy_local`.
 
 ## Why this exists
@@ -23,6 +26,38 @@ No setting was added, removed or renamed; nothing touches `.env`, the runtime-fl
 | `99a5337c` | The two plans, for review. |
 | `0a8bb41c` | local-ci caps OpenMP threads for the xdist steps (found by the first real run). |
 | `652e9730` | Two more pre-existing flakes fixed (urllib opener leak, perf guard). |
+| `c1c86b62` | Deleted `.github/workflows/` (all five files; operator decision). `CODEOWNERS` and the PR template stay. |
+| `fdebcd97` | Pilots PWA: 17 pages scrolled sideways on a phone, and a grey shadow band ran down every page. Fixed, with tests. |
+| `e807305d` | Stale user-visible text; the FinBERT/LightGBM test now runs in a fresh process with a timeout. |
+
+## The GitHub workflows (deleted, 2026-10-30)
+The last remote run on this branch (run 2721, head `e8fd3ca7`) never finished. Shard 2 of 4 hung until GitHub's 6-hour job limit cancelled it,
+on a commit that differs from the previous passing one (`652e9730`, shard 2 in 4 m 18 s) only by two markdown files, so the hang is
+nondeterministic and not from this PR. The job log shows where: worker `gw1` started
+`test_news_catalyst.py::TestFinbertOpenMPCoexistence::...coexists_with_lightgbm` and never reported a result; 178 s later (the CI per-test limit is
+180 s, `--timeout-method=thread`) xdist printed `node down: Not properly terminated` and the run went silent. That test loads FinBERT (torch), trains
+LightGBM and runs a torch pass in one process, which the repo's own known-issue doc names as a deadlock risk. The workflow had no `timeout-minutes`
+and no OpenMP thread cap. The test now runs in a fresh interpreter under a timeout (`e807305d`).
+What stops being checked by anything: **CodeQL** (bandit covers part of it) and the **daily network + slow run** (`make local-ci ARGS="--profile nightly"`
+runs it on demand; nothing schedules it). The Supabase preview check is a GitHub app, not a workflow, so it is unaffected by the deletion.
+Branch protection is a GitHub setting: any required checks from the old workflows must be removed there, or the PR will keep showing as blocked.
+Restore with `git show 652e9730:.github/workflows/ci.yml` (and the other four).
+
+## The UI pass (`fdebcd97`)
+Method: `npm run dev` (mock mode), then a Playwright script that loaded all 54 routes at 1280 px and at 390 px, recording console errors, uncaught page
+errors, failed or 4xx/5xx requests, near-blank pages, error boundaries, bad text (`undefined`, `NaN`, `[object Object]`, `Invalid Date`, `main.py`) and
+`document.documentElement.scrollWidth > clientWidth`.
+- **Found:** 0 console errors, 0 page errors, 0 failed requests across 108 page loads. But **17 of 54 routes scrolled sideways at 390 px** (every Settings page,
+  `/sentiment`, `/create-data-app`; worst 381 px too wide), and a **grey shadow band down the right edge of every page** at every width.
+- **Causes:** `SettingsLayout` was an inline flex row with a fixed 250 px sidebar and no breakpoint, which left the content pane about 60 px wide on a phone;
+  `CreateDataApp` used an inline `1fr 1fr` grid (a bare `1fr` cannot shrink below its content); two card headers could not wrap; the closed AI chat drawer
+  kept a 30 px `box-shadow` while parked just off-screen, and the blur reached back into the viewport.
+- **Fix:** mobile-first `.split-*` classes in `index.css` at the stylesheet's existing 768 px breakpoint (an inline style cannot carry a media query); two
+  `flexWrap`s; the drawer shadow only while open. **Result:** 0 of 108 page loads overflow (was 17), still 0 errors; desktop layout unchanged (screenshot checked).
+- **Tests:** `responsiveLayout.test.ts` (stylesheet stays mobile-first), `SettingsLayout.test.tsx`, two `AIChatInterface` cases; each mutation-checked. jsdom has
+  no layout engine, so these pin the cause, not the pixels; the pixels were measured in a real browser.
+- **Verified:** typecheck, vitest (155 files, 1,817 tests), `vite build`, `make local-ci --profile quick` all pass.
+- **Not a bug, left alone:** the top status bar is `overflow-x: auto`, so below about 1440 px the Trip Kill Switch button is reached by scrolling the bar.
 
 ## How `make local-ci` works, and why it is built this way
 - Each step is the same command the old workflow ran (`--list` prints them), plus a profile (`pr`, `quick`, `nightly`).
@@ -80,6 +115,17 @@ GitHub's runners still triggered on the PR (the workflows are still in the repo)
 - The two plans were written by agents and checked for their load-bearing claims, not line by line; they exist so the operator can decide.
 - The 4-core thread cap changes how many OpenMP threads LightGBM uses in the xdist steps, not which tests run; I did not check whether any
   result differs numerically with one thread (the suite passes either way).
+- **The UI audit ran against the offline mock API only.** Nothing was checked against a live backend (`VITE_USE_MOCK=false`); a typecheck and a mock-mode
+  browser pass have missed live field mismatches before, so a live pass is still owed. Only a handful of screens were looked at as screenshots; the rest
+  were checked by the script's measurements (errors, overflow, blank pages, bad text), which cannot see a misaligned or ugly screen.
+- The mobile Settings section links now wrap as plain text rows; they work, but they are not styled as tabs or chips. Cosmetic, not changed.
+- **This sandbox's `.venv` has no `torch`** (`requirements.txt` lists it), so every torch-dependent test is skipped here, including the one I rewrote. I verified
+  that test against a throwaway CPU torch installed outside the repo and put on `PYTHONPATH`, not in the venv. On a machine with torch it runs for real.
+  Under `make local-ci` (`OMP_THREAD_LIMIT=1`), the test's `torch.get_num_threads() == 1` check cannot catch a removed thread cap, because torch already
+  defaults to 1 there; it can when the variable is unset (checked). The hang and crash checks do not depend on it.
+- `DASHBOARD_REFRESH_SECONDS` is described as unused (no code reads it), but it was not removed. The settings model uses `extra="ignore"`, so removing the
+  field would not break startup for someone whose `.env` still has it; the cleanup (env allowlist, domain map, tunables editor list, mock, census, tests) is
+  its own change.
 
 ## Decisions for the operator
 1. Gate plan (Q1-Q5): gate the writers or stop the cycle early; inner durable writers now or later; a deduped alert; run-status wording; confirm the
@@ -87,7 +133,8 @@ GitHub's runners still triggered on the PR (the workflows are still in the repo)
    data both with no key and when a configured key fails; the standalone branch I had pointed at is not the daemon's path.
 2. F5/F6 plan (Q1-Q10): under the code's own 60-observation rule, F5's data does not mature until about February 2027, so the plan recommends
    building F6 first; plus flag names during the freeze and the flip bar (the existing forecast-direction proxy already fails the deployability gate).
-3. Delete `.github/workflows/`? They still trigger. Branch protection may still require them.
+3. ~~Delete `.github/workflows/`?~~ Done (`c1c86b62`). Still yours: remove any required checks from the old workflows in branch protection, and decide whether
+   anything should schedule `make local-ci ARGS="--profile nightly"` (new capability, so it needs your OK under the feature freeze).
 4. A dependency PR for the pip-audit findings (pillow 13, certifi, setuptools 84.1, filelock 4.2.1).
 5. PR #1131 (merge after one small hardening: a spec-less `sentence_transformers` stub makes the import raise `ValueError` where `main` falls back
    cleanly) and #1132 (safe to merge). The review was read-only and posted nothing.
