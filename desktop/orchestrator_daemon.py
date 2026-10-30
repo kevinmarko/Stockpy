@@ -27,8 +27,8 @@ the orchestrator daemon itself.
 
 SIGTERM hardening
 ------------------
-This reuses the EXACT pattern already proven in ``app_shell.py`` (see that
-module's docstring for the full "why" — the short version: a plain
+This reuses the EXACT pattern already proven in ``app_shell.py`` (the since-deleted
+Streamlit shell; its docstring is in git history for the full "why" — the short version: a plain
 ``signal.signal(SIGTERM, ...)`` handler is only invoked when the interpreter's
 bytecode loop regains control, which is not guaranteed while a blocking
 native call/loop owns a thread; a real ``kill -TERM`` against

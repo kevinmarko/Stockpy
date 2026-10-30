@@ -1669,7 +1669,7 @@ class Settings(BaseSettings):
         description="Comma-separated active alerting_mcp channels (e.g. 'ntfy,email,slack'). Unset defaults to 'ntfy'.",
     )
     DASHBOARD_REFRESH_SECONDS: int = Field(
-        default=1800, description="Auto-refresh interval for the Streamlit observability dashboard (seconds). Default 1800 = 30 min."
+        default=1800, description="Unused: it set the refresh interval of the Streamlit dashboard, which was deleted in 2026-09. Kept so an existing .env entry stays valid."
     )
     PROGRESS_POLL_SECONDS: int = Field(
         default=5, description="Poll interval (seconds) for the Launcher pipeline-progress indicator."
@@ -1880,7 +1880,7 @@ class Settings(BaseSettings):
             "os.environ.get('NO_VENV_REEXEC'), never settings.settings.X -- it "
             "runs BEFORE settings.py can safely be imported (it is the code "
             "deciding whether to re-exec under .venv in the first place), same "
-            "category as main.py's/main_orchestrator.py's own top-of-file "
+            "category as main_orchestrator.py's own top-of-file "
             "reexec guards. This field's declaration here exists for GUI/docs "
             "visibility only. tests/test_measure_settings_census.py's "
             "TestFormDOsEnvironIsFullyAllowlisted is the enforcement mechanism "
@@ -1924,7 +1924,7 @@ class Settings(BaseSettings):
         default="INFO",
         description="Global system logging verbosity level (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
     )
-    # Number of worker threads for the per-symbol advisory loop in main.run_once().
+    # Number of worker threads for the per-symbol advisory loop in AdvisoryOverlayStep.
     # Each engine.advisory.evaluate() call is independent (per-call engine
     # construction, read-only shared inputs), so the loop parallelizes safely.
     # The win is mostly network I/O (per-symbol quote fetch) plus native-compute
@@ -1935,7 +1935,7 @@ class Settings(BaseSettings):
         default=8,
         description=(
             "Worker-thread count for the per-symbol advisory loop in "
-            "main.run_once(). 1 = sequential (original behavior). Results are "
+            "AdvisoryOverlayStep. 1 = sequential (original behavior). Results are "
             "always reassembled in deterministic symbol order regardless of value."
         ),
     )
@@ -2232,9 +2232,9 @@ class Settings(BaseSettings):
             "deadlocks forever. Reordering forecasting_engine.py's own imports "
             "(always-on, unconditional) only helps when this module is the first "
             "thing in the whole process to touch pandas -- true in an isolated test "
-            "script, false in main.py/main_orchestrator.py/pipeline/production_steps.py, "
+            "script, false in main_orchestrator.py/pipeline/production_steps.py, "
             "which all import pandas before forecasting_engine is ever reached (those "
-            "three files carry their own guarded `import tensorflow` before their own "
+            "two files carry their own guarded `import tensorflow` before their own "
             "`import pandas` as a defense-in-depth second layer -- see Fix 2 in the "
             "doc -- but that convention is unenforced for any OTHER entry point, "
             "script, or notebook that happens to reach this code path). When True "
@@ -3757,7 +3757,7 @@ class Settings(BaseSettings):
             "Enables POST /data/ai/{commentary,chart,research}/{symbol} on the "
             "Data API. On by default -- exposing paid Claude/Gemini/Opal calls "
             "over a fail-open HTTP API is its own risk/cost class, separate from "
-            "the underlying capability being enabled for the Streamlit GUI. "
+            "the underlying capability being enabled in the platform. "
             "GUI-writable by operator decision (2026-08-08)."
         ),
     )

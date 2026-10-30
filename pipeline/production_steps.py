@@ -2876,7 +2876,7 @@ class AdvisoryOverlayStep(PipelineStep):
         if ctx.snapshot is None:
             telemetry.warning(
                 "Advisory: Robinhood account snapshot unavailable — evaluating "
-                "with an empty account (main.py's fallback); Kelly sizing still runs."
+                "with an empty account; Kelly sizing still runs."
             )
             ctx.snapshot = _empty_account_snapshot()
         snapshot = ctx.snapshot
@@ -3255,7 +3255,7 @@ class AgenticQueueStep(PipelineStep):
             telemetry.info(
                 "Shadow agentic queue: advisory source written to %s; no queue composed "
                 "(ROBINHOOD_EXECUTION_MODE=%s, or nothing composable -- any previous shadow "
-                "queue is left in place, as main.py leaves the real one).",
+                "queue is left in place).",
                 source_path, execution_mode,
             )
         else:
@@ -3334,7 +3334,7 @@ class AgenticQueueStep(PipelineStep):
             telemetry.info(
                 "Agentic queue (primary): advisory source written to %s; no queue composed "
                 "(ROBINHOOD_EXECUTION_MODE=%s, nothing composable, or ownership lost) -- "
-                "the previous execution_queue.json is left in place, as main.py leaves it.",
+                "the previous execution_queue.json is left in place.",
                 source_path, execution_mode,
             )
         else:

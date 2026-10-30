@@ -786,8 +786,8 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     # ── Autonomous agent + trade-signal alerts (Tier 6 / 6.1) ──────────────────
     "autonomous advisory agent": _g(
         "Autonomous Advisory Agent",
-        "A legacy self-pacing advisory loop that is being archived along with "
-        "`main.py`; the orchestrator daemon has no equivalent, so it is not "
+        "A legacy self-pacing advisory loop that was archived along with "
+        "`main.py` (step 5.5); the orchestrator daemon has no equivalent, so it is not "
         "available in a daemon-run deployment (the daemon's own timer and "
         "`POST /run` pace cycles instead).  Where it ran, it re-ran the analysis "
         "on an adaptive schedule — faster around the open/close and during "
