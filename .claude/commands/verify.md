@@ -2,8 +2,9 @@
 description: Run the fast offline verification gate (ruff genuine-bug lint + offline pytest suite) before considering work complete
 ---
 
-Run the same offline gate CI runs on every PR (`.github/workflows/ci.yml`'s
-`test` job), and report the result honestly.
+Run the fast offline gate (the `lint` and `offline` steps of `make local-ci`; the
+GitHub workflow that used to run it was deleted on 2026-10-30), and report the
+result honestly.
 
 1. **Lint (ruff, genuine-bug rules only):**
    ```

@@ -7,6 +7,10 @@ the replacement: it runs the same commands the old workflows ran, one after anot
 and prints a pass/fail table. It is a convenience wrapper, not a new gate: every step
 is a command you could type yourself, and ``--list`` shows exactly which.
 
+The workflow files themselves were deleted on 2026-10-30 (operator decision). The
+"was" column below names them as they were; the last copies are in git history, e.g.
+``git show 652e9730:.github/workflows/ci.yml``.
+
 What each step reproduces
 -------------------------
     step              was (workflow / job)                      command
