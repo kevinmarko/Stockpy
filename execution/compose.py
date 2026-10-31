@@ -4,7 +4,7 @@ Advisory queue COMPOSER — the single writer of ``output/execution_queue.json``
 
 Why this exists
 ----------------
-The advisory pipeline (``main.py``, every cycle) writes its own small source
+The advisory pipeline (the daemon's ``AgenticQueueStep``, in ``primary`` mode) writes its own small source
 file (``output/queue_sources/advisory.json``) and then calls
 :func:`compose_and_emit`, which reads it back, GATES the result through the
 existing risk pipeline, and EMITS one queue via
@@ -201,7 +201,7 @@ def write_source(
 
     Never raises: a write failure is logged and swallowed, returning
     ``None`` (CONSTRAINT #6) -- a source-write failure must not crash the
-    caller (``main.py``), it just means this source stays at its previous
+    caller (the daemon's ``AgenticQueueStep``), it just means this source stays at its previous
     state (or absent) until the next successful write.
 
     ``commit_guard`` (the daemon's primary-mode run-ownership check, step
@@ -247,7 +247,7 @@ def write_advisory_source(
     now: Optional[datetime] = None,
     commit_guard: Optional[Callable[[], ContextManager[bool]]] = None,
 ) -> Optional[Path]:
-    """Write the advisory source from ``main.py``'s ``RunResult.recommendations``.
+    """Write the advisory source from a cycle's ``recommendations`` (the daemon's ``ctx.recommendations``).
 
     A RAW, unfiltered record of every actionable (BUY/SELL) recommendation --
     conviction filtering happens at compose time (against the LIVE
@@ -398,11 +398,11 @@ def compose_and_emit(
     commit_guard: Optional[Callable[[], ContextManager[bool]]] = None,
 ) -> Optional[Path]:
     """Read the advisory source, compose, gate, and emit ONE
-    ``execution_queue.json``. ``main.py`` calls this right after
+    ``execution_queue.json``. ``AgenticQueueStep`` calls this right after
     :func:`write_advisory_source`.
 
-    ``macro_dto``, when supplied (``main.py`` passes its own cycle's
-    ``result.macro_dto``), is threaded through to the risk gate so
+    ``macro_dto``, when supplied (``AgenticQueueStep`` passes its own cycle's
+    ``ctx.macro_dto``), is threaded through to the risk gate so
     ``PreTradeRiskGate``'s macro checks (macro kill switch, stress scenario,
     HMM regime) genuinely evaluate real VIX/Sahm/regime state instead of
     unconditionally passing. When not supplied, falls back to a zero-network

@@ -13,7 +13,7 @@ mathematically accurate, and profitable in a simulated environment.
 
 # ---------------------------------------------------------------------------
 # Auto-route to the project's .venv interpreter (must be first executable
-# code, before any heavy import). Identical pattern to main.py /
+# code, before any heavy import). Identical pattern to
 # main_orchestrator.py. Without this, running the suite under system Python
 # (or any interpreter other than .venv) silently degrades vectorbt/backtrader
 # to "not installed" (see VBT_AVAILABLE/BT_AVAILABLE below), which produces a
@@ -4120,7 +4120,7 @@ class GravityAIAuditor:
         """Step 32 — Validates the rebuilt daily HTML report (Holdings & P&L + Rationale).
 
         ``diagnostics_and_visuals.generate_html_report`` is the ACTIVE report
-        path (called by both ``main.py`` and ``main_orchestrator.py``).  The
+        path (called by the daemon's ``StateSnapshotStep``).  The
         2026-06 redesign leads with holdings/P&L and action/rationale and adds
         an optional ``account_summary`` portfolio band.  This audit pins the
         new contract and — critically — verifies the rendered HTML never leaks
@@ -11415,7 +11415,7 @@ class GravityAIAuditor:
         multiple concurrent agents: ``reporting/progress.py`` (the
         ``ProgressReporter`` + ``read_progress``/``clear_progress`` writer,
         atomically persisting ``output/progress.json``), orchestrator
-        instrumentation (``main_orchestrator.py``/``main.py``/``pipeline/*`` +
+        instrumentation (``main_orchestrator.py``/``pipeline/*`` +
         the daemon's ``RunRecord.progress`` field), ``gui/orchestrator_runner.py``'s
         ``compute_run_progress``, and ``gui/progress_ui.py``'s ``busy`` context
         manager. This audit only owns the pieces of that surface that live in

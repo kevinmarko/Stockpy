@@ -24,15 +24,15 @@ Responsibilities
                         with recommendations / errors / started_at /
                         duration_seconds attributes (matching RunResult).
 
-Usage in main.py
-----------------
+Usage (pattern from the archived main.py)
+-----------------------------------------
     from alerting import notify, setup_logging, summarize_run
 
     def main() -> None:
-        setup_logging()          # ← very first call in main()
+        setup_logging()          # ← very first call (the daemon does this)
         ...
         result = run_once(...)
-        summary = summarize_run(result)
+        summary = summarize_run(result)   # daemon: pipeline/agentic_queue.py
         logger.info("\\n%s", summary)
         if result.errors:
             notify("InvestYo ⚠ Errors", ..., priority="high")
@@ -41,8 +41,8 @@ Usage in main.py
 
 Two-system note (observability/alerts.py)
 ------------------------------------------
-This module is narrowly scoped to ``main.py``'s advisory-loop mobile push
-notification (ntfy.sh) and root-logger setup for that one entry point. It is
+This module is narrowly scoped to the daemon's advisory-cycle mobile push
+notification (ntfy.sh) and root-logger setup for the daemon entry point. It is
 a **separate, parallel** system from ``observability/alerts.py`` — the
 general multi-channel (console/file/Discord/Slack/email) alert dispatcher
 used by strategy/risk/execution-layer code, ``prompt_registry``, and
@@ -300,9 +300,9 @@ def send_model_staleness_alert(model_key: str, days_old: int) -> None:
 def summarize_run(result: Any) -> str:
     """Produce a short, human-readable summary of a RunResult.
 
-    Accepts any duck-typed object with attributes matching ``main.RunResult``:
-    ``recommendations``, ``errors``, ``started_at``, ``duration_seconds``.
-    Using ``Any`` avoids a circular import (``main.py`` imports this module).
+    Accepts any duck-typed object with attributes matching the archived
+    ``main.RunResult``: ``recommendations``, ``errors``, ``started_at``,
+    ``duration_seconds`` (the daemon passes ``agentic_queue._RunSummary``).
 
     The returned string is suitable for:
     * An ``INFO`` log line after each pipeline cycle.

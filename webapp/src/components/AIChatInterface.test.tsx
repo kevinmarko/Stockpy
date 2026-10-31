@@ -71,6 +71,18 @@ describe("AIChatInterface closed-panel a11y", () => {
     expect(panel).toHaveAttribute("aria-hidden", "false");
   });
 
+  it("casts no shadow while closed (a 30px blur from just off-screen bleeds into every page)", () => {
+    const { container } = render(<AIChatInterface isOpen={false} onClose={() => {}} />);
+    expect(getPanel(container).style.boxShadow).toBe("none");
+  });
+
+  it("casts its shadow while open", () => {
+    const { container } = render(<AIChatInterface isOpen={true} onClose={() => {}} />);
+    const shadow = getPanel(container).style.boxShadow;
+    expect(shadow).not.toBe("none");
+    expect(shadow).not.toBe("");
+  });
+
   it("textarea sits inside the inert subtree while the panel is closed", () => {
     render(<AIChatInterface isOpen={false} onClose={() => {}} />);
     const textarea = screen.getByPlaceholderText("Ask a question about your portfolio...");

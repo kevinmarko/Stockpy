@@ -22,7 +22,7 @@
   compute genuinely new filings; already-stored dates are logged and skipped.
 
   INSTALL (recommended): double-click scripts/install_schedule.command (which
-  installs the daily-advisory, monthly-retrain, AND this weekly-edgar job), or:
+  installs the monthly-retrain AND this weekly-edgar job), or:
       launchctl load  ~/Library/LaunchAgents/com.investyo.weekly-edgar.plist
 
   UNINSTALL:

@@ -16,8 +16,8 @@ even a fully-trained meta-labeler pickle sitting in ``ml/models/`` would never
 activate the gate: the registry stayed empty for the life of every real
 process, so ``get_proba()`` always returned the neutral ``1.0``.
 
-``bootstrap_meta_registry()`` closes that gap. It is called ONCE at startup by
-both entry points (``main.py`` and ``main_orchestrator.py``). For each
+``bootstrap_meta_registry()`` closes that gap. It is called by the daemon
+pipeline's ``StrategyEvalStep`` (``pipeline/production_steps.py``). For each
 configured ``signal_id`` it attempts ``MetaLabeler.load_latest(signal_id)`` and,
 if a saved model exists AND ``ml/registry.yaml`` marks it ``deployable: true``,
 registers it. When no saved model exists, or a saved model exists but isn't
@@ -188,7 +188,7 @@ def bootstrap_meta_registry(
     """Load and register any trained, DEPLOYABLE meta-labelers into
     ``global_meta_registry``.
 
-    Called ONCE at process startup by both orchestrators. For each ``signal_id``
+    Called by the daemon pipeline's ``StrategyEvalStep``. For each ``signal_id``
     it attempts ``MetaLabeler.load_latest()`` and, if a pickle exists, checks
     ``ml/registry.yaml``'s ``meta_labeler_<signal_id>.deployable`` field before
     registering it — a saved model that failed the DSR>0.95/PBO<0.5 gate is

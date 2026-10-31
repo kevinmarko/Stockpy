@@ -28,7 +28,7 @@ real answers, per field:
     literal in production code. Writing it does nothing, ever.
 
 ``env_pinned``
-    A real shell export (``SOME_FIELD=x python3 main.py``) is live for this
+    A real shell export (``SOME_FIELD=x python3 main_orchestrator.py``) is live for this
     field right now. That always wins over both the runtime store and ``.env``,
     regardless of what the static classifier says — so this is a DOWNGRADE
     applied on top of the classification, never a classification of its own.

@@ -390,6 +390,31 @@ def _isolate_runtime_flags_store_in_tests(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _restore_urllib_default_opener_after_each_test():
+    """Undo any process-wide ``urllib`` opener a test leaves installed.
+
+    ``fredapi.Fred(...)`` calls ``urllib.request.install_opener`` whenever
+    ``HTTP_PROXY`` or ``HTTPS_PROXY`` is set (``fredapi/fred.py``), building the
+    proxy map as ``{'http': HTTP_PROXY, 'https': HTTPS_PROXY}``. With only ONE of
+    the two set -- the usual corporate or sandbox shape, ``HTTPS_PROXY`` only --
+    that map holds ``'http': None``, and from then on every plain ``http://``
+    ``urlopen`` in the process (e.g. ``shared/daemon_client`` talking to
+    ``http://127.0.0.1``) raises ``TypeError`` inside urllib's ``_parse_proxy``.
+    ``DataEngine`` builds a real ``Fred`` in many tests, so which LATER test failed
+    depended on pytest-xdist scheduling: ``tests/test_pilots_api.py::
+    TestAutomationStatus::test_read_token_gates_the_endpoint`` failed
+    intermittently and passed alone. Restoring the opener after every test
+    confines the damage to the test that caused it.
+    """
+    import urllib.request as _urlreq
+
+    before = getattr(_urlreq, "_opener", None)
+    yield
+    if getattr(_urlreq, "_opener", None) is not before:
+        _urlreq.install_opener(before)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_robinhood_login_lock_in_tests(monkeypatch, tmp_path_factory):
     """Point data.robinhood_login's cross-process login lock (+ its owner
     sidecar) at a per-test temp dir. Without this, every xdist worker's

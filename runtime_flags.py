@@ -47,7 +47,7 @@ naming the field and the expected shape.
 --------------------------------------------------------------------------
 Precedence: real shell env > store > .env > field default
 --------------------------------------------------------------------------
-An operator who runs ``SOME_FIELD=x python3 main.py`` must never have a stale
+An operator who runs ``SOME_FIELD=x python3 main_orchestrator.py`` must never have a stale
 JSON file silently override that explicit, deliberate choice. So any field
 whose name is set in the REAL shell environment is skipped by the apply step
 and reported as env-pinned.

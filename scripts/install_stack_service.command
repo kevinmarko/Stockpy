@@ -16,7 +16,9 @@
 #      (rewriting paths to THIS repo's location) and launchctl-loads it.
 #   3. Unloads the legacy com.investyo.daily-advisory job — the always-on
 #      daemon supersedes that single pre-market run (and it was failing under
-#      macOS TCC anyway). Its plist is left in place so you can re-enable it.
+#      macOS TCC anyway). The installed copy is left in place; since step 5.5
+#      the job runs the archived main.py, so only reload it for a RUNBOOK
+#      section 3.15 rollback.
 #   4. Waits a few seconds and checks the service actually came up, calling out
 #      the Full Disk Access fix if it hit the macOS ~/Desktop permission wall.
 #
@@ -72,7 +74,7 @@ if [[ -f "$DAILY" ]]; then
     echo ""
     echo "Retiring legacy com.investyo.daily-advisory (superseded by the always-on daemon)…"
     launchctl unload "$DAILY" 2>/dev/null || true
-    echo "  Unloaded. (plist left at $DAILY — re-enable with 'launchctl load' if you want the daily Sheet publish back.)"
+    echo "  Unloaded. (Installed plist left at $DAILY. It runs main.py, archived in step 5.5, so 'launchctl load' it again only for a RUNBOOK section 3.15 rollback.)"
 fi
 
 # ── Install the stack service ────────────────────────────────────────────────
@@ -135,8 +137,7 @@ else
 fi
 
 echo ""
-echo "Note: if you ALSO open launch_app.command, its engine loop will spawn a"
-echo "second daemon that contends for :8601/:8602 (the later one yields its API"
-echo "bind but the advisory still runs). For always-on, prefer THIS service and"
-echo "use launch_webapp.command just to view the data."
+echo "Note: launch_webapp.command only starts its own daemon when nothing is"
+echo "listening on :8601/:8602, so with THIS service running it just serves the"
+echo "web app against the always-on daemon."
 exit 0

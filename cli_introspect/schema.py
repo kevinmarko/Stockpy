@@ -58,7 +58,7 @@ class CommandSpec:
     """A command (a top-level CLI, or one subcommand) and its arguments."""
 
     name: str  # subcommand name, or the top-level entry-point label
-    invocation: str  # display prefix, e.g. "python3 main.py" / "python -m prompt_registry get"
+    invocation: str  # display prefix, e.g. "python3 main_orchestrator.py" / "python -m prompt_registry get"
     aliases: List[str]  # subcommand aliases (top-level commands: [])
     description: Optional[str]
     options: List[OptionSpec] = field(default_factory=list)

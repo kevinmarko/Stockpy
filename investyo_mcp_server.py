@@ -1256,8 +1256,8 @@ def generate_html_report(portfolio_id: str) -> str:
     state_snapshot.json plus the dashboards. With DAEMON_AGENTIC_QUEUE_MODE=primary
     it also rewrites the real execution queue and fires the watch-engine alerts and
     summary push, and with ADVISORY_ONLY=false it places paper orders on the FMP
-    paper ledger. This replaces the old advisory-only main.py run (main.py is being
-    retired); there is no standalone reporting entrypoint, the report is a side
+    paper ledger. This replaces the old advisory-only main.py run (main.py was
+    archived in step 5.5); there is no standalone reporting entrypoint, the report is a side
     effect of a cycle.
 
     Requires the orchestrator daemon (`python -m desktop.orchestrator_daemon`) and,

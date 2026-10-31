@@ -14,7 +14,7 @@ from `StrategyEvalStep.run`, closes that gap: once
 `SECTOR_SELECTION_ENABLED=true`, every tracked symbol whose most recent
 persisted ranking isn't from today's trading day gets recomputed once per
 day (a per-symbol `get_latest()` freshness check prevents duplicate rows
-from piling up under `main.py --interval N`).
+from piling up across the daemon's repeated cycles).
 
 **This is NOT a registered `SignalModule`.** It does not appear in
 `settings.SIGNAL_WEIGHTS` and does not feed `StrategyEngine.

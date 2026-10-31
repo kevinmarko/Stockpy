@@ -190,7 +190,7 @@ because they still describe what `forecast_direction_arima_hw` does today.
 lazily-evaluated `_get_forecast_direction_universe()` that reads the operator's live tracked
 universe via `data.portfolio_sync.compute_tracked_universe` (held Robinhood positions ∪
 `WATCHLIST`/`watchlist.txt` ∪ `settings.DEFAULT_TICKERS` — the same single source of truth
-`main.py`/`pipeline/production_steps.py` use), per commit `5eb9c6c1` on branch
+`pipeline/production_steps.py` uses; `main.py` did too before its step 5.5 archival), per commit `5eb9c6c1` on branch
 `feat-universe-transparency`.
 
 **A real, confirmed regression was found and fixed in the same pass, not merely theorized.** As

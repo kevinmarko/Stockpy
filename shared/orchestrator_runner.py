@@ -1343,7 +1343,7 @@ def read_telemetry_tail(max_lines: int = 120) -> str:
     """Return the last ``max_lines`` lines of ``logs/investyo.log``.
 
     ``alerting.setup_logging()`` rotates that file at 10 MB × 5 backups and is
-    invoked by both ``main.py`` and (indirectly) the orchestrator path; tailing
+    invoked by the daemon (``desktop/orchestrator_daemon.py``); tailing
     it gives the UI a single, entry-point-agnostic stream of structured
     diagnostics that survives across runs.
     """
@@ -1386,10 +1386,10 @@ def heartbeat_age_seconds() -> Optional[float]:
     A fresh heartbeat (< ~90 s) means the orchestrator is alive; a stale or
     missing one means it is idle or crashed. ``output/heartbeat.txt`` is
     written ONLY by ``main_orchestrator.py``'s async ``_heartbeat()`` task --
-    ``main.py`` (including its ``--interval``/``--agent`` scheduled-run modes)
-    never writes it. Callers wanting a liveness signal that covers BOTH
+    the persistent daemon (which calls ``_main_body()`` directly) never
+    writes it. Callers wanting a liveness signal that covers BOTH
     entry points should use :func:`state_snapshot_age_seconds` instead, or
-    combine both (see ``gui/engine_status.py``).
+    combine both (see ``shared/engine_status.py``).
     """
     hb = settings.OUTPUT_DIR / "heartbeat.txt"
     if not hb.exists():
@@ -1404,9 +1404,9 @@ def state_snapshot_age_seconds() -> Optional[float]:
     """Seconds since ``output/state_snapshot.json`` was last written, or None
     if absent.
 
-    Unlike :func:`heartbeat_age_seconds` (orchestrator-only), BOTH ``main.py``
-    (every ``run_once()`` cycle, including ``--interval``/``--agent`` mode)
-    and ``main_orchestrator.py`` rewrite this file, so it is the one liveness
+    Unlike :func:`heartbeat_age_seconds` (orchestrator-only), BOTH the daemon
+    (every pipeline cycle) and a standalone ``main_orchestrator.py`` run
+    rewrite this file, so it is the one liveness
     signal common to every scheduled-run entry point this platform supports.
     """
     snap = settings.OUTPUT_DIR / "state_snapshot.json"

@@ -132,7 +132,7 @@ from settings import ENV_PATH, INTERVAL_MAX_SECONDS, settings, validate_interval
 
 # Load .env before any subsequent project import. Standalone
 # `uvicorn api.control_api:app` has no main()-style entry point to hook this
-# into the way main.py/main_orchestrator.py/app_shell.py do, so it runs
+# into the way main_orchestrator.py does, so it runs
 # here, at true module top, anchored to ENV_PATH (settings.py) — a bare
 # load_dotenv() walks UP from this file's directory via find_dotenv() and,
 # in a git worktree with no .env of its own, silently finds a PARENT

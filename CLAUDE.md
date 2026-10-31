@@ -63,7 +63,12 @@ Applies to whichever agent does the work — Claude Code or Antigravity — with
 
 - **Verification is mandatory, not advisory.** A task is not done until the relevant check has been
   run and shown to pass — not "should pass." Python changes: the corresponding
-  `tests/test_<module>.py` (or the fuller `make ci` gate) must show zero failures. `webapp/src/`
+  `tests/test_<module>.py` (or the fuller `make ci` gate) must show zero failures. GitHub Actions is
+  no longer used (2026-10-29) and `.github/workflows/` was deleted (2026-10-30; the last copy of
+  each file is in the parent of the commit that deleted it: `git show "$(git log --diff-filter=D -1
+  --format=%H -- .github/workflows/ci.yml)^:.github/workflows/ci.yml"`): there is no remote CI, so
+  `make local-ci` (it runs what the old workflows ran) is the pre-merge gate and its result goes in
+  the PR. `webapp/src/`
   changes: `npm run --prefix webapp typecheck` clean AND, for anything UI-visible, an actual
   `npm run dev` + browser check (console errors + visual confirmation) — a clean typecheck proves
   the code compiles, not that a screen renders or behaves as intended.
@@ -102,7 +107,7 @@ Applies to whichever agent does the work — Claude Code or Antigravity — with
   `model:` unset so it inherits the session's model; Antigravity — use `model: pro`.
 - **`CLAUDE.md` and `AGENTS.md` are exact mirrors** (`AGENTS.md`'s first line is `# CLAUDE.md`).
   `.claude/hooks/sync_agent_docs.sh` / `.agents/hooks/sync_agent_docs.sh` copy whichever was just
-  edited onto the other; `tests/test_agent_docs_sync.py` fails CI if they differ.
+  edited onto the other; `tests/test_agent_docs_sync.py` fails `make ci` if they differ.
 
 ## Project
 
@@ -230,6 +235,7 @@ python -c "from shared import daemon_client as d; print(d.trigger_run())"   # on
 # ── Tests & gates ─────────────────────────────────────────────────────────────
 pytest tests/test_<module>.py        # targeted tests; add ::test_name for one test
 make ci                              # offline suite: pytest -m "not network and not slow" -n auto --dist loadgroup
+make local-ci [ARGS="--profile quick"]   # everything the retired GitHub Actions ran: lint, offline+slow suites, coverage floor, webapp, bandit, pip-audit, ML leakage (scripts/local_ci.py; --list shows the steps)
 make verify                          # env check + pytest + one standalone dry-run cycle (queue mode forced off: no queue/orders/pushes; fails on synthetic data) + summary (./verify.command = same)
 python scripts/preflight_check.py [--json]   # pre-live readiness gate (exit 0 = all pass)
 

@@ -27,7 +27,7 @@ The integration was planned and probed against a **Starter** plan.
 
 Two honest, permanent consequences follow, stated plainly so nobody re-discovers them later as if they were bugs:
 
-1. **`data/etf_holdings.py`'s SEC N-PORT path cannot be replaced by FMP.** ETF/mutual-fund holdings are Ultimate/Enterprise-only on this account. `data/etf_holdings.py` stays exactly as it is — SEC N-PORT via EDGAR, 1–5 months stale by the nature of that filing cadence.
+1. **`data/etf_holdings.py`'s SEC N-PORT path cannot be replaced by FMP.** ETF/mutual-fund holdings are Ultimate/Enterprise-only on this account. `data/etf_holdings.py` stays exactly as it is — SEC N-PORT via EDGAR, 1–5 months stale by the nature of that filing cadence. (The module was archived to `legacy/data/etf_holdings.py` in step 4d, 2026-09; this point now only records why FMP could not have replaced it.)
 2. **`Institutional Velocity` cannot be fixed by this integration, and stays hardcoded `0.0`.** It is computed from `netPercentInsiderShares` / `sharesShort` / `sharesOutstanding`, but Form 13F (institutional ownership) is Ultimate-only and Starter has no short-interest feed at all — there is no FMP endpoint on this plan that could feed either half of that calculation. This is a **known, permanent limitation of the Starter tier**, not a bug to file against this integration or a gap left for a future PR to close. A future plan upgrade (Ultimate/Enterprise) is the only path that changes this.
 
 ---
@@ -99,6 +99,8 @@ All 32 settings live in `settings.py` under `# --- 25. Financial Modeling Prep (
 ---
 
 ## 3a. Options Matrix FMP health overlay (`FMP_OPTIONS_HEALTH_ENABLED`)
+
+> **Archived (2026-09, steps 3d/4b/4f).** `reporting/options_snapshot.py` and `technical_options_engine.py` moved to `legacy/`, and `FMP_OPTIONS_HEALTH_ENABLED` / `FMP_OPTIONS_CONTEXT_ENABLED` are no longer `Settings` fields, so nothing in the active tree reads them. This section and the options-matrix half of §3b are kept as a record of the design.
 
 A fifth diagnostic overlay, added on top of the four described in §1 — same "diagnostic-only, never a `SignalModule`" treatment, scoped specifically to the webapp's Options Matrix screen rather than the general dashboard.
 
@@ -346,7 +348,7 @@ paper-trading-engine bullet) could already trade or scan any symbol, but had
 no way to *discover* one outside the platform's own tracked watchlist — an
 operator had to already know a ticker. This closes that gap: a real
 symbol-name/ticker search plus a sector/industry/market-cap/price/beta/
-dividend/volume screener, independent of `main.py`'s tracked universe
+dividend/volume screener, independent of the pipeline's tracked universe
 (held positions ∪ `WATCHLIST` ∪ `watchlist.txt`).
 
 **Endpoints used:** `data/fmp_client.py::search_name`/`search_symbol` wrap

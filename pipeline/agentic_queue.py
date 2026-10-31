@@ -5,12 +5,12 @@ With ``settings.DAEMON_AGENTIC_QUEUE_MODE=primary`` the orchestrator daemon
 (``pipeline.production_steps.AgenticQueueStep``) writes the REAL
 ``queue_sources/advisory.json`` + ``execution_queue.json`` and runs the two
 side effects main.py's ``_run_cycle`` used to own: the run-summary push and
-the symbol watch engine. main.py then skips all of them (see
-``daemon_owns_agentic_side_effects``), so there is only one writer.
+the symbol watch engine. main.py then skipped all of them (see
+``daemon_owns_agentic_side_effects``); it is archived (step 5.5), so there is one writer.
 
-Deliberately light (stdlib only at import time) because ``main.py`` imports
+Deliberately light (stdlib only at import time) because ``main.py`` imported
 it too. ``watch_engine`` and ``alerting`` are imported inside the functions
-that use them, as main.py does.
+that use them, as main.py did.
 
 Run ownership
 -------------
@@ -57,8 +57,8 @@ def resolve_daemon_agentic_queue_mode(value: Any) -> str:
 def daemon_owns_agentic_side_effects(value: Any) -> bool:
     """True when the daemon is the queue/watch/summary-push writer (``primary``).
 
-    main.py's ``_run_cycle`` checks this and skips its queue write, watch
-    engine, summary push and ``daily_report.html`` so there are never two
+    main.py's ``_run_cycle`` (archived in step 5.5) checked this and skipped its queue write, watch
+    engine, summary push and ``daily_report.html`` so there were never two
     writers of ``execution_queue.json`` / ``watch_state.json``.
     """
     return resolve_daemon_agentic_queue_mode(value) == "primary"

@@ -29,7 +29,7 @@ from typing import Optional
 
 # Ensure the project root is importable when invoked as ``python -m
 # engine.opal_research`` from outside the package (mirrors
-# engine/llm_commentary.py and main.py).
+# engine/llm_commentary.py and the archived main.py).
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)

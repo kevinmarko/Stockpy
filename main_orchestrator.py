@@ -929,14 +929,14 @@ def _write_state_snapshot(
     ``docs/known_issues/universe_count_reporting_mismatch.md``) -- how many
     symbols survived each narrowing stage (configured DEFAULT_TICKERS ->
     tracked universe -> raw data fetch -> dashboard compilation -> actually
-    forecasted). ``None``/``{}`` (never fabricated) when the caller is
-    ``main.py``'s advisory path, which doesn't build this dict — orchestrator-
+    forecasted). ``None``/``{}`` (never fabricated) when the caller has no
+    such dict (the archived ``main.py`` advisory path never built it) — orchestrator-
     only, matching ``tests/test_state_snapshot_parity.py``'s existing
     convention for orchestrator-only fields.
 
     ``recommendations`` (step 5.3) is the cycle's ``engine.advisory``
     ``Recommendation`` list, passed by ``StateSnapshotStep`` only when
-    ``DAEMON_AGENTIC_QUEUE_MODE=primary`` (main.py then no longer writes its
+    ``DAEMON_AGENTIC_QUEUE_MODE=primary`` (the archived main.py then no longer wrote its
     advisory snapshot). When given, every signal also carries the two fields
     only the advisory writer (``reporting/state_snapshot.py``) had, sourced
     the same way: ``garch_vol`` from ``key_indicators["garch_vol"]`` and

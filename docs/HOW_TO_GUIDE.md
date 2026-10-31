@@ -136,7 +136,7 @@ In the Pilots PWA under **Settings → Modules & Integrations → Settings Refer
 - **Search and Filter**: Filter settings by keyword or functional domain (e.g., Risk & Circuit Breakers, Options Desk & Volatility, LLM & AI Services).
 - **Turn any on/off flag on or off right here**: every non-secret boolean field — not just ones already covered by a specialized editor — shows a real toggle switch you can flip directly on this screen. A safety-critical field (marked "Dangerous") asks you to type its exact name to confirm before it saves, the same protection every other settings editor already enforces. A field marked with a "not read anywhere" warning is genuinely dead code — toggling it is accepted but has no effect, so no switch is shown for it.
 - **Liveness Indicators**: Each setting displays whether updates apply immediately or require an engine/daemon restart, plus any active capture sites.
-- **Direct Navigation**: If a setting is also grouped with related fields in one of the webapp's specialized settings editors (e.g., General Tunables, Feature Flags, Sentiment, Sector Selection, Paper Broker, FMP, Cache Long/Short), an **Edit here →** button navigates directly to that editor.
+- **Direct Navigation**: If a setting is also grouped with related fields in one of the webapp's specialized settings editors (e.g., General Tunables, Feature Flags, Sentiment, Sector Selection, Paper Broker, FMP), an **Edit here →** button navigates directly to that editor.
 - **Secret Protection**: API keys and passwords are masked (`•••• (set)` or `(not set)`) everywhere — including their platform default — and can never be leaked or edited through the browser.
 
 ---
@@ -769,9 +769,9 @@ ntfy.sh is a free, open-source push-notification service with native iOS and And
 1. Install the **ntfy** app on your phone — search "ntfy" on the App Store or Google Play.
 2. Choose a topic name that is **long and random** (it acts as your password — anyone who knows it can see your notifications). Example: `investyo-kml-x9f2q7`.
 3. In the ntfy app, tap **Subscribe to topic** → enter your topic name.
-4. Add to `.env`:
+4. Add to `.env` (the key is `ALERT_NTFY_TOPIC`; a bare `NTFY_TOPIC` line is ignored):
    ```
-   NTFY_TOPIC=investyo-kml-x9f2q7
+   ALERT_NTFY_TOPIC=investyo-kml-x9f2q7
    ```
 
 #### What gets sent
@@ -779,15 +779,15 @@ ntfy.sh is a free, open-source push-notification service with native iOS and And
 | Event | Priority | When |
 |-------|----------|------|
 | ⚠ Errors Detected | **HIGH** (always makes a sound) | Any symbol-level pipeline failure |
-| ✓ Refresh Complete | Default | Once per launch (not per interval tick) |
+| ✓ Refresh Complete | Default | At most once per US/Eastern day (not per cycle) |
 
 The error notification lists which symbols failed and at which pipeline stage. The "refresh complete" notification includes the full run summary (BUY/SELL/HOLD counts, top 3 recommendations, duration).
 
-**Daemon timer** (`ORCHESTRATOR_INTERVAL_SECONDS`): the "refresh complete" notification fires at most once per ET day, not once per cycle. Error notifications fire every cycle where errors occur.
+**Daemon** (`ORCHESTRATOR_INTERVAL_SECONDS`): the "refresh complete" notification fires at most once per ET day, not once per cycle. Error notifications fire every cycle where errors occur. The daemon sends these only with `DAEMON_AGENTIC_QUEUE_MODE=primary`; in `off` or `shadow` it sends none.
 
 #### Without NTFY_TOPIC
 
-When `NTFY_TOPIC` is unset `notify()` is a silent no-op — the app runs identically. Only the rotating log file (`logs/investyo.log`, under `$LOCAL_DATA_ROOT` — see below) is written.
+When `ALERT_NTFY_TOPIC` is unset `notify()` is a silent no-op — the app runs identically. Only the rotating log file (`logs/investyo.log`, under `$LOCAL_DATA_ROOT` — see below) is written.
 
 ---
 
@@ -1059,8 +1059,8 @@ You must include all modules in the dict (or it falls back to the defaults). The
 ## 18. Google Sheets Integration (Legacy)
 
 **Retired in step 4e (2026-09).** The Pilots PWA (`webapp/`) is the platform's only
-frontend, and nothing reads or writes the Google Sheet anymore. `main.py` (now archived) had
-no Sheet write path or a Sheet2-column-A universe fallback (see
+frontend, and nothing reads or writes the Google Sheet anymore. After step 4e, `main.py` (now
+archived) had no Sheet write path and no Sheet2-column-A universe fallback (see
 [Section 4](#4-choosing-your-ticker-universe)).
 
 The old code (`reporting/sheet_publisher.py`, `reporting/sheets_client.py`) was moved
@@ -1190,7 +1190,7 @@ MacroEngine: HMM fit failed — [reason] — returning None
 
 **This is almost never a "not enough data yet" problem.** If the warning text contains a Python error like `got an unexpected keyword argument 'method'`, it is an **`arch` library API mismatch**, not a model failure — and it means *every* ticker is silently using the cruder 20-day historical-vol fallback instead of the real GJR-GARCH estimate, no matter how much price history you have.
 
-The fix is already applied in `technical_options_engine.py`: `estimate_gjr_garch_volatility()` calls `model.fit(update_freq=0, disp='off')` with no `method=` kwarg (`arch ≥ 8.0` removed it; the default SLSQP optimizer converges fine). If you see this warning again after a dependency upgrade, check the `arch` version (`.venv/bin/python3 -c "import arch; print(arch.__version__)"`) and re-inspect the `fit()` signature — do not re-add `method=` or `options={"method": ...}`. Verify with:
+The fix is already applied in `volatility/garch.py`: `GarchVolatilityEstimator.estimate_gjr_garch_volatility()` calls `model.fit(update_freq=0, disp='off')` with no `method=` kwarg (`arch ≥ 8.0` removed it; the default SLSQP optimizer converges fine). If you see this warning again after a dependency upgrade, check the `arch` version (`.venv/bin/python3 -c "import arch; print(arch.__version__)"`) and re-inspect the `fit()` signature — do not re-add `method=` or `options={"method": ...}`. Verify with:
 
 ```bash
 .venv/bin/python3 -m pytest tests/test_quantitative_models.py -k garch -v
@@ -1325,7 +1325,7 @@ The platform can send proactive ntfy push notifications whenever a symbol's advi
 ### Prerequisites
 
 1. **ntfy app** — install on your phone from the App Store or Google Play (search "ntfy").
-2. **NTFY_TOPIC** must already be set in `.env` (see §14 of this guide for the one-time setup). Watch alerts piggyback on the same topic; no second subscription is needed.
+2. **ALERT_NTFY_TOPIC** must already be set in `.env` (see §14 of this guide for the one-time setup). Watch alerts piggyback on the same topic; no second subscription is needed.
 
 ### How it works
 
@@ -1379,7 +1379,7 @@ Conviction-above/below alerts use edge-triggering to avoid notification spam. If
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| No alerts ever fire | `NTFY_TOPIC` is unset or empty | Set `NTFY_TOPIC=your-topic` in `.env` |
+| No alerts ever fire | `ALERT_NTFY_TOPIC` is unset or empty (a bare `NTFY_TOPIC` is ignored) | Set `ALERT_NTFY_TOPIC=your-topic` in `.env` |
 | Rule in YAML but no alert | `alert_on` value not recognised, or threshold out of `[0, 1]` | Check `logs/investyo.log` for a WARNING "Skipping rule…" line |
 | `conviction_above` never re-fires | Edge suppression is working as intended | Delete `output/watch_state.json` to reset |
 | Stale symbol keeps alerting | Symbol was removed from universe but `watch_state.json` still has its entry | Automatic: state is pruned to the current universe each run; wait one cycle |
