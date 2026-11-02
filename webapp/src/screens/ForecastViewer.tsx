@@ -172,51 +172,51 @@ function ForecastView({
               
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-3)" }}>
-          {HORIZONS.map((h) => {
-            const isSelected = selectedHorizon === h.days;
-            return (
-              <div
-                key={h.days}
-                onClick={() => setSelectedHorizon(h.days)}
-                style={{
-                  padding: "var(--s-2-5) var(--s-3)",
-                  borderRadius: "var(--r-sm)",
-                  background: isSelected ? "var(--surface-3)" : "var(--surface)",
-                  border: `1px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
-                  cursor: "pointer",
-                  transition: "all 0.15s ease",
-                }}
-              >
-                <div style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>{h.days}d Horizon</div>
-                <div style={{ fontSize: "var(--t-title)", fontWeight: 700, color: "var(--text-primary)", marginTop: "2px" }}>
-                  {d[h.key] == null ? DASH : fmtNum(d[h.key] as number, 2)}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-3)" }}>
+                  {HORIZONS.map((h) => {
+                    const isSelected = selectedHorizon === h.days;
+                    return (
+                      <div
+                        key={h.days}
+                        onClick={() => setSelectedHorizon(h.days)}
+                        style={{
+                          padding: "var(--s-2-5) var(--s-3)",
+                          borderRadius: "var(--r-sm)",
+                          background: isSelected ? "var(--surface-3)" : "var(--surface)",
+                          border: `1px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
+                          cursor: "pointer",
+                          transition: "all 0.15s ease",
+                        }}
+                      >
+                        <div style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>{h.days}d Horizon</div>
+                        <div style={{ fontSize: "var(--t-title)", fontWeight: 700, color: "var(--text-primary)", marginTop: "2px" }}>
+                          {d[h.key] == null ? DASH : fmtNum(d[h.key] as number, 2)}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              </div>
-            );
-          })}
-        </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "var(--s-2-5)" }}>
-          <Tile
-            label="Expected Return (30d)"
-            value={expectedReturnPct == null ? DASH : `${expectedReturnPct >= 0 ? "+" : ""}${fmtNum(expectedReturnPct, 2)}%`}
-            tone={expectedReturnPct == null ? undefined : expectedReturnPct >= 0 ? "pos" : "neg"}
-          />
-          <Tile label="Monte Carlo Range Band" value={volatileRangePct == null ? DASH : `±${fmtNum(volatileRangePct / 2, 1)}%`} />
-          <Tile
-            label="Forecast Trend Direction"
-            value={
-              expectedReturnPct == null
-                ? DASH
-                : expectedReturnPct > 1.5
-                ? "BULLISH ↗"
-                : expectedReturnPct < -1.5
-                ? "BEARISH ↘"
-                : "NEUTRAL ➔"
-            }
-          />
-        </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "var(--s-2-5)" }}>
+                  <Tile
+                    label="Expected Return (30d)"
+                    value={expectedReturnPct == null ? DASH : `${expectedReturnPct >= 0 ? "+" : ""}${fmtNum(expectedReturnPct, 2)}%`}
+                    tone={expectedReturnPct == null ? undefined : expectedReturnPct >= 0 ? "pos" : "neg"}
+                  />
+                  <Tile label="Monte Carlo Range Band" value={volatileRangePct == null ? DASH : `±${fmtNum(volatileRangePct / 2, 1)}%`} />
+                  <Tile
+                    label="Forecast Trend Direction"
+                    value={
+                      expectedReturnPct == null
+                        ? DASH
+                        : expectedReturnPct > 1.5
+                        ? "BULLISH ↗"
+                        : expectedReturnPct < -1.5
+                        ? "BEARISH ↘"
+                        : "NEUTRAL ➔"
+                    }
+                  />
+                </div>
               </div>
             </section>
           </div>

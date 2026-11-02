@@ -8,14 +8,15 @@
 - [ ] ML pipeline (`ml/`)
 - [ ] data layer (`data/`, `data_engine.py`, `dto_models.py`)
 - [ ] execution (`execution/`)
-- [ ] GUI / reporting (`legacy/streamlit_command_center/` (frozen), `shared/`, `diagnostics_and_visuals.py`)
+- [ ] GUI / reporting (`webapp/`, `shared/`, `reporting/`, `diagnostics_and_visuals.py`)
 - [ ] observability (`observability/`)
 - [ ] config / schema (`config.py`, `database_setup.py`)
 - [ ] tests
 - [ ] other
 
 ## Test plan
-- [ ] `pytest` passes locally
+<!-- There is no GitHub CI (GitHub Actions is retired). Paste the `make local-ci` result table here. -->
+- [ ] `make local-ci` passes (table pasted above; say which steps were skipped and why)
 - [ ] No new lookahead bias introduced (perturbation tests cover changed indicators)
 - [ ] `COLUMN_SCHEMA` updated if new fields added
 - [ ] No fabricated metrics (NaN, not 0, for unavailable data)

@@ -72,6 +72,12 @@ Applies to whichever agent does the work — Claude Code or Antigravity — with
   changes: `npm run --prefix webapp typecheck` clean AND, for anything UI-visible, an actual
   `npm run dev` + browser check (console errors + visual confirmation) — a clean typecheck proves
   the code compiles, not that a screen renders or behaves as intended.
+- **Standing policy: no GitHub Actions, ever (operator, 2026-11-02).** CI is this repo's own local
+  system (`make local-ci`), not GitHub. Never add, restore or stub a workflow — not even one that
+  only reports a check name to satisfy a branch rule — and never wait on, re-run or cite remote CI
+  as evidence. Paste the `make local-ci` table into the PR as its verification. A GitHub branch rule
+  that still requires CodeQL or the old workflow checks cannot be met by any push; only the operator
+  can remove it (repo Settings → Rules), so say so once and don't retry the merge until they have.
 - **Claude Code enforces the Python half automatically.** `.claude/hooks/verify_targeted_tests.sh`
   (`PostToolUse`, non-blocking) runs the mapped `tests/test_<module>.py` after every edit to a
   tracked `.py` file. `.claude/hooks/verify_before_stop.sh` (`Stop`) is the enforcement gate: it
