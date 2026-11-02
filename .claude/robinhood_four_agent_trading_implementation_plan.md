@@ -1,8 +1,9 @@
 # Robinhood Four-Agent Trading System — Implementation Plan
 
-**Status:** PLAN ONLY — not approved for build. Written 2026-11-02 during the step-7
-feature freeze. Building any phase below needs the operator's explicit OK (CLAUDE.md
-"Feature freeze": new agentic capabilities are not in the allowed list).
+**Status:** Written 2026-11-02 during the step-7 feature freeze. **Phase 1 approved by
+the operator and built 2026-11-02** (walkthrough:
+`.claude/robinhood_four_agent_phase1_walkthrough.md`). Phases 2–5 still need the
+operator's explicit OK each (CLAUDE.md "Feature freeze").
 
 **Operator decisions (2026-11-02):**
 
@@ -50,8 +51,10 @@ cannot read or write. Robinhood trade approvals are that kind of gate for **orde
 execution**. The design keeps every existing code gate as defence-in-depth, but the
 phone tap is what makes "trades on its own" safe to contemplate.
 
-**Unverified:** whether trade approvals are currently ON for the operator's Agentic
-account. Phase 1's first act is to read `get_trade_approval_setting` and report it.
+**Verified 2026-11-02:** `get_trade_approval_setting` on the operator's Agentic account
+(the only account this agent can act on) returned `human_must_approve_trades: true`,
+last changed 2026-10-13. It can change at any time, so the skill re-derives the path per
+order from `review_equity_order` rather than trusting this.
 
 ## 3. Architecture
 
@@ -176,7 +179,9 @@ Design principles:
   4. For each passed intent: `review_equity_order`. If the response shows
      `customer_approval_required: true` and `order_checks` is empty → `place_equity_order`
      with `ref_id = uuid5(STOCKPY_NS, client_order_id)`. A deterministic ref_id makes a
-     re-run or retry idempotent at Robinhood's gateway as well as in our ledger. If
+     retry or re-run against the same queue file idempotent at Robinhood's gateway;
+     `client_order_id` is time-bucketed, so across queue refreshes the `dedup_key`
+     ledger remains the day-wide guard. If
      `order_checks` is non-empty or `customer_approval_required` is false → do not
      place; log `skipped` with the reason.
   5. Append to `execution_placed.jsonl` and `execution_receipts.jsonl` with new fields
@@ -191,9 +196,10 @@ Design principles:
      day: the `dedup_key` already blocks them, and a decline is an operator decision,
      not a transient error.
   9. **Stale approvals:** if the next cycle's queue no longer contains an intent that is
-     still pending (the signal flipped), the Trader declines it via
-     `decline_trade_approval` (an agent may only ever *reduce* exposure on its own) and
-     logs why.
+     still pending (the signal flipped), the Trader tells the operator and offers to
+     decline it via `decline_trade_approval`, calling it only after their explicit OK.
+     (Corrected in Phase 1: the original draft let the Trader decline on its own, but the
+     tool's own contract says "Confirm with the user before calling".)
 - **Order type:** recommend `ROBINHOOD_LIMIT_BUFFER_BPS > 0` (limit orders) for this
   mode. Teaching point: with an approval step, minutes can pass between preview and
   execution. A market order executes at whatever the price is when you tap; a limit
@@ -234,7 +240,7 @@ Design principles:
 | Phase | Scope | Verification |
 |---|---|---|
 | **P0** (now) | This plan. | Operator review. |
-| **P1 — Trader approval-aware** | Update `robinhood-execution` with the approval-mode gate, deterministic `ref_id`, `approval_id`/`approval_state` receipt fields, approval tracking and stale-approval decline. Extend `execution/receipts_store.py` (new fields optional; old rows still parse). Create `.claude/agents/rh-trader.md`. | `tests/test_receipts_store.py`, `tests/test_robinhood_e2e.py::TestSkillMdInvariantsPinned` updated to pin the new invariants; a `review`-mode dry run against the real Agentic account. |
+| **P1 — Trader approval-aware** ✅ built 2026-11-02 | Update `robinhood-execution` with the approval-mode gate, deterministic `ref_id`, `approval_id`/`approval_state` receipt fields, approval tracking and stale-approval decline. Extend `execution/receipts_store.py` (new fields optional; old rows still parse). Create `.claude/agents/rh-trader.md`. | `tests/test_receipts_store.py`, `tests/test_robinhood_e2e.py::TestSkillMdInvariantsPinned` updated to pin the new invariants; a `review`-mode dry run against the real Agentic account. |
 | **P2 — Portfolio & Risk preflight** | `execution/agentic_preflight.py` + `.claude/agents/rh-risk-manager.md`. | New `tests/test_agentic_preflight.py`: each check pass/fail, never-upsize property, missing-data → veto. |
 | **P3 — Analyst + Scout** | `.claude/agents/rh-strategy-analyst.md`, `rh-research-scout.md` (wrapping `agentic-discovery`); theses/research JSON schemas. | Schema tests; a `review` cycle producing all four artifacts. |
 | **P4 — Orchestration** | `/rh-agentic-cycle` command, scheduled run, ntfy summary. Webapp "Pending approvals" card on `AgenticTrading.tsx` is a webapp screen change and **needs a separate explicit OK**. | `/verify`; for the webapp part, `npm run --prefix webapp typecheck` + `/verify-webapp`. |
@@ -254,8 +260,8 @@ Design principles:
 
 ## 9. Open questions for the operator
 
-1. Is trade approval currently ON for your Robinhood Agentic account? (P1 checks it, but
-   you can look now: Robinhood app → Agentic account settings.)
+1. ~~Is trade approval currently ON for your Robinhood Agentic account?~~ **Answered:
+   yes** (operator, and verified via `get_trade_approval_setting`, 2026-11-02).
 2. How long do Robinhood pending approvals live before expiring? The tool docs say they
    expire but give no duration. P1 measures it. It decides whether a limit order or the
    approval expiry is the binding staleness control.
