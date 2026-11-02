@@ -1641,12 +1641,28 @@ button:focus-visible {
 
 .split-rail {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: var(--s-2);
+  min-width: 0;
 }
 
-.split-rail > h1 {
-  flex: 1 0 100%;
+/* On a phone the six long-label links are ONE horizontally scrollable strip under the
+   "Settings" heading (wrapped pills took several rows and pushed the form below the fold).
+   It scrolls inside itself, so the page never scrolls sideways. */
+.split-rail-links {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: var(--s-2);
+  position: relative; /* offsetParent for the scroll-to-active-link on mount */
+  overflow-x: auto;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.split-rail-links > a {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .split-content {
@@ -1667,16 +1683,25 @@ button:focus-visible {
   }
 
   .split-rail {
-    flex-direction: column;
-    flex-wrap: nowrap;
     width: 250px;
     flex-shrink: 0;
     position: sticky;
     top: var(--s-4);
+    /* A sticky box taller than the viewport (landscape phone, 844x390) cannot be scrolled
+       on its own, so its lower links would be unreachable: cap it and scroll inside it. */
+    max-height: calc(100vh - 2 * var(--s-4));
+    max-height: calc(100dvh - 2 * var(--s-4));
+    overflow-y: auto;
   }
 
-  .split-rail > h1 {
+  .split-rail-links {
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .split-rail-links > a {
     flex: 0 0 auto;
+    white-space: normal;
   }
 
   .split-content {

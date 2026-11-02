@@ -52,4 +52,22 @@ describe("SettingsLayout responsiveness", () => {
     ]);
     expect(getByTestId("pane-content")).toBeInTheDocument();
   });
+
+  it("puts the links in one .split-rail-links strip under the heading, so mobile can scroll them", () => {
+    const { container } = renderLayout();
+    const nav = container.querySelector("nav.split-rail") as HTMLElement;
+    const strip = nav.querySelector(":scope > .split-rail-links") as HTMLElement | null;
+    expect(strip).not.toBeNull();
+    // Heading stays a direct child of the rail (its own row ABOVE the strip); every link is in the strip.
+    expect(Array.from(nav.children).map((c) => c.tagName)).toEqual(["H1", "DIV"]);
+    expect(strip!.querySelectorAll(":scope > a")).toHaveLength(6);
+    expect(nav.querySelectorAll(":scope > a")).toHaveLength(0);
+  });
+
+  it("scrolls the active link into the strip on mount without needing scrollIntoView", () => {
+    // Renders under jsdom (no scrollIntoView, offsets are 0) without throwing, with the active link marked.
+    const { container } = renderLayout();
+    expect(container.querySelector(".split-rail-links a.active")?.getAttribute("href")).toBe("/settings");
+    expect((container.querySelector(".split-rail-links") as HTMLElement).scrollLeft).toBe(0);
+  });
 });

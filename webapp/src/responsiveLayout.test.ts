@@ -53,4 +53,29 @@ describe("index.css split layouts are mobile-first", () => {
     expect(baseRule(".split-cols")).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s*;/);
     expect(wideRule(".split-cols")).toMatch(/repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
   });
+
+  it("on a phone the rail links are ONE horizontally scrollable strip, not wrapping pills", () => {
+    // Wrapped pills took several rows above the form on every Settings sub-page.
+    const rail = baseRule(".split-rail");
+    expect(rail).toMatch(/flex-direction:\s*column/); // heading on its own row above the strip
+    expect(rail).not.toMatch(/flex-wrap\s*:\s*wrap/);
+    const strip = baseRule(".split-rail-links");
+    expect(strip).toMatch(/flex-wrap:\s*nowrap/);
+    expect(strip).toMatch(/overflow-x:\s*auto/);
+    const link = baseRule(".split-rail-links > a");
+    expect(link).toMatch(/flex:\s*0\s+0\s+auto/);
+    expect(link).toMatch(/white-space:\s*nowrap/);
+    // ...and from 768px it is the original column of links.
+    expect(wideRule(".split-rail-links")).toMatch(/flex-direction:\s*column/);
+    expect(wideRule(".split-rail-links")).toMatch(/overflow:\s*visible/);
+  });
+
+  it("the sticky desktop rail is capped to the viewport and scrolls inside itself", () => {
+    // A sticky box taller than a short (landscape-phone) viewport cannot scroll on its own.
+    const wide = wideRule(".split-rail");
+    expect(wide).toMatch(/position:\s*sticky/);
+    expect(wide).toMatch(/max-height:\s*calc\(100vh\s*-\s*2\s*\*\s*var\(--s-4\)\)/);
+    expect(wide).toMatch(/max-height:\s*calc\(100dvh\s*-\s*2\s*\*\s*var\(--s-4\)\)/);
+    expect(wide).toMatch(/overflow-y:\s*auto/);
+  });
 });
