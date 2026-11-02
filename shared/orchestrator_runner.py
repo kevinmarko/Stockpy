@@ -321,7 +321,9 @@ def launch_orchestrator(dry_run: bool = False) -> RunHandle:
                 attach_run_id: Optional[str] = None
                 # True once the daemon owns a run for this request. A 202 counts
                 # even without a run id: the daemon accepted it, so spawning a
-                # subprocess would duplicate the cycle.
+                # subprocess would duplicate the cycle. (A conforming daemon
+                # always returns a run id on 202 -- api/control_api.py::trigger_run
+                # -- so a None id only arises from a malformed reply.)
                 use_daemon = False
                 if result.ok:
                     attach_run_id = result.run_id
