@@ -33,8 +33,8 @@ Deliberately NOT reproduced
 ---------------------------
 * CodeQL (a GitHub-hosted analysis), the Supabase preview check, and
   ``auto-update-pr-branches.yml`` (a GitHub-only branch updater) have no local form.
-* Sharding. One machine runs the whole offline suite in one go. ``scripts/ci_shard.py``
-  is still there if you want to split the files across several machines or terminals.
+* Sharding. One machine runs the whole offline suite in one go, so the 4-way shard
+  splitter (``scripts/ci_shard.py``) and its duration map were deleted with the workflows.
 * ``npm ci``. The webapp steps assume ``webapp/node_modules`` is installed; if it is not,
   they fail (loudly) rather than silently skip.
 
