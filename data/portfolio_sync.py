@@ -776,9 +776,9 @@ def read_cache(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Shared universe-builder primitives for main.py's ``_build_universe()`` and
-# pipeline/production_steps.py's ``AsyncDataFetchStep`` — the two entry points
-# behind, respectively, ``main.py --interval``/``--agent`` and the persistent
+# Shared universe-builder primitives for pipeline/advisory_inputs.py's
+# ``build_universe_detailed()`` and pipeline/production_steps.py's
+# ``AsyncDataFetchStep`` — the advisory and data-fetch paths of the persistent
 # orchestrator daemon (main_orchestrator.py / desktop/daemon_runtime.py). See
 # docs/known_issues/daemon_universe_watchlist_divergence.md for the incident
 # these two functions close: before this, ``AsyncDataFetchStep`` reimplemented
@@ -823,8 +823,8 @@ def load_env_watchlist(watchlist_file: str) -> List[str]:
     """Return the union of uppercase tickers from the ``WATCHLIST`` env var and
     a plain-text watchlist file (one ticker per line, ``#`` = comment).
 
-    Verbatim port of ``main.py``'s original ``_load_watchlist()`` body,
-    parameterized by file path so both ``main.py`` and
+    Verbatim port of the retired ``main.py``'s original ``_load_watchlist()`` body,
+    parameterized by file path so both ``pipeline/advisory_inputs.py`` and
     ``pipeline/production_steps.py`` share one implementation instead of
     drifting. Neither source takes precedence — both are read (when present)
     and merged/deduped, env-var tickers first. Returns ``[]`` when neither
@@ -896,7 +896,7 @@ def compute_tracked_universe(
     that whole union is empty.
 
     This is the shared core of ``pipeline.advisory_inputs.build_universe_detailed()``
-    (used by main.py and, since step 5.1, the daemon), which layers its own
+    (used by the daemon's ``AsyncDataFetchStep`` since step 5.1), which layers its own
     Robinhood-snapshot ``held`` set, ``pilots.discovery.discovery()`` call and
     closed-position retention on top of this function's result. It intentionally does
     **not** attempt to also cover ``resolve_universe()``'s CLI/MCP semantics
@@ -1058,7 +1058,7 @@ def resolve_universe(
             # never marks a held symbol excluded, but subtract defensively anyway --
             # a symbol's held status can change between when it was last rated and
             # right now, and a held position must never be dropped (see module docstring).
-            # Unlike main.py's _build_universe (which unions its retention
+            # Unlike advisory_inputs.build_universe_detailed (which unions its retention
             # source AFTER this subtraction, making it structurally immune),
             # `tracked` here already includes CLOSED_RECENT_LIST_KEY symbols
             # (folded into report.symbols by build_sync_report) BEFORE this

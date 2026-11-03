@@ -1,5 +1,5 @@
 """
-gui/robinhood_execution_panel.py — read-side status for the Robinhood execution bridge.
+shared/robinhood_execution_panel.py — read-side status for the Robinhood execution bridge.
 
 Why this module exists
 -----------------------

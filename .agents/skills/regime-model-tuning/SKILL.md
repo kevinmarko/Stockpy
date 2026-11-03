@@ -4,8 +4,8 @@ description: >-
   Tune, diagnose, or reason about the Gaussian HMM regime detector
   (regime/hmm_regime.py), the rules-based macro regime classifier it feeds
   into (macro_engine.py), and the downstream gates that consume their output
-  (execution/risk_gate.py's hmm_regime check, technical_options_engine.py's
-  VRP gate). Use when adjusting HMM state count/retrain cadence, debugging
+  (execution/risk_gate.py's hmm_regime check, and the archived options VRP
+  gate in legacy/technical_options_engine.py). Use when adjusting HMM state count/retrain cadence, debugging
   why the HMM is stuck in one state or disagrees with the rules-based
   regime, or investigating a blocked/unblocked BUY tied to macro or
   volatility-regime conditions -- covers what "risk-on/off" actually means
@@ -30,7 +30,7 @@ one you're actually touching before changing anything.
 |---|---|---|---|
 | Rules-based macro classifier | `macro_engine.py` | `market_regime` isin `{"RISK ON", "NEUTRAL", "RECESSION", "CREDIT EVENT"}` | **Primary** regime signal |
 | Gaussian HMM regime detector | `regime/hmm_regime.py` | 3 hidden states, variance-ranked → `bull`/`sideways`/`bear`; exposed as `hmm_risk_on_probability` | Statistical **second opinion only** — downgrades/confirms, never independently overrides |
-| VRP gate for options-selling | `technical_options_engine.py::OptionsPricingRecommender.generate_strategy_pricing_matrix` | boolean `sell_premium_allowed` | Separate, narrower gate — only decides whether premium-SELLING is allowed this cycle |
+| VRP gate for options-selling (**archived**, step 3d/4b) | `legacy/technical_options_engine.py::OptionsPricingRecommender.generate_strategy_pricing_matrix` | boolean `sell_premium_allowed` | Separate, narrower gate — only decides whether premium-SELLING is allowed this cycle |
 
 `regime/hmm_regime.py`'s own module docstring states this explicitly: *"the
 rules-based classification in macro_engine.py / MacroEconomicDTO.market_regime
@@ -113,10 +113,10 @@ or HY OAS > 6% — see CLAUDE.md's Execution section and the Macro Regime Gate e
 diagnosing a blocked BUY; check which check's name (`hmm_regime` vs. the
 kill-switch check) actually appears in the risk-gate's rejection reason.
 
-## 3. The VRP gate (options-selling only — separate system)
+## 3. The VRP gate (options-selling only — separate system, archived)
 
 `OptionsPricingRecommender.generate_strategy_pricing_matrix()`
-(`technical_options_engine.py`) enforces, inline, exactly the rule documented in the options-premium-selling VRP entry of `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section (options desk since archived to `legacy/`): premium-selling (Put/Call Credit Spread, Iron Condor) is allowed
+(`legacy/technical_options_engine.py`; nothing in the active pipeline calls it any more) enforced, inline, exactly the rule documented in the options-premium-selling VRP entry of `docs/FEATURE_TIER_HISTORY.md`'s "2026-09 CLAUDE.md slimming — relocated entries" section (options desk since archived to `legacy/`): premium-selling (Put/Call Credit Spread, Iron Condor) is allowed
 only if `true_ivr > 50`, `vrp > 0.02`, `vix < 30`, and
 `macro_dto.market_regime != 'CREDIT EVENT'`. Reading the real gate logic
 (lines ~223-235): `sell_premium_allowed` starts `True` and is set `False` if

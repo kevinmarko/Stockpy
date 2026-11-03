@@ -13,10 +13,25 @@ actual property this module exists to add, which is serialization ACROSS
 independent OS processes. That test spawns real child ``python -c`` processes
 via ``subprocess`` and inspects their real, separately-recorded issuance
 timestamps.
+
+Timing rule for this file: the throttle's contract is about ISSUANCE times --
+the ``time.monotonic()`` value ``wait_turn`` persists at the moment it grants a
+slot, while still holding the lock. How long the caller then takes to regain
+control (scheduler jitter, GIL hand-off, a descheduled child process, a slow CI
+runner) is not part of that contract, so no test here asserts on a duration
+measured around a ``wait_turn`` call or on a timestamp taken after it returned.
+Spacing arithmetic is checked against a fake clock (``fake_clock``: the sleep
+the throttle REQUESTS, no wall clock involved); real-clock, thread and
+multi-process tests read the issuance stamps back out at the grant point
+(``_IssuanceRecorder``). The earlier caller-side measurements were the flake
+source: two timing tests in this file failed in CI once and passed on re-run
+with no code change.
 """
 from __future__ import annotations
 
+import inspect
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -26,7 +41,74 @@ from pathlib import Path
 
 import pytest
 
+import data.cross_process_throttle as throttle_mod
 from data.cross_process_throttle import wait_turn
+
+# wait_turn persists each stamp as ``f"{time.monotonic():.6f}"``, so a recorded
+# issuance time is quantized to 1us (rounding error <= 0.5us). That quantization
+# is the ONLY slack the spacing assertions allow; they otherwise demand the full
+# interval, because sleep(interval - elapsed) is anchored on the persisted stamp
+# and time.sleep never returns early.
+_STAMP_QUANTUM_SECONDS = 1e-6
+
+
+class _FakeClock:
+    """Stand-in for the ``time`` module inside ``data.cross_process_throttle``:
+    ``sleep`` records the request and advances ``monotonic`` instead of blocking,
+    so spacing arithmetic is exact and independent of machine load."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+class _IssuanceRecorder:
+    """Proxy for the throttle module's ``os`` that records every stamp at the
+    moment ``wait_turn`` persists it. That write happens under the exclusive
+    lock, right after the (possible) sleep, so it IS the issuance time -- and
+    ``stamps`` is in grant order. Everything else delegates to the real ``os``.
+    Self-contained on purpose: the multi-process test embeds its source in each
+    child interpreter via ``inspect.getsource``."""
+
+    def __init__(self, real_os):
+        self._real_os = real_os
+        self.stamps = []
+
+    def pwrite(self, fd, data, offset):
+        self.stamps.append(float(data.decode("ascii")))
+        return self._real_os.pwrite(fd, data, offset)
+
+    def __getattr__(self, name):
+        return getattr(self._real_os, name)
+
+
+@pytest.fixture
+def fake_clock(monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr(throttle_mod, "time", clock)
+    return clock
+
+
+@pytest.fixture
+def issuance(monkeypatch):
+    recorder = _IssuanceRecorder(os)
+    monkeypatch.setattr(throttle_mod, "os", recorder)
+    return recorder
+
+
+def _assert_spaced(stamps: list[float], interval: float) -> None:
+    """Every consecutive pair of issuance stamps is at least ``interval`` apart."""
+    gaps = [b - a for a, b in pairwise(stamps)]
+    assert all(g >= interval - _STAMP_QUANTUM_SECONDS for g in gaps), (
+        f"issuances closer together than the {interval}s interval: {gaps}"
+    )
 
 
 class TestNoOpOnNonPositiveInterval:
@@ -42,23 +124,46 @@ class TestNoOpOnNonPositiveInterval:
 
 
 class TestSpacingArithmetic:
-    def test_first_call_never_sleeps(self, tmp_path):
+    def test_first_call_never_sleeps(self, tmp_path, fake_clock):
         state_path = tmp_path / "x.state"
-        t0 = time.perf_counter()
         wait_turn(state_path, 0.05)
-        elapsed = time.perf_counter() - t0
-        assert elapsed < 0.05, "a fresh state file must not throttle the first call"
+        assert fake_clock.sleeps == [], "a fresh state file must not throttle the first call"
         assert state_path.exists()
 
-    def test_second_rapid_call_sleeps_the_remaining_gap(self, tmp_path):
+    def test_second_rapid_call_sleeps_the_remaining_gap(self, tmp_path, fake_clock):
+        state_path = tmp_path / "x.state"
+        interval = 0.15
+        wait_turn(state_path, interval)
+        first_issued = fake_clock.now
+        fake_clock.now += 0.04  # the caller comes back 40ms after the first grant
+        wait_turn(state_path, interval)
+        # Exactly the part of the interval that has not yet elapsed, not a full
+        # interval and not zero.
+        assert fake_clock.sleeps == [pytest.approx(interval - 0.04, abs=1e-9)]
+        second_issued = float(state_path.read_text().strip())
+        assert second_issued - first_issued == pytest.approx(
+            interval, abs=_STAMP_QUANTUM_SECONDS
+        )
+
+    def test_call_after_the_interval_has_passed_does_not_sleep(self, tmp_path, fake_clock):
         state_path = tmp_path / "x.state"
         wait_turn(state_path, 0.15)
-        t0 = time.perf_counter()
+        fake_clock.now += 0.2
         wait_turn(state_path, 0.15)
-        elapsed = time.perf_counter() - t0
-        # 0.7x tolerance for scheduler jitter (matches the tolerance convention
-        # already used by tests/test_edgar_fundamentals.py's own throttle test).
-        assert elapsed >= 0.15 * 0.7, elapsed
+        assert fake_clock.sleeps == []
+
+    def test_second_rapid_call_is_issued_a_full_interval_after_the_first(
+        self, tmp_path, issuance
+    ):
+        """Real ``time.sleep``/``flock``/state file, asserting on the issuance
+        stamps the throttle recorded at each grant -- not on how long the
+        caller waited, which a descheduled test process stretches or shrinks."""
+        state_path = tmp_path / "x.state"
+        interval = 0.15
+        wait_turn(state_path, interval)
+        wait_turn(state_path, interval)
+        assert len(issuance.stamps) == 2
+        _assert_spaced(issuance.stamps, interval)
 
     def test_state_file_persists_a_plausible_monotonic_timestamp(self, tmp_path):
         state_path = tmp_path / "x.state"
@@ -71,21 +176,17 @@ class TestSpacingArithmetic:
 
 
 class TestCorruptStateDegradesGracefully:
-    def test_garbage_content_is_treated_as_no_prior_request(self, tmp_path):
+    def test_garbage_content_is_treated_as_no_prior_request(self, tmp_path, fake_clock):
         state_path = tmp_path / "x.state"
         state_path.write_text("not-a-float garbage \x00\x01")
-        t0 = time.perf_counter()
         wait_turn(state_path, 0.05)
-        elapsed = time.perf_counter() - t0
-        assert elapsed < 0.05, "corrupt state must degrade to 'no throttle', never raise"
+        assert fake_clock.sleeps == [], "corrupt state must degrade to 'no throttle', never raise"
 
-    def test_empty_file_is_treated_as_no_prior_request(self, tmp_path):
+    def test_empty_file_is_treated_as_no_prior_request(self, tmp_path, fake_clock):
         state_path = tmp_path / "x.state"
         state_path.write_text("")
-        t0 = time.perf_counter()
         wait_turn(state_path, 0.05)
-        elapsed = time.perf_counter() - t0
-        assert elapsed < 0.05
+        assert fake_clock.sleeps == []
 
 
 class TestStaleTimestampFromPriorBootSession:
@@ -100,20 +201,22 @@ class TestStaleTimestampFromPriorBootSession:
     wanted to make an FMP/EDGAR request. See
     docs/known_issues/cross_process_throttle_monotonic_clock_reboot_reset.md."""
 
-    def test_future_timestamp_does_not_hang_and_is_treated_as_no_prior_request(self, tmp_path):
+    def test_future_timestamp_does_not_hang_and_is_treated_as_no_prior_request(
+        self, tmp_path, fake_clock
+    ):
         state_path = tmp_path / "x.state"
         # Simulate a value written far into a previous boot session, i.e.
-        # comfortably larger than this test process's own time.monotonic().
-        future_stamp = time.monotonic() + 900_000.0  # +10.4 days
+        # comfortably larger than the current session's time.monotonic().
+        future_stamp = fake_clock.now + 900_000.0  # +10.4 days
         state_path.write_text(f"{future_stamp:.6f}")
 
-        t0 = time.perf_counter()
         wait_turn(state_path, 0.05)
-        elapsed = time.perf_counter() - t0
 
-        assert elapsed < 1.0, (
-            f"wait_turn slept {elapsed:.1f}s against a stale future-looking "
-            "timestamp instead of treating it as 'no prior request known'"
+        # The fake sleep returns at once, so a regression shows up as a
+        # recorded multi-day sleep REQUEST instead of a hung test.
+        assert fake_clock.sleeps == [], (
+            f"wait_turn asked to sleep {fake_clock.sleeps} against a stale "
+            "future-looking timestamp instead of treating it as 'no prior request known'"
         )
 
     def test_future_timestamp_does_not_deadlock_a_second_waiting_process(self, tmp_path):
@@ -180,32 +283,30 @@ class TestUnwritableStateDirDegradesGracefully:
 
 
 class TestThreadSerializationWithinOneProcess:
-    def test_n_threads_against_same_path_are_spaced(self, tmp_path):
+    def test_n_threads_against_same_path_are_spaced(self, tmp_path, issuance):
         """Sanity check that wait_turn is itself thread-safe (flock's exclusion
         also applies within one process, on top of the pre-existing
         threading.Lock the callers already have) -- not the load-bearing
-        cross-process claim, see TestRealMultiProcessSerialization below."""
+        cross-process claim, see TestRealMultiProcessSerialization below.
+
+        Asserts on the stamps recorded at each grant, in grant order. A stamp
+        taken by the worker after ``wait_turn`` returned would also absorb the
+        GIL hand-off and scheduling delay of that thread, which is not part of
+        the spacing guarantee."""
         state_path = tmp_path / "x.state"
         interval = 0.03
-        issued: list[float] = []
-        lock = threading.Lock()
-
-        def worker():
-            wait_turn(state_path, interval)
-            with lock:
-                issued.append(time.monotonic())
-
         n = 8
-        threads = [threading.Thread(target=worker) for _ in range(n)]
+        threads = [
+            threading.Thread(target=wait_turn, args=(state_path, interval))
+            for _ in range(n)
+        ]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
 
-        assert len(issued) == n
-        issued.sort()
-        gaps = [b - a for a, b in pairwise(issued)]
-        assert all(g >= interval * 0.7 for g in gaps), gaps
+        assert len(issuance.stamps) == n
+        _assert_spaced(issuance.stamps, interval)
 
 
 class TestRealMultiProcessSerialization:
@@ -219,16 +320,21 @@ class TestRealMultiProcessSerialization:
     @staticmethod
     def _child_script(state_path: str, out_path: str, interval: float, n_calls: int) -> str:
         repo_root = repr(str(Path(__file__).resolve().parent.parent))
+        # The child records each issuance stamp at the grant point (inside the
+        # throttle, under the lock), not after wait_turn returns: a child that is
+        # descheduled between the grant and its next line would otherwise report
+        # a late stamp and fake a spacing violation.
         return (
-            "import json, time, sys\n"
+            "import json, os, sys\n"
             f"sys.path.insert(0, {repo_root})\n"
-            "from data.cross_process_throttle import wait_turn\n"
+            "import data.cross_process_throttle as throttle\n"
             "from pathlib import Path\n"
-            "stamps = []\n"
+            + inspect.getsource(_IssuanceRecorder)
+            + "recorder = _IssuanceRecorder(os)\n"
+            "throttle.os = recorder\n"
             f"for _ in range({n_calls!r}):\n"
-            f"    wait_turn(Path({state_path!r}), {interval!r})\n"
-            "    stamps.append(time.monotonic())\n"
-            f"Path({out_path!r}).write_text(json.dumps(stamps))\n"
+            f"    throttle.wait_turn(Path({state_path!r}), {interval!r})\n"
+            f"Path({out_path!r}).write_text(json.dumps(recorder.stamps))\n"
         )
 
     def test_two_processes_jointly_respect_the_interval(self, tmp_path):
@@ -252,20 +358,19 @@ class TestRealMultiProcessSerialization:
         assert len(stamps_a) == n_calls
         assert len(stamps_b) == n_calls
 
+        # CLOCK_MONOTONIC is kernel-wide, so the two processes' stamps are on
+        # one timeline; sorting them yields the grant order.
         combined = sorted(stamps_a + stamps_b)
-        gaps = [b - a for a, b in pairwise(combined)]
         # The COMBINED issuance rate across both processes must respect the
         # interval -- this is the actual claim: two processes do NOT each get
         # their own independent `interval`-spaced budget (which would let
         # `combined` contain near-simultaneous pairs), they share ONE.
-        assert all(g >= interval * 0.7 for g in gaps), (
-            f"combined cross-process issuance was not correctly spaced: {gaps}"
-        )
-        # And the total wall-clock for 2*n_calls combined requests at one
-        # shared `interval`-spaced budget must be at least (2*n_calls-1)*interval
-        # -- i.e. genuinely NOT 2x the throughput either process would reach alone.
+        _assert_spaced(combined, interval)
+        # And the span of 2*n_calls issuances at one shared `interval`-spaced
+        # budget must be at least (2*n_calls-1)*interval -- i.e. genuinely NOT
+        # 2x the throughput either process would reach alone.
         total_span = combined[-1] - combined[0]
-        assert total_span >= (2 * n_calls - 1) * interval * 0.7, total_span
+        assert total_span >= (2 * n_calls - 1) * (interval - _STAMP_QUANTUM_SECONDS), total_span
 
 
 @pytest.fixture(autouse=True)

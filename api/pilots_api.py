@@ -127,7 +127,7 @@ from settings import validate_interval_seconds as _validate_interval_seconds
 # (e.g. data.robinhood_portfolio, data.brokerage_credentials). Standalone
 # `uvicorn api.pilots_api:app` (this module's normal launch — see module
 # docstring) has no main()-style entry point to hook this into the way
-# main.py/main_orchestrator.py/app_shell.py do, so it runs here, at true
+# main_orchestrator.py does, so it runs here, at true
 # module top, anchored to ENV_PATH (settings.py) rather than a bare
 # load_dotenv() — bare load_dotenv() uses find_dotenv(), which walks UP from
 # this file's directory and, in a git worktree with no .env of its own,
@@ -1657,7 +1657,7 @@ def get_trade_history(
     is cache-only and capped at 100 trades for the Portfolio summary panel.
 
     Reads the DURABLE store (``data.broker_fills_store``, fed by the
-    Robinhood login worker's orders ingest during a ``--refresh-account``
+    Robinhood login worker's orders ingest during a ``refresh``
     login) rather than the JSON cache, so it survives cache eviction and
     covers the operator's full ingested history. ``summary`` is computed
     over the full filtered set, not just the returned page, so paging never
@@ -3182,9 +3182,9 @@ def disconnect_brokerage() -> Dict[str, Any]:
 )
 def refresh_brokerage() -> Dict[str, Any]:
     """Start an asynchronous on-demand Robinhood re-login + account-snapshot
-    refresh job, bypassing the daily cache — the webapp/API equivalent of
-    ``python3 main.py --refresh-account`` and the Streamlit GUI's "Force fresh
-    login (bypass cache)" checkbox on the Live Inventory / Paper Monitor tabs.
+    refresh job, bypassing the daily cache — the API behind Settings -> Brokers'
+    Refresh button, which replaced the retired ``main.py --refresh-account`` and
+    the deleted Streamlit GUI's "Force fresh login (bypass cache)" checkbox.
 
     Gated by three independent controls (see the dependencies above): a
     DEDICATED ``BROKERAGE_REFRESH_ENABLED`` flag (not

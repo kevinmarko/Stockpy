@@ -28,7 +28,9 @@ export function PilotsTableWidget() {
   }
 
   return (
-    <div data-testid="pilotsTable-widget">
+    // A 4-column table is wider than a phone-width preview box; scroll inside it
+    // rather than poking past the box edge into the card padding.
+    <div data-testid="pilotsTable-widget" style={{ overflowX: "auto" }}>
       <Table>
         <thead>
           <tr>

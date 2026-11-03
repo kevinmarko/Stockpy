@@ -172,51 +172,51 @@ function ForecastView({
               
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-3)" }}>
-          {HORIZONS.map((h) => {
-            const isSelected = selectedHorizon === h.days;
-            return (
-              <div
-                key={h.days}
-                onClick={() => setSelectedHorizon(h.days)}
-                style={{
-                  padding: "var(--s-2-5) var(--s-3)",
-                  borderRadius: "var(--r-sm)",
-                  background: isSelected ? "var(--surface-3)" : "var(--surface)",
-                  border: `1px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
-                  cursor: "pointer",
-                  transition: "all 0.15s ease",
-                }}
-              >
-                <div style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>{h.days}d Horizon</div>
-                <div style={{ fontSize: "var(--t-title)", fontWeight: 700, color: "var(--text-primary)", marginTop: "2px" }}>
-                  {d[h.key] == null ? DASH : fmtNum(d[h.key] as number, 2)}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-3)" }}>
+                  {HORIZONS.map((h) => {
+                    const isSelected = selectedHorizon === h.days;
+                    return (
+                      <div
+                        key={h.days}
+                        onClick={() => setSelectedHorizon(h.days)}
+                        style={{
+                          padding: "var(--s-2-5) var(--s-3)",
+                          borderRadius: "var(--r-sm)",
+                          background: isSelected ? "var(--surface-3)" : "var(--surface)",
+                          border: `1px solid ${isSelected ? "var(--accent)" : "var(--border)"}`,
+                          cursor: "pointer",
+                          transition: "all 0.15s ease",
+                        }}
+                      >
+                        <div style={{ fontSize: "var(--t-caption)", color: "var(--text-muted)" }}>{h.days}d Horizon</div>
+                        <div style={{ fontSize: "var(--t-title)", fontWeight: 700, color: "var(--text-primary)", marginTop: "2px" }}>
+                          {d[h.key] == null ? DASH : fmtNum(d[h.key] as number, 2)}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              </div>
-            );
-          })}
-        </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "var(--s-2-5)" }}>
-          <Tile
-            label="Expected Return (30d)"
-            value={expectedReturnPct == null ? DASH : `${expectedReturnPct >= 0 ? "+" : ""}${fmtNum(expectedReturnPct, 2)}%`}
-            tone={expectedReturnPct == null ? undefined : expectedReturnPct >= 0 ? "pos" : "neg"}
-          />
-          <Tile label="Monte Carlo Range Band" value={volatileRangePct == null ? DASH : `±${fmtNum(volatileRangePct / 2, 1)}%`} />
-          <Tile
-            label="Forecast Trend Direction"
-            value={
-              expectedReturnPct == null
-                ? DASH
-                : expectedReturnPct > 1.5
-                ? "BULLISH ↗"
-                : expectedReturnPct < -1.5
-                ? "BEARISH ↘"
-                : "NEUTRAL ➔"
-            }
-          />
-        </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "var(--s-2-5)" }}>
+                  <Tile
+                    label="Expected Return (30d)"
+                    value={expectedReturnPct == null ? DASH : `${expectedReturnPct >= 0 ? "+" : ""}${fmtNum(expectedReturnPct, 2)}%`}
+                    tone={expectedReturnPct == null ? undefined : expectedReturnPct >= 0 ? "pos" : "neg"}
+                  />
+                  <Tile label="Monte Carlo Range Band" value={volatileRangePct == null ? DASH : `±${fmtNum(volatileRangePct / 2, 1)}%`} />
+                  <Tile
+                    label="Forecast Trend Direction"
+                    value={
+                      expectedReturnPct == null
+                        ? DASH
+                        : expectedReturnPct > 1.5
+                        ? "BULLISH ↗"
+                        : expectedReturnPct < -1.5
+                        ? "BEARISH ↘"
+                        : "NEUTRAL ➔"
+                    }
+                  />
+                </div>
               </div>
             </section>
           </div>
@@ -235,20 +235,20 @@ function ForecastView({
 
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
 
-        {chartEmpty ? (
-          <div className="empty" style={{ padding: "var(--s-5)" }}>
-            Not enough forecast or price data to draw a chart.
-          </div>
-        ) : (
-          <>
-            {noHistory && (
-              <div className="empty" style={{ padding: "var(--s-3)", marginBottom: "var(--s-2-5)", fontSize: "var(--t-label)" }}>
-                No price history in the store for this symbol — showing the forecast projection only.
-              </div>
-            )}
-            <ForecastCandleChart bars={bars} forecast={forecast} />
-          </>
-        )}
+                {chartEmpty ? (
+                  <div className="empty" style={{ padding: "var(--s-5)" }}>
+                    Not enough forecast or price data to draw a chart.
+                  </div>
+                ) : (
+                  <>
+                    {noHistory && (
+                      <div className="empty" style={{ padding: "var(--s-3)", marginBottom: "var(--s-2-5)", fontSize: "var(--t-label)" }}>
+                        No price history in the store for this symbol — showing the forecast projection only.
+                      </div>
+                    )}
+                    <ForecastCandleChart bars={bars} forecast={forecast} />
+                  </>
+                )}
               </div>
             </section>
           </div>
@@ -261,43 +261,43 @@ function ForecastView({
               </div>
               <div style={{ padding: "var(--s-3)", flex: 1, overflow: "auto" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: "var(--s-2-5)", marginBottom: "var(--s-3)" }}>
-          <Tile label="ARIMA" value={d.ARIMA == null ? DASH : fmtNum(d.ARIMA, 2)} />
-          <Tile
-            label="MC band"
-            value={
-              hasBand
-                ? `${fmtNum(d.MC_Lower as number, 0)} – ${fmtNum(d.MC_Upper as number, 0)}`
-                : DASH
-            }
-          />
-        </div>
+                  <Tile label="ARIMA" value={d.ARIMA == null ? DASH : fmtNum(d.ARIMA, 2)} />
+                  <Tile
+                    label="MC band"
+                    value={
+                      hasBand
+                        ? `${fmtNum(d.MC_Lower as number, 0)} – ${fmtNum(d.MC_Upper as number, 0)}`
+                        : DASH
+                    }
+                  />
+                </div>
 
-        {/* Drivers summary */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--s-3)" }}>
-          <div style={{ background: "var(--surface-2)", padding: "var(--s-3)", borderRadius: "var(--r-xs)" }}>
-            <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "var(--t-callout)" }}>Volatility Drivers</div>
-            <div style={{ fontSize: "var(--t-caption)", color: "var(--text-secondary)", marginTop: "4px" }}>
-              Monte Carlo daily sigma is GARCH annualized volatility scaled by
-              /sqrt(252). {hasBand ? "" : "No Monte Carlo band converged this run."}
-            </div>
-          </div>
+                {/* Drivers summary */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--s-3)" }}>
+                  <div style={{ background: "var(--surface-2)", padding: "var(--s-3)", borderRadius: "var(--r-xs)" }}>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "var(--t-callout)" }}>Volatility Drivers</div>
+                    <div style={{ fontSize: "var(--t-caption)", color: "var(--text-secondary)", marginTop: "4px" }}>
+                      Monte Carlo daily sigma is GARCH annualized volatility scaled by
+                      /sqrt(252). {hasBand ? "" : "No Monte Carlo band converged this run."}
+                    </div>
+                  </div>
 
-          <div style={{ background: "var(--surface-2)", padding: "var(--s-3)", borderRadius: "var(--r-xs)" }}>
-            <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "var(--t-callout)" }}>Convergence Status</div>
-            <div
-              style={{
-                fontSize: "var(--t-caption)",
-                color: convergedCount === HORIZONS.length ? "var(--growth)" : "var(--caution)",
-                marginTop: "4px",
-                fontWeight: 600,
-              }}
-            >
-              {convergedCount === HORIZONS.length
-                ? `✓ All ${HORIZONS.length} horizons converged this run.`
-                : `⚠ ${convergedCount} of ${HORIZONS.length} horizons converged this run.`}
-            </div>
-          </div>
-        </div>
+                  <div style={{ background: "var(--surface-2)", padding: "var(--s-3)", borderRadius: "var(--r-xs)" }}>
+                    <div style={{ fontWeight: 600, color: "var(--text-primary)", fontSize: "var(--t-callout)" }}>Convergence Status</div>
+                    <div
+                      style={{
+                        fontSize: "var(--t-caption)",
+                        color: convergedCount === HORIZONS.length ? "var(--growth)" : "var(--caution)",
+                        marginTop: "4px",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {convergedCount === HORIZONS.length
+                        ? `✓ All ${HORIZONS.length} horizons converged this run.`
+                        : `⚠ ${convergedCount} of ${HORIZONS.length} horizons converged this run.`}
+                    </div>
+                  </div>
+                </div>
               </div>
             </section>
           </div>

@@ -4,7 +4,7 @@ scripts/step5_4_verify_cycle.py
 The "one dry-run cycle" step of ``make verify`` and ``verify.command`` (step 3 of 3).
 
 Before step 5.4 that step ran ``import main; main.run_once()``. ``main.py`` is
-being retired, so it now runs ONE pipeline cycle the way
+archived (step 5.5), so it now runs ONE pipeline cycle the way
 ``python3 main_orchestrator.py --dry-run`` does::
 
     asyncio.run(main_orchestrator.main(dry_run=True, strict=False))

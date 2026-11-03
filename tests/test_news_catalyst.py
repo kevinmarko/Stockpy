@@ -1979,50 +1979,89 @@ class TestGetSymbolNewsCatalystDetails:
 
 
 class TestFinbertOpenMPCoexistence:
-    """Regression coverage for docs/known_issues/pytorch_lightgbm_libomp_collision.md."""
+    """Regression coverage for docs/known_issues/pytorch_lightgbm_libomp_collision.md.
 
-    def test_get_finbert_pipeline_caps_torch_threads_and_coexists_with_lightgbm(
-        self, monkeypatch
-    ):
-        import numpy as np
-        import signals.news_catalyst as nc
+    Runs in a FRESH interpreter under a hard timeout, not in the pytest worker.
 
-        pytest.importorskip("torch")
-        import lightgbm as lgb
-        import torch
-        import torch.nn as nn
+    The bug is about process-level OpenMP state (load FinBERT, then train LightGBM, then run a
+    multi-threaded torch op), so an in-process version depends on whatever earlier tests left in
+    its xdist worker: spec-less ``tensorflow`` stubs from other test modules made transformers'
+    ``find_spec`` probe raise, and torch/LightGBM may or may not already be initialised. It can also
+    deadlock for real. On the 2-vCPU GitHub runner it hung one worker until
+    ``--timeout-method=thread`` killed the whole process, and that shard then never finished
+    (run 40970530096, 2026-10-29). In a child process a hang or a SIGSEGV fails this one test, in at
+    most ``_TIMEOUT_S`` seconds, with the child's output attached.
 
-        # Other test modules (test_cnn_lstm_worker.py, test_forecasting_lookahead.py,
-        # test_lstm_attention_worker.py) install spec-less ``types.ModuleType``
-        # tensorflow stubs in sys.modules at import time. transformers probes
-        # tensorflow with importlib.util.find_spec, which raises
-        # "ValueError: tensorflow.__spec__ is None" on such a stub, so this test
-        # failed whenever one of those modules shared its xdist worker. Hide the
-        # stubs for this test only (monkeypatch restores them afterwards).
-        for _mod_name, _mod in list(sys.modules.items()):
-            if (_mod_name == "tensorflow" or _mod_name.startswith("tensorflow.")) and getattr(
-                _mod, "__spec__", None
-            ) is None:
-                monkeypatch.delitem(sys.modules, _mod_name)
+    Limit: the child inherits the environment. With ``OMP_THREAD_LIMIT=1`` (what ``make local-ci``
+    sets for its xdist steps) torch's default thread count is already 1, so the ``== 1`` check
+    cannot catch a removed ``torch.set_num_threads(1)`` there; it does when the variable is unset
+    (verified by deleting that call). The hang and SIGSEGV checks do not depend on it.
+    """
 
-        monkeypatch.setattr(nc, "_FINBERT_LOAD_ATTEMPTED", False)
-        monkeypatch.setattr(nc, "_FINBERT_PIPELINE", None)
-        with patch("transformers.pipeline", return_value=MagicMock()):
-            pipe = nc._get_finbert_pipeline()
-            assert pipe is not None
+    _TIMEOUT_S = 120
 
-        assert torch.get_num_threads() == 1
+    _CHILD = """
+from unittest.mock import MagicMock, patch
+import numpy as np
+import signals.news_catalyst as nc
+import lightgbm as lgb
+import torch
+import torch.nn as nn
 
-        # LightGBM train + predict after FinBERT loader must not SIGSEGV
-        X = np.random.randn(40, 5).astype(np.float32)
-        y = np.random.randn(40).astype(np.float32)
-        ds = lgb.Dataset(X, label=y)
-        booster = lgb.train({"verbosity": -1, "num_threads": 2}, ds, num_boost_round=3)
-        preds = booster.predict(X)
-        assert preds.shape == (40,)
+with patch("transformers.pipeline", return_value=MagicMock()):
+    pipe = nc._get_finbert_pipeline()
+    assert pipe is not None, "FinBERT loader returned None"
 
-        # PyTorch multi-op forward pass after LightGBM must not deadlock
-        layer = nn.Linear(5, 3)
-        out = torch.softmax(layer(torch.randn(4, 5)), dim=-1)
-        assert out.shape == (4, 3)
+assert torch.get_num_threads() == 1, f"torch intra-op threads = {torch.get_num_threads()}, expected 1"
+
+# LightGBM train + predict after the FinBERT loader must not SIGSEGV
+X = np.random.randn(40, 5).astype(np.float32)
+y = np.random.randn(40).astype(np.float32)
+booster = lgb.train({"verbosity": -1, "num_threads": 2}, lgb.Dataset(X, label=y), num_boost_round=3)
+assert booster.predict(X).shape == (40,)
+
+# A PyTorch multi-op forward pass after LightGBM must not deadlock
+out = torch.softmax(nn.Linear(5, 3)(torch.randn(4, 5)), dim=-1)
+assert out.shape == (4, 3)
+print("COEXIST_OK")
+"""
+
+    def test_get_finbert_pipeline_caps_torch_threads_and_coexists_with_lightgbm(self):
+        import importlib.util
+        import subprocess
+        from pathlib import Path
+
+        # find_spec, not importorskip: importing torch here would put it in the pytest worker,
+        # which is exactly the shared state this test avoids.
+        for dep in ("torch", "transformers", "lightgbm"):
+            if importlib.util.find_spec(dep) is None:
+                pytest.skip(f"{dep} is not installed")
+
+        def _text(blob) -> str:
+            if blob is None:
+                return ""
+            return blob.decode("utf-8", "replace") if isinstance(blob, bytes) else blob
+
+        repo_root = Path(__file__).resolve().parents[1]
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", self._CHILD],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=self._TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as exc:
+            pytest.fail(
+                f"torch + LightGBM coexistence check hung for {self._TIMEOUT_S}s (OpenMP deadlock; see "
+                "docs/known_issues/pytorch_lightgbm_libomp_collision.md).\n"
+                f"stdout:\n{_text(exc.stdout)[-1500:]}\nstderr:\n{_text(exc.stderr)[-1500:]}"
+            )
+
+        assert proc.returncode == 0, (
+            f"child exited with status {proc.returncode} "
+            "(a negative number is a fatal signal, e.g. -11 = SIGSEGV).\n"
+            f"stdout:\n{proc.stdout[-1500:]}\nstderr:\n{proc.stderr[-1500:]}"
+        )
+        assert "COEXIST_OK" in proc.stdout
 

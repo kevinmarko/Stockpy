@@ -2,8 +2,8 @@
 ==========================================================================
 
 Small, dependency-light readers for the two liveness files the pipeline entry
-points write: ``output/state_snapshot.json`` (the orchestrator daemon,
-``main_orchestrator.py`` and, until it is archived, ``main.py``) and
+points write: ``output/state_snapshot.json`` (the orchestrator daemon and
+``main_orchestrator.py``) and
 ``output/heartbeat.txt`` (``main_orchestrator.main()`` ONLY — the persistent orchestrator daemon runs the pipeline via
 ``main_orchestrator._main_body()`` directly, deliberately bypassing ``main()``'s
 own per-call heartbeat lifecycle, so heartbeat.txt is permanently absent under
@@ -55,8 +55,8 @@ def snapshot_age_seconds() -> Tuple[Optional[float], str]:
 
     * ``"timestamp"`` — the snapshot's own ``"timestamp"`` JSON field was read
       (the normal, precise path — the daemon and ``main_orchestrator.py``
-      write this field at the end of every run, as does ``main.py`` until it
-      is archived).
+      write this field at the end of every run; ``main.py``, which also
+      wrote it, was archived in step 5.5).
     * ``"mtime"`` — the JSON field was absent (an older snapshot format) and
       the file's mtime was used as a fallback instead.
     * ``"missing"`` — the file does not exist, or could not be parsed at all.
@@ -106,7 +106,7 @@ def heartbeat_age_seconds() -> Optional[float]:
     string every 60s, scheduled ONLY from inside ``main_orchestrator.main()``.
     Neither the persistent orchestrator daemon (``desktop/daemon_runtime.py``
     calls ``main_orchestrator._main_body()`` directly, not ``main()``) NOR
-    ``main.py``'s advisory orchestrator (being retired) ever writes it, so
+    the archived ``main.py`` advisory orchestrator ever wrote it, so
     ``None`` is the ROUTINE, EXPECTED value under the daemon and in advisory
     mode (the platform's default posture — see AGENTS.md), not a failure
     signal. Never render this as "engine down" on its own; pair it

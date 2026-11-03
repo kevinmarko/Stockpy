@@ -134,11 +134,12 @@ function HeadlineFeed({
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          flexWrap: "wrap",
           gap: "var(--s-2)",
         }}
       >
         <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Headlines</h2>
-        <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center", flexWrap: "wrap" }}>
           {Object.entries(sourceBreakdown || {}).map(([source, count]) => (
             <span key={source} className="chip" style={{ fontSize: "var(--t-micro)", background: "transparent", border: `1px solid ${theme.border}` }}>
               {source}: {count}

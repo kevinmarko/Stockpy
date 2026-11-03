@@ -12,7 +12,7 @@ The daily HTML report was rebuilt to lead with **Holdings & P&L** and
 **Action & Rationale** — the two information classes the operator most wants
 to see at a glance.  Previously the embedded template was hard-wired to the
 *orchestrator's* wide dashboard schema (CoVaR / IV Rank / Monte-Carlo bands)
-and silently discarded the advisory fields that ``main.py`` actually computes
+and silently discarded the advisory fields the since-archived ``main.py`` computed
 (holdings, cost basis, unrealized P&L, conviction, plain-English rationale,
 suggested position size).  The new template:
 
@@ -88,7 +88,7 @@ def generate_plotly_volatility_bands(df: pd.DataFrame, ticker: str, output_path:
     and 2 Standard Deviation Bollinger Bands.
 
     Accepts DataFrames with either 'Close' or 'close' column names
-    for backward compatibility with both main.py (uppercase) and
+    for backward compatibility with both the archived main.py (uppercase) and
     main_orchestrator.py (lowercase after .columns.lower() transform).
     """
     telemetry.info(f"Generating interactive Plotly chart for {ticker}")
@@ -914,7 +914,7 @@ def generate_html_report(
     ----------
     portfolio_data:
         One dict per analysed symbol.  Accepts both the advisory schema
-        (``main.py``) and the wide pipeline schema (``main_orchestrator.py``).
+        (formerly ``main.py``'s) and the wide pipeline schema (``main_orchestrator.py``).
         All field access is defensive — missing keys degrade to "—".
     regime:
         Macro regime string (e.g. ``"RISK ON"``, ``"RECESSION"``).
@@ -927,9 +927,9 @@ def generate_html_report(
         Gravity AI verification JSON.  Falls back to the on-disk
         ``Gravity_Verification_Report.json`` then to a warning stub.
     account_summary:
-        Optional portfolio-level totals dict.  When provided (``main.py``
-        advisory path) the report renders a summary band; when ``None``
-        (``main_orchestrator.py``) the band is hidden.  Expected keys:
+        Optional portfolio-level totals dict.  When provided (only the archived
+        ``main.py`` advisory path ever passed it) the report renders a summary band; when ``None``
+        (the daemon / ``main_orchestrator.py``) the band is hidden.  Expected keys:
         ``total_equity``, ``buying_power``, ``total_unrealized_pl``,
         ``total_dividends``, ``num_positions``, ``n_buy``, ``n_hold``,
         ``n_sell``, ``n_total``, ``fetched_at`` (str), ``age_hours`` (float),
@@ -1006,7 +1006,7 @@ def generate_html_report(
         else:
             n_hold += 1
 
-        # Holdings (source of truth: Robinhood snapshot fields injected by main.py)
+        # Holdings (source of truth: Robinhood snapshot fields injected by the advisory path, formerly main.py)
         row["Shares"]   = _num(row, "Shares", "Robinhood Shares")
         row["AvgCost"]  = _num(row, "AvgCost", "Robinhood Avg Cost")
         row["Price"]    = _num(row, "Price", "Robinhood Current Price")
@@ -1110,7 +1110,7 @@ if __name__ == '__main__':
     df_dummy = pd.DataFrame({'Close': price}, index=dates)
     generate_plotly_volatility_bands(df_dummy, "MOCK")
 
-    # Mock advisory-schema portfolio (mirrors main.py's _write_html_report output)
+    # Mock advisory-schema portfolio (mirrors the archived main.py's _write_html_report output)
     test_portfolio = [
         {
             "Symbol": "AAPL", "Action Signal": "BUY", "Advisory_Conviction": 0.72,

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Outlet, NavLink } from "react-router";
 import { theme } from "../theme";
 import { GlobalStatusBanner } from "../components/GlobalStatusBanner";
@@ -12,46 +13,49 @@ export function SettingsLayout() {
     { path: "/settings/feature-flags", label: "🚩 Feature Flags" },
   ];
 
+  // On a phone the links are a scrollable strip: centre the active one on mount. Set scrollLeft
+  // directly (scrollIntoView could also scroll the page, and jsdom lacks it).
+  const linksRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const strip = linksRef.current;
+    const active = strip?.querySelector<HTMLElement>("a.active");
+    if (strip && active) strip.scrollLeft = active.offsetLeft - (strip.clientWidth - active.offsetWidth) / 2;
+  }, []);
+
   return (
     <div className="screen" style={{ display: "flex", flexDirection: "column", gap: "var(--s-4)", height: "100%" }}>
       <GlobalStatusBanner />
       
-      <div style={{ display: "flex", gap: "var(--s-6)", flex: 1, alignItems: "flex-start" }}>
+      {/* Layout lives in index.css (.split-*): stacked on phones, rail + content from 768px.
+          It was an inline fixed 250px sidebar, which left the content ~60px wide on a phone. */}
+      <div className="split-pane" style={{ flex: 1 }}>
         {/* Sidebar */}
-        <nav
-          style={{
-            width: "250px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "var(--s-2)",
-            flexShrink: 0,
-            position: "sticky",
-            top: "var(--s-4)"
-          }}
-        >
+        <nav className="split-rail">
           <h1 style={{ fontSize: "var(--t-title)", marginBottom: "var(--s-2)" }}>Settings</h1>
-          {navItems.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              end={item.end}
-              style={({ isActive }) => ({
-                padding: "var(--s-2) var(--s-3)",
-                borderRadius: "var(--r-md)",
-                textDecoration: "none",
-                color: isActive ? theme.textPrimary : theme.textSecondary,
-                background: isActive ? theme.surface3 : "transparent",
-                fontWeight: isActive ? 600 : 400,
-                transition: "background 0.2s, color 0.2s",
-              })}
-            >
-              {item.label}
-            </NavLink>
-          ))}
+          <div className="split-rail-links" ref={linksRef}>
+            {navItems.map((item) => (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                end={item.end}
+                style={({ isActive }) => ({
+                  padding: "var(--s-2) var(--s-3)",
+                  borderRadius: "var(--r-md)",
+                  textDecoration: "none",
+                  color: isActive ? theme.textPrimary : theme.textSecondary,
+                  background: isActive ? theme.surface3 : "transparent",
+                  fontWeight: isActive ? 600 : 400,
+                  transition: "background 0.2s, color 0.2s",
+                })}
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
         </nav>
 
         {/* Content Area */}
-        <div style={{ flex: 1, minWidth: 0, paddingBottom: "var(--s-8)" }}>
+        <div className="split-content">
           <Outlet />
         </div>
       </div>

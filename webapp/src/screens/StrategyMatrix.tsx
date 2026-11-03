@@ -461,8 +461,8 @@ function ModuleCard({
       className="card card-pad"
       style={{ display: "flex", flexDirection: "column", height: "100%", opacity: enabled ? 1 : 0.6 }}
     >
-      <div className="drag-handle" style={{ borderBottom: `1px solid ${theme.border}`, paddingBottom: "var(--s-2)", marginBottom: "var(--s-2)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontWeight: 700 }}>{m.name}</div>
+      <div className="drag-handle" style={{ borderBottom: `1px solid ${theme.border}`, paddingBottom: "var(--s-2)", marginBottom: "var(--s-2)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "var(--s-2)" }}>
+        <div style={{ fontWeight: 700, minWidth: 0, overflowWrap: "anywhere" }}>{m.name}</div>
         <Toggle
           checked={enabled}
           onChange={(v) => editor.setEnabled(m.name, v)}
