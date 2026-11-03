@@ -1497,6 +1497,28 @@ To disable the bridge entirely, set `ROBINHOOD_EXECUTION_MODE=off` — the next
 daemon cycle emits no queue. The advisory pause gate (§6) also short-
 circuits the cycle, so a paused cycle produces nothing to place.
 
+### Robinhood trade approvals (phone-tap confirmation)
+
+When **trade approvals** are on for the Agentic account (Robinhood app →
+the Agentic account's settings; verified on 2026-11-02), a live placement
+does not execute anything: it sends the order to your phone, and nothing
+fills until you tap **Approve**. The skill then skips its in-chat
+"place / skip / stop" question for that order — your tap is the
+confirmation. It keeps asking in chat for any order Robinhood does not mark
+`customer_approval_required`, or that comes back with pre-trade alerts.
+
+- **Declining** in the app is final for that symbol and side for the UTC day;
+  the skill never resubmits it.
+- **Pending approvals expire** on their own. The skill records every state it
+  observes in `$OUTPUT_DIR/execution_approvals.jsonl` and re-checks pending
+  ones at the start of the next run.
+- **Use limit orders** (`ROBINHOOD_LIMIT_BUFFER_BPS > 0`): you may tap minutes
+  after the preview, and a limit caps the slippage however late you approve.
+- **Turning approvals off** in the app puts every order back on the in-chat
+  question. Only you can change the setting; no agent tool can.
+- Reconciliation reports declined/expired requests under `not_approved` and
+  pending ones under `awaiting_approval`, not as missing fills.
+
 ### Preflight
 
 `python scripts/preflight_check.py` includes the Robinhood execution checks —

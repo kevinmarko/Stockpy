@@ -31,11 +31,20 @@ review (they may be arriving here because of an ntfy push
 5. If `mode == "live"`, place ONLY `allow_place: true` intents, one at a time,
    each with an explicit per-order human confirmation, re-checking the kill
    switch before each placement, and append outcomes to
-   `$OUTPUT_DIR/execution_receipts.jsonl`.
+   `$OUTPUT_DIR/execution_receipts.jsonl`. When an order's
+   `review_equity_order` response shows `customer_approval_required: true`
+   with empty `order_checks` (Robinhood trade approvals are on), submitting it
+   only sends it to the operator's phone — their tap there is the per-order
+   confirmation, so don't also ask in chat. Every `place_equity_order` carries
+   the deterministic `ref_id` from `execution.receipts_store.make_ref_id`.
+6. Track every approval you submitted with `get_trade_approvals` and record
+   each observed state via `append_approval_event` — per the skill's step 6.
 
 Never place an order in `review` mode, never place an `allow_place: false`
 intent, never batch-confirm (discussion is not consent — the explicit
-per-order confirmation still has to be asked for and given), and never operate
-against the main (non-Agentic) account.
+per-order confirmation still has to be asked for and given, in chat or by the
+operator's tap in the Robinhood app), never approve a trade yourself (decline a
+pending one only with the operator's OK), and never operate against the main
+(non-Agentic) account.
 
 $ARGUMENTS
