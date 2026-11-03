@@ -1107,6 +1107,11 @@ class TestSkillMdInvariantsPinned:
             "No usable preflight",
             "A missing check makes the process stricter, never",
             "Preflight vetoes are final.",
+            # Thesis narration (four-agent plan, Phase 3)
+            "Thesis per order (narration only).",
+            "load_run_artifacts",
+            "thesis unavailable",
+            "This step changes nothing about which orders are placed.",
         ]
 
         for skill_md_path in skill_md_paths:

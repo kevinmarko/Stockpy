@@ -73,6 +73,10 @@ ACCOUNT_VALUES_UNAVAILABLE = "account_values_unavailable"
 OVER_POSITION_WEIGHT = "over_position_weight"
 BUYING_POWER_EXHAUSTED = "buying_power_exhausted"
 OVER_PORTFOLIO_GROSS = "over_portfolio_gross"
+# Plan check 10 (Phase 3) — only when the caller passes critical_gap_fields.
+THESIS_MISSING = "thesis_missing"
+THESIS_INVALID = "thesis_invalid"
+CRITICAL_DATA_GAP = "critical_data_gap"
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +373,9 @@ def preflight(
     stale_after_minutes: float = DEFAULT_STALE_AFTER_MINUTES,
     earnings_dates: Optional[Mapping[str, Optional[date]]] = None,
     earnings_blackout_days: Optional[int] = None,
+    theses: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    invalid_thesis_ids: Iterable[str] = (),
+    critical_gap_fields: Iterable[str] = (),
 ) -> PreflightReport:
     """Veto-only check of every queue intent against the live account.
 
@@ -377,6 +384,12 @@ def preflight(
     a BUY's ``est_notional`` never exceeds its queue ``target_notional``.
     ``passed`` means "survived every check"; ``placeable`` additionally needs
     ``mode == "live"`` (a ``review`` run shows what WOULD pass, nothing more).
+
+    Plan check 10 (opt-in, off by default): with ``critical_gap_fields`` set,
+    an intent is vetoed when its Analyst thesis is missing (``theses`` holds
+    only VALID theses, keyed by client_order_id), was rejected by
+    ``execution.agentic_research.validate_theses`` (``invalid_thesis_ids``),
+    or lists one of those fields in its ``data_gaps``.
     """
     now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
     mode = str(queue.get("mode") or "off")
@@ -399,6 +412,8 @@ def preflight(
         blockers.append(PENDING_APPROVAL_UNIDENTIFIED)
 
     pending = {(s.upper(), d.lower()) for s, d in pending_approvals}
+    critical = {str(f) for f in critical_gap_fields}
+    invalid_theses = {str(c) for c in invalid_thesis_ids}
     placed = set(placed_dedup_keys)
     verdicts: List[IntentVerdict] = []
 
@@ -427,6 +442,15 @@ def preflight(
             v.reasons.append(ALREADY_SUBMITTED_TODAY)
         if (symbol, side) in pending:
             v.reasons.append(APPROVAL_ALREADY_PENDING)
+        # 10. (opt-in) the Analyst's thesis must exist, validate, and not lack critical data
+        if critical:
+            thesis = (theses or {}).get(v.client_order_id)
+            if v.client_order_id in invalid_theses:
+                v.reasons.append(THESIS_INVALID)
+            elif not isinstance(thesis, Mapping):
+                v.reasons.append(THESIS_MISSING)
+            elif critical & {str(g) for g in (thesis.get("data_gaps") or [])}:
+                v.reasons.append(CRITICAL_DATA_GAP)
 
         holding = account.positions.get(symbol) if account.positions is not None else None
         if side == "sell" and account.positions is None:
@@ -506,7 +530,8 @@ def preflight(
         evaluated_at=now.isoformat(),
         run_blockers=blockers,
         verdicts=verdicts,
-        limits={"max_notional_per_order": cap, "max_position_weight": weight_cap,
+        limits={"critical_gap_fields": sorted(critical) or None,
+                "max_notional_per_order": cap, "max_position_weight": weight_cap,
                 "max_portfolio_gross": gross_cap, "buying_power": bp,
                 "total_value": account.total_value, "equity_value": equity},
     )
@@ -583,7 +608,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--quotes", required=True, help="saved get_equity_quotes output (JSON)")
     ap.add_argument("--approvals", required=True, help="saved get_trade_approvals output (JSON; a list of pages is fine)")
     ap.add_argument("--earnings", help='optional {"SYM": "YYYY-MM-DD"} map; needs --blackout-days')
-    ap.add_argument("--blackout-days", type=int, help="veto BUYs within N days of earnings (default: off)")
+    ap.add_argument("--blackout-days", type=int,
+                    help="veto BUYs within N days of earnings (default: off). Without --earnings, "
+                         "dates come from the Research Scout's research.json for this queue")
+    ap.add_argument("--critical-gaps", default="",
+                    help="comma-separated data_gaps fields that veto a BUY/SELL (plan check 10; "
+                         "also vetoes intents with no valid thesis). Default: off")
     ap.add_argument("--queue", help="queue path (default: $OUTPUT_DIR/execution_queue.json)")
     ap.add_argument("--output-dir", help="override $OUTPUT_DIR")
     ap.add_argument("--no-write", action="store_true", help="print only; do not write preflight.json")
@@ -601,6 +631,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
 
     approvals, unidentified = approvals_from_mcp(_load_json(args.approvals))
+    critical = [f.strip() for f in args.critical_gaps.split(",") if f.strip()]
+    earnings = _earnings_from_json(_load_json(args.earnings)) if args.earnings else None
+    theses: Dict[str, Any] = {}
+    invalid: List[str] = []
+    if critical or (args.blackout_days is not None and earnings is None):
+        from execution.agentic_research import earnings_dates_from_research, load_run_artifacts
+        art = load_run_artifacts(queue, out_dir)
+        if earnings is None and art["research"] is not None and not art["research_errors"]:
+            earnings = earnings_dates_from_research(art["research"])
+        doc = (art["theses"] or {}).get("theses") or {}
+        theses = {c: doc[c] for c in art["valid_thesis_ids"]}
+        invalid = [c for c in art["thesis_errors"] if c != "_doc"]
     report = preflight(
         queue,
         AccountState.from_mcp(_load_json(args.portfolio), _load_json(args.positions)),
@@ -610,8 +652,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         unidentified_pending_approvals=unidentified,
         placed_dedup_keys=[r.get("dedup_key") for r in read_placed_ledger(out_dir) if r.get("dedup_key")],
         kill_switch_active=GlobalKillSwitch().is_active(),
-        earnings_dates=_earnings_from_json(_load_json(args.earnings)),
+        earnings_dates=earnings or {},
         earnings_blackout_days=args.blackout_days,
+        theses=theses,
+        invalid_thesis_ids=invalid,
+        critical_gap_fields=critical,
     )
     summary = report.to_dict()
     if not args.no_write:
