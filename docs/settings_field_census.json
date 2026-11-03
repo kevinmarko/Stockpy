@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "cba1ef1013a7ebd065593fa10107c47c5514a2cf",
+    "git_commit": "1079e098d74c324a85fd1e0e9b060d8598be4b54",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2939,7 +2939,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 368,
+    "files_scanned": 369,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3455,7 +3455,7 @@
         },
         {
           "file": "execution/agentic_preflight.py",
-          "line": 304,
+          "line": 308,
           "expr": "getattr(settings, name)"
         },
         {

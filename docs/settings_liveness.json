@@ -91,7 +91,7 @@
     {
       "expr": "getattr(settings, name)",
       "file": "execution/agentic_preflight.py",
-      "line": 304,
+      "line": 308,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -131,7 +131,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 368,
+  "files_scanned": 369,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",

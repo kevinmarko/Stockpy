@@ -4,8 +4,11 @@
 the operator and built 2026-11-02** (walkthrough:
 `.claude/robinhood_four_agent_phase1_walkthrough.md`; merged as #1134). **Phase 2
 approved and built 2026-11-03** (plan `.claude/robinhood_four_agent_phase2_implementation_plan.md`,
-walkthrough `.claude/robinhood_four_agent_phase2_walkthrough.md`). Phases 3–5 still need
-the operator's explicit OK each (CLAUDE.md "Feature freeze").
+walkthrough `.claude/robinhood_four_agent_phase2_walkthrough.md`; merged as #1135).
+**Phase 3 approved and built 2026-11-03** (plan
+`.claude/robinhood_four_agent_phase3_implementation_plan.md`, walkthrough
+`.claude/robinhood_four_agent_phase3_walkthrough.md`). Phases 4–5 still need the
+operator's explicit OK each (CLAUDE.md "Feature freeze").
 
 **Operator decisions (2026-11-02):**
 
@@ -159,8 +162,9 @@ Design principles:
      still-pending approval for the same symbol/side (from `get_trade_approvals`).
   9. SELL quantity is no more than the held quantity (no accidental short).
   10. Analyst `data_gaps` include a field the operator has marked critical → veto.
-     **(Deferred to Phase 3** — the Analyst doesn't exist yet. Check 7 shipped as a
-     caller-supplied window, off by default, with no new setting.)
+     **(Built in Phase 3 as opt-in**, `critical_gap_fields` / `--critical-gaps`, off by
+     default; it also vetoes intents with no valid thesis. Check 7 takes its dates from
+     the Scout's `research.json` when no explicit map is passed.)
 - **Can (as built in Phase 2):** veto only — the operator chose veto-only over shrink-to-fit
   (plan Q5). It does resolve the exact share count (floor of target ÷ price, trims capped at
   sellable shares), which is sizing per the existing rules, not shrinking.
@@ -249,7 +253,7 @@ Design principles:
 | **P0** (now) | This plan. | Operator review. |
 | **P1 — Trader approval-aware** ✅ built 2026-11-02 | Update `robinhood-execution` with the approval-mode gate, deterministic `ref_id`, `approval_id`/`approval_state` receipt fields, approval tracking and stale-approval decline. Extend `execution/receipts_store.py` (new fields optional; old rows still parse). Create `.claude/agents/rh-trader.md`. | `tests/test_receipts_store.py`, `tests/test_robinhood_e2e.py::TestSkillMdInvariantsPinned` updated to pin the new invariants; a `review`-mode dry run against the real Agentic account. |
 | **P2 — Portfolio & Risk preflight** ✅ built 2026-11-03 (`.claude/robinhood_four_agent_phase2_walkthrough.md`) | `execution/agentic_preflight.py` + `.claude/agents/rh-risk-manager.md`. | New `tests/test_agentic_preflight.py`: each check pass/fail, never-upsize property, missing-data → veto. |
-| **P3 — Analyst + Scout** | `.claude/agents/rh-strategy-analyst.md`, `rh-research-scout.md` (wrapping `agentic-discovery`); theses/research JSON schemas. | Schema tests; a `review` cycle producing all four artifacts. |
+| **P3 — Analyst + Scout** ✅ built 2026-11-03 | `.claude/agents/rh-strategy-analyst.md`, `rh-research-scout.md` (wrapping `agentic-discovery`); theses/research JSON schemas. | Schema tests; a `review` cycle producing all four artifacts. |
 | **P4 — Orchestration** | `/rh-agentic-cycle` command, scheduled run, ntfy summary. Webapp "Pending approvals" card on `AgenticTrading.tsx` is a webapp screen change and **needs a separate explicit OK**. | `/verify`; for the webapp part, `npm run --prefix webapp typecheck` + `/verify-webapp`. |
 | **P5 — Burn-in** | 10 trading days in `review`, then `live` with a small `ROBINHOOD_MAX_NOTIONAL_PER_ORDER`; review every approve/decline/expire against the theses. | Receipts reconcile 1:1 with Robinhood fills; zero placements while approvals were off. |
 

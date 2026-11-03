@@ -107,3 +107,32 @@ def test_rh_risk_manager_defers_to_the_preflight_code():
     body = RISK_MANAGER.read_text(encoding="utf-8")
     assert "python3 -m execution.agentic_preflight" in body
     assert "never override it" in body
+
+
+def _mcp_tools(path: Path) -> set:
+    tools = _frontmatter_tools(path)
+    return {t.strip() for t in tools.split(":", 1)[1].split(",") if t.strip().startswith("mcp__")}
+
+
+@pytest.mark.parametrize("agent,servers,allowed", [
+    ("rh-research-scout.md", ("robinhood-trading", "Robinhood"),
+     ("get_accounts", "get_scans", "run_scan", "get_scanner_filter_specs", "get_equity_quotes",
+      "get_equity_fundamentals", "get_earnings_calendar", "get_earnings_results",
+      "get_equity_analyst_ratings", "get_sec_filing_index")),
+    ("rh-strategy-analyst.md", ("investyo", "investyo-platform"),
+     ("get_signal_breakdown", "get_regime_status", "get_recommendation")),
+])
+def test_phase3_agents_have_exactly_their_read_tools(agent, servers, allowed):
+    """Scout and Analyst are read-only researchers: their MCP tools are exactly
+    the listed read set (under each server spelling) — no order, scan-edit,
+    watchlist or paper-trade tools."""
+    path = REPO / ".claude" / "agents" / agent
+    assert not ORDER_POWER_TOOL.findall(_frontmatter_tools(path))
+    expected = {f"mcp__{s}__{t}" for s in servers for t in allowed}
+    assert _mcp_tools(path) == expected
+
+
+def test_phase3_agents_defer_to_the_validator():
+    for agent in ("rh-research-scout.md", "rh-strategy-analyst.md"):
+        body = (REPO / ".claude" / "agents" / agent).read_text(encoding="utf-8")
+        assert "python3 -m execution.agentic_research validate" in body
