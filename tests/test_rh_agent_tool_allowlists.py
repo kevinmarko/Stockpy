@@ -81,3 +81,29 @@ def test_rh_trader_defers_to_the_skill_and_states_it_cannot_approve():
     assert ".claude/skills/robinhood-execution/SKILL.md" in body
     assert "You can never approve a trade." in body
     assert "the skill wins" in body
+
+
+RISK_MANAGER = REPO / ".claude" / "agents" / "rh-risk-manager.md"
+_RISK_READ_TOOLS = ("get_accounts", "get_portfolio", "get_equity_positions",
+                    "get_equity_quotes", "get_trade_approvals", "get_earnings_calendar")
+
+
+def test_rh_risk_manager_is_read_only_and_complete():
+    """Agent 3 needs exactly the live-state read tools, under both server
+    spellings, and nothing that can submit, decline, cancel or edit."""
+    tools = _frontmatter_tools(RISK_MANAGER)
+    assert not ORDER_POWER_TOOL.findall(tools)
+    for server in ("robinhood-trading", "Robinhood"):
+        for t in _RISK_READ_TOOLS:
+            assert f"mcp__{server}__{t}" in tools, f"rh-risk-manager missing {server}/{t}"
+    listed = {t.strip() for t in tools.split(":", 1)[1].split(",")}
+    mcp_tools = {t for t in listed if t.startswith("mcp__")}
+    assert all(t.rsplit("__", 1)[1] in _RISK_READ_TOOLS for t in mcp_tools), mcp_tools
+    for forbidden in ("Write", "Edit", "review_equity_order"):
+        assert forbidden not in listed
+
+
+def test_rh_risk_manager_defers_to_the_preflight_code():
+    body = RISK_MANAGER.read_text(encoding="utf-8")
+    assert "python3 -m execution.agentic_preflight" in body
+    assert "never override it" in body
