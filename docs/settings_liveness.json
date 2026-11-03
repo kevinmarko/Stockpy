@@ -89,6 +89,13 @@
       "rules": []
     },
     {
+      "expr": "getattr(settings, name)",
+      "file": "execution/agentic_preflight.py",
+      "line": 304,
+      "resolved_by_factory": null,
+      "rules": []
+    },
+    {
       "expr": "getattr(settings, attr, None)",
       "file": "llm/status_store.py",
       "line": 212,
@@ -124,7 +131,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 367,
+  "files_scanned": 368,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -444,7 +451,7 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 793,
+    "attr": 794,
     "factory_param": 4,
     "getattr_const": 294,
     "os_environ": 2

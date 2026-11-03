@@ -70,6 +70,9 @@ not — read them a checklist only if they ask for one.
      (one line per observed approval state; the last line per `approval_id`
      wins). Written only through `execution/receipts_store.py`'s
      `append_approval_event`.
+   - `$OUTPUT_DIR/agentic/<run_id>/preflight.json` — the Portfolio & Risk
+     preflight for one queue (written by `execution/agentic_preflight.py`, see
+     step 4b).
    - `$OUTPUT_DIR/KILL_SWITCH` — the kill-switch sentinel file.
 2. The `robinhood-trading` MCP server is connected (tools `review_equity_order`,
    `place_equity_order`, `get_accounts`, `get_portfolio`, `get_equity_positions`,
@@ -261,9 +264,32 @@ response is the truth for that order.
    - `mode == "live"` → continue, but only for intents whose `allow_place` is
      `true`. Treat `allow_place: false` as preview-only and say why
      (`gate_reasons`).
+4b. **Portfolio & Risk preflight (live only).** Before placing anything, get
+   the preflight for THIS queue — the code-enforced check of every intent
+   against the live Agentic account (cumulative buying power, concentration,
+   notional cap, sellable shares, pending approvals, staleness, kill switch):
+   - Run the `rh-risk-manager` agent (or follow its procedure yourself), which
+     saves fresh `get_portfolio` / `get_equity_positions` / `get_equity_quotes`
+     / `get_trade_approvals` output and runs `python3 -m execution.agentic_preflight`.
+   - Load it with
+     `python3 -c "import json; from execution.agentic_preflight import read_preflight_for_queue; print(json.dumps(read_preflight_for_queue(json.load(open('$OUTPUT_DIR/execution_queue.json')))))"`.
+     It returns the preflight only if its `queue_generated_at` equals this
+     queue's `generated_at`; anything else prints `null`.
+   - **A preflight veto is final.** Place only intents whose verdict has
+     `passed: true`, using the verdict's `qty` and `limit_price` (it sized them
+     from the live quote and the account's real cash). Never place a vetoed
+     intent, not even through the in-chat question — tell the operator the
+     reason codes in plain words instead. `run_blockers` veto everything.
+   - **No usable preflight** (`null`, unreadable, or it failed to run): say so,
+     and treat every order as the **in-chat path** (step 5c), sizing it
+     yourself as in step 3. A missing check makes the process stricter, never
+     looser.
 5. **Place (live only, one at a time, human-confirmed).** For each
    `allow_place: true` intent:
    a. Re-read `$OUTPUT_DIR/KILL_SWITCH`; if it now exists, abort the whole run.
+      Skip any intent the preflight vetoed (step 4b). For a preflight-passed
+      intent, call `review_equity_order` again with the preflight's `qty` and
+      `limit_price` — that fresh response is the one step 5c reads.
    b. **Idempotency check.** Compute this intent's
       `dedup_key = "YYYY-MM-DD:SYMBOL:SIDE"` using **today's UTC date**, then
       read `$OUTPUT_DIR/execution_placed.jsonl` and check whether that
@@ -369,8 +395,12 @@ response is the truth for that order.
   (`$OUTPUT_DIR/execution_placed.jsonl`) for today's `dedup_key`; if present,
   the intent is already placed — skip it, never double-place. Append a ledger
   line after every successful placement so the next run sees it.
-- **Limit price from the live quote.** For a `limit` intent, always derive the
-  limit price from the review-time MCP quote (BUY ≤ quote·(1+bps/10000), SELL ≥
+- **Preflight vetoes are final.** With a preflight for this queue, place only
+  its `passed: true` intents at its `qty` and `limit_price`; without one, every
+  order takes the in-chat path.
+- **Limit price from the live quote.** For a `limit` intent, use the
+  preflight's `limit_price` (computed from a live quote fetched for this
+  queue); without a preflight, derive the limit price from the review-time MCP quote (BUY ≤ quote·(1+bps/10000), SELL ≥
   quote·(1−bps/10000)) — never from the queue's stale snapshot price — and pass
   the same price to both `review_equity_order` and `place_equity_order`.
 - **Receipts, not intents.** You append outcomes to
