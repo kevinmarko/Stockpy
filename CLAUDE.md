@@ -427,7 +427,10 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   forces the kill switch on.
 - **Robinhood trading** is queue-driven: the pipeline writes `execution_queue.json`; the
   `robinhood-execution` skill / `/rh-execute` previews and, only in `ROBINHOOD_EXECUTION_MODE=live`
-  with per-trade human confirmation, places orders. Paper first.
+  with per-trade human confirmation, places orders. Paper first. With Robinhood trade approvals on
+  for the Agentic account, that confirmation is the operator's tap in the Robinhood app (an agent can
+  decline but never approve); the skill picks the path per order from `review_equity_order`'s
+  `customer_approval_required`. Only `.claude/agents/rh-trader.md` may list order-power tools.
 - **Robinhood login is device-approval only.** `data/robinhood_portfolio.py::_login_with` rejects by
   default (`RobinhoodApprovalRequired`) and logs in only inside the isolated worker
   (`data/robinhood_login_worker.py`, `RH_LOGIN_WORKER=1`), launched per attempt as a killable,

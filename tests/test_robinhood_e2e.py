@@ -54,8 +54,12 @@ from execution.kill_switch import GlobalKillSwitch
 from execution.queue_builder import build_execution_queue, emit_execution_queue
 from execution.receipts_store import (
     already_placed,
+    append_approval_event,
     append_placed,
+    latest_approval_states,
     make_dedup_key,
+    make_ref_id,
+    read_placed_ledger,
 )
 
 
@@ -134,10 +138,18 @@ class _MockRobinhoodMCP:
     AGENTIC_ACCOUNT_ID = "AGENTIC-TEST-0001"
 
     def __init__(self, *, quote_prices: Optional[Dict[str, float]] = None,
-                 buying_power: float = 100_000.0) -> None:
+                 buying_power: float = 100_000.0,
+                 approvals_required: bool = False,
+                 order_checks: Optional[Dict[str, List[str]]] = None) -> None:
         self.calls: List[tuple[str, Dict[str, Any]]] = []
         self.placed_orders: List[Dict[str, Any]] = []
         self.reviewed_orders: List[Dict[str, Any]] = []
+        # Robinhood trade-approval mode: place_equity_order only CREATES an
+        # approval request the customer approves in the app; nothing executes.
+        self.approvals_required = approvals_required
+        self._order_checks = order_checks or {}
+        self.approval_requests: Dict[str, Dict[str, Any]] = {}  # approval_id -> request
+        self._by_ref_id: Dict[str, str] = {}                     # ref_id -> approval_id
         self._quote_prices = quote_prices or {}
         self._buying_power = buying_power
         self._order_seq = 0
@@ -175,13 +187,49 @@ class _MockRobinhoodMCP:
         """Pre-trade preview. NEVER changes state — recorded only."""
         self.calls.append(("review_equity_order", kwargs))
         self.reviewed_orders.append(dict(kwargs))
-        return {"ok": True, "warnings": [], "preview": dict(kwargs)}
+        checks = list(self._order_checks.get(str(kwargs.get("symbol", "")).upper(), []))
+        return {"ok": True, "warnings": [], "preview": dict(kwargs),
+                "customer_approval_required": self.approvals_required,
+                "order_checks": checks}
+
+    def get_trade_approval_setting(self, account_number: str) -> Dict[str, Any]:
+        self.calls.append(("get_trade_approval_setting", {"account_number": account_number}))
+        return {"setting": {"account_number": account_number,
+                            "human_must_approve_trades": self.approvals_required}}
+
+    def get_trade_approvals(self, account_number: str,
+                            approval_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+        self.calls.append(("get_trade_approvals",
+                           {"account_number": account_number, "approval_ids": approval_ids}))
+        ids = approval_ids if approval_ids is not None else [
+            a for a, r in self.approval_requests.items() if r["state"] == "pending"]
+        return {"approvals": [
+            {"approval_id": a, "state": self.approval_requests[a]["state"]}
+            for a in ids if a in self.approval_requests]}
+
+    def customer_acts(self, approval_id: str, state: str) -> None:
+        """Test helper: the operator approves/declines in the app (or it expires)."""
+        req = self.approval_requests[approval_id]
+        req["state"] = state
+        if state == "approved":
+            self.placed_orders.append({"order_id": f"filled-{approval_id}", **req["order"]})
 
     # -- write tool ---------------------------------------------------------
 
     def place_equity_order(self, **kwargs: Any) -> Dict[str, Any]:
         """Place an order. Records it and returns a fake order id."""
         self.calls.append(("place_equity_order", kwargs))
+        if self.approvals_required:
+            ref_id = kwargs.get("ref_id")
+            if ref_id and ref_id in self._by_ref_id:   # Robinhood dedups on ref_id
+                aid = self._by_ref_id[ref_id]
+                return {"approval_id": aid, "state": self.approval_requests[aid]["state"]}
+            self._order_seq += 1
+            aid = f"approval-{self._order_seq:04d}"
+            self.approval_requests[aid] = {"state": "pending", "order": dict(kwargs)}
+            if ref_id:
+                self._by_ref_id[ref_id] = aid
+            return {"approval_id": aid, "state": "pending"}
         self._order_seq += 1
         order_id = f"mcp-order-{self._order_seq:04d}"
         self.placed_orders.append({"order_id": order_id, **kwargs})
@@ -242,7 +290,9 @@ def run_execution_skill(
     queue_path = output_dir / "execution_queue.json"
 
     summary = {"previewed": 0, "placed": 0, "skipped": 0,
-               "aborted": False, "reason": ""}
+               "aborted": False, "reason": "",
+               "submitted_for_approval": 0, "confirm_asked": 0}
+    submitted_approvals: List[Dict[str, Any]] = []
 
     # -- Step 1: load state ------------------------------------------------
     if not queue_path.exists():
@@ -306,8 +356,8 @@ def run_execution_skill(
             else:
                 qty = 0
 
-        mcp.review_equity_order(symbol=symbol, side=side,
-                                order_type=order_type, quantity=qty)
+        review = mcp.review_equity_order(symbol=symbol, side=side,
+                                         order_type=order_type, quantity=qty)
         summary["previewed"] += 1
 
         # -- Step 4: mode gate ---------------------------------------------
@@ -373,8 +423,16 @@ def run_execution_skill(
             summary["skipped"] += 1
             continue
 
-        # c. explicit human confirmation per order.
-        decision = confirm(intent)
+        # c. confirmation path, decided by THIS order's review response:
+        #    approval path → the operator's tap in the app is the confirmation;
+        #    anything else → explicit in-chat "place / skip / stop".
+        approval_path = (review.get("customer_approval_required") is True
+                         and not review.get("order_checks"))
+        if approval_path:
+            decision = "place"
+        else:
+            summary["confirm_asked"] += 1
+            decision = confirm(intent)
         if decision == "stop":
             summary["reason"] = "operator_stop"
             break
@@ -387,23 +445,55 @@ def run_execution_skill(
             summary["skipped"] += 1
             continue
 
-        # d. place.
+        # d. place, with a deterministic ref_id (never random).
+        ref_id = make_ref_id(intent.get("client_order_id"))
+        if ref_id is None:
+            _append_receipt(output_dir, {
+                "ts": now.isoformat(), "symbol": symbol, "side": side,
+                "qty": qty, "action": "skipped", "mcp_order_id": None,
+                "note": "blank client_order_id — no deterministic ref_id",
+            })
+            summary["skipped"] += 1
+            continue
         result = mcp.place_equity_order(symbol=symbol, side=side,
-                                        order_type=order_type, quantity=qty)
+                                        order_type=order_type, quantity=qty,
+                                        ref_id=ref_id)
         order_id = result.get("order_id")
+        approval_id = result.get("approval_id")
         append_placed(
             {"ts": now.isoformat(), "symbol": symbol, "side": side,
              "qty": qty, "target_notional": intent.get("target_notional"),
              "client_order_id": intent.get("client_order_id"),
-             "mcp_order_id": order_id},
+             "mcp_order_id": order_id, "approval_id": approval_id,
+             "ref_id": ref_id},
             output_dir,
         )
+        if approval_id:
+            append_approval_event({"ts": now.isoformat(), "approval_id": approval_id,
+                                   "state": result.get("state", "pending"),
+                                   "symbol": symbol, "side": side, "ref_id": ref_id},
+                                  output_dir)
+            submitted_approvals.append({"approval_id": approval_id,
+                                        "symbol": symbol, "side": side})
+            summary["submitted_for_approval"] += 1
         _append_receipt(output_dir, {
             "ts": now.isoformat(), "symbol": symbol, "side": side,
             "qty": qty, "action": "placed", "mcp_order_id": order_id,
             "note": "placed after human confirmation",
         })
         summary["placed"] += 1
+
+    # -- Step 6: track approvals (fresh call; record every observed state) ---
+    if submitted_approvals:
+        ids = [a["approval_id"] for a in submitted_approvals]
+        meta = {a["approval_id"]: a for a in submitted_approvals}
+        resp = mcp.get_trade_approvals(account_number=_MockRobinhoodMCP.AGENTIC_ACCOUNT_ID,
+                                       approval_ids=ids)
+        for appr in resp.get("approvals", []):
+            m = meta.get(appr["approval_id"], {})
+            append_approval_event({"ts": now.isoformat(), "approval_id": appr["approval_id"],
+                                   "state": appr.get("state"), "symbol": m.get("symbol"),
+                                   "side": m.get("side")}, output_dir)
 
     return summary
 
@@ -732,6 +822,96 @@ class TestStaleQueueHardStop:
         assert mcp.call_count("place_equity_order") == 0
         assert mcp.call_count("review_equity_order") == 0  # aborted before previews
 
+class TestTradeApprovalMode:
+    """Robinhood trade-approval mode (four-agent plan, Phase 1): with approvals
+    on, place_equity_order only creates a request the operator approves on
+    their phone, so the in-chat confirmation is skipped — but only per order,
+    and only when Robinhood's own review response says so."""
+
+    def _two_buys(self, out: Path) -> None:
+        _build_and_emit([_rec("MSFT", "BUY", conviction=0.95),
+                         _rec("NVDA", "BUY", conviction=0.95)], out, mode="live")
+
+    def test_approval_path_submits_without_in_chat_confirm(self, tmp_output: Path):
+        self._two_buys(tmp_output)
+        asked: List[str] = []
+        mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 400.0, "NVDA": 100.0},
+                                approvals_required=True)
+        summary = run_execution_skill(
+            tmp_output, mcp, confirm=lambda i: asked.append(i["symbol"]) or "skip")
+        assert asked == []                                  # phone tap replaces chat
+        assert summary["submitted_for_approval"] == 2
+        assert mcp.placed_orders == []                      # nothing EXECUTED
+        assert len(mcp.approval_requests) == 2
+        ledger = read_placed_ledger(tmp_output)
+        assert {r["approval_id"] for r in ledger} == set(mcp.approval_requests)
+        states = latest_approval_states(tmp_output)
+        assert {r["state"] for r in states.values()} == {"pending"}
+        assert mcp.call_count("get_trade_approvals") == 1   # tracked with a fresh call
+
+    def test_every_submission_carries_deterministic_ref_id(self, tmp_output: Path):
+        payload = _build_and_emit([_rec("MSFT", "BUY", conviction=0.95)], tmp_output, mode="live")
+        mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 400.0}, approvals_required=True)
+        run_execution_skill(tmp_output, mcp)
+        (_, kwargs), = [c for c in mcp.calls if c[0] == "place_equity_order"]
+        expected = make_ref_id(payload["intents"][0]["client_order_id"])
+        assert expected is not None and kwargs["ref_id"] == expected
+
+    def test_order_checks_fall_back_to_in_chat_confirm(self, tmp_output: Path):
+        self._two_buys(tmp_output)
+        asked: List[str] = []
+        mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 400.0, "NVDA": 100.0},
+                                approvals_required=True,
+                                order_checks={"NVDA": ["pattern_day_trader_warning"]})
+        summary = run_execution_skill(
+            tmp_output, mcp, confirm=lambda i: asked.append(i["symbol"]) or "skip")
+        assert asked == ["NVDA"]                 # only the flagged order asks in chat
+        assert summary["submitted_for_approval"] == 1
+        assert summary["skipped"] == 1
+
+    def test_approvals_off_keeps_legacy_in_chat_gate(self, tmp_output: Path):
+        self._two_buys(tmp_output)
+        asked: List[str] = []
+        mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 400.0, "NVDA": 100.0},
+                                approvals_required=False)
+        summary = run_execution_skill(
+            tmp_output, mcp, confirm=lambda i: asked.append(i["symbol"]) or "skip")
+        assert sorted(asked) == ["MSFT", "NVDA"]
+        assert mcp.call_count("place_equity_order") == 0
+        assert summary["skipped"] == 2
+
+    def test_review_mode_never_submits_even_with_approvals_on(self, tmp_output: Path):
+        _build_and_emit([_rec("MSFT", "BUY", conviction=0.95)], tmp_output, mode="review")
+        mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 400.0}, approvals_required=True)
+        run_execution_skill(tmp_output, mcp)
+        assert mcp.call_count("place_equity_order") == 0
+        assert mcp.approval_requests == {}
+
+    def test_declined_order_not_resubmitted_same_day(self, tmp_output: Path):
+        _build_and_emit([_rec("MSFT", "BUY", conviction=0.95)], tmp_output, mode="live")
+        mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 400.0}, approvals_required=True)
+        run_execution_skill(tmp_output, mcp)
+        (aid,) = mcp.approval_requests
+        mcp.customer_acts(aid, "declined")
+
+        summary2 = run_execution_skill(tmp_output, mcp)
+        assert summary2["submitted_for_approval"] == 0
+        assert len(mcp.approval_requests) == 1
+        assert mcp.placed_orders == []
+
+    def test_robinhood_dedups_a_lost_ledger_write_via_ref_id(self, tmp_output: Path):
+        """Belt and braces: even if the local ledger line were lost, the same
+        intent re-sends the same ref_id and Robinhood returns the SAME
+        approval instead of creating a second one."""
+        _build_and_emit([_rec("MSFT", "BUY", conviction=0.95)], tmp_output, mode="live")
+        mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 400.0}, approvals_required=True)
+        run_execution_skill(tmp_output, mcp)
+        (tmp_output / _PLACED_LEDGER_FILENAME).unlink()
+        run_execution_skill(tmp_output, mcp)
+        assert mcp.call_count("place_equity_order") == 2
+        assert len(mcp.approval_requests) == 1
+
+
 class TestSkillMdInvariantsPinned:
     """The Robinhood one-confirmation-per-order gate is prose-only in the skill instructions.
     This test ensures the critical safety invariants are pinned verbatim in the SKILL.md
@@ -762,7 +942,19 @@ class TestSkillMdInvariantsPinned:
             "Agentic account only.",
             "Idempotent placement.",
             "execution_placed.jsonl",
-            "Limit price from the live quote."
+            "Limit price from the live quote.",
+            # Robinhood trade-approval mode (four-agent plan, Phase 1)
+            "## Robinhood trade-approval mode",
+            "customer_approval_required: true",
+            "When in doubt, use this path",
+            "You never approve a trade.",
+            "Deterministic ref_id.",
+            "make_ref_id(",
+            "get_trade_approval_setting",
+            "Approval states come from a fresh call.",
+            "append_approval_event",
+            "never resubmit a declined or expired order",
+            "execution_approvals.jsonl",
         ]
 
         for skill_md_path in skill_md_paths:
