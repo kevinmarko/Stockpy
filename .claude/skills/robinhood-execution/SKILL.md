@@ -284,6 +284,19 @@ response is the truth for that order.
      and treat every order as the **in-chat path** (step 5c), sizing it
      yourself as in step 3. A missing check makes the process stricter, never
      looser.
+4c. **Thesis per order (narration only).** Load the Strategy Analyst's
+   validated theses for this queue:
+   `python3 -c "import json; from execution.agentic_research import load_run_artifacts; a=load_run_artifacts(json.load(open('$OUTPUT_DIR/execution_queue.json'))); t=(a['theses'] or {}).get('theses', {}); print(json.dumps({c: t[c] for c in a['valid_thesis_ids']}))"`.
+   Only theses that pass `execution/agentic_research.py`'s validator are
+   printed; every number in them is checked against its cited source.
+   Before each order goes to the operator's phone, say its **thesis**,
+   **invalidation** and any **flags** in one or two lines, and put the one-line
+   thesis in the ntfy text. For an order with no valid thesis, say
+   "thesis unavailable" and why (missing, or the validator rejected it). Never write a
+   thesis yourself, and never quote a number that isn't in a validated thesis
+   or the queue. This step changes nothing about which orders are placed. Only
+   the preflight vetoes, and its opt-in check 10 (`--critical-gaps`) is how a
+   missing or invalid thesis can block an order.
 5. **Place (live only, one at a time, human-confirmed).** For each
    `allow_place: true` intent:
    a. Re-read `$OUTPUT_DIR/KILL_SWITCH`; if it now exists, abort the whole run.

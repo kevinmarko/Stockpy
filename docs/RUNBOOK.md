@@ -1545,6 +1545,18 @@ vetoes is placed, not even if you say "place" in chat. Common reasons:
 
 No usable preflight means every order asks you in chat (the stricter path).
 
+### Reading a thesis (Research Scout + Strategy Analyst)
+
+Before each order goes to your phone the Trader says its **thesis** (why this
+trade, why now), its **invalidation** (what would make it wrong) and any
+**flags** (e.g. earnings in two days). Every number in a thesis was checked
+against the file it came from by `python -m execution.agentic_research
+validate`. A thesis with a number that doesn't match its source is rejected,
+and the Trader says "thesis unavailable" instead. A thesis is advice: it never
+changes which orders are sent, unless you turn on the preflight's check 10
+(`--critical-gaps forecast_30d,...`), which vetoes orders with no valid thesis
+or with one of those fields missing.
+
 ### Preflight
 
 `python scripts/preflight_check.py` includes the Robinhood execution checks —

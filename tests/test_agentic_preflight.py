@@ -388,3 +388,65 @@ class TestPersistence:
             args += [f"--{name}", str(p)]
         assert ap.main(args) == 2
         assert "queue unreadable" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Plan check 10 (Phase 3): Analyst thesis / critical data gaps — opt-in
+# ---------------------------------------------------------------------------
+
+class TestCheck10:
+    T_OK = {"coid-AAPL-buy": {"data_gaps": []}}
+
+    def test_off_by_default_even_without_theses(self):
+        assert only(run(queue(intent("AAPL")))).passed
+
+    def test_missing_thesis_vetoes_when_on(self):
+        r = run(queue(intent("AAPL")), critical_gap_fields=["forecast_30d"])
+        assert only(r).reasons == [ap.THESIS_MISSING]
+        assert r.limits["critical_gap_fields"] == ["forecast_30d"]
+
+    def test_valid_thesis_passes(self):
+        assert only(run(queue(intent("AAPL")), theses=self.T_OK, critical_gap_fields=["x"])).passed
+
+    def test_invalid_thesis_vetoes(self):
+        r = run(queue(intent("AAPL")), theses=self.T_OK, invalid_thesis_ids=["coid-AAPL-buy"],
+                critical_gap_fields=["x"])
+        assert ap.THESIS_INVALID in only(r).reasons
+
+    def test_critical_gap_vetoes_noncritical_does_not(self):
+        t = {"coid-AAPL-buy": {"data_gaps": ["forecast_30d", "analyst_ratings"]}}
+        assert ap.CRITICAL_DATA_GAP in only(run(queue(intent("AAPL")), theses=t,
+                                                 critical_gap_fields=["forecast_30d"])).reasons
+        assert only(run(queue(intent("AAPL")), theses=t, critical_gap_fields=["regime"])).passed
+
+    def test_cli_uses_research_earnings_and_theses(self, tmp_path, monkeypatch, capsys):
+        from settings import settings
+        from execution import agentic_research as ar
+        monkeypatch.setattr(settings, "ROBINHOOD_MAX_NOTIONAL_PER_ORDER", 500.0, raising=False)
+        import execution.kill_switch as ks
+        monkeypatch.setattr(ks, "KILL_SWITCH_FILE", tmp_path / "KILL_SWITCH", raising=False)
+        gen = datetime.now(timezone.utc) - timedelta(minutes=2)
+        q = queue(intent("F", notional=100), intent("T", notional=100), generated=gen)
+        (tmp_path / "execution_queue.json").write_text(json.dumps(q))
+        run_dir = ar.run_dir_for_queue(q, tmp_path)
+        run_dir.mkdir(parents=True)
+        soon = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+        (run_dir / ar.RESEARCH_FILENAME).write_text(json.dumps({"queue_generated_at": q["generated_at"], "symbols": {
+            "F": {"next_earnings": {"date": soon, "source": "cal"}, "analyst_ratings": None, "data_gaps": ["analyst_ratings"]},
+            "T": {"next_earnings": {"date": None, "reason": "none", "source": "cal"}, "analyst_ratings": None,
+                  "data_gaps": ["analyst_ratings"]}}}))
+        (run_dir / ar.THESES_FILENAME).write_text(json.dumps({"queue_generated_at": q["generated_at"], "theses": {
+            "coid-T-buy": {"symbol": "T", "side": "buy", "thesis": "t", "invalidation": "i", "drivers": [],
+                           "data_gaps": []}}}))
+        args = ["--output-dir", str(tmp_path), "--blackout-days", "3", "--critical-gaps", "forecast_30d"]
+        files = {"portfolio": portfolio(total="1000", bp="1000"), "positions": positions(),
+                 "quotes": quotes(F=12.0, T=21.0), "approvals": {"data": {"approvals": []}}}
+        for name, payload in files.items():
+            p = tmp_path / f"{name}.json"
+            p.write_text(json.dumps(payload))
+            args += [f"--{name}", str(p)]
+        assert ap.main(args) == 0
+        by = {v["symbol"]: v for v in json.loads(capsys.readouterr().out)["verdicts"]}
+        assert ap.EARNINGS_WITHIN_BLACKOUT in by["F"]["reasons"]    # Scout's date fed the blackout
+        assert ap.THESIS_MISSING in by["F"]["reasons"]              # no thesis for F
+        assert by["T"]["passed"] is True                           # thesis present, no earnings
