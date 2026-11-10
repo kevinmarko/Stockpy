@@ -2717,7 +2717,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     max: 3600,
     step: 1,
     description:
-      "Poll interval (seconds) for the Launcher pipeline-progress indicator.",
+      "Freshness window (seconds) for shared.orchestrator_runner.compute_run_progress(); its only caller was the deleted Streamlit Launcher, so nothing reads this today.",
   },
   {
     group: "Runtime & Ops",

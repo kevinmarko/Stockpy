@@ -51,9 +51,9 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   calibration:
     "A reliability check: 'when the system says conviction 0.80, does it actually win 80% of the time?' The reliability diagram compares stated conviction to the realized win rate per bin.",
   "buy range":
-    "The technical zone where purchasing the asset is considered favorable, below which momentum may be failing, and above which it is overextended. Sourced from the technical options engine; purely informational.",
+    "The technical zone where purchasing the asset is considered favorable, below which momentum may be failing, and above which it is overextended. Computed by the strategy engine from support/resistance, ATR and Chandelier exit levels; informational (orders are not priced from it).",
   "sell/stop range":
-    "The zone to take profits, paired with a hard stop-loss level. Sourced from the technical options engine; purely informational.",
+    "The zone to take profits, paired with a hard stop-loss level. Computed by the strategy engine from ATR and Chandelier exit levels; informational (orders are not priced from it).",
   "reliability diagram":
     "The chart on the Calibration screen. Points on the diagonal are perfectly calibrated; above the line = underconfident, below = overconfident. Bins with too little data read 'insufficient', never a fabricated win rate.",
   "kelly target": (t) =>
@@ -99,7 +99,7 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
   forecast:
     "A multi-horizon, probabilistic price projection — never a guarantee. An input that can't be computed shows '—', never a fabricated number.",
   "garch vol":
-    "A GJR-GARCH volatility estimate that weights recent bad days more than good ones (the leverage effect) — more accurate than a plain moving standard deviation. It's the primary vol input for sizing and options.",
+    "A GJR-GARCH volatility estimate that weights recent bad days more than good ones (the leverage effect) — more accurate than a plain moving standard deviation. It's the primary vol input for position sizing.",
   "brinson-fachler":
     "Attribution that splits benchmark out-/under-performance into Allocation (right sectors?), Selection (right stocks within a sector?), and Interaction (the combined effect).",
   "execution mode":

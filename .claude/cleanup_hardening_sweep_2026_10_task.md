@@ -46,7 +46,12 @@ Plans written in this sweep (review before any code): `.claude/synthetic_data_ga
 - [x] Removed the 4-way shard splitter (`scripts/ci_shard.py`, `.test_durations.json`, `tests/test_ci_shard.py`); standing policy "no GitHub Actions ever" in CLAUDE.md/AGENTS.md and the PR template.
 
 ### Still open from round 2 (found, not fixed)
-- `ErrorState` (`webapp/src/components/ui.tsx` ~465) treats every 404 as "run the pipeline" and drops the server's message, so a bad pilot id (`/pilots/does-not-exist`) says "Nothing here yet - run the pipeline". Low severity; shared component.
-- `/commands` at 1280 px scrolls ~6 px sideways (cosmetic; candidate: the top-bar Trip Kill Switch button).
+- [x] FIXED 2026-11-10: `ErrorState` (`webapp/src/components/ui.tsx` ~465) treated every 404 as "run the pipeline" and drops the server's message, so a bad pilot id (`/pilots/does-not-exist`) says "Nothing here yet - run the pipeline". Low severity; shared component.
+- NOT REPRODUCED 2026-11-10 (mock and live backend, 1024/1280/1440: scrollWidth == viewport): `/commands` at 1280 px scrolls ~6 px sideways (cosmetic; candidate: the top-bar Trip Kill Switch button).
 - Stale mentions found by the help audit in files outside its scope: `shared/ai_control_center.py` ("Section B/C/D", `--agent`), `settings.py` `PROGRESS_POLL_SECONDS` description ("Launcher"), `webapp/src/help/helpContent.ts` (Buy/Sell Range "technical options engine", `garch vol` "and options"), `pilots/reports.py` docstrings, `shared/help_widgets.py` (Streamlit-only module kept alive by Gravity steps 76/77), Gravity step 77 check 9 (reads a directory that no longer exists, so it can never pass).
 - Live pass could not exercise populated-data shapes, a real daemon, auth paths, POST actions or chat/streaming (no keys or data in the sandbox).
+
+### Round 3 (2026-11-10, same day)
+- [x] Unknown pilot id now says "Not found / There is no pilot with the id ..." (opt-in `ErrorState.notFound`; other screens keep the cold-start wording). Tests pinned, mutation-checked, checked in a browser.
+- [x] Stale text: `PROGRESS_POLL_SECONDS` description (it is read only by a function nothing calls), webapp help for Buy/Sell Range (strategy engine, not the archived options engine) and GARCH vol, and `shared/ai_control_center.py` (no more Streamlit "Section B/C/D" or `--agent` run). `pilots/reports.py` / `api/pilots_api.py` Streamlit mentions are provenance notes ("ported from"), left as accurate history.
+- [ ] Decision **D7** (added to the dead-code plan): remove `PROGRESS_POLL_SECONDS` + `compute_run_progress` + the `pipeline_progress` help section, all dead since the Streamlit Launcher.

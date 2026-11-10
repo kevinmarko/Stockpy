@@ -452,28 +452,35 @@ export function StaleDataNotice({
   );
 }
 
-/** Distinguishes an honest "not run yet" 404 from a hard error. */
+/** Distinguishes an honest "not run yet" 404 from a hard error. Pass `notFound` where a
+ *  404 can only mean the thing does not exist (e.g. an unknown pilot id): "run the
+ *  pipeline" would be advice that cannot help there. */
 export function ErrorState({
   message,
   status,
   onRetry,
+  notFound,
 }: {
   message: string;
   status: number | null;
   onRetry?: () => void;
+  notFound?: string;
 }) {
-  const isColdStart = status === 404;
+  const isMissing = status === 404 && notFound != null;
+  const isColdStart = status === 404 && !isMissing;
   return (
     <div className="empty">
       <div style={{ fontSize: "var(--t-subhead)", fontWeight: 600, color: "var(--text-secondary)" }}>
-        {isColdStart ? "Nothing here yet" : "Couldn't load"}
+        {isMissing ? "Not found" : isColdStart ? "Nothing here yet" : "Couldn't load"}
       </div>
       <div style={{ marginTop: "var(--s-1-5)" }}>
-        {isColdStart
+        {isMissing
+          ? notFound
+          : isColdStart
           ? "Run the Stockpy pipeline to produce data, then pull to refresh."
           : message}
       </div>
-      {onRetry && !isColdStart && (
+      {onRetry && status !== 404 && (
         <button className="btn" style={{ marginTop: "var(--s-4)" }} onClick={onRetry}>
           Retry
         </button>

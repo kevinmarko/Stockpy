@@ -409,3 +409,11 @@ No `webapp/src` files are touched, so `npm run typecheck`/browser checks are not
   needs its own plan; the freeze applies to new capabilities.
 - **D6.** Confirm the work is sequenced after the other three agents' edits land (census/liveness regeneration must be last and
   is currently red in the shared tree because of their uncommitted `settings.py` changes).
+
+## Addendum (2026-11-10): `PROGRESS_POLL_SECONDS` and `compute_run_progress`
+
+Found after the plan above was written. **Verified, not changed (only the setting's description was made truthful).**
+
+- `shared/orchestrator_runner.py::compute_run_progress` has **no production caller** (repo-wide grep excluding `legacy/`: only its own module comments, `shared/env_io.py`'s comment and `tests/test_run_progress.py`). Its only caller was the deleted Streamlit Launcher's progress bar.
+- `settings.PROGRESS_POLL_SECONDS` is read only inside that function (as a 3x freshness window), so nothing in production reads it either. It is still in `shared/env_io.ALLOWED_KEYS`, `pilots/settings_domains.py`, the `api/pilots_api.py` tunables list, `mock.ts`, `.env.example`, and `shared/help_content.py` (the `pipeline_progress` section text, which `tests/test_help_content*.py` pins as "every N seconds").
+- Proposed (decision **D7**): remove the setting, the function, its tests and the `pipeline_progress` help section together, the same way `DASHBOARD_REFRESH_SECONDS` was removed (old `.env` keeps loading: `extra="ignore"`). Also needs the Gravity suite checked: steps around line 11420 assert the setting exists and is allowlisted.
