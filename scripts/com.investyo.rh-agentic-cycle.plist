@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.investyo.rh-agentic-cycle.plist
+  ===================================
+  macOS launchd timer for the unattended four-agent Robinhood cycle (Phase 4 of
+  .claude/robinhood_four_agent_trading_implementation_plan.md).
+
+  Every 15 minutes launchd runs
+      .venv/bin/python3 -m execution.agentic_cycle launch
+  which takes a single-flight lock, then runs a cheap gate (no LLM call) and
+  exits unless: ROBINHOOD_EXECUTION_MODE is review or live, the kill switch is
+  off, the US market is open, the daemon's execution_queue.json is under 30 min
+  old with at least one actionable intent, and that queue has not been handled
+  yet. Only then does it run the /rh-agentic-cycle coordinator through `claude -p` (hard
+  30-minute timeout), which runs Research Scout -> Strategy Analyst -> Portfolio
+  & Risk Manager -> Trader. In live mode every order still goes to your phone:
+  nothing executes until you tap Approve in the Robinhood app.
+
+  NOT INSTALLED BY install_schedule.command, on purpose. Load it by hand when you
+  want the cycle to run on its own (RUNBOOK "Agentic cycle (unattended)"):
+      cp scripts/com.investyo.rh-agentic-cycle.plist ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
+
+  STOP / ROLLBACK (takes effect immediately; nothing else to undo):
+      launchctl unload ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
+
+  LOGS: output/agentic_cycle.out / .err; per-cycle detail in
+  $OUTPUT_DIR/agentic/<run_id>/cycle.json and $OUTPUT_DIR/agentic/cycles.jsonl.
+
+  Needs, on this Mac: the Claude Code CLI (`claude`) logged in, and the
+  Robinhood MCP server connected in Claude Code. launchd starts with a minimal
+  PATH, so PATH below lists the usual install locations of `claude`; add yours
+  if `which claude` prints somewhere else. Paths are absolute (launchd does not
+  expand ~ or $HOME): edit them if the repo lives elsewhere.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.investyo.rh-agentic-cycle</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kevinlee/Desktop/Stockpy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/kevinlee/Desktop/Stockpy/.venv/bin/python3</string>
+        <string>-m</string>
+        <string>execution.agentic_cycle</string>
+        <string>launch</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/kevinlee/.local/bin:/Users/kevinlee/.claude/local:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <!-- Every 15 minutes. The gate makes off-hours and no-work wakes free. -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <!-- Do NOT run at load time, and never restart on exit. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/agentic_cycle.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/agentic_cycle.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

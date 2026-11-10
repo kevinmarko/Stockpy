@@ -6,6 +6,8 @@
 
 > **2026-09 (step 4c):** Follow-a-Pilot is archived. Removed from `api/pilots_api.py`: `GET/PUT /follows`, `POST /pilots/{id}/follow`, the `aum_proxy`/`followers_proxy`/`followable` fields of `/pilots` and `/pilots/{id}`, `/agentic/status`'s `follows` block and `/thresholds`' `follow_min_amount`. In `investyo_mcp_server.py`, `follow_pilot`/`unfollow_pilot`/`get_follows`/`get_portfolio_by_pilot` are read-only retired stubs, `list_pilots` has no AUM column, and the `follow-result.html` and `pilot-portfolio.html` widgets are gone (17 widgets). `FOLLOW_API_TOKEN` stays as the general command token. Entries below that describe following are historical.
 
+> **2026-11 (four-agent Phase 4):** `GET /agentic/approvals` (read tier, `require_read_token`) returns `shared/agentic_approvals.py::build_approvals_view()`: `{pending, recent, n_pending, last_cycle, note}`, built from `execution_approvals.jsonl`, `execution_placed.jsonl` and the latest `agentic/<run_id>/cycle.json`. A state is the last one the Trader agent recorded (not a live Robinhood read, which `note` says), and a thesis is quoted only when that run's `cycle.json` lists it in `valid_thesis_ids`. Read-only: nothing here can approve, decline or place. Tests: `tests/test_agentic_approvals.py`, `tests/test_pilots_api.py::TestAgenticApprovals`.
+
 > Part of the split-out `CLAUDE.md` System Architecture reference. See [../../CLAUDE.md](../../CLAUDE.md) for the index.
 
 - **observability/__init__.py** — Empty package marker.
