@@ -4173,7 +4173,6 @@ _TUNABLE_GROUPS: List[tuple] = [
     (
         "Runtime & Ops",
         [
-            ("PROGRESS_POLL_SECONDS", "int", {"min": 1, "max": 3600, "step": 1}),
             ("LOG_LEVEL", "enum", {"options": ["DEBUG", "INFO", "WARNING", "ERROR"]}),
             ("ADVISORY_REUSE_PIPELINE_COMPUTE", "bool", {}),
             ("ADVISORY_ONLY", "bool", {}),

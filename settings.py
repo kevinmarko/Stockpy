@@ -1668,9 +1668,6 @@ class Settings(BaseSettings):
         default=None,
         description="Comma-separated active alerting_mcp channels (e.g. 'ntfy,email,slack'). Unset defaults to 'ntfy'.",
     )
-    PROGRESS_POLL_SECONDS: int = Field(
-        default=5, description="Freshness window (seconds) for shared.orchestrator_runner.compute_run_progress(); its only caller was the deleted Streamlit Launcher, so nothing reads this today."
-    )
     # ISO date string (YYYY-MM-DD) recording when paper trading began.
     # Used by scripts/preflight_check.py to verify >= 90 days of paper history.
     PAPER_TRADING_START_DATE: Optional[str] = Field(

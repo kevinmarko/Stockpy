@@ -2709,18 +2709,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   // ---- Runtime & Ops ----
   {
     group: "Runtime & Ops",
-    key: "PROGRESS_POLL_SECONDS",
-    type: "number",
-    value: 5,
-    default: 5,
-    min: 1,
-    max: 3600,
-    step: 1,
-    description:
-      "Freshness window (seconds) for shared.orchestrator_runner.compute_run_progress(); its only caller was the deleted Streamlit Launcher, so nothing reads this today.",
-  },
-  {
-    group: "Runtime & Ops",
     key: "LOG_LEVEL",
     type: "enum",
     value: "INFO",

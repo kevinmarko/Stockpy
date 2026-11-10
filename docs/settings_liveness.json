@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 310,
+    "live_safe": 309,
     "no_op": 2,
     "restart_required": 78,
-    "total": 390
+    "total": 389
   },
   "dynamic_sites": [
     {
@@ -56,21 +56,21 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4312,
+      "line": 4311,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4417,
+      "line": 4416,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5227,
+      "line": 5226,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -350,7 +350,6 @@
     "PIPELINE_STEP_TIMEOUT_SECONDS",
     "PIT_CAPTURE_ENABLED",
     "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE",
-    "PROGRESS_POLL_SECONDS",
     "PROMPT_CACHE_DIR",
     "PROMPT_CACHE_KEEP_VERSIONS",
     "PROMPT_REGISTRY_BACKEND",
@@ -451,15 +450,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 800,
+    "attr": 797,
     "factory_param": 4,
-    "getattr_const": 294,
+    "getattr_const": 293,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 256,
+    "attr": 255,
     "factory_param": 4,
-    "getattr_const": 172,
+    "getattr_const": 171,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -482,7 +481,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4842",
+        "site": "api/pilots_api.py:4841",
         "via": []
       },
       {
@@ -1209,7 +1208,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4793",
+        "site": "api/pilots_api.py:4792",
         "via": []
       }
     ],
@@ -1220,7 +1219,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4792",
+        "site": "api/pilots_api.py:4791",
         "via": []
       }
     ],
@@ -1266,7 +1265,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4913",
+        "site": "api/pilots_api.py:4912",
         "via": []
       }
     ],

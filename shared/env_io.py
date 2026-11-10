@@ -175,10 +175,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS",
     "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS",  # JSON-encoded dict[str, int]; see _JSON_KEYS
     # Observability / runtime
-    # Poll interval (seconds) for the Launcher tab's live pipeline-progress bar
-    # (see reporting/progress.py + gui/orchestrator_runner.py::compute_run_progress).
-    # Non-secret; scalar (not JSON-encoded).
-    "PROGRESS_POLL_SECONDS",
     # Heuristic multiplier the check_overnight_liquidity MCP tool uses to
     # approximate depth notional from ADV (e.g. 0.01 = 1% ADV). Non-secret,
     # plain float tunable -- no credential material.

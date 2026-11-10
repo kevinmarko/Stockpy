@@ -101,13 +101,10 @@ def test_read_log_tail_returns_hint_when_missing(runner):
 
 
 # ---------------------------------------------------------------------------
-# heartbeat_age_seconds / state_snapshot_age_seconds
+# heartbeat_age_seconds
 # ---------------------------------------------------------------------------
-# heartbeat.txt is orchestrator-only (main_orchestrator.py); state_snapshot.json
-# is rewritten by EVERY run_once() cycle in BOTH main.py (interval/agent mode
-# included) and main_orchestrator.py -- the (since deleted) Streamlit engine
-# badge relied on this distinction to show the right state whichever entry
-# point drove the refresh loop.
+# heartbeat.txt is written only by a standalone main_orchestrator.py run; the
+# daemon never writes it.
 
 def test_heartbeat_age_seconds_none_when_missing(runner):
     assert runner.heartbeat_age_seconds() is None
@@ -119,28 +116,6 @@ def test_heartbeat_age_seconds_reflects_file_mtime(runner):
     age = runner.heartbeat_age_seconds()
     assert age is not None
     assert 0.0 <= age < 5.0
-
-
-def test_state_snapshot_age_seconds_none_when_missing(runner):
-    assert runner.state_snapshot_age_seconds() is None
-
-
-def test_state_snapshot_age_seconds_reflects_file_mtime(runner):
-    snap = runner.settings.OUTPUT_DIR / "state_snapshot.json"
-    snap.write_text("{}", encoding="utf-8")
-    age = runner.state_snapshot_age_seconds()
-    assert age is not None
-    assert 0.0 <= age < 5.0
-
-
-def test_state_snapshot_age_seconds_independent_of_heartbeat(runner):
-    """main.py --interval mode: only state_snapshot.json is ever written --
-    state_snapshot_age_seconds() must report freshness with no heartbeat.txt
-    present at all."""
-    snap = runner.settings.OUTPUT_DIR / "state_snapshot.json"
-    snap.write_text("{}", encoding="utf-8")
-    assert runner.heartbeat_age_seconds() is None
-    assert runner.state_snapshot_age_seconds() is not None
 
 
 def test_read_telemetry_tail_missing_returns_hint(runner):

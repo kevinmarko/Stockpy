@@ -222,10 +222,6 @@ def _rh_max_notional() -> float:
     return settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER
 
 
-def _progress_poll_seconds() -> int:
-    return settings.PROGRESS_POLL_SECONDS
-
-
 def _sizing_cap_alert_threshold_pct() -> int:
     return int(settings.SIZING_CAP_ALERT_THRESHOLD_PCT * 100)
 
@@ -1343,15 +1339,6 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         "symbol + side. A non-zero 'Unmatched' count means the ledger recorded a "
         "placement the receipts log doesn't confirm — investigate before the next "
         "run. The ledger is tolerated as absent (no placements yet)."
-    ),
-    "pipeline_progress": lambda: (
-        "Percentage of pipeline stages completed for the current run "
-        "(`output/progress.json`, or the daemon's run status for a daemon-launched "
-        f"run).  Clients poll every {_progress_poll_seconds()} seconds while a run "
-        "is active, and a progress file older than three polls is treated as "
-        "stale (the reading then falls back to a coarse stage count).  The web "
-        "app has no progress bar yet — the Pipeline screen shows run status and "
-        "history.  This only reflects analysis progress; it places no orders."
     ),
     "observability.snapshot_summary": (
         "Summary of the file-backed state last written by the orchestrator."

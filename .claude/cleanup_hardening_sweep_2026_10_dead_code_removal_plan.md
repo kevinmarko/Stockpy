@@ -423,3 +423,7 @@ Found after the plan above was written. **Verified, not changed (only the settin
 - **Step E done (D3):** deleted `shared/regime_filter.py`, `shared/robinhood_mode.py`, `shared/symbol_search.py` and their tests; fixed the two `robinhood_execution_panel.py` docstring mentions and the wrong `docs/architecture/webapp-and-gui.md` line that listed `regime_filter.py` as live.
 - Census/liveness regenerated (files scanned 371 -> 367). Gravity suite checked: it names none of the four modules.
 - **Not done, still need you:** D1 (Steps B-D, which break the "revert the 5.5 PR" rollback), D2, D4-D7.
+
+- **D1 = KEEP (operator, 2026-11-10).** The "revert the 5.5 PR" rollback stays, so Steps B-D (`daemon_owns_agentic_side_effects`, the `build_universe` wrapper, `RunContext` `*_fn` fields) are **not** done and stay in place for `legacy/main.py`.
+- **D2 done:** `state_snapshot_age_seconds` + its 3 tests deleted; the `heartbeat_age_seconds` docstring now says what to read instead.
+- **D7 done:** `compute_run_progress`, `RunProgress` and their private helpers (the whole "Real 0-100% progress bar" block of `shared/orchestrator_runner.py`), `tests/test_run_progress.py`, the `PROGRESS_POLL_SECONDS` setting (settings, `env_io` allowlist, settings domain, tunables list, `mock.ts`, `.env.example`) and the `pipeline_progress` help section + its test. Gravity step 74 checks 6/7 now pin the removal (run directly: PASSED). `reporting/progress.py` stays (live: the daemon's run status).
