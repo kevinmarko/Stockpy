@@ -6262,3 +6262,33 @@ class TestLiveTradeExecutionReject:
         assert first.status_code == 200
         assert second.status_code == 409
         assert second.json()["detail"] == "already_decided"
+
+
+class TestAgenticApprovals:
+    @pytest.fixture(autouse=True)
+    def _reset_state_api_token(self, monkeypatch):
+        monkeypatch.setattr(settings, "STATE_API_TOKEN", None, raising=False)
+
+    def test_shape_from_files(self, tmp_path):
+        from execution import receipts_store as rs
+        rs.append_approval_event({"approval_id": "a1", "state": "pending", "symbol": "T", "side": "buy"},
+                                 output_dir=tmp_path)
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/agentic/approvals")
+        assert resp.status_code == 200
+        body = resp.json()
+        for key in ("pending", "recent", "n_pending", "last_cycle", "note"):
+            assert key in body
+        assert body["n_pending"] == 1 and body["pending"][0]["symbol"] == "T"
+        assert body["pending"][0]["thesis"] is None
+
+    def test_cold_start(self, tmp_path):
+        with mock.patch.object(settings, "OUTPUT_DIR", tmp_path):
+            resp = client.get("/agentic/approvals")
+        assert resp.status_code == 200
+        assert resp.json()["pending"] == [] and resp.json()["last_cycle"] is None
+
+    def test_401_on_wrong_read_token(self):
+        with mock.patch.object(settings, "STATE_API_TOKEN", "read-tok"):
+            resp = client.get("/agentic/approvals", headers={"Authorization": "Bearer wrong"})
+        assert resp.status_code == 401

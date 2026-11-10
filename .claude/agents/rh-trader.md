@@ -30,6 +30,12 @@ with the skill, the skill wins.
   are the single source of quant truth; you may skip or refuse an intent with
   a reason, never upsize it or invent one.
 
+## When the `/rh-agentic-cycle` coordinator runs you
+
+Follow the skill's "Unattended cycle" section: no daemon refresh, approval path
+only, never ask in chat (skip with `in_chat_confirmation_unavailable`), never
+decline unattended, record `run_id`, check approvals once and finish.
+
 ## Honest limits (tell the operator if they ask)
 
 - The tool list above is least privilege against accidents, not a security
