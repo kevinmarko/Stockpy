@@ -37,3 +37,16 @@ Plans written in this sweep (review before any code): `.claude/synthetic_data_ga
 - Code comments in many files still mention `main.py` or `app_shell.py` as historical context (comments only; the user-visible strings are done)
 - This sandbox's `.venv` has no `torch` although `requirements.txt` lists it, so torch tests skip here (the rewritten FinBERT test was verified against a throwaway CPU torch on `PYTHONPATH`, not the venv)
 - Cosmetic: the mobile Settings section links wrap as plain text rather than tabs; the top status bar scrolls sideways below ~1440 px by design, with no visual cue
+
+## Round 2 (2026-11-10): four agents on the leftovers
+- [x] **Live-backend UI pass** (real `api.pilots_api` / `data_api` / `metrics_api` + `VITE_USE_MOCK=false`, 56 routes x 2 widths): no page errors, no failed requests. Found and **fixed** `/settings/reference`: dict/list-valued settings rendered as `[object Object]` (the real backend sends them raw; the mock never did) and the page scrolled sideways on a phone (long unbreakable descriptions/keys). Regression tests are mutation-checked; mock now carries a dict-valued field.
+- [x] **Python help catalog** (`shared/help_content.py`, `docs/HOW_TO_GUIDE.md`): every entry audited against the webapp and live backend; stale screens renamed, wrong claims fixed, deleted-surface entries removed; new `tests/test_help_content_live_surfaces.py`.
+- [x] **`DASHBOARD_REFRESH_SECONDS` removed** everywhere; tests prove an old `.env` / runtime-flags store carrying it still loads.
+- [x] **Step-5 dead code: verified plan written, nothing deleted** (`.claude/cleanup_hardening_sweep_2026_10_dead_code_removal_plan.md`). Three symbols are still read by `legacy/main.py`, so deleting them retires the documented "revert the 5.5 PR" rollback: **operator decision D1** (D2-D6 in the plan).
+- [x] Removed the 4-way shard splitter (`scripts/ci_shard.py`, `.test_durations.json`, `tests/test_ci_shard.py`); standing policy "no GitHub Actions ever" in CLAUDE.md/AGENTS.md and the PR template.
+
+### Still open from round 2 (found, not fixed)
+- `ErrorState` (`webapp/src/components/ui.tsx` ~465) treats every 404 as "run the pipeline" and drops the server's message, so a bad pilot id (`/pilots/does-not-exist`) says "Nothing here yet - run the pipeline". Low severity; shared component.
+- `/commands` at 1280 px scrolls ~6 px sideways (cosmetic; candidate: the top-bar Trip Kill Switch button).
+- Stale mentions found by the help audit in files outside its scope: `shared/ai_control_center.py` ("Section B/C/D", `--agent`), `settings.py` `PROGRESS_POLL_SECONDS` description ("Launcher"), `webapp/src/help/helpContent.ts` (Buy/Sell Range "technical options engine", `garch vol` "and options"), `pilots/reports.py` docstrings, `shared/help_widgets.py` (Streamlit-only module kept alive by Gravity steps 76/77), Gravity step 77 check 9 (reads a directory that no longer exists, so it can never pass).
+- Live pass could not exercise populated-data shapes, a real daemon, auth paths, POST actions or chat/streaming (no keys or data in the sandbox).

@@ -4543,6 +4543,20 @@ function mockSettingsReference(): SettingsReferenceResponse {
       editable_at: "/settings/feature-flags",
     },
     {
+      // The real GET /settings/reference sends dict/list-valued settings RAW with type "string"
+      // (api/pilots_api.py get_settings_reference); a scalar-only mock hid "[object Object]".
+      key: "SIGNAL_WEIGHTS",
+      category: "allowed",
+      value: { technical: 0.4, fundamental: 0.35, sentiment: 0.25 },
+      default: { technical: 0.4, fundamental: 0.35, sentiment: 0.25 },
+      type: "string",
+      description: "Per-module weights for the weighted-sum signal aggregator.",
+      domain: "Financial/Risk/Sizing",
+      dangerous: false,
+      liveness: mockLiveness("SIGNAL_WEIGHTS"),
+      editable_at: "/settings/modules",
+    },
+    {
       key: "KELLY_FRACTION",
       category: "allowed",
       value: 0.5,

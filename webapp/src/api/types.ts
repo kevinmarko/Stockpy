@@ -1818,8 +1818,10 @@ export interface TunablesUpdateResult {
 export interface SettingsReferenceField {
   key: string;
   category: "allowed" | "secret" | "excluded";
-  value: number | boolean | string | null;
-  default: number | boolean | string | null;
+  /** Scalars, or the raw list/dict the backend sends for JSON-valued settings
+   *  (SIGNAL_WEIGHTS, DEFAULT_TICKERS, ...). Render through `fmtRefValue`. */
+  value: number | boolean | string | unknown[] | Record<string, unknown> | null;
+  default: number | boolean | string | unknown[] | Record<string, unknown> | null;
   type: TunableFieldType;
   description: string | null;
   domain: string;
