@@ -1602,6 +1602,56 @@ with each validated thesis, recent decisions and the last cycle's status. It
 shows the last state the Trader recorded, and the Robinhood app is the live
 source; approve or decline there.
 
+### Phase 5 burn-in (Agent 5, the Reviewer)
+
+The Reviewer (`rh-reviewer`, `/rh-agentic-review`) is read-only. Once a day it
+checks the four trading agents and pushes one summary, e.g. "Burn-in day 4/10:
+NOT READY" followed by what's missing. The verdict comes from
+`execution/agentic_review.py`; `review.json` per day is in
+`$OUTPUT_DIR/agentic/review/<YYYY-MM-DD>/`.
+
+1. **Start in review:** set `ROBINHOOD_EXECUTION_MODE=review` and a small
+   positive `ROBINHOOD_MAX_NOTIONAL_PER_ORDER`, keep trade approvals ON in the
+   Robinhood app, and load both timers:
+
+```bash
+cp scripts/com.investyo.rh-agentic-cycle.plist scripts/com.investyo.rh-agentic-review.plist ~/Library/LaunchAgents/
+```
+```bash
+launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
+```
+```bash
+launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-review.plist
+```
+
+2. **Each day:** read the push. A **SAFETY CHECK FAILED** push is high priority:
+   stop the cycle (`launchctl unload ...rh-agentic-cycle.plist` or the kill
+   switch) and look at `review.json`'s `invariants` before anything else.
+   - `order_without_phone_approval`: Robinhood reports an agent-submitted order
+     with no phone approval (`placed_agent: agentic`).
+   - `placed_in_review_cycle`, `placed_without_ref_id`,
+     `placed_vetoed_or_oversized`, `duplicate_placement`: the Trader broke one
+     of its rules.
+3. **READY** means every criterion holds:
+   - all safety invariants pass;
+   - 10 days with a completed review cycle;
+   - no failed cycle in the last 3 cycle days;
+   - reconciliation clean;
+   - a positive cap set;
+   - trade approvals confirmed on.
+
+   Going live is then your call. To go live, set `ROBINHOOD_EXECUTION_MODE=live`
+   in your own settings (keep the cap small at first). The Reviewer never changes
+   it.
+4. **Check without waiting for the timer:** `/rh-agentic-review` in Claude Code,
+   or `python -m execution.agentic_review status` for the last verdict (exit 0
+   READY, 1 NOT READY, 2 no usable review).
+5. **Roll back:** set the mode back to `review` or `off`, or unload the cycle
+   timer. The Reviewer can keep running; it only reads.
+
+A review that didn't run (timeout, `claude` not found, missing inputs) sends
+"Agentic burn-in review did not run". Logs: `output/agentic_review.out` / `.err`.
+
 ### Preflight
 
 `python scripts/preflight_check.py` includes the Robinhood execution checks —

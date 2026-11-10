@@ -1608,6 +1608,16 @@ list: what's waiting on you with its thesis and what it would take to be
 wrong, what you decided recently, and how the last cycle went. The card only
 shows; you approve or decline in the Robinhood app.
 
+### The burn-in check (Agent 5)
+
+A fifth agent, the **Reviewer**, checks the other four once a day and pushes a
+short report: "Burn-in day 4/10: NOT READY", with what's still missing. It
+compares what the agents sent with what really filled in Robinhood, shows how
+each approved trade has moved against its thesis ("too early to judge" until
+the thesis horizon), and flags anything unsafe, such as an order that executed
+without your tap. The Pending approvals card shows the same verdict. **Ready for
+live** is only a recommendation: you switch to live yourself, in settings.
+
 ## In-App Help & Glossary
 
 The web app's **Help & Glossary** screen (`/help`) gives instant access to every concept in

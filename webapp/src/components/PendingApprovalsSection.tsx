@@ -1,6 +1,6 @@
 import { api } from "../api/client";
 import { useApi } from "../hooks/useApi";
-import type { AgenticApprovalRow, AgenticApprovals, AgenticCycleStatus } from "../api/types";
+import type { AgenticApprovalRow, AgenticApprovals, AgenticBurnin, AgenticCycleStatus } from "../api/types";
 import { Chip, EmptyState, ErrorState, Loading, Notice, StaleDataNotice } from "./ui";
 import { timeAgo } from "../format";
 import { theme } from "../theme";
@@ -45,6 +45,7 @@ export function PendingApprovalsSection({ refreshToken }: { refreshToken: number
       {!loading && error && <ErrorState message={error} status={status} onRetry={reload} />}
       {!loading && !error && data && (
         <>
+          {data.burnin && <BurninLine burnin={data.burnin} />}
           {data.last_cycle && <CycleLine cycle={data.last_cycle} />}
 
           {data.pending.length === 0 ? (
@@ -146,5 +147,47 @@ function CycleLine({ cycle }: { cycle: AgenticCycleStatus }) {
       : `Last agent cycle: ${cycle.mode ?? "?"} mode, ${who}, ${when}${cycle.summary_title ? `. ${cycle.summary_title}` : ""}`;
   return (
     <p style={{ color: theme.textSecondary, fontSize: "var(--t-caption)", margin: "0 0 var(--s-2)" }}>{label}</p>
+  );
+}
+
+/**
+ * Agent 5 (Reviewer) verdict. READY is advice only: switching to live stays the
+ * operator's own settings change, which the line says.
+ */
+function BurninLine({ burnin }: { burnin: AgenticBurnin }) {
+  const progress =
+    burnin.review_days != null && burnin.required_days != null
+      ? `day ${burnin.review_days}/${burnin.required_days}`
+      : "progress unknown";
+  if (burnin.safety_failures.length > 0) {
+    return (
+      <Notice variant="warn" style={{ marginBottom: "var(--s-2)" }} data-testid="burnin-line">
+        <span>⛔</span>
+        <span>
+          Burn-in safety check failed ({burnin.safety_failures.join(", ")}). Review before any more orders.
+        </span>
+      </Notice>
+    );
+  }
+  return (
+    <div data-testid="burnin-line" style={{ marginBottom: "var(--s-2)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--s-2)", flexWrap: "wrap" }}>
+        <span style={{ fontSize: "var(--t-caption)", color: theme.textSecondary }}>
+          Burn-in {progress} (reviewed {burnin.day ?? "—"})
+        </span>
+        <Chip
+          label={burnin.ready ? "Ready for live (your call)" : "Not ready"}
+          tone={burnin.ready ? "growth" : "muted"}
+          title="Agent 5 (Reviewer) verdict. Going live is always your own settings change."
+        />
+      </div>
+      {!burnin.ready && burnin.unmet.length > 0 && (
+        <ul style={{ margin: "var(--s-1) 0 0", paddingLeft: "var(--s-4)", color: theme.textMuted, fontSize: "var(--t-caption)" }}>
+          {burnin.unmet.map((u) => (
+            <li key={u}>{u}</li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "c68cb3c8ddd05eda97e487f6e69ad4e2398f2196",
+    "git_commit": "2db545ec782e94ed59c27702f0be56c4e1f14a93",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2933,7 +2933,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 367,
+    "files_scanned": 368,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -2961,7 +2961,7 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 711,
+      "total_reads": 712,
       "distinct_fields": 252,
       "counts": {
         "OUTPUT_DIR": 102,
@@ -3025,6 +3025,7 @@
         "NEWS_EARNINGS_DAMPEN_DAYS": 3,
         "RISK_FREE_RATE": 3,
         "ROBINHOOD_AUTO_REFRESH_ENABLED": 3,
+        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 3,
         "RUNTIME_FLAGS_REFRESH_ENABLED": 3,
         "SECTOR_SELECTION_ENABLED": 3,
         "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE": 3,
@@ -3098,7 +3099,6 @@
         "RH_PASSWORD": 2,
         "RH_USERNAME": 2,
         "RLHF_CALIBRATION_ENABLED": 2,
-        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 2,
         "ROBINHOOD_SCHEDULED_LOGIN_ENABLED": 2,
         "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS": 2,
         "SECTOR_HEAT_ENABLED": 2,
