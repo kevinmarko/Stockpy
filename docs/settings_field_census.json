@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "d9b619461190e806a27bc169108aa464642bbf41",
+    "git_commit": "6f92f87edb19aaf4edd131a79b28e881e18ef668",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2936,7 +2936,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 371,
+    "files_scanned": 367,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -2964,7 +2964,7 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 715,
+      "total_reads": 714,
       "distinct_fields": 253,
       "counts": {
         "OUTPUT_DIR": 103,
@@ -3026,7 +3026,6 @@
         "MACRO_REGIME_GATE_ENABLED": 3,
         "MCP_OAUTH_ISSUER_URL": 3,
         "NEWS_EARNINGS_DAMPEN_DAYS": 3,
-        "ORCHESTRATOR_EXTENDED_HOURS_ONLY": 3,
         "RISK_FREE_RATE": 3,
         "ROBINHOOD_AUTO_REFRESH_ENABLED": 3,
         "RUNTIME_FLAGS_REFRESH_ENABLED": 3,
@@ -3090,6 +3089,7 @@
         "NEWS_LOOKBACK_DAYS": 2,
         "OPAL_RESEARCH_ENABLED": 2,
         "ORCHESTRATOR_DAEMON_TOKEN": 2,
+        "ORCHESTRATOR_EXTENDED_HOURS_ONLY": 2,
         "ORCHESTRATOR_INTERVAL_SECONDS": 2,
         "PILOTS_API_PORT": 2,
         "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE": 2,

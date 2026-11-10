@@ -105,9 +105,9 @@ def test_read_log_tail_returns_hint_when_missing(runner):
 # ---------------------------------------------------------------------------
 # heartbeat.txt is orchestrator-only (main_orchestrator.py); state_snapshot.json
 # is rewritten by EVERY run_once() cycle in BOTH main.py (interval/agent mode
-# included) and main_orchestrator.py -- gui/engine_status.py depends on this
-# distinction to show a correct badge regardless of which entry point is
-# actually driving the refresh loop.
+# included) and main_orchestrator.py -- the (since deleted) Streamlit engine
+# badge relied on this distinction to show the right state whichever entry
+# point drove the refresh loop.
 
 def test_heartbeat_age_seconds_none_when_missing(runner):
     assert runner.heartbeat_age_seconds() is None

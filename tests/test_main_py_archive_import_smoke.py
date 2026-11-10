@@ -44,7 +44,6 @@ _ENTRY_POINTS = [
     "pipeline.production_steps",
     "pipeline.advisory_inputs",
     "pipeline.agentic_queue",
-    "shared.engine_status",
     "shared.market_hours",
     "shared.orchestrator_runner",
     "reporting.state_snapshot",

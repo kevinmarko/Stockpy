@@ -1391,7 +1391,7 @@ def heartbeat_age_seconds() -> Optional[float]:
     the persistent daemon (which calls ``_main_body()`` directly) never
     writes it. Callers wanting a liveness signal that covers BOTH
     entry points should use :func:`state_snapshot_age_seconds` instead, or
-    combine both (see ``shared/engine_status.py``).
+    combine both.
     """
     hb = settings.OUTPUT_DIR / "heartbeat.txt"
     if not hb.exists():

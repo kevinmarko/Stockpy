@@ -15,7 +15,7 @@
 > (`legacy/streamlit_command_center/`, `launch_app.command`, `launch_gui.command`,
 > `scripts/build_macos_app.command`) were deleted in 2026-09; git history has them.
 > **`shared/`** holds live backend modules (`env_io.py`, `orchestrator_runner.py`,
-> `daemon_client.py`, `strategy_registry.py`, `regime_filter.py`, and others) used by
+> `daemon_client.py`, `strategy_registry.py`, `market_hours.py`, and others) used by
 > production code (`api/pilots_api.py`, `api/data_api.py`, `api/_jobs.py`, and
 > more). `desktop/daemon_runtime.py`, `desktop/orchestrator_daemon.py`,
 > `desktop/run_history_store.py`, and `desktop/daemon_status.py` are backend infra the web

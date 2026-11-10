@@ -10,8 +10,7 @@ turns queue entries into real Robinhood MCP calls, appending outcomes to
 ``output/execution_receipts.jsonl``.  Until now neither file had a GUI view —
 the operator had to inspect them by hand.  This module is the **read side**
 only: it never contacts the MCP, never mutates the queue, and never writes
-receipts.  It mirrors the shape of :mod:`shared.dead_letter` and
-:mod:`shared.robinhood_mode` (tolerant, Streamlit-free, headlessly testable).
+receipts.  It mirrors the shape of :mod:`shared.dead_letter` (tolerant, Streamlit-free, headlessly testable).
 
 Every ``output/...`` path mentioned below resolves under
 ``settings.OUTPUT_DIR`` (``settings.LOCAL_DATA_ROOT``-anchored, default
@@ -572,7 +571,7 @@ def ntfy_topic_configured() -> bool:
     ``.env`` got a silently-always-``False`` result here forever). This field
     is classified as a GUI secret in `gui/env_io.py`'s ``SECRET_KEYS``, so its
     cleartext must never be captured here — CONSTRAINT #3. Lazy-imports
-    `settings.settings` (mirrors `gui/robinhood_mode.py::read_robinhood_execution_mode`)
+    `settings.settings` (as the deleted `gui/robinhood_mode.py` reader did)
     so this module keeps importing cleanly in minimal test environments.
     """
     try:
