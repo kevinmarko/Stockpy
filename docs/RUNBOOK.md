@@ -1514,6 +1514,44 @@ confirmation. It keeps asking in chat for any order Robinhood does not mark
 - Reconciliation reports declined/expired requests under `not_approved` and
   pending ones under `awaiting_approval`, not as missing fills.
 
+### Portfolio & Risk preflight (live account check before every order)
+
+Before anything is sent, the `rh-risk-manager` agent (or `/rh-execute`'s step
+4b) checks the whole queue against the **live** Agentic account with
+`python3 -m execution.agentic_preflight` and writes
+`$OUTPUT_DIR/agentic/<run_id>/preflight.json`. Its vetoes are final; nothing it
+vetoes is placed, not even if you say "place" in chat. Common reasons:
+
+- `buying_power_exhausted`: each buy fits your cash alone, but the
+  higher-conviction ones already use it. Buys are taken highest conviction first.
+- `qty_below_one_share`: the per-order dollar cap
+  (`ROBINHOOD_MAX_NOTIONAL_PER_ORDER`) or the queue's target is less than one
+  share at the live price, and limit orders need whole shares. With a small
+  Agentic account this is expected for high-priced stocks. Raising the cap, or
+  funding the account, is your call.
+- `sell_exceeds_sellable`: the live account holds fewer sellable shares than
+  the full exit wants (shares already sold or unsettled).
+- `approval_already_pending` / `already_submitted_today`: one request per order.
+- `quote_unavailable`, `positions_unavailable`, `account_values_unavailable`:
+  Robinhood didn't return a value, so the check fails closed.
+- Run-level (veto everything): `kill_switch_active`, `queue_stale`,
+  `pending_approval_unidentified` (an approval the code can't read: check the
+  app, decline it there if it's stale, then refresh).
+
+No usable preflight means every order asks you in chat (the stricter path).
+
+### Reading a thesis (Research Scout + Strategy Analyst)
+
+Before each order goes to your phone the Trader says its **thesis** (why this
+trade, why now), its **invalidation** (what would make it wrong) and any
+**flags** (e.g. earnings in two days). Every number in a thesis was checked
+against the file it came from by `python -m execution.agentic_research
+validate`. A thesis with a number that doesn't match its source is rejected,
+and the Trader says "thesis unavailable" instead. A thesis is advice: it never
+changes which orders are sent, unless you turn on the preflight's check 10
+(`--critical-gaps forecast_30d,...`), which vetoes orders with no valid thesis
+or with one of those fields missing.
+
 ### Preflight
 
 `python scripts/preflight_check.py` includes the Robinhood execution checks —

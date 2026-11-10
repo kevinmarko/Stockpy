@@ -50,6 +50,7 @@ from typing import Any, Callable, Dict, List, Optional
 import pytest
 
 from engine.advisory import Recommendation
+from execution import agentic_preflight as ap
 from execution.kill_switch import GlobalKillSwitch
 from execution.queue_builder import build_execution_queue, emit_execution_queue
 from execution.receipts_store import (
@@ -150,7 +151,10 @@ class _MockRobinhoodMCP:
         self._order_checks = order_checks or {}
         self.approval_requests: Dict[str, Dict[str, Any]] = {}  # approval_id -> request
         self._by_ref_id: Dict[str, str] = {}                     # ref_id -> approval_id
-        self._quote_prices = quote_prices or {}
+        # AAPL is the held name in _standard_snapshot (10 sh @ $150): give it a
+        # live quote by default so the Portfolio & Risk preflight can size it.
+        self._quote_prices = {"AAPL": 150.0, **(quote_prices or {})}
+        self.held: Dict[str, float] = {"AAPL": 10.0}
         self._buying_power = buying_power
         self._order_seq = 0
 
@@ -164,6 +168,34 @@ class _MockRobinhoodMCP:
                  "buying_power": self._buying_power},
             ]
         }
+
+    # -- real-shape payloads for the Portfolio & Risk preflight --------------
+    # (what rh-risk-manager saves verbatim from get_portfolio /
+    # get_equity_positions / get_equity_quotes / get_trade_approvals)
+
+    def portfolio_payload(self) -> Dict[str, Any]:
+        self.calls.append(("get_portfolio", {"shape": "real"}))
+        equity = sum(q * self._quote_prices.get(s, 0.0) for s, q in self.held.items())
+        return {"data": {"total_value": str(self._buying_power + equity), "equity_value": str(equity),
+                         "cash": str(self._buying_power),
+                         "buying_power": {"buying_power": str(self._buying_power)}}}
+
+    def positions_payload(self) -> Dict[str, Any]:
+        self.calls.append(("get_equity_positions", {"shape": "real"}))
+        return {"data": {"positions": [
+            {"symbol": s, "quantity": str(q), "shares_available_for_sells": str(q)} for s, q in self.held.items()]}}
+
+    def quotes_payload(self, symbols: List[str]) -> Dict[str, Any]:
+        self.calls.append(("get_equity_quotes", {"symbols": symbols}))
+        return {"data": {"results": [
+            {"quote": {"symbol": s, "last_trade_price": str(self._quote_prices[s]), "state": "active",
+                       "has_traded": True}} for s in symbols if s in self._quote_prices]}}
+
+    def approvals_payload(self) -> Dict[str, Any]:
+        self.calls.append(("get_trade_approvals", {"shape": "real"}))
+        return {"data": {"approvals": [
+            {"approval_id": a, "symbol": r["order"]["symbol"], "side": r["order"]["side"]}
+            for a, r in self.approval_requests.items() if r["state"] == "pending"]}}
 
     def get_portfolio(self) -> Dict[str, Any]:
         self.calls.append(("get_portfolio", {}))
@@ -268,8 +300,12 @@ def run_execution_skill(
     now: datetime = FIXED_NOW,
     kill_switch: Optional[GlobalKillSwitch] = None,
     stale_after_minutes: float = 30.0,
+    use_preflight: bool = True,
 ) -> Dict[str, Any]:
     """Pure-Python port of ``.claude/skills/robinhood-execution/SKILL.md``.
+
+    ``use_preflight=False`` simulates step 4b finding no usable preflight:
+    every order then takes the in-chat path.
 
     Follows the SKILL procedure so the prose safety invariants become testable:
 
@@ -336,6 +372,29 @@ def run_execution_skill(
         summary["reason"] = "no_agentic_account"
         raise SkillAbort("no dedicated Agentic account — refusing to place")
     mcp.get_portfolio()
+
+    # -- Step 4b: Portfolio & Risk preflight (live only), the REAL code ------
+    verdicts: Dict[str, Any] = {}
+    preflight_ok = False
+    if mode == "live" and use_preflight:
+        symbols = sorted({i["symbol"] for i in intents})
+        approvals, unidentified = ap.approvals_from_mcp(mcp.approvals_payload())
+        report = ap.preflight(
+            payload,
+            ap.AccountState.from_mcp(mcp.portfolio_payload(), mcp.positions_payload()),
+            ap.quotes_from_mcp(mcp.quotes_payload(symbols)),
+            now=now,
+            pending_approvals=approvals,
+            unidentified_pending_approvals=unidentified,
+            placed_dedup_keys=[r["dedup_key"] for r in read_placed_ledger(output_dir)],
+            kill_switch_active=kill_switch.is_active(),
+            max_notional=max_notional,
+        )
+        ap.write_preflight(report, output_dir=output_dir)
+        loaded = ap.read_preflight_for_queue(payload, output_dir=output_dir)
+        preflight_ok = loaded is not None
+        verdicts = {v["client_order_id"]: v for v in (loaded or {}).get("verdicts", [])}
+    summary["preflight_used"] = preflight_ok
 
     # -- Step 3: preview EVERY intent (always) -----------------------------
     for intent in intents:
@@ -423,10 +482,28 @@ def run_execution_skill(
             summary["skipped"] += 1
             continue
 
+        # 4b/5a. a preflight veto is final; a pass re-reviews at ITS qty.
+        if preflight_ok:
+            verdict = verdicts.get(intent.get("client_order_id"))
+            if verdict is None or not verdict.get("passed"):
+                reasons = ",".join((verdict or {}).get("reasons", []) or ["no_verdict"])
+                _append_receipt(output_dir, {
+                    "ts": now.isoformat(), "symbol": symbol, "side": side,
+                    "qty": qty, "action": "skipped", "mcp_order_id": None,
+                    "note": f"preflight veto: {reasons}",
+                })
+                summary["skipped"] += 1
+                summary.setdefault("preflight_vetoed", []).append(symbol)
+                continue
+            qty = verdict["qty"]
+            review = mcp.review_equity_order(symbol=symbol, side=side, order_type=order_type,
+                                             quantity=qty, limit_price=verdict.get("limit_price"))
+
         # c. confirmation path, decided by THIS order's review response:
         #    approval path → the operator's tap in the app is the confirmation;
-        #    anything else → explicit in-chat "place / skip / stop".
-        approval_path = (review.get("customer_approval_required") is True
+        #    anything else (incl. no usable preflight) → in-chat "place / skip / stop".
+        approval_path = (preflight_ok
+                         and review.get("customer_approval_required") is True
                          and not review.get("order_checks"))
         if approval_path:
             decision = "place"
@@ -797,7 +874,8 @@ class TestOperatorConfirmationGate:
         summary = run_execution_skill(tmp_output, mcp, confirm=lambda intent: "skip")
         assert summary["placed"] == 0
         assert mcp.call_count("place_equity_order") == 0
-        assert mcp.call_count("review_equity_order") == 1  # still previewed
+        # previewed in step 3, then re-reviewed at the preflight's qty (step 5a)
+        assert mcp.call_count("review_equity_order") == 2
 
     def test_operator_stop_halts_remaining_intents(self, tmp_output: Path):
         _build_and_emit(
@@ -847,7 +925,9 @@ class TestTradeApprovalMode:
         assert {r["approval_id"] for r in ledger} == set(mcp.approval_requests)
         states = latest_approval_states(tmp_output)
         assert {r["state"] for r in states.values()} == {"pending"}
-        assert mcp.call_count("get_trade_approvals") == 1   # tracked with a fresh call
+        tracking = [kw for name, kw in mcp.calls
+                    if name == "get_trade_approvals" and kw.get("approval_ids")]
+        assert len(tracking) == 1                           # tracked with a fresh call
 
     def test_every_submission_carries_deterministic_ref_id(self, tmp_output: Path):
         payload = _build_and_emit([_rec("MSFT", "BUY", conviction=0.95)], tmp_output, mode="live")
@@ -899,17 +979,82 @@ class TestTradeApprovalMode:
         assert len(mcp.approval_requests) == 1
         assert mcp.placed_orders == []
 
-    def test_robinhood_dedups_a_lost_ledger_write_via_ref_id(self, tmp_output: Path):
-        """Belt and braces: even if the local ledger line were lost, the same
-        intent re-sends the same ref_id and Robinhood returns the SAME
+    def test_lost_ledger_write_caught_by_preflight_then_by_ref_id(self, tmp_output: Path):
+        """Belt and braces for a lost ledger line: the preflight sees the still-
+        pending approval and vetoes the duplicate; and even with no preflight,
+        the same intent re-sends the same ref_id and Robinhood returns the SAME
         approval instead of creating a second one."""
         _build_and_emit([_rec("MSFT", "BUY", conviction=0.95)], tmp_output, mode="live")
         mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 400.0}, approvals_required=True)
         run_execution_skill(tmp_output, mcp)
         (tmp_output / _PLACED_LEDGER_FILENAME).unlink()
-        run_execution_skill(tmp_output, mcp)
+
+        summary = run_execution_skill(tmp_output, mcp)
+        assert summary["preflight_vetoed"] == ["MSFT"]
+        assert mcp.call_count("place_equity_order") == 1
+
+        run_execution_skill(tmp_output, mcp, use_preflight=False)   # in-chat path, confirm=place
         assert mcp.call_count("place_equity_order") == 2
         assert len(mcp.approval_requests) == 1
+
+
+class TestPreflightIntegration:
+    """Phase 2: the Trader honors the Portfolio & Risk preflight (step 4b)."""
+
+    def test_cumulative_buying_power_veto_is_final_even_if_operator_says_place(self, tmp_output: Path):
+        # Each BUY alone fits the cash; together they don't. The preflight keeps
+        # the higher-conviction one and vetoes the other — no confirm can undo it.
+        _build_and_emit([_rec("MSFT", "BUY", conviction=0.99, pct=0.01),
+                         _rec("NVDA", "BUY", conviction=0.90, pct=0.01)], tmp_output, mode="live")
+        mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 100.0, "NVDA": 100.0}, buying_power=1_000.0)
+        mcp.held = {}
+        summary = run_execution_skill(tmp_output, mcp, confirm=lambda i: "place")
+        assert summary["preflight_used"] is True
+        assert summary["preflight_vetoed"] == ["NVDA"]
+        assert [o["symbol"] for o in mcp.placed_orders] == ["MSFT"]
+        receipts = [json.loads(l) for l in (tmp_output / _RECEIPTS_FILENAME).read_text().splitlines()]
+        assert any("buying_power_exhausted" in (r.get("note") or "") for r in receipts)
+
+    def test_places_at_the_preflight_quantity(self, tmp_output: Path):
+        _build_and_emit([_rec("MSFT", "BUY", conviction=0.95)], tmp_output, mode="live")
+        mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 400.0})
+        run_execution_skill(tmp_output, mcp)
+        verdict = json.loads(next((tmp_output / "agentic").glob("*/preflight.json")).read_text())["verdicts"][0]
+        (order,) = mcp.placed_orders
+        assert order["quantity"] == verdict["qty"]
+
+    def test_no_preflight_means_in_chat_for_every_order_even_with_approvals_on(self, tmp_output: Path):
+        _build_and_emit([_rec("MSFT", "BUY", conviction=0.95)], tmp_output, mode="live")
+        asked: List[str] = []
+        mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 400.0}, approvals_required=True)
+        summary = run_execution_skill(tmp_output, mcp, use_preflight=False,
+                                      confirm=lambda i: asked.append(i["symbol"]) or "skip")
+        assert summary["preflight_used"] is False
+        assert asked == ["MSFT"] and mcp.approval_requests == {}
+
+    def test_full_exit_of_shares_already_sold_is_vetoed(self, tmp_output: Path):
+        payload = _build_and_emit([_rec("AAPL", "SELL", conviction=0.95, pct=0.0)], tmp_output, mode="live")
+        assert payload["intents"][0]["qty"] == 10.0          # full exit of the snapshot's 10 shares
+        mcp = _MockRobinhoodMCP()
+        mcp.held = {"AAPL": 4.0}                              # live account has only 4
+        summary = run_execution_skill(tmp_output, mcp)
+        assert summary["preflight_vetoed"] == ["AAPL"]
+        assert mcp.placed_orders == []
+
+    def test_trim_is_capped_at_live_sellable_shares(self, tmp_output: Path):
+        payload = _build_and_emit([_rec("AAPL", "SELL", conviction=0.95)], tmp_output, mode="live")
+        assert payload["intents"][0]["qty"] is None           # a trim: sized from target_notional
+        mcp = _MockRobinhoodMCP()
+        mcp.held = {"AAPL": 4.0}
+        run_execution_skill(tmp_output, mcp)
+        (order,) = mcp.placed_orders
+        assert order["quantity"] == 4.0
+
+    def test_review_mode_runs_no_preflight_and_places_nothing(self, tmp_output: Path):
+        _build_and_emit([_rec("MSFT", "BUY", conviction=0.95)], tmp_output, mode="review")
+        mcp = _MockRobinhoodMCP(quote_prices={"MSFT": 400.0})
+        summary = run_execution_skill(tmp_output, mcp)
+        assert summary["preflight_used"] is False and mcp.placed_orders == []
 
 
 class TestSkillMdInvariantsPinned:
@@ -955,6 +1100,18 @@ class TestSkillMdInvariantsPinned:
             "append_approval_event",
             "never resubmit a declined or expired order",
             "execution_approvals.jsonl",
+            # Portfolio & Risk preflight (four-agent plan, Phase 2)
+            "Portfolio & Risk preflight",
+            "A preflight veto is final.",
+            "read_preflight_for_queue",
+            "No usable preflight",
+            "A missing check makes the process stricter, never",
+            "Preflight vetoes are final.",
+            # Thesis narration (four-agent plan, Phase 3)
+            "Thesis per order (narration only).",
+            "load_run_artifacts",
+            "thesis unavailable",
+            "This step changes nothing about which orders are placed.",
         ]
 
         for skill_md_path in skill_md_paths:

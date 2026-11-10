@@ -613,6 +613,8 @@ class TestNoOrderFunctions:
         "execution/compose.py",
         "execution/priority_queue.py",
         "execution/macro_snapshot.py",
+        "execution/agentic_preflight.py",
+        "execution/agentic_research.py",
     )
 
     _STRICT_FORBIDDEN_EXACT = frozenset({

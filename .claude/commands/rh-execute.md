@@ -28,7 +28,15 @@ review (they may be arriving here because of an ntfy push
    respecting `max_notional_per_order`), pausing after each to answer
    whatever the operator asks about it.
 4. If `mode == "review"`, STOP after previews — this is the paper/dry-run stage.
-5. If `mode == "live"`, place ONLY `allow_place: true` intents, one at a time,
+4b. If `mode == "live"`, get the Portfolio & Risk preflight for this queue (the
+   `rh-risk-manager` agent, or `python3 -m execution.agentic_preflight` per the
+   skill's step 4b). Its vetoes are final; place only `passed: true` intents at
+   its `qty` and `limit_price`. With no usable preflight, every order takes the
+   in-chat confirmation path.
+4c. Say each order's validated thesis, invalidation and flags (the
+   `rh-strategy-analyst`'s `theses.json`, loaded per the skill's step 4c) before
+   it is sent; "thesis unavailable" when there is none. Narration only.
+5. If `mode == "live", place ONLY `allow_place: true` intents, one at a time,
    each with an explicit per-order human confirmation, re-checking the kill
    switch before each placement, and append outcomes to
    `$OUTPUT_DIR/execution_receipts.jsonl`. When an order's
