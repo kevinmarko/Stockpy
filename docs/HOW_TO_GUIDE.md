@@ -1585,6 +1585,29 @@ app screen places Robinhood orders.
 
 ---
 
+### Hands-off mode: the four-agent cycle
+
+With the optional timer on (see `docs/RUNBOOK.md`, "Agentic cycle
+(unattended)"), four agents run on their own after each fresh queue during
+market hours: one researches the queued stocks, one writes a short thesis per
+order, one checks every order against your real account, and the Trader sends
+the survivors to your phone. You'll get:
+
+- **An approval request in the Robinhood app** for each order. Nothing trades
+  until you tap Approve. Declining is final for the day; the agents never
+  resend it.
+- **One push per cycle**: "2 trades awaiting your approval in Robinhood", then
+  one line per order with its share count, limit price and thesis, plus what
+  was vetoed and why. In review mode it says "Review run: N would pass, M
+  vetoed" and nothing is sent.
+- **"Agentic cycle stopped"** if a step failed. Nothing more was sent from that
+  cycle; the next queue starts fresh.
+
+The **Pending approvals** card on the Agentic Trading screen shows the same
+list: what's waiting on you with its thesis and what it would take to be
+wrong, what you decided recently, and how the last cycle went. The card only
+shows; you approve or decline in the Robinhood app.
+
 ## In-App Help & Glossary
 
 The web app's **Help & Glossary** screen (`/help`) gives instant access to every concept in

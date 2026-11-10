@@ -313,6 +313,8 @@ import shared.gravity_ai_panel as gravity_ai_panel
 # ever calls the MCP place_equity_order tool. Imported at module top so tests
 # can `mock.patch.object(pilots_api, "execution_panel", ...)`.
 import shared.robinhood_execution_panel as execution_panel
+# Four-agent cycle read side (GET /agentic/approvals); module alias so tests can patch it.
+import shared.agentic_approvals as agentic_approvals
 
 # Portfolio-aware RAG query (POST /rag/query). agents/rag_orchestrator.py's
 # own optional heavy deps (langgraph, qdrant_client, sentence-transformers)
@@ -2578,6 +2580,20 @@ def get_agentic_status() -> Dict[str, Any]:
         "queue": queue_summary,
         "agent_loop": agentic.agent_loop_status(),
     }
+
+
+@app.get("/agentic/approvals", dependencies=[Depends(require_read_token)])
+def get_agentic_approvals() -> Dict[str, Any]:
+    """Robinhood trade approvals the agents sent to the operator's phone — READ ONLY.
+
+    Returns ``{pending, recent, n_pending, last_cycle, note}`` from
+    ``shared.agentic_approvals.build_approvals_view``: the last approval state
+    the Trader agent recorded per approval (not a live Robinhood read; ``note``
+    says so), the validated thesis when the run's validator accepted it (else
+    ``null``), and the latest unattended cycle's status. Nothing here can
+    approve, decline or place: the operator does that in the Robinhood app.
+    Never raises, never 500s (CONSTRAINT #6)."""
+    return agentic_approvals.build_approvals_view()
 
 
 @app.get("/agentic/discovery", dependencies=[Depends(require_read_token)])

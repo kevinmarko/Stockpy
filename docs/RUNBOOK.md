@@ -1552,6 +1552,56 @@ changes which orders are sent, unless you turn on the preflight's check 10
 (`--critical-gaps forecast_30d,...`), which vetoes orders with no valid thesis
 or with one of those fields missing.
 
+### Agentic cycle (unattended): Scout → Analyst → Risk → Trader
+
+`/rh-agentic-cycle` (`.claude/commands/rh-agentic-cycle.md`) runs the four
+agents in order for the current queue. `execution/agentic_cycle.py` makes every
+deterministic call: whether to run, stage bookkeeping, and the summary push.
+Unattended, the Trader sends orders **only to your phone**. It never asks in
+chat (such orders are skipped with `in_chat_confirmation_unavailable`), never
+declines anything for you, and places nothing if trade approvals are off.
+
+**Run once by hand** (in Claude Code on the Mac): `/rh-agentic-cycle`.
+**Check without running anything:** `python -m execution.agentic_cycle gate`
+(exit 0 = would run, 3 = skip, with the reason).
+
+**Turn on the timer** (every 15 min; not installed by `install_schedule.command`):
+
+```bash
+cp scripts/com.investyo.rh-agentic-cycle.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
+```
+
+It needs `claude` logged in and the Robinhood MCP connected on that Mac (edit
+the plist's `PATH` if `which claude` is elsewhere). Start with
+`ROBINHOOD_EXECUTION_MODE=review` (Phase 5 burn-in): the cycle runs end to end
+and pushes "Review run: N would pass, M vetoed" without sending anything.
+
+**Turn it off / roll back:** `launchctl unload ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist`.
+Setting the mode to `off` or activating the kill switch also stops it at the gate.
+
+**Skip reasons** (normal, no push): `mode_off`, `kill_switch_active`,
+`market_closed`, `queue_missing` / `queue_unreadable` / `queue_stale` /
+`queue_timestamp_unavailable`, `no_actionable_intents`, `already_handled`
+(one cycle per queue; a failed one is not retried, the next daemon queue gets a
+new run), `cycle_in_progress`, `state_unavailable`.
+
+**When a cycle fails** you get one high-priority push ("Agentic cycle
+stopped"). Details: `$OUTPUT_DIR/agentic/<run_id>/cycle.json` (each stage's
+status and the reason) and `$OUTPUT_DIR/agentic/cycles.jsonl` (one line per
+cycle). Launcher output: `output/agentic_cycle.out` / `.err`. A hard 30-minute
+timeout stops a stuck run and records it as failed.
+
+**Stuck lock?** The lock (`$OUTPUT_DIR/agentic/cycle.lock`) is an OS file lock
+released when its process exits, so it can't outlive a crash. If
+`cycle_in_progress` persists, find the process (`pgrep -fl agentic_cycle`).
+
+**Pending approvals in the webapp:** the Agentic Trading screen's "Pending
+approvals" card (`GET /agentic/approvals`) lists what's waiting on your phone,
+with each validated thesis, recent decisions and the last cycle's status. It
+shows the last state the Trader recorded, and the Robinhood app is the live
+source; approve or decline there.
+
 ### Preflight
 
 `python scripts/preflight_check.py` includes the Robinhood execution checks —

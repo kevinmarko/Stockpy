@@ -190,6 +190,22 @@ Never decide the path from memory or from an earlier call: Robinhood lets the
 customer flip the setting at any time, so the per-order `review_equity_order`
 response is the truth for that order.
 
+## Unattended cycle (`/rh-agentic-cycle`)
+
+When the `/rh-agentic-cycle` coordinator runs you as its Trader stage, nobody
+may be at the keyboard. Everything in this skill still applies, with these
+overrides (the coordinator passes them verbatim):
+
+- Do not trigger a daemon run; use the queue as it is. If its `generated_at`
+  is not the cycle's `queue_generated_at`, place nothing and report a failure.
+- Place only on the **approval path**. Never ask in chat: an order that would
+  need in-chat confirmation is skipped with the note
+  `in_chat_confirmation_unavailable`. With trade approvals off, place nothing.
+- Never call `decline_trade_approval` unattended; stale approvals go into the
+  cycle's summary push for the operator.
+- Record `run_id` in every placed record, check approvals once, and don't wait
+  for the operator's tap.
+
 ## Procedure
 
 1. **Load state and orient the operator.** Read `$OUTPUT_DIR/execution_queue.json`.

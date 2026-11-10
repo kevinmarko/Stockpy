@@ -6,6 +6,8 @@
 
 > **2026-09 (step 4c):** Follow-a-Pilot is gone from the webapp: `FollowModal.tsx`, `resolveMinAmount.ts`, the Follow buttons on PilotDetail/Comparison, the Marketplace "Most Popular" rail (`PopularCard`), the Portfolio and Settings-Modules "Active follows" sections, AgenticTrading's follows chip/row, onboarding's "Set amount" step, and the `getFollows`/`follow` client+mock methods and `Follow*` types. `PilotSummary` has no `aum_proxy`/`followers_proxy`/`followable`. Entries below that describe following are historical.
 
+> **2026-11 (four-agent Phase 4):** `components/PendingApprovalsSection.tsx` on the Agentic Trading screen (below the execution queue, `id="pending-approvals"`) reads `api.getAgenticApprovals()` (`AgenticApprovals` in `types.ts`; mock fixture `MOCK_AGENTIC_APPROVALS` covers a validated thesis, a missing one, an unknown state and a failed last cycle). It lists approvals waiting on the phone with their validated thesis and invalidation, recent decisions, and the last unattended cycle's status (a warning when it failed). It has no approve or decline buttons: that happens only in the Robinhood app.
+
 > Part of the split-out `CLAUDE.md` System Architecture reference. See [../../CLAUDE.md](../../CLAUDE.md) for the index.
 
 > **Frontend:** `webapp/` (the Pilots PWA) is the platform's only UI. The Streamlit

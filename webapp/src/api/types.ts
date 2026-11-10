@@ -3105,6 +3105,49 @@ export interface AgentLoopStatus {
   reason: string | null;
 }
 
+/** One Robinhood trade approval the agents sent to the operator's phone. */
+export interface AgenticApprovalRow {
+  approval_id: string;
+  symbol: string | null;
+  side: "buy" | "sell" | string | null;
+  /** Shares sent; null when no placed record matches (never a guessed 0). */
+  qty: number | null;
+  /** Last state the Trader agent recorded — not a live Robinhood read. */
+  state: "pending" | "approved" | "declined" | "expired" | "auto_approved" | "unknown" | string;
+  submitted_at: string | null;
+  recorded_at: string | null;
+  run_id: string | null;
+  /** Quoted only when the run's validator accepted it; otherwise null. */
+  thesis: string | null;
+  invalidation: string | null;
+}
+
+/** The latest unattended /rh-agentic-cycle run (cycle.json). */
+export interface AgenticCycleStatus {
+  run_id: string | null;
+  status: "running" | "completed" | "failed" | string | null;
+  mode: "review" | "live" | string | null;
+  launched_by: "timer" | "manual" | string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  failed_stage: string | null;
+  reason: string | null;
+  summary_title: string | null;
+}
+
+/**
+ * GET /agentic/approvals — trade approvals the four-agent cycle sent to the
+ * operator's phone, plus the last cycle's status. Read-only: approving and
+ * declining happen in the Robinhood app, never here.
+ */
+export interface AgenticApprovals {
+  pending: AgenticApprovalRow[];
+  recent: AgenticApprovalRow[];
+  n_pending: number;
+  last_cycle: AgenticCycleStatus | null;
+  note: string;
+}
+
 /**
  * GET /agentic/status — composite "what is the agent doing" answer for the
  * Agentic Trading tab's header. Read-only; never places an order (see

@@ -13,6 +13,7 @@ import type { StrategyReportCardSnapshot,
   BatchRetrospectiveInsightsResponse,
   BridgeReliabilityResponse,
   AgenticDiscovery,
+  AgenticApprovals,
   AgenticStatus,
   AgentLoopStatus,
   AiChartResponse,
@@ -7455,6 +7456,78 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
  * `sources` (a Pilot-follow intent has no underlying news/sentiment sources
  * of its own) to exercise the "field genuinely absent" rendering path too.
  */
+// Honest fixture for GET /agentic/approvals: one pending approval WITH a
+// validated thesis, one pending WITHOUT one (validator rejected it -> null,
+// never invented), a decided history including an "unknown" state, and a
+// last cycle that FAILED so the degraded shape is exercised.
+const MOCK_AGENTIC_APPROVALS: AgenticApprovals = {
+  pending: [
+    {
+      approval_id: "mock-appr-1",
+      symbol: "T",
+      side: "buy",
+      qty: 7,
+      state: "pending",
+      submitted_at: "2026-11-10T15:06:12+00:00",
+      recorded_at: "2026-11-10T15:06:40+00:00",
+      run_id: "20261110T150000Z",
+      thesis: "Conviction 0.95 with momentum 0.42 leads the queue; regime is risk-on.",
+      invalidation: "A close below the 50-day average.",
+    },
+    {
+      approval_id: "mock-appr-2",
+      symbol: "F",
+      side: "sell",
+      qty: null,
+      state: "pending",
+      submitted_at: "2026-11-10T14:36:02+00:00",
+      recorded_at: "2026-11-10T14:36:30+00:00",
+      run_id: null,
+      thesis: null,
+      invalidation: null,
+    },
+  ],
+  recent: [
+    {
+      approval_id: "mock-appr-0",
+      symbol: "AAPL",
+      side: "buy",
+      qty: 1,
+      state: "declined",
+      submitted_at: "2026-11-07T15:05:00+00:00",
+      recorded_at: "2026-11-07T15:35:00+00:00",
+      run_id: "20261107T150000Z",
+      thesis: null,
+      invalidation: null,
+    },
+    {
+      approval_id: "mock-appr-00",
+      symbol: "MSFT",
+      side: "buy",
+      qty: 1,
+      state: "unknown",
+      submitted_at: "2026-11-06T15:05:00+00:00",
+      recorded_at: "2026-11-06T15:20:00+00:00",
+      run_id: null,
+      thesis: null,
+      invalidation: null,
+    },
+  ],
+  n_pending: 2,
+  last_cycle: {
+    run_id: "20261110T153000Z",
+    status: "failed",
+    mode: "live",
+    launched_by: "timer",
+    started_at: "2026-11-10T15:31:00+00:00",
+    finished_at: "2026-11-10T15:33:10+00:00",
+    failed_stage: "risk",
+    reason: "preflight.json missing for this queue",
+    summary_title: null,
+  },
+  note: "States are the last ones the Trader agent recorded; the Robinhood app is the live source. Approve or decline there.",
+};
+
 const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
   generated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
   mode: "review",
@@ -11182,6 +11255,10 @@ export const mockApi = {
   },
 
   // ---- Agentic Trading tab ----
+  async getAgenticApprovals(): Promise<AgenticApprovals> {
+    return delay(MOCK_AGENTIC_APPROVALS);
+  },
+
   async getAgenticStatus(): Promise<AgenticStatus> {
     return delay({
       mode: MOCK_EXECUTION_QUEUE.mode,
