@@ -216,6 +216,22 @@ Design principles:
   execution. A market order executes at whatever the price is when you tap; a limit
   order caps the slippage at the buffer no matter how late you approve.
 
+### Agent 5 — Reviewer (added in Phase 5)
+
+- **Job:** check the other four after the fact. Reconcile every placement with the
+  Agentic account's real fills, show each approved trade's move against its thesis,
+  count cycle failures and vetoes, and hard-fail on safety breaches (an order executed
+  without a phone tap, a placement in review mode or beyond the preflight, a missing
+  `ref_id`, a duplicate). Reports burn-in readiness (READY needs 10 review days, clean
+  invariants and reconciliation, a positive cap, approvals confirmed on).
+- **Tools:** read-only Robinhood (`get_accounts`, `get_equity_orders`,
+  `get_equity_quotes`, `get_trade_approvals`, `get_trade_approval_setting`). No order,
+  decline, cancel or Write tool.
+- **Code:** `execution/agentic_review.py`; command `/rh-agentic-review`; daily timer
+  `scripts/com.investyo.rh-agentic-review.plist` (not auto-installed).
+- **May not:** change the mode, the cap, the queue or an approval. READY is advice;
+  going live is the operator's own settings change.
+
 ## 5. How it runs ("on its own")
 
 - **Trigger:** the daemon already pushes an ntfy notification when the queue gains a new
@@ -255,7 +271,7 @@ Design principles:
 | **P2 — Portfolio & Risk preflight** ✅ built 2026-11-03 (`.claude/robinhood_four_agent_phase2_walkthrough.md`) | `execution/agentic_preflight.py` + `.claude/agents/rh-risk-manager.md`. | New `tests/test_agentic_preflight.py`: each check pass/fail, never-upsize property, missing-data → veto. |
 | **P3 — Analyst + Scout** ✅ built 2026-11-03 | `.claude/agents/rh-strategy-analyst.md`, `rh-research-scout.md` (wrapping `agentic-discovery`); theses/research JSON schemas. | Schema tests; a `review` cycle producing all four artifacts. |
 | **P4 — Orchestration** ✅ built 2026-11-10 (`.claude/robinhood_four_agent_phase4_walkthrough.md`) | `/rh-agentic-cycle` command, scheduled run, ntfy summary. Webapp "Pending approvals" card on `AgenticTrading.tsx` (separately OK'd by the operator 2026-11-10). | `/verify`; for the webapp part, `npm run --prefix webapp typecheck` + `/verify-webapp`. |
-| **P5 — Burn-in** | 10 trading days in `review`, then `live` with a small `ROBINHOOD_MAX_NOTIONAL_PER_ORDER`; review every approve/decline/expire against the theses. | Receipts reconcile 1:1 with Robinhood fills; zero placements while approvals were off. |
+| **P5 — Burn-in** 🛠 tooling built 2026-11-10 (`.claude/robinhood_four_agent_phase5_walkthrough.md`); the 10-day run itself happens on the operator's Mac | Agent 5 (Reviewer, `rh-reviewer`, `execution/agentic_review.py`) measures it: 10 trading days in `review`, then `live` with a small `ROBINHOOD_MAX_NOTIONAL_PER_ORDER`; review every approve/decline/expire against the theses. | Receipts reconcile 1:1 with Robinhood fills; zero placements while approvals were off. |
 
 ## 8. Documentation updates (part of the deliverable)
 

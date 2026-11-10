@@ -7524,6 +7524,18 @@ const MOCK_AGENTIC_APPROVALS: AgenticApprovals = {
     reason: "preflight.json missing for this queue",
     summary_title: null,
   },
+  // Mid-burn-in: NOT READY with the unmet items spelled out (never a bare flag).
+  burnin: {
+    day: "2026-11-10",
+    ready: false,
+    review_days: 4,
+    required_days: 10,
+    unmet: [
+      "6 more day(s) with a completed review cycle (4/10)",
+      "1 failed cycle(s) in the last 3 cycle days: 20261110T153000Z",
+    ],
+    safety_failures: [],
+  },
   note: "States are the last ones the Trader agent recorded; the Robinhood app is the live source. Approve or decline there.",
 };
 

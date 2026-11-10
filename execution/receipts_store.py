@@ -416,8 +416,16 @@ def reconcile(
     orders_fetcher: Optional[Callable[[], List[Dict[str, Any]]]] = None,
     symbol_resolver: Optional[Callable[[str], Optional[str]]] = None,
     force: bool = False,
+    fills: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """Cross-check the placed-intent ledger against actual FILLED orders.
+
+    ``fills`` (optional): already-parsed ``OrderFill``s to reconcile against
+    instead of calling ``fetch_filled_orders``. The four-agent Reviewer
+    (``execution/agentic_review.py``) passes the Agentic account's fills from
+    a saved MCP ``get_equity_orders`` response this way, because
+    ``fetch_filled_orders`` reads and writes the shared order cache
+    (``cache/robinhood_orders.json``), which holds the main account's history.
 
     Reuses the PURE FIFO fill reconstruction in :mod:`data.robinhood_orders`
     (``fetch_filled_orders`` → ``OrderFill``) — the FIFO logic is NEVER
@@ -468,12 +476,13 @@ def reconcile(
         placed_keys = set(placed_by_key.keys())
 
         # Reuse the existing FIFO-source fetch (READ ONLY) — do NOT reimplement.
-        from data.robinhood_orders import fetch_filled_orders
-        fills = fetch_filled_orders(
-            force=force,
-            orders_fetcher=orders_fetcher,
-            symbol_resolver=symbol_resolver,
-        )
+        if fills is None:
+            from data.robinhood_orders import fetch_filled_orders
+            fills = fetch_filled_orders(
+                force=force,
+                orders_fetcher=orders_fetcher,
+                symbol_resolver=symbol_resolver,
+            )
 
         # Fills grouped by the same (date, symbol, side) key as the ledger.
         fill_keys: Dict[str, List[Any]] = {}
