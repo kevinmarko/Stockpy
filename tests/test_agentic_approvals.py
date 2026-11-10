@@ -81,3 +81,15 @@ def test_corrupt_files_degrade(tmp_path):
     (tmp_path / "agentic" / RUN / "cycle.json").write_text("{bad")
     v = build_approvals_view(tmp_path)
     assert v["pending"] == [] and v["last_cycle"] is None
+
+
+def test_burnin_block_from_latest_review(tmp_path):
+    from datetime import date
+    from execution import agentic_review as ar
+    assert build_approvals_view(tmp_path)["burnin"] is None
+    ar.save_input("orders", {"data": {"orders": []}}, day=date(2026, 11, 20), output_dir=tmp_path)
+    ar.run_review(day=date(2026, 11, 20), output_dir=tmp_path, max_notional=200.0)
+    b = build_approvals_view(tmp_path)["burnin"]
+    assert b["day"] == "2026-11-20" and b["ready"] is False
+    assert b["review_days"] == 0 and b["required_days"] == 10
+    assert any("more day(s)" in u for u in b["unmet"]) and b["safety_failures"] == []

@@ -7,7 +7,9 @@ write under ``settings.OUTPUT_DIR``:
 * ``execution_approvals.jsonl`` — every approval state the Trader observed;
 * ``execution_placed.jsonl`` — what was sent (qty, client_order_id, run_id);
 * ``agentic/<run_id>/cycle.json`` and ``theses.json`` — the cycle's status and
-  the theses its validator accepted.
+  the theses its validator accepted;
+* ``agentic/review/<day>/review.json`` — the Reviewer's latest burn-in verdict
+  (``burnin``; null until the first review).
 
 Honesty rules (CONSTRAINT #4): a state shown here is the **last state the agent
 recorded**, not a live Robinhood read; the response says when it was recorded.
@@ -67,6 +69,7 @@ def build_approvals_view(output_dir: Optional[Any] = None, *, recent_limit: int 
         "recent": [],
         "n_pending": 0,
         "last_cycle": None,
+        "burnin": None,
         "note": ("States are the last ones the Trader agent recorded; the Robinhood app "
                  "is the live source. Approve or decline there."),
     }
@@ -118,6 +121,25 @@ def build_approvals_view(output_dir: Optional[Any] = None, *, recent_limit: int 
             }
             summary = cyc.get("summary") if isinstance(cyc.get("summary"), Mapping) else None
             view["last_cycle"]["summary_title"] = summary.get("title") if summary else None
+        view["burnin"] = _burnin_summary(out)
     except Exception as exc:
         logger.warning("agentic_approvals: view unavailable (%s)", exc)
     return view
+
+
+def _burnin_summary(out: Path) -> Optional[Dict[str, Any]]:
+    """The latest Reviewer verdict (``agentic/review/<day>/review.json``), or None."""
+    from execution.agentic_review import latest_review
+
+    rev = latest_review(out)
+    if not rev:
+        return None
+    b = rev.get("burnin") or {}
+    return {
+        "day": rev.get("day"),
+        "ready": bool(b.get("ready")),
+        "review_days": b.get("review_days"),
+        "required_days": b.get("required_days"),
+        "unmet": list(b.get("unmet") or []),
+        "safety_failures": list(b.get("safety_failures") or []),
+    }

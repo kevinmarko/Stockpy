@@ -3138,11 +3138,25 @@ export interface AgenticCycleStatus {
  * operator's phone, plus the last cycle's status. Read-only: approving and
  * declining happen in the Robinhood app, never here.
  */
+/** Latest Agent 5 (Reviewer) burn-in verdict. READY is advice; going live is the operator's call. */
+export interface AgenticBurnin {
+  day: string | null;
+  ready: boolean;
+  review_days: number | null;
+  required_days: number | null;
+  /** Every criterion still unmet, in plain words. */
+  unmet: string[];
+  /** Safety invariants that failed (e.g. "order_without_phone_approval"); empty = all pass. */
+  safety_failures: string[];
+}
+
 export interface AgenticApprovals {
   pending: AgenticApprovalRow[];
   recent: AgenticApprovalRow[];
   n_pending: number;
   last_cycle: AgenticCycleStatus | null;
+  /** Null until the Reviewer has run once. */
+  burnin: AgenticBurnin | null;
   note: string;
 }
 
