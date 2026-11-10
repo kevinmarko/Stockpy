@@ -2038,7 +2038,6 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
     "data/market_data.py:2287",
   ],
   FUNDAMENTALS_SOURCE: ["data/market_data.py:1892"],
-  DASHBOARD_REFRESH_SECONDS: ["api/pilots_api.py:4194", "pilots/settings_domains.py:132"],
   CORS_ALLOWED_ORIGINS: ["api/control_api.py:169", "api/data_api.py:131", "api/metrics_api.py:74", "api/pilots_api.py:342", "api/state_api.py:87"],
   SENTIMENT_SOURCES: ["data/sentiment_sources.py:1932"],
   SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: ["data/sentiment_sources.py:1962"],
@@ -2707,18 +2706,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     description: "Master flag for HistoricalStore DB routing. When True, OHLCV bars and account snapshots are read from / written to quant_platform.db. First call for a symbol = full BARS_BACKFILL_DAYS backfill; subsequent calls = delta only. Set False to reproduce pre-Tier-2.3 behavior (all fetches go directly to the live provider).",
   },
   // ---- Runtime & Ops ----
-  {
-    group: "Runtime & Ops",
-    key: "DASHBOARD_REFRESH_SECONDS",
-    type: "number",
-    value: 1800,
-    default: 1800,
-    min: 1,
-    max: 86400,
-    step: 1,
-    description:
-      "Unused: it set the refresh interval of the Streamlit dashboard, which was deleted in 2026-09. Kept so an existing .env entry stays valid.",
-  },
   {
     group: "Runtime & Ops",
     key: "PROGRESS_POLL_SECONDS",

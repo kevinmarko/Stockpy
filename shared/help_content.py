@@ -1,10 +1,23 @@
 """
-gui/help_content.py
-===================
-Static help-content store for the InvestYo Command Center.
+shared/help_content.py
+======================
+Static help-content store: plain-English definitions, per-screen explainers,
+section tooltips and metric tooltips for the platform's operator help.
 
-**Zero Streamlit imports.**  All content is defined here so GUI panels can
-import exactly what they need without touching the rendering layer.  Every
+The Pilots PWA (``webapp/``) is the only frontend and keeps its own help text in
+``webapp/src/help/helpContent.ts`` (``TAB_HELP`` / ``GLOSSARY``).  This module is
+the Python-side catalog.  It was written for the Streamlit "InvestYo Command
+Center" (deleted 2026-09), so its ``TAB_HELP`` keys are the *legacy tab ids*,
+kept as stable keys; each description now says which web app screen carries the
+capability today, or says plainly that the surface was archived.  Its remaining
+consumers are ``shared/help_widgets.py`` (Streamlit wrappers still imported by
+the Gravity audit), the ``MODEL_RETRAIN_WINDOW_DAYS`` constant used by
+``pilots/models.py`` / ``api/pilots_api.py``, and the tests.  Never describe a
+deleted surface (the Streamlit app, the ``main.py`` ``--interval`` / ``--agent``
+loops) as live here — ``tests/test_help_content_live_surfaces.py`` enforces that.
+
+**Zero Streamlit imports.**  All content is defined here so callers can
+import exactly what they need without touching a rendering layer.  Every
 lookup function returns a safe empty value for unknown keys — it never raises.
 
 All threshold values are imported from ``settings``, ``validation.thresholds``,
@@ -33,7 +46,8 @@ Exported public API
 ``GLOSSARY``
     ``Dict[str, GlossaryEntry]`` keyed by lower-cased term.
 ``TAB_HELP``
-    ``Dict[str, TabHelp]`` keyed by the 14 Command Center tab IDs.
+    ``Dict[str, TabHelp]`` keyed by the legacy tab IDs (stable keys; each entry
+    describes the web app screen that replaced the tab).
 ``SECTION_HELP``
     ``Dict[str, str]`` — one-sentence tooltip per named panel section.
 ``METRIC_HELP``
@@ -114,7 +128,7 @@ class GlossaryEntry:
 
 @dataclass(frozen=True)
 class TabHelp:
-    """Help text for one Command Center tab.
+    """Help text for one screen (keyed by its legacy Command Center tab id).
 
     Attributes
     ----------
@@ -124,8 +138,8 @@ class TabHelp:
         Human-readable tab name.
     description : str
         Two-to-four sentence plain-English description of the tab's purpose.
-        Must reinforce that this is an **informational** tool — no orders are
-        sent from the GUI.
+        Must say where the capability lives in the web app today (or that it was
+        archived) and must not describe a deleted surface as live.
     key_concepts : tuple[str, ...]
         Tuple of lower-cased glossary keys that are most relevant here.
     guide_anchor : str or None
@@ -224,6 +238,32 @@ def _sizing_cap_escalation_factor() -> float:
     return settings.SIZING_CAP_ESCALATION_FACTOR
 
 
+def _max_portfolio_heat_pct() -> float:
+    return settings.MAX_PORTFOLIO_HEAT * 100
+
+
+def _hmm_downgrade_threshold() -> float:
+    return settings.HMM_RISK_ON_DOWNGRADE_THRESHOLD
+
+
+def _hmm_risk_off_agreement() -> float:
+    return settings.HMM_RISK_OFF_AGREEMENT_THRESHOLD
+
+
+def _microcap_threshold_musd() -> int:
+    return int(settings.MULTIFACTOR_MICROCAP_THRESHOLD / 1_000_000)
+
+
+def _news_earnings_suppress_hours() -> float:
+    return settings.NEWS_EARNINGS_SUPPRESS_HOURS
+
+
+# Suggested-exit fractions come from engine.advisory.CONFIG (constant per
+# process, like the VIX/Sahm thresholds above).
+_EXIT_FRACTION_STRONG_PCT = int(_ADVISORY_CONFIG["exit_fraction_strong_sell"] * 100)
+_EXIT_FRACTION_NORMAL_PCT = int(_ADVISORY_CONFIG["exit_fraction_normal_sell"] * 100)
+
+
 # Retrain window (days) used by the Analytics ML-model-monitoring section to
 # flag a stale model. No dedicated setting exists, so this mirrors the default
 # ml.meta_labeling.MetaLabeler(retrain_freq_days=30) cadence and the LGBM ranker's
@@ -237,8 +277,10 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "Action Signal",
         "The system's recommendation for each ticker: STRONG BUY, BUY, HOLD, "
         "RISK REDUCE, or AVOID.  "
-        "This is purely informational — the platform is in advisory mode and "
-        "does not send orders automatically.",
+        "This is informational — in the default advisory mode the platform sends "
+        "no orders.  Outside it, orders go only to the local FMP paper ledger; "
+        "real-money orders only ever go through the human-confirmed Robinhood "
+        "queue.",
         "#7-reading-the-action-signals",
     ),
     "strong buy": _g(
@@ -327,7 +369,7 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         lambda: (
             "The change in conviction between two pipeline runs for the same ticker.  "
             f"Moves of ≥ {_conv_delta()} are highlighted in the 'Δ Since Last Run' band "
-            "at the top of the HTML report so you can quickly spot meaningful shifts "
+            "at the top of the dashboard report so you can quickly spot meaningful shifts "
             "without reading every row."
         ),
         "#6-understanding-the-output",
@@ -335,7 +377,7 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     "calibration": _g(
         "Calibration",
         "A reliability check that asks: 'When the system says conviction 0.80, "
-        "does it actually win 80% of the time?'  The Reports tab shows a chart "
+        "does it actually win 80% of the time?'  The Calibration screen shows a chart "
         "comparing stated conviction to empirical win rate per bin.  Bars above "
         "the diagonal = underconfident; below = overconfident.",
         "#conviction-calibration-reports-tab",
@@ -397,12 +439,15 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     ),
     "hmm": _g(
         "HMM (Hidden Markov Model)",
-        "A statistical model that runs in the background to give a second opinion "
-        "on the macro regime.  It analyzes SPY returns, realized volatility, VIX, "
-        "and the yield curve to produce a 'risk-on probability' from 0 to 1.  "
-        "Below 0.30, it can quietly downgrade the regime from RISK ON to NEUTRAL.  "
-        "If the HMM can't run, the platform uses only the rules-based regime — "
-        "no crash, no degradation.",
+        lambda: (
+            "A statistical model that runs in the background to give a second opinion "
+            "on the macro regime.  It analyzes SPY returns, realized volatility, VIX, "
+            "and the yield curve to produce a 'risk-on probability' from 0 to 1.  "
+            f"Below {_hmm_downgrade_threshold()}, it can quietly downgrade the regime "
+            "from RISK ON to NEUTRAL.  "
+            "If the HMM can't run, the platform uses only the rules-based regime — "
+            "no crash, no degradation."
+        ),
         "#the-hmm-second-opinion",
     ),
     "yield curve": _g(
@@ -453,8 +498,7 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "A sophisticated volatility estimate that lets today's volatility depend "
         "more heavily on recent bad days than recent good days (the 'leverage "
         "effect').  More accurate than a simple moving standard deviation.  "
-        "The platform uses it as the primary vol estimate for position sizing "
-        "and options premium evaluation.",
+        "The platform uses it as the primary vol estimate for position sizing.",
         "#8-understanding-position-sizing-kelly-target",
     ),
     "chandelier exit": _g(
@@ -487,46 +531,14 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "#6-understanding-the-output",
     ),
 
-    # ── Options ───────────────────────────────────────────────────────────────
+    # ── Options (archived) ────────────────────────────────────────────────────
     "iv rank": _g(
-        "IV Rank (IVR)",
-        "Implied Volatility Rank — where the current implied volatility sits "
-        "relative to the past year's range.  An IVR of 80 means IV is in the "
-        "top 20% of the past year — historically a good time to sell options "
-        "premium.  The platform requires IVR > 50 before suggesting credit spreads.",
-        "#7-reading-the-action-signals",
-    ),
-    "vrp": _g(
-        "VRP (Volatility Risk Premium)",
-        "The excess of implied volatility over realized volatility.  When IV "
-        "charges more than the stock actually moves, there is a premium to collect "
-        "by selling options.  A VRP > 0.02 is required before the platform "
-        "recommends a premium-selling options strategy.",
-        "#7-reading-the-action-signals",
-    ),
-    "put credit spread": _g(
-        "Put Credit Spread",
-        "An options strategy that sells a put at one strike and buys a protective "
-        "put at a lower strike.  Collects premium if the stock stays above the "
-        "short put.  Max loss is limited to the spread width minus premium received.  "
-        "The platform recommends this when IVR, VRP, and macro conditions are all "
-        "favorable.  **Advisory only — no orders are sent.**",
-        "#7-reading-the-action-signals",
-    ),
-    "iron condor": _g(
-        "Iron Condor",
-        "An options strategy that combines a put credit spread (below the market) "
-        "and a call credit spread (above the market), profiting if the stock "
-        "stays within a defined range until expiry.  Requires favorable IV "
-        "conditions.  **Advisory only — no orders are sent.**",
-        "#7-reading-the-action-signals",
-    ),
-    "black-scholes greeks": _g(
-        "Black-Scholes Greeks",
-        "Sensitivities of an options price to market factors: Delta (price change "
-        "per $1 move in the stock), Gamma (rate of Delta change), Vega (change per "
-        "1% vol move), and Theta (daily time decay).  The Options tab shows these "
-        "for the at-the-money strike at 30 days to expiry.",
+        "IV Rank (IVR) — archived",
+        "Implied Volatility Rank (where current implied volatility sits in the "
+        "past year's range) belonged to the options desk, which was archived to "
+        "`legacy/` (steps 3d-4b).  The live pipeline no longer computes IVR or "
+        "suggests premium-selling options strategies, so there is no IVR value "
+        "to read in the web app.",
         "#7-reading-the-action-signals",
     ),
 
@@ -599,35 +611,41 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     # ── Risk gate & kill switch ───────────────────────────────────────────────
     "kill switch": _g(
         "Kill Switch",
-        "A file-based pause gate.  When active, the advisory pipeline skips "
-        "generating new recommendations for the current cycle (advisory mode) or "
-        "the order manager blocks all submissions (live mode).  "
-        "Activate via the Launcher tab or `python -m execution.kill_switch --activate`.",
+        "A file-based pause gate (`output/KILL_SWITCH`).  When active, the "
+        "advisory pipeline skips generating new recommendations for the current "
+        "cycle (advisory mode) or the order manager blocks all submissions "
+        "(live mode).  Toggle it from Settings → General in the web app (or the "
+        "Commands screen), or run `python -m execution.kill_switch --activate`.",
         "#15-the-kill-switch--pause-gate",
     ),
     "advisory mode": _g(
         "Advisory Mode",
         "The project default (`ADVISORY_ONLY=true`).  The full quant pipeline runs "
-        "— data fetch, indicators, forecasts, signals, HTML report — but the broker "
-        "execution layer is completely quarantined.  No orders are placed, ever.  "
-        "The GUI shows a '📋 ADVISORY MODE' banner as a permanent reminder.",
+        "— data fetch, indicators, forecasts, signals, the dashboard report — but "
+        "the broker execution layer is completely quarantined.  No orders are "
+        "placed, ever.  The web app shows an 'Advisory Only Mode' status banner "
+        "as a permanent reminder.",
         "#advisory-only-mode",
     ),
     "risk gate": _g(
         "Risk Gate",
-        "Ten sequential pre-trade checks that every order must pass before reaching "
-        "the broker.  Checks include: max position size, portfolio heat, correlation, "
-        "daily loss limit, macro kill switch, HMM regime, stress scenario, market "
-        "hours, minimum validation report, and order rate limit.  All checks pass "
-        "conservatively when context data is missing.",
+        "Eleven sequential pre-trade checks that every order must pass before reaching "
+        "the broker.  They are: kill-switch halt, max position size, portfolio heat, "
+        "correlation, daily loss limit, macro kill switch, HMM regime, stress "
+        "scenario, market hours, minimum validation report, and order rate limit.  "
+        "A check passes conservatively when its context data is missing.  Blocks "
+        "are listed on Mission Control (Risk gate block log).",
         "#safety-tab-formerly-gravity-audit--what-to-check-when-an-order-is-blocked",
     ),
     "portfolio heat": _g(
         "Portfolio Heat",
-        "Total adverse (unrealized) P&L across all open positions as a percentage "
-        "of portfolio equity.  If heat rises above 5%, the risk gate blocks new "
-        "BUY orders to prevent compounding a bad day.  Displayed in the "
-        "Observability tab and the HTML report.",
+        lambda: (
+            "Total adverse (unrealized) P&L across all open positions as a percentage "
+            "of portfolio equity.  If heat rises above "
+            f"{_max_portfolio_heat_pct():g}% (MAX_PORTFOLIO_HEAT), the risk gate "
+            "blocks new BUY orders to prevent compounding a bad day.  Shown on "
+            "Mission Control and in the dashboard report."
+        ),
         "#12-the-observability-dashboard",
     ),
     "dead letter": _g(
@@ -647,19 +665,22 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "Signal Weight",
         "A number that controls how much each signal module contributes to the "
         "final composite score.  The total score = sum of (module_score × weight) "
-        "across all active modules.  Weights are tunable in Settings or the "
-        "Strategy Matrix tab.  The macro_regime module has the highest weight because "
-        "it gates everything else.",
+        "across all active modules.  Weights and enabled modules are tunable in "
+        "Settings → Strategy (SIGNAL_WEIGHTS).  By default the macro_regime module "
+        "carries the largest weight because it gates everything else.",
         "#17-adjusting-signal-weights",
     ),
     "multifactor signal": _g(
         "Multifactor Signal",
-        "A Fama-French-inspired score that combines four factors: Value (price "
-        "vs book/earnings), Quality (ROE and operating margin), Low Volatility, "
-        "and Size (smaller stocks get a higher score).  Each factor is "
-        "cross-sectionally ranked vs the other tickers in your universe before "
-        "being averaged.  Microcap stocks (<$300M market cap) receive a neutral "
-        "score to avoid noise.",
+        lambda: (
+            "A Fama-French-inspired score that combines four factors: Value (price "
+            "vs book/earnings), Quality (ROE and operating margin), Low Volatility, "
+            "and Size (smaller stocks get a higher score).  Each factor is "
+            "cross-sectionally ranked vs the other tickers in your universe before "
+            "being averaged.  Microcap stocks "
+            f"(<${_microcap_threshold_musd()}M market cap, MULTIFACTOR_MICROCAP_THRESHOLD) "
+            "receive a neutral score to avoid noise."
+        ),
         "#17-adjusting-signal-weights",
     ),
     "time-series momentum": _g(
@@ -693,16 +714,19 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "State Snapshot",
         "A JSON file (`output/state_snapshot.json`) written after every pipeline "
         "run.  Contains the macro regime, VIX, HMM probability, kill-switch status, "
-        "and per-signal summary.  The Observability tab and the 'Δ Since Last Run' "
-        "HTML report band both read from this file.",
+        "and per-signal summary.  The web app's backend (Mission Control, symbol "
+        "pages) reads it, and the 'Δ Since Last Run' band of the dashboard report "
+        "is built from its rotated copies.",
         "#12-the-observability-dashboard",
     ),
     "heartbeat": _g(
         "Heartbeat",
-        "A timestamp file (`output/heartbeat.txt`) written every 60 seconds by "
-        "the async orchestrator while it is running.  The dashboard shows a "
-        "'staleness warning' when this file is > 2 hours old, meaning no "
-        "fresh data has been produced recently.",
+        "A timestamp file (`output/heartbeat.txt`) rewritten every 60 seconds "
+        "while a standalone `python3 main_orchestrator.py` run is in progress.  "
+        "The persistent orchestrator daemon never writes it, so under the daemon "
+        "Mission Control's Heartbeat section honestly reads 'No heartbeat' — "
+        "use the Pipeline screen for daemon liveness.  When the file exists, "
+        "Mission Control labels it Fresh, Slow or Stale by its age.",
         "#12-the-observability-dashboard",
     ),
     "snapshot diff": _g(
@@ -710,7 +734,8 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "A comparison between the current pipeline run and the previous one.  "
         "Highlights new BUY signals, action flips (e.g. HOLD → BUY), conviction "
         "changes above the threshold, and holdings added or dropped.  "
-        "Rendered as the '🔔 Δ Since Last Run' band at the top of the HTML report.",
+        "Rendered as the '🔔 Δ Since Last Run' band at the top of the dashboard "
+        "report (`output/daily_report_dashboard.html`, listed in the Report Library).",
         "#6-understanding-the-output",
     ),
     "brinson-fachler": _g(
@@ -719,23 +744,26 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "we beat / underperform the benchmark?' into three effects: "
         "Allocation (did we overweight the right sectors?), "
         "Selection (did we pick the right stocks within each sector?), and "
-        "Interaction (the combined effect of both).  Found in the Reports tab.",
+        "Interaction (the combined effect of both).  Found on the Portfolio "
+        "attribution screen.",
         "#reports-tab--live-vs-backtested-provenance--drill-down",
     ),
     "dry run": _g(
         "Dry Run",
         "A mode where the pipeline runs normally including order generation, "
         "but the OrderManager intercepts every intent before reaching the broker.  "
-        "Orders are logged but never submitted.  Safer than advisory mode for "
-        "testing the full execution path without real trades.  "
-        "Set `DRY_RUN=true` in `.env`.",
+        "Orders are logged but never submitted, so it exercises the full "
+        "execution path (risk gate included) without any fills.  Select it as "
+        "Simulation mode in Settings → General (writes `ADVISORY_ONLY=false` and "
+        "`DRY_RUN=true`).",
         "#advisory-only-mode",
     ),
     "paper trading": _g(
         "Paper Trading",
         "Running the pipeline with real market data and real logic, but against a "
         "simulated broker account (no real money): the local FMP paper ledger, "
-        "which fills at live FMP quotes.  The preflight check requires 90 days of paper trading before "
+        "which fills at live FMP quotes.  The preflight check requires a minimum "
+        "paper-trading duration (measured from `PAPER_TRADING_START_DATE`) before "
         "going live.  Only relevant when `ADVISORY_ONLY=false`.",
         "#11-paper-trading-workflow",
     ),
@@ -743,23 +771,27 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "Watch Rules",
         "YAML-configured rules that trigger phone push notifications (via ntfy) "
         "when an advisory signal changes or a conviction threshold is crossed.  "
-        "Stored in `watch_rules.yaml` at the project root.  "
-        "Useful for staying informed between scheduled runs without polling the dashboard.",
+        "Stored in `watch_rules.yaml` at the project root and evaluated each cycle "
+        "by the orchestrator daemon (its agentic-queue step, in `primary` mode).  "
+        "Useful for staying informed between runs without polling the dashboard.",
         "#symbol-watch-alerts-tier-14",
     ),
     "decision journal": _g(
         "Decision Journal",
         "A log where you record whether you acted on, passed, or modified each "
-        "advisory recommendation.  Stored as `output/decision_log.jsonl`.  "
-        "Used by the Conviction Calibration chart to filter to decisions you "
-        "actually endorsed, and by the Live-vs-Recommendation Tracking section "
+        "advisory recommendation (Calibration and Agentic Trading screens).  "
+        "Stored as `output/decision_log.jsonl`.  "
+        "Used by the conviction calibration chart to filter to decisions you "
+        "actually endorsed, and by the recommendation-tracking section "
         "to measure whether your judgment adds alpha over the raw model.",
         "#manual-execution-journal-reports-tab",
     ),
     "live inventory": _g(
         "Live Inventory",
         "A combined view of your Robinhood held positions + all configured "
-        "watchlists, with per-symbol market-data coverage status.  Coverage "
+        "watchlists, with per-symbol market-data coverage status — the coverage "
+        "panel on Settings → Tracked Universe (Universe Transparency shows the "
+        "read-only counts).  Coverage "
         "levels: FULL (quotes + bars + fundamentals), QUOTES_ONLY, EQUITY_ONLY "
         "(held but no live price), or UNCOVERED.  Only FULL symbols are used for "
         "pricing-dependent metrics.",
@@ -776,49 +808,53 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     "circuit breaker": _g(
         "Circuit Breaker",
         "A trip condition derived from the kill-switch sentinel or the last 24 hours "
-        "of risk-gate block records.  Visible in the Safety tab.  CRITICAL trips "
+        "of risk-gate block records.  Visible in Mission Control's Circuit "
+        "breakers section.  CRITICAL trips "
         "halt everything; WARNING trips are per-symbol blocks.  In advisory mode "
         "these are informational — they show which checks would have blocked an "
         "order if the broker were active.",
         "#safety-tab-formerly-gravity-audit--what-to-check-when-an-order-is-blocked",
     ),
 
-    # ── Autonomous agent + trade-signal alerts (Tier 6 / 6.1) ──────────────────
+    # ── Archived: autonomous agent loop + trade-signal alerts (Tier 6 / 6.1) ──
+    # All four entries describe code that now lives in legacy/ (step 5.5).  They
+    # are kept only so the glossary can say so honestly (the Gravity audit pins
+    # the "autonomous advisory agent" / "conviction momentum" terms and their
+    # guide anchors); none of them is a live surface.
     "autonomous advisory agent": _g(
-        "Autonomous Advisory Agent",
-        "A legacy self-pacing advisory loop that was archived along with "
-        "`main.py` (step 5.5); the orchestrator daemon has no equivalent, so it is not "
-        "available in a daemon-run deployment (the daemon's own timer and "
-        "`POST /run` pace cycles instead).  Where it ran, it re-ran the analysis "
-        "on an adaptive schedule — faster around the open/close and during "
-        "volatility, slower overnight — and re-pinged you about high-conviction "
-        "signals you had not acted on.  It was always advisory: it never placed "
-        "an order on your behalf.",
+        "Autonomous Advisory Agent (archived)",
+        "A self-pacing advisory loop that was archived to `legacy/` along with "
+        "`main.py` (step 5.5); the orchestrator daemon has no equivalent, so it is "
+        "not available in a daemon-run deployment (the daemon's own timer and "
+        "`POST /run` pace cycles instead).  While it existed it re-ran the "
+        "analysis on an adaptive schedule and re-pinged you about high-conviction "
+        "signals you had not acted on.  It never placed an order.",
         "#autonomous-advisory-agent",
     ),
     "backlog reminder": _g(
-        "Backlog Reminder",
-        "A push notification the legacy autonomous agent loop (not part of the "
-        "orchestrator daemon) sends when a high-conviction BUY/SELL has gone "
-        "unactioned, escalating over time (roughly hourly, then every few hours, "
-        "then daily).  It stops once you log a decision for that symbol, the "
-        "signal goes stale, or the reminder cap is reached.",
+        "Backlog Reminder (archived)",
+        "A push notification sent by the archived autonomous agent loop (not part "
+        "of the orchestrator daemon) when a high-conviction BUY/SELL had gone "
+        "unactioned.  It no longer exists in the live platform; the daemon's "
+        "Symbol Watch alerts (see Watch Rules) are the active push alerts.",
         "#autonomous-advisory-agent",
     ),
     "conviction momentum": _g(
-        "Conviction Momentum",
-        "An early heads-up from the legacy agent loop based on a symbol's conviction "
-        "*trajectory* across cycles: 'building' when conviction is climbing "
-        "steadily toward an entry, 'fading' when it is deteriorating on a name no "
-        "longer rated a buy.  Each trend alerts once.  Informational only.",
+        "Conviction Momentum (archived)",
+        "An early heads-up ('building' / 'fading') once sent by "
+        "`engine/trade_signals.py` from a symbol's conviction trajectory across "
+        "cycles.  That module was archived to `legacy/` with the agent loop "
+        "(step 5.5), so the alert is no longer sent.  Conviction itself, and its "
+        "change between runs (Conviction Delta), are still live.",
         "#trade-signal-alerts",
     ),
     "stop and target proximity": _g(
-        "Stop / Target Proximity Alert",
-        "For your held positions the legacy agent loop derives a volatility-based stop below "
-        "your cost and a take-profit target from the forecast, and alerts you when "
-        "the live price approaches or breaches either level.  A position-"
-        "management nudge — it does not place or modify any order.",
+        "Stop / Target Proximity Alert (archived)",
+        "An alert once sent by `engine/trade_signals.py` when a held position's "
+        "live price approached a volatility-based stop or a forecast-derived "
+        "target.  The module was archived to `legacy/` with the agent loop (step "
+        "5.5), so the alert is no longer sent.  The Buy Zone / Sell Zone ranges on "
+        "each recommendation are still live.",
         "#trade-signal-alerts",
     ),
 
@@ -826,8 +862,9 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     "robinhood execution bridge": _g(
         "Robinhood Execution Bridge",
         "The opt-in, paper-first path that lets the platform act on its advice via "
-        "the Robinhood Trading MCP.  It is OFF by default.  The pipeline only "
-        "writes a gated, dry-run proposed-order queue; a separate Claude Code "
+        "the Robinhood Trading MCP.  It is OFF by default.  The orchestrator "
+        "daemon only writes a gated, dry-run proposed-order queue (its "
+        "agentic-queue step, `DAEMON_AGENTIC_QUEUE_MODE=primary`); a separate Claude Code "
         "agent (`/rh-execute`) is the only thing that ever contacts Robinhood, and "
         "in live mode it asks you to confirm every single order.",
         "#robinhood-execution-bridge",
@@ -851,7 +888,7 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     ),
     "execution queue": _g(
         "Execution Queue",
-        "The `output/execution_queue.json` file the pipeline writes in review/live "
+        "The `output/execution_queue.json` file the orchestrator daemon writes in review/live "
         "mode: a list of proposed orders, each already run through the risk gate "
         "and kill-switch in dry-run.  An order is marked placeable only in live "
         "mode with the gate passed and the kill switch clear.  The Claude Code "
@@ -864,8 +901,9 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
         "Score Component Decomposition",
         "Breaks a symbol's final aggregated score into each active signal "
         "module's weighted contribution (module score x its configured weight). "
-        "Only modules that ran this cycle -- not disabled via the Strategy "
-        "Matrix, not suppressed by a regime gate -- are shown.  The base neutral "
+        "Only modules that ran this cycle -- not disabled in Settings → Strategy, "
+        "not suppressed by a regime gate -- are shown (Signal Breakdown screen).  "
+        "The base neutral "
         "score is 50; the final score is 50 plus the sum of every shown "
         "contribution.",
         "#17-adjusting-signal-weights",
@@ -892,57 +930,64 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
     ),
     "comparison.symbol_comparison": _g(
         "Symbol Comparison",
-        "A side-by-side view of 2-3 operator-chosen symbols: final score, "
+        "A side-by-side view of 2-3 operator-chosen symbols (Pilot Strategy "
+        "Comparison screen): final score, "
         "Kelly Target, conviction, GARCH volatility, and the per-module score "
         "breakdown for each -- so a difference in ranking between two symbols "
         "has a direct, inspectable answer instead of just two numbers.",
         "#17-adjusting-signal-weights",
     ),
-    # ── Sidebar: regime filter + CSV export ────────────────────────────────────
-    "sidebar.regime_filter": _g(
-        "Regime Filter",
-        "A sidebar control that lets you narrow the platform's view to symbols "
-        "last tagged with one specific macro regime (RISK ON / NEUTRAL / "
-        "RECESSION / CREDIT EVENT) instead of all of them.  The choice is stored "
-        "for the current browser session only — it does not change `.env` or "
-        "affect the pipeline's own regime-gating logic.",
-        "#9-the-macro-regime-system",
-    ),
-    # ── Reports tab: suggested SELL exit sizing ──────────────────────────────
+    # ── Advisory field: suggested SELL exit sizing ───────────────────────────
     "reports.suggested_exit_pct": _g(
         "Suggested Exit %",
-        "Fraction of your CURRENT held quantity recommended for exit on a SELL "
-        "action — 100% when the loss+bearish-forecast escalation (Case A) fired, "
-        "50% for a base-signal SELL/RISK REDUCE (a trim). Blank for BUY/HOLD or "
-        "when the symbol isn't held — there is nothing to size in that case.",
+        lambda: (
+            "The `suggested_exit_pct` advisory field: fraction of your CURRENT held "
+            "quantity recommended for exit on a SELL action — "
+            f"{_EXIT_FRACTION_STRONG_PCT}% when the loss+bearish-forecast escalation "
+            f"(Case A) fired, {_EXIT_FRACTION_NORMAL_PCT}% for a base-signal "
+            "SELL/RISK REDUCE (a trim). 0 for BUY/HOLD or when the symbol isn't "
+            "held — there is nothing to size in that case."
+        ),
         "#price-ranges",
     ),
 }
 
 # ---------------------------------------------------------------------------
-# TAB_HELP — 14 Command Center tab IDs
+# TAB_HELP — legacy tab ids -> the web app screen that replaced each tab
 # ---------------------------------------------------------------------------
+# The Streamlit Command Center that these ids came from was deleted in 2026-09.
+# The ids stay as stable lookup keys (other code and tests reference them); every
+# description below says where the capability lives in the Pilots PWA today.
+# Whatever has no screen is said to be archived — never described as live.
 
 TAB_HELP: Dict[str, TabHelp] = {
     "launcher": _t(
         "launcher",
-        "🚀 Launcher",
-        "Start a pipeline run, monitor progress, and view logs.  "
-        "Two launch buttons: '▶️ Launch Pipeline' runs the full async orchestrator "
-        "(data → signals → HTML report), while '🔄 Refresh Data (Advisory)' runs "
-        "the faster synchronous advisory loop.  "
-        "Both are purely informational — no broker orders are placed.",
+        "🚀 Launcher (now Pipeline + Console)",
+        "Legacy tab id.  Today: the **Pipeline** screen (`/pipeline`) shows the "
+        "orchestrator daemon's status, run triggers (full advisory pipeline, data "
+        "only, metrics only), run history and the dead-letter queue; the "
+        "**Console** screen (`/console`) launches background jobs (preflight "
+        "check, test suite, an advisory pipeline cycle, full verification, the "
+        "Gravity audit, a validation backtest); the automated schedule is on "
+        "Settings → Data & Automation.  A pipeline cycle is no longer purely "
+        "informational: depending on the daemon's settings it can place orders on "
+        "the local FMP paper ledger and write the Robinhood execution queue — it "
+        "never places a real order.",
         ("advisory mode", "heartbeat", "dead letter", "kill switch", "dry run"),
         "#5-running-the-pipeline",
     ),
     "reports": _t(
         "reports",
-        "📈 Reports",
-        "Analyze the most recent pipeline results.  Includes portfolio heat, "
-        "MFE/MAE/Edge Ratio per signal, the Brinson-Fachler attribution section, "
-        "the Conviction Calibration reliability diagram, the Decision Journal "
-        "(log what you did with each signal), and the live-vs-backtested provenance "
-        "banner.  All data sourced from files — this tab never calls the broker.",
+        "📈 Reports (now Portfolio, Attribution, Calibration)",
+        "Legacy tab id; the Reports tab was split across screens.  **Portfolio** "
+        "(`/portfolio`): holdings, realized performance and held-vs-signal "
+        "reconciliation.  **Portfolio attribution** (`/attribution`): "
+        "Brinson-Fachler attribution, factor exposure and correlation clusters.  "
+        "**Calibration** (`/calibration`): the conviction reliability diagram, "
+        "recommendation tracking, MFE/MAE/Edge Ratio and the Decision Journal "
+        "(log what you did with each signal).  **Mission Control** shows portfolio "
+        "heat.  Apart from the Decision Journal write, these are analysis views.",
         (
             "brinson-fachler",
             "calibration",
@@ -956,140 +1001,154 @@ TAB_HELP: Dict[str, TabHelp] = {
     "report_library": _t(
         "report_library",
         "📁 Report Library",
-        "Browse and view — inline, right in the app — every report file the "
-        "platform generates.  Covers the live daily HTML report (regenerated on "
-        "every advisory refresh cycle, so it is always current), the per-day "
-        "daily briefings (one per day, and you can generate today's from here), "
-        "the orchestrator dashboards (the daily report and its volatility bands, "
-        "which only refresh when you kick off a manual full-orchestrator run), "
-        "and validation reports (which appear once a strategy has been through "
-        "the validation harness).  Every file can be viewed inline or "
-        "downloaded.  Read-only and file-backed — this tab never calls the "
-        "broker.",
+        "Browse every report file the platform generates, on the **Report "
+        "Library** screen (`/operations/reports`).  It lists the orchestrator "
+        "dashboards (`daily_report_dashboard.html` and the volatility-bands "
+        "chart, rewritten by each full daemon cycle that reaches its snapshot "
+        "step), daily briefings (one per day; the screen can generate today's), "
+        "the NotebookLM export, and per-strategy validation reports (once a "
+        "strategy has been through the validation harness).  The older "
+        "`daily_report.html` was retired with `main.py` and is listed only if an "
+        "old copy is still on disk.  HTML reports are download-only until you opt "
+        "in to 'View inline'.",
         ("advisory mode", "dead letter", "walk-forward validation", "pbo", "dsr"),
         "#17-report-library",
     ),
     "validation_lab": _t(
         "validation_lab",
-        "🔬 Validation Lab",
-        "Run the strategy-validation harness on demand and read the results "
-        "back, all from inside the app.  Pick one or more registered strategies "
-        "and a backtest window, then launch the run — it executes as a "
-        "background subprocess (the GUI stays responsive) and writes per-strategy "
-        "validation reports to `reports/`.  The results section shows each "
-        "strategy's deployable ✅/❌ verdict against the PBO / DSR / net-Sharpe / "
-        "Max-Drawdown gates (thresholds imported from `validation.thresholds`), "
-        "plus the rendered walk-forward / CPCV HTML report.  Read-only and "
-        "file-backed — this tab never calls the broker.",
+        "🔬 Validation Lab (now Commands + Strategy Health)",
+        "Legacy tab id; there is no Validation Lab screen.  Run the validation "
+        "harness from **Commands** (`/commands`: build a "
+        "`python -m scripts.refresh_validations --strategies ...` run or press "
+        "Bulk Validate All Strategies; executing from the web app needs "
+        "`COMMAND_EXECUTION_ENABLED`) or from the **Console** screen's Run "
+        "Backtest form.  It runs as a background job and writes "
+        "`reports/*_validation_summary.json`.  Read the results on **Strategy "
+        "Health** (each strategy's deployable verdict against the PBO / DSR / "
+        "net-Sharpe / Max-Drawdown gates, thresholds imported from "
+        "`validation.thresholds`) and in the **Report Library** (summaries plus "
+        "the walk-forward / CPCV HTML report).  The harness never calls the "
+        "broker.",
         ("walk-forward validation", "cpcv", "pbo", "dsr", "max drawdown"),
         "#18-validation-lab",
     ),
     "settings": _t(
         "settings",
         "⚙️ Settings",
-        "Edit non-secret tunable parameters and save them to `.env`.  "
-        "Secret values (API keys, passwords, TOTP) are shown masked and are "
-        "read-only here — edit those directly in `.env`.  "
-        "Changes take effect on the **next** pipeline launch, not immediately.",
+        "The **Settings** screens (`/settings/*`) edit non-secret tunable "
+        "parameters and save them through the backend's allowlisted `.env` writer "
+        "(General, Data & Automation, Tracked Universe, Brokers, Modules, "
+        "Strategy, Runtime Tunables, Feature Flags, the scoped sentiment / "
+        "sector / FMP editors, AI, Prompts, and a read-only Settings Reference).  "
+        "Secret values (API keys, passwords) are masked and read-only there — edit "
+        "those directly in `.env`.  When a change takes effect depends on the "
+        "setting: Settings Reference lists each one's liveness (immediately, "
+        "restart required, no-op, or env-pinned).",
         ("advisory mode", "dry run"),
         "#3-configuring-your-environment",
     ),
     "strategy_matrix": _t(
         "strategy_matrix",
-        "🧩 Strategy Matrix",
-        "Enable or disable individual signal modules, adjust their weights, "
-        "view the strategy version registry (sha256 of each module file), "
-        "and toggle the global execution mode between Simulation, Paper, and Live.  "
-        "The mode toggle is suppressed while Advisory Mode is active — no accidental "
-        "live-mode activation.",
+        "🧩 Strategy Matrix (now Settings → Strategy)",
+        "Legacy tab id.  **Settings → Strategy** (`/settings/strategy`, 'Signal "
+        "modules') enables or disables individual signal modules, adjusts their "
+        "weights after a confirm step, and shows each module's version "
+        "fingerprint (sha256 prefix + file modified time) and the meta-label "
+        "confidence distribution.  The global execution-mode toggle moved to "
+        "**Settings → General** (Advisory / Simulation / Paper / Live; each change "
+        "needs typed confirmation).",
         ("signal weight", "advisory mode", "kill switch"),
         "#strategy-matrix-tab--global-execution-mode-toggle",
     ),
     "paper_monitor": _t(
         "paper_monitor",
-        "📒 Paper Monitor",
-        "Side-by-side view of your Robinhood account snapshot (real account state: "
-        "shares, average cost, unrealized P&L) against the pipeline's market-data "
-        "projection per ticker.  The Robinhood snapshot is the source of truth for "
-        "cost basis and shares; the pipeline is the source of truth for prices and "
-        "indicators.  These roles never cross.",
+        "📒 Paper Monitor (now Portfolio + Paper Broker)",
+        "Legacy tab id.  The **Portfolio** screen (`/portfolio`) shows your real holdings from the "
+        "Robinhood account snapshot (the source of truth for shares, average cost "
+        "and unrealized P&L) reconciled against the pipeline's signals; prices "
+        "and indicators come from the pipeline — these roles never cross.  The "
+        "**Paper Broker** screen (`/paper-broker`) is the local simulated brokerage "
+        "(the FMP paper ledger): positions, orders, closed trades, Quick Trade, and "
+        "a reset.",
         ("advisory mode", "kelly target", "conviction"),
         "#11-paper-trading-workflow",
     ),
     "gravity": _t(
         "gravity",
-        "🛡️ Safety & Gravity Audit",
-        "Three-panel safety overview: (1) Strategy Health — per-strategy "
-        "PBO / DSR / Sharpe / Max Drawdown gate verdicts; "
-        "(2) Circuit Breaker Dashboard — active kill-switch trips and risk-gate "
-        "blocks from the last 24 hours; "
-        "(3) Dependency Map — which tabs and reports lose coverage when a data "
-        "source degrades; "
-        "(4) Gravity AI Review — automated code-level audit.  "
-        "Review this before authorizing any change in execution mode.",
+        "🛡️ Safety & Gravity Audit (now Strategy Health + Mission Control)",
+        "Legacy tab id.  **Strategy Health** (`/strategy-health`) shows each "
+        "strategy's PBO / DSR / Sharpe / Max Drawdown gate verdicts and a "
+        "Claude-vs-Gemini AI disagreement section.  **Mission Control**'s Circuit "
+        "breakers and Risk gate block log show active kill-switch trips and "
+        "risk-gate blocks from the last 24 hours.  Run the Gravity AI Review "
+        "Suite from the **Console** screen.  The old Dependency Map view has no "
+        "screen (the map is `shared/dependency_map.py::impacted_consumers`).  "
+        "Review these before authorizing any change in execution mode.",
         ("circuit breaker", "risk gate", "pbo", "dsr", "kill switch"),
         "#safety-tab-formerly-gravity-audit--what-to-check-when-an-order-is-blocked",
     ),
     "options": _t(
         "options",
-        "🧮 Options",
-        "Premium-selling strategy matrix for each active symbol.  "
-        "Shows GJR-GARCH volatility, IV Rank proxy, Aroon/Coppock trend bias, "
-        "the recommended strategy (Put Credit Spread, Iron Condor, Cash/Wait), "
-        "strike levels, net premium, daily theta, and ATM Black-Scholes Greeks.  "
-        "Gated by IVR > 50, VRP > 0.02, VIX < 30, and no CREDIT EVENT — "
-        "Cash/Wait is returned when any gate fails.  "
-        "All informational — no orders are submitted.",
-        ("put credit spread", "iron condor", "iv rank", "vrp", "garch vol", "black-scholes greeks"),
+        "🧮 Options (archived)",
+        "Archived.  The Options tab — the premium-selling strategy matrix with "
+        "GJR-GARCH volatility, an IV Rank proxy, strike levels and Black-Scholes "
+        "Greeks — belonged to the options desk, which was archived to `legacy/` "
+        "(steps 3d-4b; see `legacy/README.md`).  There is no Options screen in the "
+        "web app, and the live pipeline no longer computes IVR, VRP or options "
+        "strategy suggestions.",
+        ("iv rank",),
         "#7-reading-the-action-signals",
     ),
     "market_data": _t(
         "market_data",
-        "🛰️ Market Data",
-        "Shows which data provider is active (FMP or the yfinance ~15-min "
-        "delayed fallback), quote freshness per symbol, and a sliding-window connectivity "
-        "health badge.  Lets you fetch a batch of quotes with per-symbol error "
-        "classification (Rate Limited, Not Found, Timeout, etc.) and a validation "
-        "Status column to catch malformed quotes before they reach the quant pipeline.",
+        "🛰️ Market Data (now Data Explorer)",
+        "Legacy tab id.  The **Data Explorer** screen (`/data-explorer`) has a "
+        "'Market data connection' section: the active provider (FMP primary, "
+        "yfinance fallback), delivery mode and quote TTL, a connection-health "
+        "badge for this session, and a per-symbol quote check with typed failure "
+        "classification (rate limited, no data, unauthorized, ...) and the "
+        "client-observed latency.",
         ("advisory mode",),
         "#5-running-the-pipeline",
     ),
     "observability": _t(
         "observability",
-        "📊 Observability",
-        "The platform's single observability surface (the former standalone "
-        "`streamlit run observability/dashboard.py` app has been retired): "
-        "macro regime / VIX / HMM risk-on probability, account holdings & P&L, "
-        "open positions vs. pipeline signals, portfolio heat/gross/net exposure, "
-        "validation report status, recent closed trades, an equity-curve/"
-        "drawdown/regime-overlay chart, the risk gate block log, a heartbeat "
-        "trend sparkline, system resource metrics (CPU, memory, disk), a "
-        "latency heatmap (populated by the Market Data tab), and a structured "
-        "log viewer with contextual error classification.",
+        "📊 Observability (now Mission Control)",
+        "The platform's single observability surface is **Mission Control** "
+        "(`/observability`).  An attention strip flags anything that needs a look "
+        "(circuit-breaker trips, portfolio heat over its limit, risk-gate blocks, "
+        "sizing-cap escalations, a stale heartbeat, the macro gate being off), "
+        "with an honest 'All clear' otherwise.  Below it: the macro regime gate "
+        "control (regime, VIX, Sahm Rule, HY OAS, yield curve, HMM risk-on "
+        "probability), portfolio risk and the equity / drawdown chart, then — "
+        "under 'Background telemetry' — forecast skill (portfolio-wide and "
+        "per-symbol), circuit breakers, the risk-gate block log, system "
+        "telemetry, per-symbol data latency, the sizing-cap audit trail, "
+        "heartbeat, strategy P&L and a log tail.  The former standalone "
+        "`observability/dashboard.py` app is gone.",
         ("heartbeat", "state snapshot", "macro regime", "vix", "hmm"),
         "#12-the-observability-dashboard",
     ),
     "analytics": _t(
         "analytics",
-        "📊 Analytics",
-        "Read-only performance & analytics, distinct from the Observability "
-        "tab's *internal* paper-store view.  Sections: (1) Broker Realized "
-        "Performance — realized P&L reconstructed from your Robinhood order "
-        "history (FIFO round-trips), clearly labelled 'Broker (Robinhood order "
-        "history)' so it is never confused with the internal TransactionsStore "
-        "P&L; (2) Account Value Equity Curve — total account equity over time "
-        "from stored account snapshots; (3) Recent Alerts Feed — a tail of the "
-        "structured alert log.  It also hosts the ML registry, news-sentiment, "
-        "and slippage/CoVaR analytics panels.  Every source is file-backed and "
-        "degrades to an empty-state message rather than a fabricated value.",
+        "📊 Analytics (now Portfolio, Trade History, Activity, Models)",
+        "Legacy tab id; its sections now live on separate screens.  Realized "
+        "performance and the account-value history are on **Portfolio**; the "
+        "reconstructed Robinhood closed-trade ledger (FIFO round trips) is on "
+        "**Trade History**; the structured alert log is the **Activity** feed; "
+        "the ML model registry (CPCV DSR / PBO, training date, sample size) is on "
+        "**The models** (`/models`); news sentiment is on **Sentiment "
+        "Dynamics**.  Every source degrades to an empty-state message rather "
+        "than a fabricated value.",
         ("advisory mode", "state snapshot", "kelly target"),
         "#12-the-observability-dashboard",
     ),
     "sentiment_dynamics": _t(
         "sentiment_dynamics",
         "💬 Sentiment Dynamics",
-        "Two DISTINCT, independent sentiment signals for a chosen symbol — "
-        "never conflated. (1) News Catalyst Sentiment: the always-on "
+        "The **Sentiment Dynamics** screen (`/sentiment`) shows two DISTINCT, "
+        "independent sentiment signals for a chosen symbol — never conflated. "
+        "(1) News Catalyst Sentiment: the always-on "
         "pipeline's real `news_sentiment` field (FinBERT / keyword-lexicon "
         "over recent FMP headlines), read straight from the latest "
         "state snapshot. (2) Antigravity Agent + GJR-GARCH: an on-demand "
@@ -1097,89 +1156,82 @@ TAB_HELP: Dict[str, TabHelp] = {
         "real per-request GJR-GARCH(1,1,1) fit measuring the asymmetric "
         "leverage effect and shock persistence (α+β+γ/2) over price history. "
         "When the Antigravity agent is unavailable (SDK missing, no "
-        "GEMINI_API_KEY, or a failed call) the tab shows an honest "
+        "GEMINI_API_KEY, or a failed call) the screen shows an honest "
         "'unavailable' note and blank '—' fields rather than a guessed "
         "number — the GARCH persistence metric is computed independently "
         "and can still show a real value. Read-only and advisory-only; no "
-        "orders are ever placed from this tab.",
+        "orders are ever placed from this screen.",
         ("garch vol",),
         "#sentiment-dynamics-tab",
     ),
-    "pairs": _t(
-        "pairs",
-        "🔗 Pairs",
-        "Read-only, advisory-only view over the pairs-trading (statistical "
-        "arbitrage) engine. **Scan** takes a symbol list and ranks cointegrated "
-        "candidate pairs by Engle-Granger p-value, keeping only those with a "
-        "5–60 day mean-reversion half-life. **Analyze a pair** shows the current "
-        "spread z-score, Kalman-filtered hedge ratio, rolling ADF p-value, and "
-        "half-life for a chosen Y/X pair, plus a human-readable current signal "
-        "(entry / hold / exit / stop / not-cointegrated) and a z-score chart. "
-        "Entry at |z|>2, exit at the 0-cross or ADF p>0.10, stop at |z|>4 — all "
-        "**informational**. No orders are ever placed from this tab.",
-        ("advisory mode",),
-        "#12-the-observability-dashboard",
-    ),
     "live_inventory": _t(
         "live_inventory",
-        "📦 Live Inventory",
-        "Combines your Robinhood holdings, Robinhood watchlists, and any "
-        "file-backed watchlists into one deduped universe.  Shows per-symbol "
-        "coverage status (FULL / QUOTES_ONLY / EQUITY_ONLY / UNCOVERED) so "
-        "you know which tickers can support pricing-dependent metrics.  "
-        "'🔄 Sync Now' refreshes the universe and persists the result as "
-        "`DEFAULT_TICKERS` in `.env` for the next pipeline run.",
+        "📦 Live Inventory (now Tracked Universe)",
+        "Legacy tab id.  The coverage panel on **Settings → Tracked Universe** "
+        "combines your Robinhood holdings, Robinhood watchlists and file-backed "
+        "watchlists into one deduped list with per-symbol coverage status (FULL / "
+        "QUOTES_ONLY / EQUITY_ONLY / UNCOVERED), so you know which tickers can "
+        "support pricing-dependent metrics; **Universe Transparency** "
+        "(`/universe`) shows the read-only counts.  'Sync Now' (gated by "
+        "`UNIVERSE_SYNC_ENABLED`) persists the discovered list as "
+        "`DEFAULT_TICKERS` in `.env`; the daemon builds its own universe from "
+        "held ∪ watchlist ∪ discovered symbols and uses `DEFAULT_TICKERS` only "
+        "when that union is empty.",
         ("live inventory", "advisory mode"),
         "#4-choosing-your-ticker-universe",
     ),
     "help": _t(
         "help",
         "❓ Help",
-        "In-app glossary and per-tab reference — search 60+ terms (Kelly Target, "
-        "PBO, DSR, Sahm Rule, IVR, HMM, …) with plain-English definitions and "
-        "'Read more →' links back to the How-To Guide, plus a tab-by-tab "
-        "description of every Command Center tab.  Purely informational.",
+        "The **Help & Glossary** screen (`/help`) is a searchable index over the "
+        "web app's full glossary (kept in `webapp/src/help/helpContent.ts`), and "
+        "each screen also has a 'How this works' panel.  Purely informational.",
         ("advisory mode",),
         "#in-app-help--glossary",
     ),
     "prompts": _t(
         "prompts",
         "📝 Prompts",
-        "Shows the resolved version and source (pin / remote / disk cache / "
-        "baseline) of every AI-facing prompt in the Prompt Registry, with a "
-        "'🔄 Sync' button and a diff/rollback viewer.  Fetched prompts are "
-        "advisory text only — they can change what an AI is told, never what "
-        "the platform is permitted to do.",
+        "The **Prompt Registry** screen (`/settings/prompts`) shows the resolved "
+        "version and source (pin / remote / disk cache / baseline) of every "
+        "AI-facing prompt, with a Sync control (it runs "
+        "`python -m prompt_registry sync` as a gated job), a version diff viewer "
+        "and a pin / clear-pin control.  Fetched prompts are advisory text only — "
+        "they can change what an AI is told, never what the platform is "
+        "permitted to do.",
         ("advisory mode",),
         "#16-remote-prompt-updates-prompt-registry",
     ),
     "ai_insights": _t(
         "ai_insights",
         "🪄 AI Insights",
-        "Per-symbol AI reads layered on top of the pipeline's own signals: an "
-        "Opal research brief (thesis/catalysts/risk factors grounded in real "
-        "FMP news), a Claude analyst rationale note, a Gemini chart-pattern "
-        "read, and a Claude-vs-Gemini disagreement view.  Every section is "
-        "button-gated — nothing calls an AI provider until you click it — and "
-        "purely informational: no AI output here places or modifies an order.",
+        "Per-symbol AI reads layered on top of the pipeline's own signals, on each "
+        "symbol's **Symbol Detail** page (`/symbol/:ticker`): an Opal research "
+        "brief (thesis / catalysts / risk factors grounded in real news), a "
+        "Claude analyst note, and a Gemini chart-pattern read.  Each card is "
+        "generated only when you click its button — nothing calls an AI provider "
+        "otherwise — and the **Strategy Health** screen's AI disagreement section "
+        "compares the latest Claude and Gemini verdicts per symbol.  Purely "
+        "informational: no AI output places or modifies an order.",
         ("advisory mode",),
         "#ai-insights--ai-control-center",
     ),
     "ai_control_center": _t(
         "ai_control_center",
         "🎛️ AI Control Center",
-        "One place to turn every AI option on or off, run each on demand, and "
-        "start/stop a recurring pipeline run — all operator-triggered, nothing "
-        "autonomous.  Section A toggles the master switches (Claude commentary, "
-        "Gemini alerts, Gemini chart vision, Gravity AI runner, Opal research) and "
-        "shows a ready / disabled / missing-key / not-built badge per capability.  "
-        "Section B runs per-symbol Claude / Gemini-vision / Opal actions on demand.  "
-        "Section C runs the Gravity AI audit.  Section D starts and stops an "
-        "`--interval` or `--agent` run you can stop at any time.  Provider API keys "
-        "stay secret-only in `.env` (never GUI-writable); toggles take effect on the "
-        "next launch.",
+        "The **AI Control Center** screen (`/settings/ai`) shows which LLM "
+        "capabilities are on, which provider serves each one, and what happened on "
+        "the last real call.  A Capabilities section has one master toggle per "
+        "underlying switch (several capabilities share `LLM_COMMENTARY_ENABLED`) "
+        "and a provider selector where a capability can be routed to more than "
+        "one provider; a Provider telemetry section lists the last real call per "
+        "capability.  Writes go to `.env` through the Pilots API "
+        "(`LLM_WRITES_ENABLED`); provider API keys stay secret-only in `.env` "
+        "(never writable from the app).  Everything is operator-triggered — the "
+        "old Command Center's section that started a recurring pipeline run "
+        "does not exist; use the Pipeline screen or the daemon's own timer.",
         ("advisory mode", "kill switch"),
-        "#advisory-only-mode",
+        "#ai-insights--ai-control-center",
     ),
 }
 
@@ -1193,62 +1245,47 @@ TAB_HELP: Dict[str, TabHelp] = {
 # section_help(), which resolve either shape transparently.
 
 SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
-    "strategy_matrix.mode_consistency": (
-        "PAPER_TRADING and DRY_RUN are written together so the mode is "
-        "fully consistent — no half-flips."
-    ),
     "strategy_matrix.version_registry": (
         "Each module's deployment fingerprint — sha256 prefix + file mtime — "
         "joined with live enable/weight state from `settings`."
     ),
     "strategy_matrix.symbol_comparison": (
         "Compare final score, sizing, and signal-module drivers across 2-3 "
-        "symbols side by side."
-    ),
-    "options.directive_controls": (
-        "Directive controls — session-scoped (not saved to .env). Defaults = engine constants."
-    ),
-    "options.theta_forecast_warning": (
-        "⚠️ **This is NOT a forecast.** It is a mechanical projection of "
-        "today's theta held flat for 30 days, assuming zero price movement, "
-        "zero IV change, and no gamma/vega repricing — none of which is "
-        "realistic over a full month. Treat it only as a rough 'time decay "
-        "floor' reference, not an expected P&L."
+        "symbols side by side (Pilot Strategy Comparison screen)."
     ),
     "brinson_fachler": (
         "Brinson-Fachler decomposes your portfolio return vs a benchmark into "
-        "Allocation, Selection, and Interaction effects.  "
-        "Enter sector weights and returns in the table, then click 'Compute'."
+        "Allocation, Selection, and Interaction effects (Portfolio attribution "
+        "screen)."
     ),
     "conviction_calibration": (
-        "Reliability diagram — bars are empirical win rates per conviction bin.  "
-        "The diagonal is 'perfect calibration'.  Requires conviction-annotated "
-        "closed trades (accumulated from live advisory runs)."
+        "Reliability diagram (Calibration screen) — bars are empirical win rates per "
+        "conviction bin.  The diagonal is 'perfect calibration'.  Requires "
+        "conviction-annotated closed trades (accumulated from live advisory runs)."
     ),
     "decision_journal": (
-        "Log whether you acted on, passed, or modified each advisory signal.  "
+        "Log whether you acted on, passed, or modified each advisory signal "
+        "(Calibration and Agentic Trading screens).  "
         "Entries are appended to output/decision_log.jsonl and linked to trades."
     ),
     "snapshot_diff": (
         "Changes since the last pipeline run: new BUYs, action flips, large "
         "conviction moves, and holdings added or dropped."
     ),
-    "heartbeat_trend": (
-        "Rolling sparkline of how stale the orchestrator's heartbeat is.  "
-        "A rising trend means the pipeline is running less frequently than expected."
-    ),
     "dead_letter_queue": (
-        "Symbols whose analysis failed during the last run.  "
-        "Use 'Retry' to re-evaluate a single ticker without re-running everything."
+        "Symbols whose analysis failed during the last run (Pipeline screen).  "
+        "'Retry' is not a per-symbol retry: it triggers one full orchestrator-daemon "
+        "cycle over the whole universe (requires DEAD_LETTER_RETRY_ENABLED)."
     ),
     "circuit_breaker_dashboard": (
-        "Active risk-gate trips derived from the kill-switch sentinel and the "
-        "last 24 hours of risk_gate_blocks.jsonl.  "
+        "Active risk-gate trips (Mission Control) derived from the kill-switch "
+        "sentinel and the last 24 hours of risk_gate_blocks.jsonl.  "
         "In advisory mode these are informational — no orders exist to block."
     ),
     "dependency_map": (
-        "Shows which GUI panels and reports are affected when a data source "
-        "(FMP, yfinance, FRED, Robinhood) degrades or becomes unavailable."
+        "`shared/dependency_map.py::impacted_consumers` maps a degraded data source "
+        "(FMP, yfinance, FRED, Robinhood) to the consumers that lose coverage.  "
+        "The web app has no screen for it."
     ),
     "strategy_version_registry": (
         "SHA-256 prefix and file mtime for each registered signal module.  "
@@ -1266,27 +1303,27 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         "when multiple 'different' tickers actually move together."
     ),
     "latency_heatmap": (
-        "Per-symbol quote latency (time from quote timestamp to ingestion).  "
-        "Populated by the Market Data tab's 'Fetch quotes' batch.  "
+        "Per-symbol quote latency on Mission Control (needs "
+        "`MARKET_DATA_LATENCY_TRACKING_ENABLED`).  The Data Explorer's 'Market "
+        "data connection' check shows the client-observed round trip per symbol.  "
         "High latency on a real-time provider (FMP) suggests network issues."
     ),
     "preflight_panel": (
-        "Runs scripts/preflight_check.py and shows pass/fail per check.  "
+        "`scripts/preflight_check.py` (the Console screen's Preflight Check launcher) "
+        "reports pass/fail per check.  "
         "In advisory mode, broker checks are automatically skipped.  "
         "Fix any blocking failure before changing execution mode."
     ),
-    "launcher_safety_controls": (
-        "Kill-switch toggle and DRY_RUN checkbox for the current session.  "
-        "'Safe Mode' is ON when both the kill switch and DRY_RUN are active."
-    ),
     "global_execution_mode": (
-        "Simulation → Paper → Live mode selector.  "
-        "Suppressed while ADVISORY_ONLY=true.  "
-        "Live mode requires a deliberate 'CONFIRM LIVE PRODUCTION' button click."
+        "Advisory / Simulation / Paper / Live mode selector on Settings → General.  "
+        "Each change writes ADVISORY_ONLY (plus DRY_RUN for non-advisory modes) "
+        "together and needs typed confirmation; Live means the automated pipeline "
+        "places no orders (real orders go only through the Robinhood queue)."
     ),
     "robinhood_execution_bridge": (
-        "Off by default. In 'review' mode the pipeline writes a gated, dry-run "
-        f"order queue that only previews. A queue older than {_RH_QUEUE_STALE_MIN} "
+        "Off by default. In 'review' mode the orchestrator daemon writes a gated, "
+        "dry-run order queue that only previews. A queue older than "
+        f"{_RH_QUEUE_STALE_MIN} "
         "minutes is treated as stale and the `/rh-execute` agent refuses to place "
         "from it — re-run the pipeline for a fresh one. Placement, when enabled, "
         "always requires per-order human confirmation in the agent session."
@@ -1308,22 +1345,26 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         "run. The ledger is tolerated as absent (no placements yet)."
     ),
     "pipeline_progress": lambda: (
-        "Percentage of pipeline stages completed for the current run.  "
-        f"Refreshes every {_progress_poll_seconds()} seconds while a run is "
-        "active.  Advisory-only — no orders are placed; this only reflects "
-        "analysis progress."
+        "Percentage of pipeline stages completed for the current run "
+        "(`output/progress.json`, or the daemon's run status for a daemon-launched "
+        f"run).  Clients poll every {_progress_poll_seconds()} seconds while a run "
+        "is active, and a progress file older than three polls is treated as "
+        "stale (the reading then falls back to a coarse stage count).  The web "
+        "app has no progress bar yet — the Pipeline screen shows run status and "
+        "history.  This only reflects analysis progress; it places no orders."
     ),
     "observability.snapshot_summary": (
         "Summary of the file-backed state last written by the orchestrator."
     ),
     "observability.macro_gate_write": (
-        "Writes `MACRO_REGIME_GATE_ENABLED` to `.env` via `gui/env_io.py`.  "
-        "Change takes effect when the orchestrator next starts."
+        "The Mission Control toggle writes `MACRO_REGIME_GATE_ENABLED` to `.env` "
+        "via `shared/env_io.py`.  Check Settings Reference for when the change "
+        "takes effect."
     ),
     "observability.recession_telemetry": (
-        "Values are sourced from the last orchestrator run's state snapshot "
+        "Values are sourced from the last pipeline run's state snapshot "
         "(FRED data).  They reflect conditions at pipeline execution time, "
-        "not real-time — run the orchestrator to refresh."
+        "not real-time — trigger a daemon cycle (Pipeline screen) to refresh."
     ),
     "observability.sizing_cap_audit": lambda: (
         "Durable log of position-sizing guardrail events — `sizing/"
@@ -1338,35 +1379,19 @@ SECTION_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         "are capped in one cycle."
     ),
     "strategy_health_gates": (
-        "Sourced from `output/gravity_verification_report.json` (written by the "
-        "Gravity AI Review Suite). Evaluated against thresholds in "
+        "On the Strategy Health screen, sourced from each strategy's "
+        "`reports/<strategy_id>_validation_summary.json` (written by the "
+        "validation harness). Evaluated against thresholds in "
         "`validation/thresholds.py` — the same constants used by "
         "`validation/harness.py`."
     ),
-    "options.matrix_intro": (
-        "Hydrated premium-selling matrix: GJR-GARCH σ, realized-vol IVR proxy, "
-        "Aroon+Coppock trend bias, ATM Black-Scholes Greeks, and the "
-        "deterministic strategy directive with $0.50 strike-grid integrity checks."
-    ),
-    "options.matrix_methodology": (
-        "σ from GJR-GARCH(1,1) with 20-day realized fallback; **IVR proxy** is a "
-        "realized-vol percentile (true IVR requires an options chain). Trend bias "
-        "is Aroon+Coppock sign "
-        "agreement. **Stale=True** marks delayed (~15 min) yfinance quotes. "
-        "Realizable Theta applies a DTE-scaled execution-friction haircut "
-        "(40% @ 1DTE, 22% @ 7DTE, 12% @ 30DTE, 5% baseline)."
-    ),
     "strategy_matrix.signal_modules": (
-        "**Signal modules** — disable a module or adjust its weight; "
-        "saved to `.env` and honored by `SignalAggregator` on next run."
+        "**Signal modules** (Settings → Strategy) — disable a module or adjust its "
+        "weight; saved to `.env` and honored by `SignalAggregator`."
     ),
     "strategy_matrix.regime_multiplier_note": (
         "Note: `regime_multiplier` must keep weight 0.0 — it carries the HMM "
         "second opinion as a sizing multiplier, not a score."
-    ),
-    "report_viewer.llm_commentary_off": (
-        "LLM commentary is off.  Set `LLM_COMMENTARY_ENABLED=true` and "
-        "`ANTHROPIC_API_KEY=…` in `.env`, then relaunch the GUI."
     ),
     "sentiment_dynamics.news_catalyst": (
         "The always-on pipeline's real `news_sentiment` field for this symbol "
@@ -1411,10 +1436,12 @@ METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         f"Unemployment-rise recession indicator.  "
         f"At or above {_SAHM_THRESH} the platform applies a macro score penalty."
     ),
-    "HMM Risk-On Probability": (
+    "HMM Risk-On Probability": lambda: (
         "Hidden Markov Model probability that we are in a risk-on macro regime [0, 1].  "
-        "Below 0.30 can downgrade the rules-based regime from RISK ON to NEUTRAL.  "
-        "Below 0.20 (risk-off > 0.80) tightens the kill-switch trigger thresholds."
+        f"Below {_hmm_downgrade_threshold()} can downgrade the rules-based regime from "
+        "RISK ON to NEUTRAL.  When the risk-off probability (1 − this value) exceeds "
+        f"{_hmm_risk_off_agreement()} during RECESSION, lowered kill-switch "
+        "thresholds apply."
     ),
     "HMM_Risk_On_Probability": (
         "See 'HMM Risk-On Probability' — identical metric, underscore column key."
@@ -1438,13 +1465,9 @@ METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     "GARCH Vol": (
         "GJR-GARCH annualized volatility estimate.  More sensitive to recent "
         "downside moves than a simple historical standard deviation.  "
-        "Used for position sizing and options premium evaluation."
+        "Used for position sizing."
     ),
     "Sigma_GARCH": "Same as GARCH Vol — GJR-GARCH annualized volatility.",
-    "IVR Proxy": (
-        "Realized-vol IVR proxy [0–100].  Values above 50 suggest options IV is "
-        "elevated relative to recent history — favorable for premium selling."
-    ),
     "RSI": "Relative Strength Index (14-period).  Above 70 = overbought; below 30 = oversold.",
     "RSI_2": (
         "Ultra-short RSI (2-period) used for mean-reversion entries.  "
@@ -1454,8 +1477,9 @@ METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
     "Aroon": "Aroon Oscillator.  Near +100 = strong uptrend; near -100 = strong downtrend.",
     "MACD": "MACD crossover score.  Positive when the MACD line is above its signal line.",
     "Forecast 30d": (
-        "30-day blended price forecast from ARIMA, Monte Carlo, Holt-Winters, "
-        "and CNN-LSTM models.  Weighted by each model's recent forecast skill."
+        "30-day blended price forecast from the ARIMA, Monte Carlo, Holt-Winters, "
+        "Prophet and CNN-LSTM models.  The blend can be weighted by each model's "
+        "recent realized forecast skill (see Mission Control's forecast skill)."
     ),
     "Buy Zone": "ATR-based entry price range.  Buying within this range improves risk/reward.",
     "Sell Zone": (
@@ -1470,9 +1494,10 @@ METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         "Current market value: shares × current price.  "
         "Sourced from the Robinhood snapshot for held positions; '—' for watchlist-only."
     ),
-    "Portfolio Heat": (
+    "Portfolio Heat": lambda: (
         "Adverse unrealized P&L as % of equity.  "
-        "Above 5% the risk gate blocks new BUY orders."
+        f"Above {_max_portfolio_heat_pct():g}% (MAX_PORTFOLIO_HEAT) the risk gate "
+        "blocks new BUY orders."
     ),
     "Coverage Status": (
         "Market-data coverage for this symbol: FULL (quotes+bars+fundamentals), "
@@ -1484,9 +1509,11 @@ METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         "Fama-French composite score: average of Value, Quality, Low-Vol, and Size "
         "z-scores, winsorized to ±3.  Mapped to [-1, +1] via tanh(z/2)."
     ),
-    "News_Sentiment": (
+    "News_Sentiment": lambda: (
         "Sentiment score from recent news headlines via FinBERT (neural) or "
-        "keyword lexicon fallback.  In [-1, +1].  Suppressed within 48 h of earnings."
+        "keyword lexicon fallback.  In [-1, +1].  Suppressed within "
+        f"{_news_earnings_suppress_hours():g} h of earnings "
+        "(NEWS_EARNINGS_SUPPRESS_HOURS)."
     ),
     "Earnings_Date": "Next expected earnings announcement date for this ticker.",
     "Sell Range": (
@@ -1530,36 +1557,14 @@ METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         "momentum signal module; bottom half scores negative."
     ),
     "Buy Range": "ATR-based entry price range.  Buying within this range improves risk/reward.",
-    "Portfolio Delta": (
-        "Unweighted sum of ATM Delta across held symbols with an actionable "
-        "options directive.  Per-contract, not position-size-weighted — see "
-        "the Options tab caption for why weighting isn't fabricated."
-    ),
-    "Portfolio Gamma": (
-        "Unweighted sum of ATM Gamma across held symbols with an actionable "
-        "options directive.  Per-contract, not position-size-weighted."
-    ),
-    "Portfolio Vega": (
-        "Unweighted sum of ATM Vega across held symbols with an actionable "
-        "options directive.  Per-contract, not position-size-weighted."
-    ),
-    "Portfolio Theta": (
-        "Unweighted sum of ATM daily Theta across held symbols with an "
-        "actionable options directive.  Per-contract, not position-size-weighted."
-    ),
-    "Theta Carry Projection": (
-        "Cumulative Theta × 30, assuming price/IV stay flat for 30 days.  "
-        "A mechanical 'time decay floor' reference — NOT a forecast of "
-        "actual 30-day P&L, which also depends on gamma/vega repricing."
-    ),
     "Meta-Label Composite": (
         "Geometric mean of active signal modules' meta-label confidence "
         "(Lopez de Prado 'is the primary signal correct?' probability), applied "
         "as a multiplier on Kelly Target before the position-size cap.  Always "
         "1.0 (no-op) until a MetaLabeler is trained and registered for a given "
-        "signal — see ml/meta_labeling.py.  Not currently written to a "
-        "per-symbol column in the dashboard; this platform surfaces it only "
-        "as a multiplicative effect already baked into Kelly Target."
+        "signal — see ml/meta_labeling.py.  The web app shows it in Symbol "
+        "Detail's sizing breakdown and as the confidence distribution on "
+        "Settings → Strategy; it is otherwise baked into Kelly Target."
     ),
     "Intents Queued": (
         "Number of proposed orders in `output/execution_queue.json` this cycle.  "
@@ -1634,28 +1639,14 @@ METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         "meta-label/regime-multiplier readouts for 2-3 selected symbols, plus "
         "each symbol's score-component breakdown for direct comparison."
     ),
-    "sidebar.regime_match_count": (
-        "Count of symbols from the last pipeline run whose recorded macro "
-        "status matches the sidebar regime filter. Based on "
-        "`output/state_snapshot.json` — refresh the pipeline to update it."
-    ),
-    "sidebar.regime_filter": (
-        "Filters the 'symbols matching' count below to the selected macro "
-        "regime. 'All regimes' shows every symbol from the last run regardless "
-        "of the regime tag recorded at that time."
-    ),
-    "export.download_signals_csv": (
-        "Exports the per-symbol rows from the last `state_snapshot.json` run — "
-        "action, score, Kelly target, buy/sell ranges, macro status — as a flat "
-        "CSV for offline post-trade analysis. Respects the regime filter above."
-    ),
-    "reports.suggested_exit_pct": (
+    "reports.suggested_exit_pct": lambda: (
         "Fraction of the currently held quantity recommended for exit on a "
-        "SELL action — 100% for the Case A loss+bearish-forecast escalation, "
-        "50% for a base-signal trim. Blank when not a held SELL."
+        f"SELL action — {_EXIT_FRACTION_STRONG_PCT}% for the Case A "
+        f"loss+bearish-forecast escalation, {_EXIT_FRACTION_NORMAL_PCT}% for a "
+        "base-signal trim. 0 when not a held SELL."
     ),
 
-    # ── Analytics tab — ML model freshness & deployability monitoring ────────
+    # ── Models screen — ML model freshness & deployability monitoring ────────
     "analytics.last_trained_age": (
         f"Days since the model's `trained_date` in `ml/registry.yaml`.  Beyond "
         f"the {MODEL_RETRAIN_WINDOW_DAYS}-day retrain window the model is flagged "
@@ -1685,7 +1676,7 @@ METRIC_HELP: Dict[str, Union[str, Callable[[], str]]] = {
         f"from freshness — a deployable model can still be stale."
     ),
 
-    # ── Sentiment Dynamics tab ────────────────────────────────────────────
+    # ── Sentiment Dynamics screen ─────────────────────────────────────────
     "sentiment_dynamics.news_sentiment": (
         "The pipeline's real `news_sentiment` field for this symbol, roughly "
         "in [-1, +1] (FinBERT / keyword-lexicon over recent FMP headlines). "

@@ -175,7 +175,6 @@ ALLOWED_KEYS: tuple[str, ...] = (
     "META_LABELING_BACKFILL_DEFAULT_HORIZON_DAYS",
     "META_LABELING_BACKFILL_LIVE_HORIZON_DAYS",  # JSON-encoded dict[str, int]; see _JSON_KEYS
     # Observability / runtime
-    "DASHBOARD_REFRESH_SECONDS",
     # Poll interval (seconds) for the Launcher tab's live pipeline-progress bar
     # (see reporting/progress.py + gui/orchestrator_runner.py::compute_run_progress).
     # Non-secret; scalar (not JSON-encoded).

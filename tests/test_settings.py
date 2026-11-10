@@ -580,3 +580,61 @@ class TestStep4fRetiredKeysAreHarmless:
         shown = env_io.read_settings()["OPTIONS_ALERT_WEBHOOK_URL"]
         assert "secret-path" not in shown
 
+
+
+class TestDashboardRefreshSecondsRemovedIsHarmless:
+    """``DASHBOARD_REFRESH_SECONDS`` (unused since the Streamlit dashboard was
+    deleted in 2026-09) was removed from ``Settings``. A pre-existing ``.env``,
+    shell export or ``output/runtime_flags.json`` entry must keep loading."""
+
+    _KEY = "DASHBOARD_REFRESH_SECONDS"
+
+    def test_field_is_gone(self):
+        assert self._KEY not in Settings.model_fields
+
+    def test_key_in_env_file_does_not_raise_and_is_ignored(self, tmp_path, monkeypatch):
+        env_file = tmp_path / ".env"
+        env_file.write_text(f"{self._KEY}=1800\nKELLY_FRACTION=0.4\n", encoding="utf-8")
+        monkeypatch.delenv("KELLY_FRACTION", raising=False)
+        monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+        s = Settings(_env_file=str(env_file))
+        assert s.KELLY_FRACTION == pytest.approx(0.4)  # the file really was read
+        assert not hasattr(s, self._KEY)
+
+    def test_key_in_real_environment_does_not_raise(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(self._KEY, "60")
+        monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+        s = Settings(_env_file=None)
+        assert not hasattr(s, self._KEY)
+
+    def test_key_as_init_kwarg_does_not_raise(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+        s = Settings(_env_file=None, DASHBOARD_REFRESH_SECONDS=1800)
+        assert not hasattr(s, self._KEY)
+
+    def test_runtime_store_entry_is_skipped_as_unknown_not_a_crash(self, tmp_path, monkeypatch):
+        import json
+
+        import runtime_flags
+
+        store = tmp_path / "runtime_flags.json"
+        store.write_text(json.dumps({
+            "version": 1,
+            "flags": {
+                self._KEY: {"value": 900},
+                "KELLY_FRACTION": {"value": 0.3},
+            },
+        }), encoding="utf-8")
+        monkeypatch.delenv("KELLY_FRACTION", raising=False)
+        monkeypatch.setenv("OUTPUT_DIR", str(tmp_path / "out"))
+        s = Settings(_env_file=None)
+        report = runtime_flags.apply_overrides(s, path=store)
+        assert report.error is None
+        assert report.skipped_unknown == (self._KEY,)
+        assert "KELLY_FRACTION" in report.applied
+        assert s.KELLY_FRACTION == pytest.approx(0.3)
+
+    def test_env_io_no_longer_allows_gui_writes_of_the_key(self):
+        from shared import env_io
+
+        assert self._KEY not in env_io.ALLOWED_KEYS

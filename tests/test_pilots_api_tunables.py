@@ -394,7 +394,7 @@ class TestTunablesScopeInvariants:
                 "BETA_LOOKBACK_DAYS",
                 "MARKET_DATA_PROVIDER", "MARKET_DATA_QUOTE_TTL_SECONDS",
                 "MARKET_DATA_BARS_TTL_SECONDS", "FUNDAMENTALS_SOURCE",
-                "DASHBOARD_REFRESH_SECONDS", "PROGRESS_POLL_SECONDS", "LOG_LEVEL",
+                "PROGRESS_POLL_SECONDS", "LOG_LEVEL",
                 "ADVISORY_REUSE_PIPELINE_COMPUTE", "ADVISORY_ONLY",
             }
             | _NEW_ADVANCED_KEYS

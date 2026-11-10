@@ -1668,9 +1668,6 @@ class Settings(BaseSettings):
         default=None,
         description="Comma-separated active alerting_mcp channels (e.g. 'ntfy,email,slack'). Unset defaults to 'ntfy'.",
     )
-    DASHBOARD_REFRESH_SECONDS: int = Field(
-        default=1800, description="Unused: it set the refresh interval of the Streamlit dashboard, which was deleted in 2026-09. Kept so an existing .env entry stays valid."
-    )
     PROGRESS_POLL_SECONDS: int = Field(
         default=5, description="Poll interval (seconds) for the Launcher pipeline-progress indicator."
     )

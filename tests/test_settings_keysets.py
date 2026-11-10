@@ -315,7 +315,9 @@ class TestExistingEditorsAreNotBootstrap:
             # SECTOR_FORECAST_CONFIGS ("Advanced / Config") retired.
             # 83 -> 82 (step 5.6): ORCHESTRATOR_DAEMON_ENABLED ("Advanced /
             # Config") retired; the daemon is the only runtime.
-            "_TUNABLE_INDEX": 82,
+            # 82 -> 81: DASHBOARD_REFRESH_SECONDS ("Runtime & Ops") retired;
+            # nothing read it once the Streamlit dashboard was deleted.
+            "_TUNABLE_INDEX": 81,
             # 33 -> 31 (2026-09 vendor removal): REDDIT_BACKFILL_MAX_PAGES and
             # FINNHUB_RATE_LIMIT_PER_MIN retired with Reddit/Finnhub.
             "_SENTIMENT_INDEX": 31,
@@ -332,7 +334,8 @@ class TestExistingEditorsAreNotBootstrap:
         # 163 -> 162 (2026-10 dead-tab cleanup): PAIRS_SNAPSHOT_ENABLED.
         # 162 -> 155 (forecasting rebuild F4 part 1): the 7 tunables above.
         # 155 -> 154 (step 5.6): ORCHESTRATOR_DAEMON_ENABLED.
-        assert len(ALL_EDITOR_KEYS) == 154
+        # 154 -> 153: DASHBOARD_REFRESH_SECONDS.
+        assert len(ALL_EDITOR_KEYS) == 153
 
     def test_no_editor_exposes_a_bootstrap_key(self):
         offenders = {
