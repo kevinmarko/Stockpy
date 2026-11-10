@@ -152,6 +152,23 @@ def fills_from_mcp(orders: Sequence[Mapping[str, Any]]) -> Tuple[List[Any], int]
     return parse_orders(rows, lambda inst: inst or None), unresolved
 
 
+def approvals_required_from_mcp(payload: Any) -> Optional[bool]:
+    """``human_must_approve_trades`` from a ``get_trade_approval_setting`` response.
+
+    Robinhood nests it under ``data.setting`` (seen live 2026-11-10:
+    ``{"data": {"setting": {"account_number", "human_must_approve_trades",
+    "updated_at"}}}``); a flat ``data`` is accepted too. Only a real boolean
+    counts: anything else is ``None`` (unconfirmed), never a guessed ``True``.
+    """
+    data = _unwrap(payload)
+    if not isinstance(data, Mapping):
+        return None
+    for candidate in (data.get("setting"), data):
+        if isinstance(candidate, Mapping) and isinstance(candidate.get("human_must_approve_trades"), bool):
+            return candidate["human_must_approve_trades"]
+    return None
+
+
 def _is_agent_initiated(o: Mapping[str, Any]) -> bool:
     """Agent-initiated per Robinhood. Rows without the field count as agent orders (fail closed)."""
     return o.get("agent_initiated") is not False
@@ -444,8 +461,7 @@ def run_review(
     fills, unresolved = fills_from_mcp(agent_orders)
     quotes = quotes_from_mcp(_read_json(folder / "inputs" / "quotes.json"))
     last_prices = {s: q.last if q.last is not None else None for s, q in quotes.items()}
-    setting_raw = _unwrap(_read_json(folder / "inputs" / "approval_setting.json"))
-    approvals_on = setting_raw.get("human_must_approve_trades") if isinstance(setting_raw, Mapping) else None
+    approvals_on = approvals_required_from_mcp(_read_json(folder / "inputs" / "approval_setting.json"))
 
     out = _output_dir(output_dir)
     placed = read_placed_ledger(out)

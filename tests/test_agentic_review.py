@@ -70,7 +70,10 @@ def save_inputs(tmp, orders=None, quotes=None, approvals_on=True):
     if quotes is not None:
         ar.save_input("quotes", quotes, day=DAY, output_dir=tmp)
     if approvals_on is not None:
-        ar.save_input("approval_setting", {"data": {"human_must_approve_trades": approvals_on}},
+        # The real shape, captured from the live account on 2026-11-10.
+        ar.save_input("approval_setting", {"data": {"setting": {
+                          "account_number": "619354848", "human_must_approve_trades": approvals_on,
+                          "updated_at": "2026-10-13T14:55:38Z"}}},
                       day=DAY, output_dir=tmp)
 
 
@@ -448,3 +451,16 @@ def test_plist_runs_launcher_and_is_not_auto_installed():
     assert data["ProgramArguments"][-3:] == ["-m", "execution.agentic_review", "launch"]
     assert len(data["StartCalendarInterval"]) == 5 and not data.get("RunAtLoad")
     assert "rh-agentic-review" not in (REPO / "scripts" / "install_schedule.command").read_text()
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ({"data": {"setting": {"human_must_approve_trades": True}}, "guide": "..."}, True),   # live shape
+    ({"data": {"setting": {"human_must_approve_trades": False}}}, False),
+    ({"data": {"human_must_approve_trades": True}}, True),                               # flat
+    ({"data": {"setting": {"human_must_approve_trades": "true"}}}, None),                # not a bool
+    ({"data": {"setting": {}}}, None),
+    (None, None),
+    ("garbage", None),
+])
+def test_approvals_required_from_mcp(payload, expected):
+    assert ar.approvals_required_from_mcp(payload) is expected

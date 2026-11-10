@@ -43,6 +43,19 @@ them. The fifth agent does that measuring, and the verdict is code.
   documented fields. A filled row without a symbol is counted as unresolved, never
   guessed. The first real review will confirm the shape.
 
+## First live run (2026-11-10, read-only, from the cloud session)
+
+The `rh-reviewer` agent ran against the Agentic account (619354848). Robinhood
+returned 0 orders, agent-initiated or not, and no pending approvals. All five
+invariants passed and the reconciliation was clean. It also exposed a bug:
+`get_trade_approval_setting` nests the flag under `data.setting`, but `run_review` read
+it from `data`, so every review would have reported approvals as "not confirmed" even
+with them on. The unit test's fixture had the flat shape, while the e2e fake had the
+nested one. Fixed with `approvals_required_from_mcp` (both shapes; only a real boolean
+counts), and the fixture now uses the captured live response. Re-running on the saved
+input gives `approvals_required: true`; the remaining unmet items are 0/10 review days
+and the cap, which isn't set in that container.
+
 ## Verification
 
 - `pytest tests/test_agentic_review.py tests/test_agentic_approvals.py
