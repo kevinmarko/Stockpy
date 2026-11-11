@@ -2001,16 +2001,31 @@ class TestFinbertOpenMPCoexistence:
     _TIMEOUT_S = 120
 
     _CHILD = """
-from unittest.mock import MagicMock, patch
+import importlib.machinery
+import sys
+import types
+from unittest.mock import MagicMock
 import numpy as np
 import signals.news_catalyst as nc
+
+# Stub transformers in sys.modules instead of patch("transformers.pipeline"):
+# patch() resolves transformers.pipeline before the loader runs, which imports
+# torch ahead of the loader's lightgbm-first ordering and leaves the loader bound
+# to the real HuggingFace pipeline (it then tries to download FinBERT).
+fake_transformers = types.ModuleType("transformers")
+fake_transformers.__spec__ = importlib.machinery.ModuleSpec("transformers", None)
+sentinel_pipe = MagicMock(name="finbert_pipeline_sentinel")
+fake_transformers.pipeline = MagicMock(return_value=sentinel_pipe)
+sys.modules["transformers"] = fake_transformers
+
+# The loader itself must run first: it imports lightgbm, then torch, and caps
+# torch to one thread. Importing either here beforehand would hide a regression.
+pipe = nc._get_finbert_pipeline()
+assert pipe is sentinel_pipe, f"FinBERT loader did not use the stubbed pipeline (got {pipe!r})"
+
 import lightgbm as lgb
 import torch
 import torch.nn as nn
-
-with patch("transformers.pipeline", return_value=MagicMock()):
-    pipe = nc._get_finbert_pipeline()
-    assert pipe is not None, "FinBERT loader returned None"
 
 assert torch.get_num_threads() == 1, f"torch intra-op threads = {torch.get_num_threads()}, expected 1"
 
@@ -2033,7 +2048,7 @@ print("COEXIST_OK")
 
         # find_spec, not importorskip: importing torch here would put it in the pytest worker,
         # which is exactly the shared state this test avoids.
-        for dep in ("torch", "transformers", "lightgbm"):
+        for dep in ("torch", "lightgbm"):
             if importlib.util.find_spec(dep) is None:
                 pytest.skip(f"{dep} is not installed")
 
