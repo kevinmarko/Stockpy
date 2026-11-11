@@ -3,7 +3,7 @@ anywidget==0.11.0
 asttokens==3.0.1
 backtrader==1.9.78.123
 beautifulsoup4==4.15.0
-certifi==2026.6.17
+certifi==2026.10.23
 cffi==2.0.0
 charset-normalizer==3.4.7
 comm==0.2.3
@@ -51,7 +51,7 @@ numba==0.61.2
 # first upgrading numba to a release that supports it, or the JIT paths in
 # vectorbt/pandas-ta will break at runtime.
 numpy>=2.0,<2.3
-oauthlib==4.0.0
+oauthlib==4.0.1
 packaging==26.0
 pandas==2.3.3
 pandas-ta-classic==0.6.20
@@ -60,7 +60,7 @@ parso==0.8.7
 patsy==1.0.2
 peewee==4.1.0
 pexpect==4.9.0
-pillow==12.3.0
+pillow==13.0.0
 platformdirs==4.10.0
 plotly==6.8.0
 pluggy==1.6.0
@@ -70,7 +70,7 @@ psutil==7.2.2
 psygnal==0.15.1
 ptyprocess==0.7.0
 pure_eval==0.2.3
-pyasn1==0.6.4
+pyasn1==0.6.5
 pyasn1_modules==0.4.2
 pycparser==3.0
 pydantic==2.13.4
@@ -91,7 +91,7 @@ ruff==0.16.0  # CI lint step (.github/workflows/ci.yml) -- not used at runtime
 schedule==1.2.2
 scikit-learn==1.9.0
 scipy==1.17.1
-setuptools==83.0.0
+setuptools==84.1.0
 six==1.17.0
 soupsieve==2.9.0
 stack-data==0.6.3

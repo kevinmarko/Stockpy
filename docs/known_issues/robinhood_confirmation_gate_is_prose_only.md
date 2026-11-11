@@ -10,3 +10,31 @@ This is a known gap: the platform relies on the LLM adhering to its instructions
 A test (`TestSkillMdInvariantsPinned` in `tests/test_robinhood_e2e.py`) has been added to pin the verbatim safety language in the `SKILL.md` file, ensuring that the required instructions cannot be accidentally removed or modified without failing the test suite. This is defense-in-depth against silent prose drift — it is explicitly **not** a substitute for code-level enforcement, since no such enforcement point exists for this particular integration.
 
 **Sibling instance of the same gap class, since resolved as far as it can be (2026-09):** `data/jules_client.py`'s Jules coding-agent dispatch gate had the identical structural problem — `confirm=True` was (and remains) a plain caller-supplied boolean with no code-level proof a human reviewed the specific prompt being dispatched. `.claude/jules_confirm_hard_gate_implementation_plan.md`'s Phases 1-3 added prompt-hash pinning (`request_dispatch_approval`/`approval_token`, closing an "approved X, dispatched Y" content-mismatch risk specifically) and a dispatch cooldown, plus a live-verified GitHub branch-protection finding — all documented in `docs/JULES_INTEGRATION.md` Sec 4, with the identical `TestSkillMdInvariantsPinned`-style pinned test (`tests/test_jules_delegation_skill.py`). Unlike this Robinhood gap, Jules's gate is entirely within this repo's own code (not a third-party MCP server with no interception point), so a code-level check WAS buildable here — but even so, that plan's own research (Sec 2) independently reconfirmed this exact finding: no gate surveyed anywhere in this repo, including the new Jules one, can actually distinguish "a human did this" from "an agent with the right token/file-access did this." The Jules hardening raises the bar against accidental drift/loops; it does not close this gap's underlying class any more than this Robinhood mitigation does.
+
+## Status update (2026-11-02): closed for orders that go through Robinhood trade approvals
+
+Robinhood now exposes the interception point this write-up said did not exist —
+on Robinhood's side, not ours. When the Agentic account requires the customer's
+approval (`get_trade_approval_setting` → `human_must_approve_trades: true`,
+verified ON for the operator's Agentic account on 2026-11-02),
+`place_equity_order` does not execute: it sends the order to the operator's
+Robinhood app, and no tool can approve it (`decline_trade_approval` is the only
+write an agent has over a pending approval). The operator's tap is a gate no
+agent in this repo can satisfy, which is the property the in-chat prose gate
+never had.
+
+What changed (four-agent plan Phase 1,
+`.claude/robinhood_four_agent_trading_implementation_plan.md`): the
+`robinhood-execution` skill picks the confirmation path per order from
+Robinhood's own `review_equity_order` response — `customer_approval_required:
+true` with empty `order_checks` → approval path (no in-chat question; the tap
+is the confirmation); anything else → the legacy in-chat question, unchanged.
+
+**Still open, stated honestly:**
+- The path choice itself is prose: an agent that ignores the skill could call
+  `place_equity_order` without reviewing first. With approvals on, that order
+  still waits for the operator's tap — so the residual risk is confined to the
+  account whose approval setting the operator turned **off**.
+- The approval setting is the operator's alone to change (only in the
+  Robinhood app). If they turn it off, this gap is back to exactly what is
+  described above, and the skill falls back to the in-chat question.

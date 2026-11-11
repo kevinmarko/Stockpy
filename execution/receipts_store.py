@@ -19,7 +19,16 @@
 #
 #   output/execution_placed.jsonl    — the placed-intent ledger, OWNED here:
 #       {"ts", "dedup_key", "symbol", "side", "qty", "target_notional",
-#        "client_order_id", "mcp_order_id"}
+#        "client_order_id", "mcp_order_id", "approval_id", "ref_id", "run_id"}
+#     In Robinhood trade-approval mode a ledger line means "submitted for the
+#     operator's approval", not "executed": `approval_id` carries the id the
+#     MCP returned and the approval's outcome lives in the approvals log below.
+#     The last three fields are optional (None on pre-approval-mode rows).
+#
+#   output/execution_approvals.jsonl — the approval-outcome log, OWNED here:
+#       {"ts", "approval_id", "state", "state_raw", "symbol", "side",
+#        "dedup_key", "ref_id", "note"}
+#     Append-only; the LAST line for an approval_id is its current state.
 #     where dedup_key = f"{YYYY-MM-DD}:{SYMBOL}:{SIDE}" (UTC date) — stable
 #     across the 60s client_order_id bucketing, so a repeated recommendation on
 #     the same day is recognised as already-placed.
@@ -45,6 +54,7 @@ import json
 import logging
 import math
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -53,6 +63,18 @@ logger = logging.getLogger(__name__)
 
 RECEIPTS_FILENAME = "execution_receipts.jsonl"
 PLACED_FILENAME = "execution_placed.jsonl"
+APPROVALS_FILENAME = "execution_approvals.jsonl"
+
+# Fixed namespace for deterministic Robinhood `ref_id`s. NEVER change it: every
+# ref_id already sent to Robinhood was derived from it, and a new namespace would
+# make a retry of an already-submitted order look like a brand-new order.
+_REF_ID_NAMESPACE = uuid.UUID("6f1c2e0a-5b7d-4c3e-9a41-8d2f6b0e7c15")
+
+# Normalised Robinhood trade-approval states. Robinhood documents these five
+# (pending, approved, declined, expired, auto-approved); anything else is kept
+# verbatim in `state_raw` and normalised to "unknown", never guessed.
+APPROVAL_STATES = frozenset({"pending", "approved", "declined", "expired", "auto_approved"})
+_TERMINAL_NOT_EXECUTED = frozenset({"declined", "expired"})
 
 # How close a ledger notional/qty must be to a reconstructed fill to count as a
 # match (share-count based reconciliation is qty-driven; notional is advisory).
@@ -219,7 +241,18 @@ def _normalise_placed_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "target_notional": _opt_float(rec.get("target_notional")),
         "client_order_id": str(rec.get("client_order_id", "") or ""),
         "mcp_order_id": (str(rec["mcp_order_id"]) if rec.get("mcp_order_id") not in (None, "") else None),
+        "approval_id": _opt_str(rec.get("approval_id")),
+        "ref_id": _opt_str(rec.get("ref_id")),
+        "run_id": _opt_str(rec.get("run_id")),
     }
+
+
+def _opt_str(x: Any) -> Optional[str]:
+    """Coerce to a non-empty string, or ``None``."""
+    if x is None:
+        return None
+    s = str(x).strip()
+    return s or None
 
 
 def _opt_float(x: Any) -> Optional[float]:
@@ -231,6 +264,116 @@ def _opt_float(x: Any) -> Optional[float]:
         return v if math.isfinite(v) else None
     except (TypeError, ValueError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Robinhood ref_id + trade-approval outcome log
+# ---------------------------------------------------------------------------
+
+def make_ref_id(client_order_id: Any) -> Optional[str]:
+    """Deterministic Robinhood ``ref_id`` (a UUID string) for one logical order.
+
+    ``place_equity_order`` deduplicates on ``ref_id``. Deriving it from the
+    queue's ``client_order_id`` (uuid5 under a fixed namespace) means a retry,
+    a re-run of the skill, or a second agent session submitting the same
+    intent FROM THE SAME QUEUE FILE sends the SAME ref_id, so Robinhood itself
+    refuses the duplicate. ``client_order_id`` is time-bucketed
+    (``make_client_order_id``), so a refreshed queue gives the same trade a new
+    id — the day-wide guard is the ``dedup_key`` ledger; this is the second
+    layer under it, not a replacement. Returns ``None`` for a blank
+    ``client_order_id`` (never a random fallback, which would defeat the point).
+    """
+    coid = _opt_str(client_order_id)
+    if coid is None:
+        return None
+    return str(uuid.uuid5(_REF_ID_NAMESPACE, coid))
+
+
+def normalise_approval_state(raw: Any) -> str:
+    """Map a Robinhood approval state string onto :data:`APPROVAL_STATES`.
+
+    Tolerates case, ``-``/space separators and ``STATE_``/``APPROVAL_STATE_``
+    prefixes (``"STATE_AUTO_APPROVED"`` → ``"auto_approved"``). Anything that
+    does not map is ``"unknown"`` — never a guessed state.
+    """
+    s = str(raw or "").strip().lower().replace("-", "_").replace(" ", "_")
+    for prefix in ("trade_approval_state_", "approval_state_", "state_"):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+            break
+    if s == "autoapproved":
+        s = "auto_approved"
+    return s if s in APPROVAL_STATES else "unknown"
+
+
+def append_approval_event(record: Dict[str, Any], output_dir: Optional[Any] = None) -> bool:
+    """Append one approval-state observation to ``execution_approvals.jsonl``.
+
+    ``record`` needs an ``approval_id`` and a ``state`` (raw Robinhood value or
+    an already-normalised one). Returns ``True`` on success, ``False`` when the
+    record is unusable (no approval_id) or the write failed. Never raises
+    (CONSTRAINT #6). Same atomic rewrite-and-replace as :func:`append_placed`.
+    """
+    try:
+        rec = dict(record or {})
+        approval_id = _opt_str(rec.get("approval_id"))
+        if approval_id is None:
+            logger.warning("receipts_store: approval event without approval_id; not recorded")
+            return False
+        raw_state = rec.get("state_raw", rec.get("state"))
+        dt = _coerce_dt(rec.get("ts")) or datetime.now(timezone.utc)
+        symbol = str(rec.get("symbol", "") or "").upper()
+        side = str(rec.get("side", "") or "").lower()
+        norm = {
+            "ts": dt.astimezone(timezone.utc).isoformat(),
+            "approval_id": approval_id,
+            "state": normalise_approval_state(raw_state),
+            "state_raw": _opt_str(raw_state),
+            "symbol": symbol or None,
+            "side": side or None,
+            "dedup_key": _opt_str(rec.get("dedup_key")),
+            "ref_id": _opt_str(rec.get("ref_id")),
+            "note": _opt_str(rec.get("note")),
+        }
+        out_dir = _resolve_output_dir(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / APPROVALS_FILENAME
+        existing = _read_jsonl(path)
+        existing.append(norm)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            for r in existing:
+                fh.write(json.dumps(r, sort_keys=True) + "\n")
+        os.replace(tmp, path)
+        return True
+    except Exception as exc:
+        logger.warning("receipts_store: failed to append approval event (%s); skipping", exc)
+        return False
+
+
+def read_approval_events(output_dir: Optional[Any] = None) -> List[Dict[str, Any]]:
+    """Read ``execution_approvals.jsonl`` (tolerant; ``[]`` when absent)."""
+    return _read_jsonl(_resolve_output_dir(output_dir) / APPROVALS_FILENAME)
+
+
+def latest_approval_states(output_dir: Optional[Any] = None) -> Dict[str, Dict[str, Any]]:
+    """Return ``{approval_id: latest event}`` — the last line per id wins."""
+    latest: Dict[str, Dict[str, Any]] = {}
+    for rec in read_approval_events(output_dir):
+        aid = _opt_str(rec.get("approval_id"))
+        if aid is not None:
+            latest[aid] = rec
+    return latest
+
+
+def pending_approval_ids(output_dir: Optional[Any] = None) -> List[str]:
+    """Approval ids whose latest recorded state is ``pending``.
+
+    These are the ids the skill must re-check with ``get_trade_approvals`` —
+    the log only knows what was last observed, never the live state.
+    """
+    return [aid for aid, rec in latest_approval_states(output_dir).items()
+            if rec.get("state") == "pending"]
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +416,16 @@ def reconcile(
     orders_fetcher: Optional[Callable[[], List[Dict[str, Any]]]] = None,
     symbol_resolver: Optional[Callable[[str], Optional[str]]] = None,
     force: bool = False,
+    fills: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """Cross-check the placed-intent ledger against actual FILLED orders.
+
+    ``fills`` (optional): already-parsed ``OrderFill``s to reconcile against
+    instead of calling ``fetch_filled_orders``. The four-agent Reviewer
+    (``execution/agentic_review.py``) passes the Agentic account's fills from
+    a saved MCP ``get_equity_orders`` response this way, because
+    ``fetch_filled_orders`` reads and writes the shared order cache
+    (``cache/robinhood_orders.json``), which holds the main account's history.
 
     Reuses the PURE FIFO fill reconstruction in :mod:`data.robinhood_orders`
     (``fetch_filled_orders`` → ``OrderFill``) — the FIFO logic is NEVER
@@ -306,6 +457,8 @@ def reconcile(
           "unmatched_placed": [ ... ],  # ledger entries with NO matching fill key
           "unexpected_fills": [ ... ],  # fills with NO matching ledger key
           "quantity_mismatch": [ ... ], # shared keys whose known qty diverges beyond tolerance
+          "not_approved": [ ... ],      # approval requests the operator declined / that expired
+          "awaiting_approval": [ ... ], # approval requests still pending (last observed state)
           "ok": bool,                   # True iff no unmatched/unexpected/mismatched
         }
 
@@ -323,12 +476,13 @@ def reconcile(
         placed_keys = set(placed_by_key.keys())
 
         # Reuse the existing FIFO-source fetch (READ ONLY) — do NOT reimplement.
-        from data.robinhood_orders import fetch_filled_orders
-        fills = fetch_filled_orders(
-            force=force,
-            orders_fetcher=orders_fetcher,
-            symbol_resolver=symbol_resolver,
-        )
+        if fills is None:
+            from data.robinhood_orders import fetch_filled_orders
+            fills = fetch_filled_orders(
+                force=force,
+                orders_fetcher=orders_fetcher,
+                symbol_resolver=symbol_resolver,
+            )
 
         # Fills grouped by the same (date, symbol, side) key as the ledger.
         fill_keys: Dict[str, List[Any]] = {}
@@ -372,12 +526,32 @@ def reconcile(
                 # exactly as before this fix.
                 matched_keys.add(key)
 
-        unmatched_placed = [
+        unfilled = [
             rec for rec in placed
             if (rec.get("dedup_key") or make_dedup_key(
                 rec.get("symbol", ""), rec.get("side", ""), rec.get("ts"),
             )) not in fill_keys
         ]
+
+        # Trade-approval mode: a ledger line is an approval REQUEST. One the
+        # operator declined, or that expired, legitimately has no fill — that
+        # is the gate working, not a discrepancy. One still pending has not
+        # had its chance to fill yet. Both get their own honest bucket; an
+        # approval with no recorded outcome (or approved but unfilled) stays
+        # in unmatched_placed exactly as before.
+        approval_states = latest_approval_states(output_dir)
+        unmatched_placed: List[Dict[str, Any]] = []
+        not_approved: List[Dict[str, Any]] = []
+        awaiting_approval: List[Dict[str, Any]] = []
+        for rec in unfilled:
+            aid = _opt_str(rec.get("approval_id"))
+            state = (approval_states.get(aid) or {}).get("state") if aid else None
+            if state in _TERMINAL_NOT_EXECUTED:
+                not_approved.append({**rec, "approval_state": state})
+            elif state == "pending":
+                awaiting_approval.append({**rec, "approval_state": state})
+            else:
+                unmatched_placed.append(rec)
 
         unexpected_fills = [
             {
@@ -398,6 +572,8 @@ def reconcile(
             "unmatched_placed": unmatched_placed,
             "unexpected_fills": unexpected_fills,
             "quantity_mismatch": quantity_mismatch,
+            "not_approved": not_approved,
+            "awaiting_approval": awaiting_approval,
             "ok": ok,
         }
     except Exception as exc:
@@ -408,6 +584,8 @@ def reconcile(
             "unmatched_placed": [],
             "unexpected_fills": [],
             "quantity_mismatch": [],
+            "not_approved": [],
+            "awaiting_approval": [],
             "ok": False,
             "error": str(exc),
         }

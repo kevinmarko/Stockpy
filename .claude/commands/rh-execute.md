@@ -28,14 +28,31 @@ review (they may be arriving here because of an ntfy push
    respecting `max_notional_per_order`), pausing after each to answer
    whatever the operator asks about it.
 4. If `mode == "review"`, STOP after previews — this is the paper/dry-run stage.
-5. If `mode == "live"`, place ONLY `allow_place: true` intents, one at a time,
+4b. If `mode == "live"`, get the Portfolio & Risk preflight for this queue (the
+   `rh-risk-manager` agent, or `python3 -m execution.agentic_preflight` per the
+   skill's step 4b). Its vetoes are final; place only `passed: true` intents at
+   its `qty` and `limit_price`. With no usable preflight, every order takes the
+   in-chat confirmation path.
+4c. Say each order's validated thesis, invalidation and flags (the
+   `rh-strategy-analyst`'s `theses.json`, loaded per the skill's step 4c) before
+   it is sent; "thesis unavailable" when there is none. Narration only.
+5. If `mode == "live", place ONLY `allow_place: true` intents, one at a time,
    each with an explicit per-order human confirmation, re-checking the kill
    switch before each placement, and append outcomes to
-   `$OUTPUT_DIR/execution_receipts.jsonl`.
+   `$OUTPUT_DIR/execution_receipts.jsonl`. When an order's
+   `review_equity_order` response shows `customer_approval_required: true`
+   with empty `order_checks` (Robinhood trade approvals are on), submitting it
+   only sends it to the operator's phone — their tap there is the per-order
+   confirmation, so don't also ask in chat. Every `place_equity_order` carries
+   the deterministic `ref_id` from `execution.receipts_store.make_ref_id`.
+6. Track every approval you submitted with `get_trade_approvals` and record
+   each observed state via `append_approval_event` — per the skill's step 6.
 
 Never place an order in `review` mode, never place an `allow_place: false`
 intent, never batch-confirm (discussion is not consent — the explicit
-per-order confirmation still has to be asked for and given), and never operate
-against the main (non-Agentic) account.
+per-order confirmation still has to be asked for and given, in chat or by the
+operator's tap in the Robinhood app), never approve a trade yourself (decline a
+pending one only with the operator's OK), and never operate against the main
+(non-Agentic) account.
 
 $ARGUMENTS

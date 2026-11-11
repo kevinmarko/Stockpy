@@ -16,6 +16,7 @@ import type { StrategyReportCardSnapshot,
   BatchRetrospectiveInsightsResponse,
   BridgeReliabilityResponse,
   AgenticDiscovery,
+  AgenticApprovals,
   AgenticStatus,
   AiChartResponse,
   AiCommentaryResponse,
@@ -843,6 +844,7 @@ const liveApi = {
     }),
   // ---- Agentic Trading tab ----
   getAgenticStatus: () => http<AgenticStatus>("/agentic/status"),
+  getAgenticApprovals: () => http<AgenticApprovals>("/agentic/approvals"),
   getAgenticDiscovery: () => http<AgenticDiscovery>("/agentic/discovery"),
   putScanConfig: (req: ScanConfigRequest) =>
     http<ScanConfigResult>("/agentic/scan-config", {
