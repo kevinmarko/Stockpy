@@ -271,3 +271,48 @@ class TestResolveTargetDescription:
 
         assert result is None
         store.get_fundamentals_history.assert_not_called()
+
+
+class TestSbertAvailabilityProbe:
+    """The import-time probe must degrade, never crash, on a spec-less stub.
+
+    Some tests install bare ``types.ModuleType`` stubs in ``sys.modules``.
+    ``importlib.util.find_spec`` raises ``ValueError`` (not ``ImportError``)
+    for those, so an unguarded probe would make ``data.sector_embeddings``
+    itself fail to import. Each case loads a FRESH copy of the module under a
+    private name so the real ``data.sector_embeddings`` (and the objects other
+    tests imported from it) are left untouched.
+    """
+
+    @staticmethod
+    def _load_fresh_copy(name: str):
+        import importlib.util as ilu
+        import sys
+
+        spec = ilu.spec_from_file_location(name, sector_embeddings.__file__)
+        module = ilu.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.modules.pop(name, None)
+        return module
+
+    def test_spec_less_stub_degrades_to_unavailable(self, monkeypatch):
+        import sys
+        import types
+
+        stub = types.ModuleType("sentence_transformers")
+        assert stub.__spec__ is None
+        monkeypatch.setitem(sys.modules, "sentence_transformers", stub)
+
+        fresh = self._load_fresh_copy("_sector_embeddings_stub_probe")
+
+        assert fresh.SBERT_AVAILABLE is False
+        assert fresh._sbert_installed() is False
+
+    def test_probe_value_error_is_treated_as_not_installed(self, monkeypatch):
+        def _raise_value_error(name, *args, **kwargs):
+            raise ValueError(f"{name}.__spec__ is None")
+
+        monkeypatch.setattr(sector_embeddings.importlib.util, "find_spec", _raise_value_error)
+        assert sector_embeddings._sbert_installed() is False
