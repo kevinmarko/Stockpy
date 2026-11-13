@@ -71,23 +71,27 @@ Exit codes (fail closed)
        attributed to this run): an explicit "cycle did not refresh the
        snapshot: <reason>" line is printed so a cycle that did not run can never
        be reported as a pass
-    4  the cycle ran and refreshed the snapshot but proves nothing about live
-       data: it used synthetic ``MockDataEngine`` data, or the snapshot holds no
-       signals. The wiring ran; "the live pipeline works" is NOT established, so
-       ``make verify`` must not say it passed
+    4  the cycle ran but proves nothing about live data: it used synthetic
+       ``MockDataEngine`` data (checked FIRST, because the synthetic-data gate
+       makes such a cycle skip the snapshot by design), or it refreshed a
+       snapshot that holds no signals. The wiring ran; "the live pipeline
+       works" is NOT established, so ``make verify`` must not say it passed
 
 What it still does (the old ``run_once()`` step did not)
 --------------------------------------------------------
-It rewrites ``state_snapshot.json`` (plus its ``history/`` copy), the HTML
-dashboards and ``dead_letter.json`` under ``OUTPUT_DIR`` (the old ``run_once()``
-step did none of these; it did write ``progress.json``, as this cycle does),
-stamps ``last_data_refresh.txt``, updates the local DB / caches and fetches
-market data. A ``MockDataEngine`` cycle (no ``FRED_API_KEY``, or no data came
-back) exits 4: the cycle ran, but it proves the wiring, not live data, and
-because ``StateSnapshotStep`` ignores the synthetic flag (a known, unfixed
-pre-existing gap) it has also overwritten the snapshot and dashboards with that
-data. It is detected from the captured ``RunContext``
-(``context_extras['data_is_synthetic']`` or a ``MockDataEngine`` market).
+A real-data cycle rewrites ``state_snapshot.json`` (plus its ``history/``
+copy), the HTML dashboards and ``dead_letter.json`` under ``OUTPUT_DIR`` (the
+old ``run_once()`` step did none of these; it did write ``progress.json``, as
+this cycle does), stamps ``last_data_refresh.txt``, updates the local DB /
+caches and fetches market data. A ``MockDataEngine`` cycle (no
+``FRED_API_KEY``, or no data came back) exits 4: the cycle ran, but it proves
+the wiring, not live data. The synthetic-data gate
+(``pipeline/synthetic_gate.py``) makes it skip the snapshot, its ``history/``
+copy, the dashboards and the freshness marker, so it no longer overwrites the
+operator's real files with that data; ``dead_letter.json``, ``progress.json``
+and the local DB / forecast ledger are not gated yet. It is detected from the
+captured ``RunContext`` (``context_extras['data_is_synthetic']`` or a
+``MockDataEngine`` market).
 Nothing checks whether a daemon cycle is in flight: if one is, its snapshot
 could satisfy the freshness check (the missing end-of-cycle hook above catches
 only the case where this run never finished) and the two cycles share
@@ -344,10 +348,11 @@ def _print_briefing(output_dir: Any) -> None:
 def _used_synthetic_data(ctx: Any) -> bool:
     """True when the cycle ran on ``MockDataEngine`` data (either way it can get there).
 
-    ``AsyncDataFetchStep`` sets ``context_extras['data_is_synthetic']`` only on
-    its empty-data fallback branch; with no ``FRED_API_KEY`` it picks
-    ``MockDataEngine`` up front WITHOUT setting that flag, so the engine itself
-    is checked too.
+    ``AsyncDataFetchStep`` sets ``context_extras['data_is_synthetic']`` for a
+    ``MockDataEngine`` engine (no ``FRED_API_KEY``) and on its empty-data
+    fallback (``pipeline/synthetic_gate.py``). The engine itself is checked too,
+    as a second line, so a cycle whose flag was never set (a test that opted
+    out of the gate) is still not reported as live.
     """
     if ctx is None:
         return False
@@ -368,27 +373,30 @@ def _print_disclosure(output_dir: Any, obs: _Observation, *, refreshed: bool) ->
         "alert(s) suppressed."
     )
     print(
-        "  A completed cycle rewrites state_snapshot.json (+ history/), the HTML dashboards, "
-        "dead_letter.json and progress.json under "
+        "  A completed real-data cycle rewrites state_snapshot.json (+ history/), the HTML "
+        "dashboards, dead_letter.json and progress.json under "
         f"{output_dir}, stamps last_data_refresh.txt, updates the local DB / caches, fetches "
         "market data, and appends to risk_gate_blocks.jsonl if the pre-trade risk gate blocks an "
         "order. The old run_once() verify step did not rewrite the snapshot, dashboards or "
         "dead_letter.json. last_data_refresh.txt can make the daemon's timer skip its next pull "
         "within DATA_FRESHNESS_TTL_SECONDS."
     )
-    if not refreshed:
+    synthetic = obs.ctx is not None and _used_synthetic_data(obs.ctx)
+    if not refreshed and not synthetic:
         print(
             "  This run stopped before it wrote the snapshot; only the steps before that "
             "(data fetch etc.) touched their files."
         )
     if obs.ctx is None:
         print("  (could not inspect the cycle's data source: end-of-cycle hook not reached)")
-    elif _used_synthetic_data(obs.ctx):
+    elif synthetic:
         print(
             "  WARNING: this cycle ran on SYNTHETIC MockDataEngine data (no FRED key, or no market "
-            "data came back). It proves the wiring ran, NOT that live data works, and "
-            "StateSnapshotStep ignores that flag, so it has OVERWRITTEN state_snapshot.json and "
-            "the dashboards with that data. Fix the data source and run it again."
+            "data came back). It proves the wiring ran, NOT that live data works. The "
+            "synthetic-data gate made it skip state_snapshot.json (+ history/), the HTML "
+            "dashboards and last_data_refresh.txt, so nothing of those was overwritten; "
+            "dead_letter.json, progress.json and the local DB / forecast ledger are not gated "
+            "yet and may have been written. Fix the data source and run it again."
         )
 
 
@@ -428,6 +436,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     from settings import settings
 
     output_dir = settings.OUTPUT_DIR
+    # Synthetic first: the synthetic-data gate makes such a cycle skip the
+    # snapshot by design, so the snapshot check below would misreport it as
+    # "did not refresh the snapshot" (exit 3). A stopped cycle (kill switch)
+    # keeps its own, more specific exit-3 explanation.
+    if (
+        obs.ctx is not None
+        and not getattr(obs.ctx, "stopped", False)
+        and _used_synthetic_data(obs.ctx)
+    ):
+        print(
+            "VERIFY CYCLE INCOMPLETE - the cycle ran on SYNTHETIC MockDataEngine data (no "
+            "FRED_API_KEY, or no market data came back), so it proves the wiring, not that "
+            "the live pipeline works; by design it did not rewrite the snapshot or dashboards.",
+            file=sys.stderr,
+        )
+        _print_disclosure(output_dir, obs, refreshed=False)
+        return EXIT_UNVERIFIED
+
     check = check_snapshot(output_dir, started_epoch)
     if not check.ok:
         reason = _cycle_not_refreshed_reason(check, obs)

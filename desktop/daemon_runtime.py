@@ -463,6 +463,19 @@ class OrchestratorDaemon:
             "OrchestratorDaemon started: engines warm, data_engine=%s, interval_seconds=%s",
             type(self._data_engine).__name__, self._interval_seconds,
         )
+        # Synthetic-data gate (pipeline/synthetic_gate.py): every cycle on this
+        # engine computes but writes nothing (no queue, snapshot, dashboards,
+        # pushes or paper orders). Say so loudly once at start when the queue
+        # mode means the operator expects the daemon to write the queue.
+        if data_engine.is_synthetic_provider(self._data_engine):
+            queue_mode = str(getattr(settings, "DAEMON_AGENTIC_QUEUE_MODE", "off") or "off")
+            if queue_mode.strip().lower() != "off":
+                logger.error(
+                    "DAEMON_AGENTIC_QUEUE_MODE=%s but the daemon is on synthetic "
+                    "MockDataEngine data: every cycle will skip the queue, snapshot, "
+                    "dashboards, pushes and paper orders. Set FRED_API_KEY and "
+                    "restart the daemon.", queue_mode,
+                )
 
         # Previously gated on `self._interval_seconds > 0` alone -- under the
         # realistic default deployment (ORCHESTRATOR_INTERVAL_SECONDS=0, "on-

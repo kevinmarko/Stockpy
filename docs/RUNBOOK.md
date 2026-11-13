@@ -848,12 +848,20 @@ runs (hourly with `ORCHESTRATOR_INTERVAL_SECONDS=3600`; the clean-run
 "Refresh Complete" push at most once per ET day, the error push every cycle
 with errors). `main.py` is archived (`legacy/main.py`, step 5.5) and no longer runs.
 `daily_report.html` is retired: use `daily_report_dashboard.html`
-or the webapp. A paused (kill-switch) cycle, or one whose price
-fetch came back empty and fell back to synthetic data, writes nothing and pushes nothing; the
-previous queue stays and the skill's ~30-minute freshness rule keeps it from being placed.
-**A daemon running with no `FRED_API_KEY` configured is NOT covered by that skip:** it picks
-`MockDataEngine` up front without the synthetic-data flag, so in `primary` it would write the
-real queue from flat-$10 mock data (a known gap, not fixed; keep the key set).
+or the webapp. A paused (kill-switch) cycle writes nothing and pushes nothing; the previous
+queue stays and the skill's ~30-minute freshness rule keeps it from being placed.
+**A cycle on synthetic data writes nothing either** (`pipeline/synthetic_gate.py`, since
+2026-11): when the daemon's engine is `MockDataEngine` (no `FRED_API_KEY`, or the FRED check
+failed when the daemon started) or a price fetch came back empty, the cycle still computes but
+writes no queue, advisory source, watch state, pushes, paper orders, state snapshot, dashboards
+or freshness marker. It is still recorded `succeeded`; the run's progress message starts
+`SYNTHETIC DATA`, the log has one CRITICAL `SYNTHETIC DATA:` line per cycle, one deduplicated
+CRITICAL alert goes out, the daily summary carries a warning, and in `shadow`/`primary` the daemon
+logs an ERROR at start. The daemon builds its engine once at start, so **after setting
+`FRED_API_KEY`, restart the daemon**. Check the start line `OrchestratorDaemon started: engines
+warm, data_engine=DataEngine` (`MockDataEngine` there means every cycle is skipped). Not gated yet:
+the inner writers inside `RunPipelineStep` (forecast ledger, `dead_letter.json`, symbol-rating and
+cap-audit rows) — see `docs/known_issues/synthetic_data_gate_keyless_cycle_2026_10.md`.
 
 **Rollback (after step 5.5):** revert the step 5.5 PR (`git revert`; it restores `main.py`, the
 `com.investyo.daily-advisory` plist under `scripts/` and the moved tests), then set

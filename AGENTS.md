@@ -297,6 +297,12 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   macro gate, deployability) fail *closed* on missing data. Per-ticker loops (`data_engine.py`,
   orchestrators, per-symbol fetches) wrap each ticker in try/except and dead-letter it so one bad
   symbol never aborts a run.
+- **Synthetic-data gate.** A cycle on `MockDataEngine` data computes but writes nothing durable or
+  outward. `AsyncDataFetchStep` decides it once, from the engine's identity
+  (`data_engine.is_synthetic_provider`) or the empty-fetch fallback, and sets
+  `ctx.context_extras["data_is_synthetic"]`; any step that writes a file, DB row, push or order must
+  honor it (`pipeline/synthetic_gate.py::is_cycle_synthetic`). The inner `RunPipelineStep` writers
+  are a known follow-up (`docs/known_issues/synthetic_data_gate_keyless_cycle_2026_10.md`).
 - **Degenerate-std guard.** Any ratio dividing by a computed std or drawdown guards with `< 1e-12`
   (or `>= 1e-12` to proceed), never an exact `== 0`/`> 0` check (e.g.
   `validation/metrics.py::_DEGENERATE_STD`).

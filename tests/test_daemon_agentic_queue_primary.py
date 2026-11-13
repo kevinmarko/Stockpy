@@ -482,9 +482,9 @@ class TestMcpReportUnderPrimary:
         triggered.assert_called_once()
         assert "report was refreshed" in text and "daily_report_dashboard.html" in text
         assert "retired" not in text
-        # A synthetic-data cycle still renders the report and is still "succeeded"
-        # (StateSnapshotStep ignores the marker), so the tool must say it cannot tell.
-        assert "Synthetic (MockDataEngine) data detected" in text
+        # Since the synthetic-data gate a synthetic cycle renders no report, so a
+        # refreshed one needs no "cannot tell" caution.
+        assert "cannot detect" not in text
 
     def test_stale_dashboard_after_a_green_cycle_is_not_reported_as_fresh(self, monkeypatch, tmp_path):
         import os
@@ -505,7 +505,8 @@ class TestMcpReportUnderPrimary:
         ran.assert_not_called()
         assert "report not refreshed" in text
         assert "report was refreshed" not in text
-        assert "synthetic" not in text.lower()  # synthetic cycles DO render the report
+        # Synthetic data is now one of the possible causes (the gate skips the report).
+        assert "synthetic MockDataEngine data" in text
 
 
 # ---------------------------------------------------------------------------

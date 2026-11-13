@@ -303,13 +303,13 @@ python3 main_orchestrator.py --dry-run
 
 The pipeline runs identically but any generated orders are logged rather than placed on the paper ledger. Use this to verify the setup before enabling live order flow.
 
-> **`--dry-run` stops broker orders only.** It does not switch off the agentic-queue step: with `DAEMON_AGENTIC_QUEUE_MODE=primary` a standalone `--dry-run` cycle still writes the real `execution_queue.json`, runs the watch engine and sends pushes, and it still rewrites the state snapshot and dashboards. To confirm the pipeline runs without the queue and push side effects, use `make verify` (or `python scripts/step5_4_verify_cycle.py`): it forces the queue mode `off` in-process and suppresses alerts (it still rewrites the state snapshot and dashboards, and it exits non-zero if the cycle ran on synthetic data).
+> **`--dry-run` stops broker orders only.** It does not switch off the agentic-queue step: with `DAEMON_AGENTIC_QUEUE_MODE=primary` a standalone `--dry-run` cycle still writes the real `execution_queue.json`, runs the watch engine and sends pushes, and it still rewrites the state snapshot and dashboards (on real data; a synthetic-data cycle writes none of these, see below). To confirm the pipeline runs without the queue and push side effects, use `make verify` (or `python scripts/step5_4_verify_cycle.py`): it forces the queue mode `off` in-process and suppresses alerts (on real data it still rewrites the state snapshot and dashboards; it exits non-zero if the cycle ran on synthetic data).
 
 ### Offline / mock mode
 
 If a `FRED_API_KEY` is not configured, the orchestrator automatically falls back to `MockDataEngine`, which generates deterministic synthetic data (`data_engine.live_data_configured()` — a FRED key check, not a `credentials.json` presence check; see the note below). Useful for testing code changes without network access.
 
-This is expected in development.
+This is expected in development. **A synthetic-data cycle computes but writes nothing durable or outward** (since 2026-11, `pipeline/synthetic_gate.py`): no execution queue, advisory source, watch state, pushes, paper orders, `state_snapshot.json`, dashboards or freshness marker, so mock mode never overwrites real local outputs. The run is still recorded `succeeded`, with a progress message starting `SYNTHETIC DATA` and one CRITICAL log line per cycle. To see Mock-cycle outputs in a test, opt in explicitly (`tests/_synthetic_outputs.py`).
 
 **Note (2026-09):** this gate used to key off `os.path.exists("credentials.json")` (the Google Sheets service-account file). It was switched to a FRED-key check in step 4 prep, ahead of the Google Sheet publisher's retirement in step 4e (see [Section 18](#18-google-sheets-integration-legacy)) — deleting `credentials.json` no longer silently switches the daemon to fabricated data.
 
@@ -1138,9 +1138,11 @@ Set `FRED_API_KEY=your_key` in `.env`. Get a free key at fred.stlouisfed.org.
 ### "FRED_API_KEY not configured. Operating with deterministic MockDataEngine."
 
 This means no `FRED_API_KEY` is set in `.env` — `data_engine.live_data_configured()` is
-the real/mock switch (a FRED-key check). Set `FRED_API_KEY=your_key` to get real data;
-the pipeline still runs normally on synthetic data without one, which is fine for
-testing code changes. (Before 2026-09 this gate keyed off `credentials.json`, the now-
+the real/mock switch (a FRED-key check). Set `FRED_API_KEY=your_key` to get real data,
+then restart the daemon (it builds its data engine once at start). Without one the
+pipeline still computes on synthetic data, which is fine for testing code changes, but
+writes no queue, pushes, paper orders, snapshot, dashboards or freshness marker (the
+synthetic-data gate; the log says `SYNTHETIC DATA:` each cycle). (Before 2026-09 this gate keyed off `credentials.json`, the now-
 retired Google Sheets service-account file — see
 [Section 18](#18-google-sheets-integration-legacy) — which tied real-vs-mock data to an
 unrelated integration; deleting that file no longer has any effect on this choice.)

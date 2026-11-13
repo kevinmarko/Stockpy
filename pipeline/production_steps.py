@@ -31,6 +31,13 @@ from typing import Any, Optional
 
 from pipeline.base import PipelineStep
 from pipeline.context import RunContext
+from pipeline.synthetic_gate import (
+    REASON_EMPTY_PRICE_FETCH,
+    REASON_MOCK_ENGINE,
+    is_cycle_synthetic,
+    mark_cycle_synthetic,
+    synthetic_reason,
+)
 from settings import settings
 class TelemetryProxy:
     def __getattr__(self, name):
@@ -195,6 +202,17 @@ class AsyncDataFetchStep(PipelineStep):
             ctx.symbols = base_symbols
         universe_funnel["tracked_universe_total"] = len(ctx.symbols)
 
+        # Synthetic-data gate (pipeline/synthetic_gate.py): decided ONCE, here,
+        # from the engine this cycle actually uses -- whether it was picked
+        # keyless just above, built by OrchestratorDaemon._build_data_engine
+        # (keyless, or after a failed FRED check) or injected by a caller. The
+        # flag used to be set only on the empty-fetch fallback below, so a
+        # keyless daemon cycle wrote the queue, snapshot and dashboards from
+        # MockDataEngine data. Called through the module attribute so tests
+        # can patch it (tests/_synthetic_outputs.py::allow_synthetic_outputs).
+        if data_engine_mod.is_synthetic_provider(de):
+            mark_cycle_synthetic(ctx, REASON_MOCK_ENGINE)
+
         # 1. Asynchronous concurrent data fetching
         if ctx.progress is not None:
             ctx.progress.start_stage("data", symbols_total=len(ctx.symbols))
@@ -213,20 +231,19 @@ class AsyncDataFetchStep(PipelineStep):
             ctx.macro_raw = de.fetch_macro_raw()
             ctx.fund_raw = de.fetch_fundamentals_raw(ctx.symbols)
             ctx.tech_raw = de.fetch_technical_raw(ctx.symbols)
-            # Broker-agnostic synthetic-data marker (Finding 1): this cycle's
-            # figures are MockDataEngine's flat $10 prices and fabricated
-            # fundamentals, not real market data. Mirrors
-            # main_orchestrator._mark_data_refreshed()'s real-data-only
-            # asymmetry below -- set ONLY on this fallback branch, never on
-            # the real-data path. BrokerExecutionStep checks this marker
-            # before it will submit any paper order.
-            ctx.context_extras['data_is_synthetic'] = True
-        else:
+            # Synthetic-data marker (Finding 1): this cycle's figures are now
+            # MockDataEngine's flat $10 prices and fabricated fundamentals,
+            # not real market data. Every durable/outward writer honors it
+            # (pipeline/synthetic_gate.py). No-op if the engine was already
+            # synthetic (the first reason wins).
+            mark_cycle_synthetic(ctx, REASON_EMPTY_PRICE_FETCH)
+
+        if not is_cycle_synthetic(ctx):
             # Real (non-mock) data landed — stamp the cross-cycle freshness
             # marker so the daemon's interval gate (DATA_FRESHNESS_TTL_SECONDS)
-            # can skip the next few pulls. The mock fallback above deliberately
-            # does NOT stamp it, so an offline blip re-tries on the next cycle
-            # rather than being treated as a fresh pull.
+            # can skip the next few pulls. A synthetic cycle (Mock engine OR
+            # the fallback above) never stamps it, so it is never treated as
+            # a fresh pull and the next cycle re-tries real data.
             main_orchestrator._mark_data_refreshed()
 
         universe_funnel["tech_raw_count"] = len(ctx.tech_raw)
@@ -3096,8 +3113,9 @@ class AgenticQueueStep(PipelineStep):
       (``pipeline.agentic_queue.daemon_owns_agentic_side_effects``).
 
     Skips (and logs why): in every mode, the whole step when the cycle
-    stopped, the data is synthetic (MockDataEngine fallback) or the advisory
-    overlay did not finish; the queue write alone when there are no
+    stopped, the data is synthetic (a MockDataEngine engine or the empty-fetch
+    fallback, ``pipeline/synthetic_gate.py``) or the advisory overlay did not
+    finish; the queue write alone when there are no
     recommendations (primary still sends the summary push, which then reports
     the per-symbol errors, and runs the watch engine, as main.py did).
 
@@ -3168,8 +3186,8 @@ class AgenticQueueStep(PipelineStep):
         """Why this cycle must produce nothing at all (queue, pushes, watch), or None."""
         if ctx.stopped:
             return f"the cycle stopped ({ctx.stop_reason or 'no reason recorded'})"
-        if ctx.context_extras.get("data_is_synthetic"):
-            return "this cycle fell back to synthetic MockDataEngine data"
+        if is_cycle_synthetic(ctx):
+            return "this cycle ran on synthetic MockDataEngine data"
         if not ctx.context_extras.get("advisory_overlay_ok"):
             return "the advisory overlay did not complete this cycle"
         return None
@@ -3362,16 +3380,17 @@ class BrokerExecutionStep(PipelineStep):
         # 6. Broker Execution
         effective_dry_run = ctx.force_account # Or pass it in context
 
-        # Synthetic-data gate (Finding 1): a cycle that fell back to
-        # MockDataEngine (AsyncDataFetchStep's fail-safe branch, triggered by
-        # a total market-data outage) must NEVER submit a live/paper broker
-        # order priced off flat $10 fabricated data. Checked BEFORE the
-        # ADVISORY_ONLY/broker-credential branches below, and returns
-        # unconditionally without calling main_orchestrator._execute_broker_
-        # orders. This never touches broker-selection code -- that selection
-        # happens one layer deeper inside _execute_broker_orders, keyed off
-        # execution.broker_selection.resolve_broker_backend().
-        if ctx.context_extras.get("data_is_synthetic"):
+        # Synthetic-data gate (Finding 1, pipeline/synthetic_gate.py): a cycle
+        # on MockDataEngine data -- the engine itself (no FRED key, a failed
+        # FRED check in the daemon, an injected engine) or AsyncDataFetchStep's
+        # empty-fetch fallback (a total market-data outage) -- must NEVER
+        # submit a paper broker order priced off flat $10 fabricated data.
+        # Checked BEFORE the ADVISORY_ONLY/broker-credential branches below,
+        # and returns unconditionally without calling main_orchestrator.
+        # _execute_broker_orders. This never touches broker-selection code --
+        # that selection happens one layer deeper inside _execute_broker_orders,
+        # keyed off execution.broker_selection.resolve_broker_backend().
+        if is_cycle_synthetic(ctx):
             telemetry.critical(
                 "Synthetic (MockDataEngine) data detected for this cycle -- "
                 "skipping broker execution entirely regardless of "
@@ -3393,11 +3412,29 @@ class BrokerExecutionStep(PipelineStep):
 
 
 class StateSnapshotStep(PipelineStep):
-    """Saves state snapshots for telemetry and UI, and renders Jinja reports."""
+    """Saves state snapshots for telemetry and UI, and renders Jinja reports.
+
+    Writes nothing on a synthetic-data cycle (``pipeline/synthetic_gate.py``):
+    no ``state_snapshot.json`` (nor its ``history/`` rotation), no
+    ``volatility_bands_dashboard.html`` / ``daily_report_dashboard.html`` and no
+    printed payload. Readers keep the last REAL snapshot, whose own
+    ``timestamp`` ages; no placeholder or "synthetic" snapshot is written
+    (CONSTRAINT #4). The gate lives here, not in ``_write_state_snapshot``, so
+    the writer itself (``tests/test_state_snapshot_parity.py``) is unchanged.
+    """
     name = "snapshot"
     
     def run(self, ctx: RunContext) -> None:
         """Write state snapshots for telemetry/UI and render the Jinja HTML report."""
+        if is_cycle_synthetic(ctx):
+            telemetry.critical(
+                "Synthetic (MockDataEngine) data this cycle (%s) -- skipping the state "
+                "snapshot, its history/ copy and the HTML dashboards; the previous "
+                "files are left in place.",
+                synthetic_reason(ctx) or "no reason recorded",
+            )
+            return
+
         from main_orchestrator import _write_state_snapshot, generate_plotly_volatility_bands, generate_html_report, json
         
         out_dir = str(settings.OUTPUT_DIR)
