@@ -87,6 +87,19 @@ describe("glossaryDef", () => {
     expect(glossaryDef("opportunity scan", null)).toContain("— candidates");
   });
 
+  it("renders the naive gate's live settings from /thresholds (forecasting rebuild F6b)", () => {
+    const def = glossaryDef("naive gate", { ...LIVE, forecast_gate_min_improvement: 0.01, forecast_gate_min_obs: 40 });
+    expect(def).toContain("1.0%");
+    expect(def).toContain("40 scored pairs");
+  });
+
+  it("degrades the naive gate numbers to '—' when thresholds are null (not a guess)", () => {
+    const def = glossaryDef("naive gate", null) ?? "";
+    expect(def).toContain("at least — lower than");
+    expect(def).toContain("at least — scored pairs");
+    expect(def).not.toMatch(/0\.5%|\b60\b/);
+  });
+
   it("no longer carries a 'follow minimum' glossary entry (Follow-a-Pilot was removed)", () => {
     expect(glossaryDef("follow minimum", LIVE)).toBeUndefined();
   });

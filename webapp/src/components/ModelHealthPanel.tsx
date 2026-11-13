@@ -11,6 +11,7 @@ import {
   Cell
 } from 'recharts';
 import { Activity, Loader2 } from 'lucide-react';
+import { Link } from 'react-router';
 import { useApi } from '../hooks/useApi';
 import { api } from '../api/client';
 import { EmptyState } from './ui';
@@ -66,6 +67,15 @@ export function ModelHealthPanel({ symbol, compact }: { symbol?: string; compact
           title="No model-health data"
           hint="No universe-wide model comparison is tracked. Pick a symbol to see its forecast skill weights."
         />
+        {/* The Forecasts screen has the universe-wide published-forecast table
+            and, per symbol, skill vs naive and the naive-gate decisions. */}
+        <Link
+          to="/forecast"
+          style={{ fontSize: "var(--t-caption)", color: "var(--accent)", marginTop: "var(--s-2)" }}
+          data-testid="model-health-forecasts-link"
+        >
+          Open Forecasts: skill vs naive and the naive gate →
+        </Link>
       </div>
     );
   }
@@ -140,6 +150,13 @@ export function ModelHealthPanel({ symbol, compact }: { symbol?: string; compact
             {`Forecast Skill (${symbol})`}
           </h3>
         </div>
+        <Link
+          to={`/forecast?symbol=${encodeURIComponent(symbol)}`}
+          style={{ fontSize: "var(--t-caption)", color: "var(--accent)" }}
+          data-testid="model-health-forecasts-link"
+        >
+          Forecasts →
+        </Link>
         {/* ForecastSkill carries no is_synthetic flag of its own (see
             api/types.ts) -- an empty/absent reliability curve already
             renders the honest EmptyState above, so there is nothing to

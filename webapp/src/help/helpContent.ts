@@ -98,6 +98,12 @@ export const GLOSSARY: Record<string, GlossaryValue> = {
     "A Hidden Markov Model's probability (0-1) that the market is in a risk-on regime. It multiplies the Kelly Target, so bearish readings shrink suggested sizes; when it can't run it defaults to 1.0 (no effect).",
   forecast:
     "A multi-horizon, probabilistic price projection — never a guarantee. An input that can't be computed shows '—', never a fabricated number.",
+  "naive gate": (t) =>
+    `A check on each model before its forecast is blended: a model is admitted only if, on matured outcomes in the recent skill window (its length is shown on the Forecasts screen), its median log error is at least ${fmtPct(t?.forecast_gate_min_improvement, 1, { fromFraction: true })} lower than that of the naive 'price stays flat' forecast, on at least ${fmtNum(t?.forecast_gate_min_obs, 0)} scored pairs. If no model qualifies, the naive forecast is published (the 'naive' badge). When the gate is off it runs in shadow: its decisions are recorded but the plain blend is published. The Forecasts screen shows which mode is live.`,
+  "skill vs naive":
+    "How a model's past forecasts compare with the naive forecast (today's price, unchanged) on the same days: the median absolute log error of each (0.02 is about 2%), the share of days the model was closer, a sign-test p-value (a small p means the win/loss split is unlikely to be luck) and how often it called the direction right. Only matured outcomes count; a model with no scored days shows the reason instead of a number.",
+  "forecast z":
+    "A planned measure (forecasting rebuild F5): the forecast's predicted move (its log return from today's price) divided by E, the published model's typical miss (median absolute log error over its n matured forecasts). A large |z| means the forecast moves more than the model usually misses by. It is not measured yet, so the Forecasts screen shows z, E and n as 'unavailable' with the reason, never as 0.",
   "garch vol":
     "A GJR-GARCH volatility estimate that weights recent bad days more than good ones (the leverage effect) — more accurate than a plain moving standard deviation. It's the primary vol input for position sizing.",
   "brinson-fachler":
@@ -317,10 +323,10 @@ export const TAB_HELP: Record<string, TabHelp> = {
     ],
   },
   forecast: {
-    title: "Forecast Viewer",
+    title: "Forecasts",
     description:
-      "Multi-horizon, probabilistic price forecasts for one symbol, with the model's volatility (GJR-GARCH) and regime inputs. Forecasts are not guarantees — an input that can't be computed shows '—', never a fabricated number.",
-    keyConcepts: ["forecast", "garch vol", "hmm regime"],
+      "The pipeline's published 10/30/60/90-day forecasts for every tracked symbol, read from the last run (nothing is refit here), with their Monte Carlo bands and badges when a horizon published the naive forecast or a fallback. Pick a symbol to see what its forecast changed this cycle (score points, the action tier without them, advisory rules, the sell-zone top) and its ledger: skill against the naive 'price stays flat' forecast per model, and what the naive gate admitted or rejected and why. Anything not measured shows '—' or 'unavailable' with the reason, never a fabricated number.",
+    keyConcepts: ["forecast", "naive gate", "skill vs naive", "mc band coverage", "forecast z"],
   },
   sentiment: {
     title: "Sentiment Dynamics",

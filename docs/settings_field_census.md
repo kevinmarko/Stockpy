@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `00fba602cde0fbc893b2ca335c1313eed8d02fba`
+- Measured at commit: `23e165e86cb3e8ca9bce9b7881be2f6c4d7fd143`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -235,7 +235,7 @@ _S.settings, _dsr_settings, _gravity_settings, _guard_settings, _mt_settings, _o
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 717 | 252 |
+| (a) `settings.KEY` | 721 | 253 |
 | (b) `getattr(settings, "KEY", default)` | 298 | 171 |
 | (c) `getattr(settings, <var>)` (dynamic) | 16 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
@@ -261,7 +261,7 @@ referenced by name somewhere and is probably read dynamically.
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1624`, `pilots/feature_flags.py:49` | likely read dynamically |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **128**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **127**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -343,7 +343,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `FORECAST_MAX_CONCURRENCY` | b | 2 | 0 |
 | `FORECAST_MC_RANDOM_SEED` | b | 1 | 0 |
 | `FORECAST_MODEL_PERSISTENCE_ENABLED` | b | 2 | 0 |
-| `FORECAST_NAIVE_GATE_ENABLED` | b | 5 | 0 |
 | `FORECAST_PROPHET_WEIGHT` | b | 2 | 0 |
 | `FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED` | b | 1 | 0 |
 | `FRED_KEY_ROTATED_DATE` | b | 1 | 0 |
