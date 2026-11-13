@@ -22,8 +22,10 @@ pipeline.advisory_inputs.build_universe_detailed() -- the exact function
 build_universe() (formerly main.py's _build_universe()) wraps -- so the daemon
 also gains the advisory path's held-in-fallback rule (DEFAULT_TICKERS fires only when held, watchlist AND
 discovered are all empty) and closed-position retention. The
-TestDaemonMatchesAdvisoryInputsUniverse class pins that the two produce the
-identical universe for the same inputs.
+TestDaemonUniverseMatchesDocumentedRules class pins the step's universe
+against hand-written expectations derived from those rules (decision D4,
+2026-11-13: the class it replaced compared the step to the same function the
+step calls, which was a tautology).
 These tests exercise AsyncDataFetchStep.run() directly with a hand-built
 RunContext (ctx.market pre-set so the function skips straight past the
 credentials.json/DataEngine-construction branch into
@@ -352,48 +354,89 @@ class TestDaemonClosedPositionRetention:
         assert ctx.symbols == ["AAPL", "HELD"]
 
 
-_PARITY_SCENARIOS = {
-    "everything": dict(
-        held=["HELD", "BOTH"], watchlist_file_tickers=["WLST", "BOTH"], watchlist_env="ENVW",
-        discovered_candidates=["DISC"], default_tickers=["DFLT"], recently_closed=["SOLD", "HELD"],
+# Each scenario pairs the universe inputs with the universe the documented
+# rules (CLAUDE.md "Symbol universe"; build_universe_detailed()'s docstring)
+# say the daemon must produce. The expected lists are written out by hand from
+# those rules, NOT computed by calling the builder the step itself calls, so a
+# change to the builder's behaviour fails here instead of moving both sides.
+# Rules applied, in order:
+#   1. held | WATCHLIST env | watchlist.txt | discovered, uppercased;
+#   2. rating auto-drop subtracts excluded symbols, never held ones;
+#   3. DEFAULT_TICKERS only when the union after step 2 is empty;
+#   4. recently-closed retention (minus held) unioned LAST, so it is never
+#      auto-dropped and never suppresses the DEFAULT_TICKERS fallback;
+#   5. sorted.
+_SPEC_SCENARIOS = {
+    "everything": (
+        dict(
+            held=["HELD", "BOTH"], watchlist_file_tickers=["WLST", "BOTH"], watchlist_env="ENVW",
+            discovered_candidates=["DISC"], default_tickers=["DFLT"], recently_closed=["SOLD", "HELD"],
+        ),
+        # union non-empty -> no DFLT; HELD is held, so retention adds only SOLD.
+        ["BOTH", "DISC", "ENVW", "HELD", "SOLD", "WLST"],
     ),
-    "held_only_with_defaults": dict(held=["HELD"], default_tickers=["DFLT"]),
-    "empty_account_defaults_fallback": dict(held=[], default_tickers=["DFLT", "SPY"]),
-    "empty_account_defaults_plus_retention": dict(
-        held=[], default_tickers=["DFLT"], recently_closed=["SOLD"],
+    "held_only_with_defaults": (
+        dict(held=["HELD"], default_tickers=["DFLT"]),
+        # a held position alone suppresses the DEFAULT_TICKERS fallback.
+        ["HELD"],
     ),
-    "discovery_only": dict(held=[], discovered_candidates=["DISC"], default_tickers=["DFLT"]),
-    "auto_drop": dict(
-        held=["HELD"], watchlist_file_tickers=["BAD", "GOOD"], discovered_candidates=["DBAD"],
-        recently_closed=["SOLD"], rating_excluded={"BAD", "DBAD", "HELD", "SOLD"},
+    "empty_account_defaults_fallback": (
+        dict(held=[], default_tickers=["DFLT", "SPY"]),
+        ["DFLT", "SPY"],
     ),
-    "auto_drop_empties_union": dict(
-        held=[], watchlist_file_tickers=["BAD"], default_tickers=["DFLT"],
-        rating_excluded={"BAD"},
+    "empty_account_defaults_plus_retention": (
+        dict(held=[], default_tickers=["DFLT"], recently_closed=["SOLD"]),
+        # retention is unioned after the fallback decision, so DFLT still fires.
+        ["DFLT", "SOLD"],
     ),
-    "nothing_at_all": dict(held=[]),
+    "discovery_only": (
+        dict(held=[], discovered_candidates=["DISC"], default_tickers=["DFLT"]),
+        # a discovered candidate makes the union non-empty -> no DFLT.
+        ["DISC"],
+    ),
+    "auto_drop": (
+        dict(
+            held=["HELD"], watchlist_file_tickers=["BAD", "GOOD"], discovered_candidates=["DBAD"],
+            recently_closed=["SOLD"], rating_excluded={"BAD", "DBAD", "HELD", "SOLD"},
+        ),
+        # BAD/DBAD dropped; HELD survives (held is never dropped); SOLD is
+        # retained even though excluded, because retention comes after the drop.
+        ["GOOD", "HELD", "SOLD"],
+    ),
+    "auto_drop_empties_union": (
+        dict(
+            held=[], watchlist_file_tickers=["BAD"], default_tickers=["DFLT"],
+            rating_excluded={"BAD"},
+        ),
+        # the drop empties the union, so the fallback fires on the post-drop set.
+        ["DFLT"],
+    ),
+    "nothing_at_all": (dict(held=[]), []),
 }
 
 
-class TestDaemonMatchesAdvisoryInputsUniverse:
-    """The step 5.1 equivalence gate at the unit level: for identical inputs
-    (held, WATCHLIST env, watchlist.txt, discovered, retention,
-    DEFAULT_TICKERS fallback, rating auto-drop) the daemon's
-    AsyncDataFetchStep and pipeline.advisory_inputs.build_universe() (the
-    function main.py's _build_universe() was, until step 5.5 archived
-    main.py) produce the same universe."""
+class TestDaemonUniverseMatchesDocumentedRules:
+    """The daemon's AsyncDataFetchStep produces the universe the documented
+    rules specify, for each combination of inputs (held, WATCHLIST env,
+    watchlist.txt, discovered, retention, DEFAULT_TICKERS fallback, rating
+    auto-drop).
 
-    @pytest.mark.parametrize("scenario", sorted(_PARITY_SCENARIOS))
-    def test_same_universe(self, scenario, tmp_path, monkeypatch):
-        import pipeline.advisory_inputs as ai
+    Replaces TestDaemonMatchesAdvisoryInputsUniverse (decision D4,
+    2026-11-13). That class compared the step to
+    ``pipeline.advisory_inputs.build_universe()``, a wrapper over
+    ``build_universe_detailed()``, the very function the step calls, so it
+    could only fail if the step passed the wrong arguments. The expected
+    lists here are written by hand from the rules above, so they also catch a
+    behaviour change in the builder itself, and they still catch the step
+    passing the wrong ``watchlist_file`` (the watchlist.txt symbols would
+    go missing)."""
 
-        inputs = dict(_PARITY_SCENARIOS[scenario])
+    @pytest.mark.parametrize("scenario", sorted(_SPEC_SCENARIOS))
+    def test_universe_matches_documented_rules(self, scenario, tmp_path, monkeypatch):
+        inputs, expected = _SPEC_SCENARIOS[scenario]
+        inputs = dict(inputs)
         held = inputs.pop("held")
 
         ctx = _run_step(_make_ctx(), held=held, tmp_path=tmp_path, monkeypatch=monkeypatch, **inputs)
 
-        # build_universe() reads WATCHLIST_FILE; point it at the same file the daemon read.
-        monkeypatch.setattr(ai, "WATCHLIST_FILE", ctx.watchlist_file)
-        advisory_universe = ai.build_universe(_snapshot(held))
-
-        assert ctx.symbols == advisory_universe
+        assert ctx.symbols == expected

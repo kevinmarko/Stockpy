@@ -1,6 +1,6 @@
 # Cleanup and hardening sweep (2026-10-29) task tracker
 
-Walkthrough: `.claude/cleanup_hardening_sweep_2026_10_walkthrough.md`. PR: kevinmarko/Stockpy#1133.
+Walkthrough: `.claude/cleanup_hardening_sweep_2026_10_walkthrough.md`. PR: kevinmarko/Stockpy#1133 (merged 2026-11-13 as `68d9e69`).
 Plans written in this sweep (review before any code): `.claude/synthetic_data_gate_keyless_implementation_plan.md`,
 `.claude/forecasting_rebuild_f5_f6_implementation_plan.md`.
 
@@ -21,13 +21,13 @@ Plans written in this sweep (review before any code): `.claude/synthetic_data_ga
 - [x] Gates on the final tree: ruff + offline suite 11,799 passed / 29 skipped; `make local-ci --profile quick` (lint, webapp typecheck/test/build, bandit, ML audit, ML lookahead) all PASS; vitest 155 files / 1,817 tests
 
 ## Open: yours to decide
-- [ ] `pip-audit` is RED (59 advisories: pillow 39, filelock 17, certifi 2, setuptools 1) on pins in `requirements.txt` that predate this PR - separate dependency PR
+- [x] `pip-audit` is clean (2026-11-13). It was RED (59 advisories: pillow 39, filelock 17, certifi 2, setuptools 1) on pins that predated this PR; #1140 bumped soupsieve (the last finding), and an audit of all 101 exactly-pinned packages on `main` found no known vulnerabilities
 - [ ] Gate plan Q1-Q5 and F5/F6 plan Q1-Q10
-- [ ] Branch protection (re-checked 2026-11-13: still on in both the "main" ruleset and the classic `main` rule; the operator's own account can bypass them, this session's cannot): remove any required checks from the deleted workflows (a GitHub setting, not in the repo), or the PR keeps showing "blocked". Confirmed 2026-10-30/31/11-02: three squash-merge attempts refused with 405 (CodeQL results + "5 of 5 required status checks are expected"); no tool in this session can edit rulesets
+- [x] Branch protection (2026-11-13): the operator deleted both the "main" ruleset and the classic `main` branch protection, so no status check is required any more. Side effect: force-push and deletion protection on `main` are gone too; the operator may re-add a ruleset with only those two rules. (History: 2026-10-30/31/11-02 three squash-merge attempts were refused with 405, CodeQL results + "5 of 5 required status checks are expected".)
 - [x] **Operator: standing policy, no GitHub Actions ever** (2026-11-02): rule added to CLAUDE.md/AGENTS.md; the PR template's test plan now asks for the `make local-ci` table (and its stale Streamlit GUI path is now `webapp/`)
-- [ ] Nothing schedules the daily network + slow run now (`make local-ci ARGS="--profile nightly"` runs it on demand). A launchd job would be new capability, so it needs your OK under the feature freeze. CodeQL has no local equivalent (bandit covers part)
+- [x] Nightly run scheduled (operator OK 2026-11-13, branch `cleanup-dead-code-d3-d5-nightly`): `scripts/com.investyo.nightly-local-ci.plist` (daily 22:30, never auto-installed) runs `scripts/nightly_local_ci.sh` = `make local-ci ARGS="--profile nightly"`, logging under `LOCAL_DATA_ROOT/logs/nightly_ci/`; install/uninstall in RUNBOOK §5.1b; pinned by `tests/test_nightly_local_ci_schedule.py`. No GitHub workflow. CodeQL still has no local equivalent (bandit covers part)
 - [x] PR #1131 merged by the operator 2026-11-13 (merged into this branch as `a4bbd2f`; the 6 test files it touched: 214 passed)
-- [ ] PR #1132 (docs-only skill fix; claims re-verified 2026-11-13, merges cleanly) - blocked by the same `main` rules as this PR
+- [x] PR #1132 (docs-only skill fix) merged 2026-11-13 as `90ec9ab`
 
 ## Found, deliberately not fixed here
 - **Live-backend UI pass is still owed.** The audit ran against the offline mock only (`VITE_USE_MOCK=false` not exercised); only a few screens were reviewed as screenshots
@@ -55,6 +55,13 @@ Plans written in this sweep (review before any code): `.claude/synthetic_data_ga
 ### Round 3 (2026-11-10, same day)
 - [x] Unknown pilot id now says "Not found / There is no pilot with the id ..." (opt-in `ErrorState.notFound`; other screens keep the cold-start wording). Tests pinned, mutation-checked, checked in a browser.
 - [x] Stale text: `PROGRESS_POLL_SECONDS` description (it is read only by a function nothing calls), webapp help for Buy/Sell Range (strategy engine, not the archived options engine) and GARCH vol, and `shared/ai_control_center.py` (no more Streamlit "Section B/C/D" or `--agent` run). `pilots/reports.py` / `api/pilots_api.py` Streamlit mentions are provenance notes ("ported from"), left as accurate history.
-- [ ] Decision **D7** (added to the dead-code plan): remove `PROGRESS_POLL_SECONDS` + `compute_run_progress` + the `pipeline_progress` help section, all dead since the Streamlit Launcher.
+- [x] Decision **D7** (added to the dead-code plan; done 2026-11-10, see below): remove `PROGRESS_POLL_SECONDS` + `compute_run_progress` + the `pipeline_progress` help section, all dead since the Streamlit Launcher.
 - [x] Dead-code plan Steps A and E done (`engine_status` + three Streamlit-era helpers, with their tests); D1 (rollback-coupled Steps B-D), D2 and D7 still open.
 - [x] Operator decisions 2026-11-10: **D1 keep the rollback** (Steps B-D not done); **D2 and D7 done** (dead `state_snapshot_age_seconds`, `compute_run_progress` + `PROGRESS_POLL_SECONDS` + `pipeline_progress` help removed; Gravity step 74 pins it).
+
+### Round 4 (2026-11-13): operator decisions D3-D6 + nightly timer
+- [x] **D3 = yes**: already done in Step E (#1133, `68d9e69`); re-verified on `origin/main` that the three Streamlit-era helpers and their tests are gone and nothing outside `legacy/` (incl. Gravity and `investyo_mcp_server.py`) imports them. Nothing left to delete.
+- [x] **D4**: `TestDaemonMatchesAdvisoryInputsUniverse` (step vs. the function the step calls, a tautology) rewritten as `TestDaemonUniverseMatchesDocumentedRules`: the same 8 scenarios against hand-written expected universes. Mutation-checked (wrong `watchlist_file`; held dropped by auto-drop).
+- [x] **D5 = keep** `execution/overnight_guardrails.py`, `validation/walk_forward.py`, `signals/sentiment_index.py` as they are (no code change).
+- [x] **D6 = moot** (resolved): the concurrent edits it waited on have landed.
+- [x] Nightly local CI timer (see "Open" above). Outcomes recorded in the dead-code plan's "Final decisions (operator, 2026-11-13)".
