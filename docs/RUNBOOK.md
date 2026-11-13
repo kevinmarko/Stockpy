@@ -1568,12 +1568,16 @@ declines anything for you, and places nothing if trade approvals are off.
 **Turn on the timer** (every 15 min; not installed by `install_schedule.command`):
 
 ```bash
-cp scripts/com.investyo.rh-agentic-cycle.plist ~/Library/LaunchAgents/
+sed "s|/Users/kevinlee/Desktop/Stockpy|$PWD|g" scripts/com.investyo.rh-agentic-cycle.plist > ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
 launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
 ```
 
-It needs `claude` logged in and the Robinhood MCP connected on that Mac (edit
-the plist's `PATH` if `which claude` is elsewhere). Start with
+Run it from the repo root: the plists use the placeholder path
+`/Users/kevinlee/Desktop/Stockpy` (like every plist in `scripts/`), and the
+`sed` swaps in the real checkout. A plain `cp` installs a job that points at a
+folder that may not exist and fails without any push. It needs `claude` logged
+in and the Robinhood MCP connected on that Mac (edit the plist's `PATH` if
+`which claude` is elsewhere). Start with
 `ROBINHOOD_EXECUTION_MODE=review` (Phase 5 burn-in): the cycle runs end to end
 and pushes "Review run: N would pass, M vetoed" without sending anything.
 
@@ -1615,7 +1619,7 @@ NOT READY" followed by what's missing. The verdict comes from
    Robinhood app, and load both timers:
 
 ```bash
-cp scripts/com.investyo.rh-agentic-cycle.plist scripts/com.investyo.rh-agentic-review.plist ~/Library/LaunchAgents/
+for n in rh-agentic-cycle rh-agentic-review; do sed "s|/Users/kevinlee/Desktop/Stockpy|$PWD|g" scripts/com.investyo.$n.plist > ~/Library/LaunchAgents/com.investyo.$n.plist; done
 ```
 ```bash
 launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist

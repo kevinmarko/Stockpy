@@ -19,7 +19,8 @@
 
   NOT INSTALLED BY install_schedule.command, on purpose. Load it by hand when you
   want the cycle to run on its own (RUNBOOK "Agentic cycle (unattended)"):
-      cp scripts/com.investyo.rh-agentic-cycle.plist ~/Library/LaunchAgents/
+      (from the repo root; rewrites the placeholder repo path, see below)
+      sed "s|/Users/kevinlee/Desktop/Stockpy|$PWD|g" scripts/com.investyo.rh-agentic-cycle.plist > ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
       launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
 
   STOP / ROLLBACK (takes effect immediately; nothing else to undo):
@@ -32,7 +33,10 @@
   Robinhood MCP server connected in Claude Code. launchd starts with a minimal
   PATH, so PATH below lists the usual install locations of `claude`; add yours
   if `which claude` prints somewhere else. Paths are absolute (launchd does not
-  expand ~ or $HOME): edit them if the repo lives elsewhere.
+  expand ~ or $HOME) and use the placeholder /Users/kevinlee/Desktop/Stockpy,
+  like the other plists here: install with the sed line above (or
+  install_schedule.command's rewrite), never a plain cp, or the job points at
+  a folder that may not exist and fails without a push.
 -->
 <plist version="1.0">
 <dict>
