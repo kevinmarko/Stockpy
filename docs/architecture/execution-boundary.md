@@ -289,7 +289,7 @@ disclosed here, not patched.
 
 `tests/test_production_steps_universe.py` (`TestDaemonUniverseReadsWatchlist`,
 `TestDaemonUniverseWatchlistSurvivesAlongsideDiscovery`,
-`TestDaemonUniverseUnionsAllSources`) proves **inclusion** — that
+`TestDaemonUniverseUnionsAllSources`, `TestDaemonUniverseMatchesDocumentedRules`) proves **inclusion** — that
 watchlist/discovery/default-ticker sources are correctly unioned into the
 daemon's universe. No existing test in this checkout proves the **inverse**:
 that a symbol present only in an FMP-screener result, a Quick-Trade session,

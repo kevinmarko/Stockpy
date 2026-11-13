@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.investyo.nightly-local-ci.plist
+  ===================================
+  macOS launchd timer that runs the full local CI suite once a day:
+      /bin/bash scripts/nightly_local_ci.sh
+  which runs `make local-ci` with the nightly profile (the full pytest suite,
+  network + slow tests included; the local replacement for the retired
+  nightly.yml workflow) in this checkout, as it is (no fetch or pull).
+  There is no GitHub Actions in this repo; this timer is local only.
+
+  Schedule: every day at 22:30 local time. That is after the US close and
+  after the daemon's 04:00-20:00 ET weekday window, and the run (3 h timeout
+  at most) ends before the 02:00 Sunday weekly-edgar job. Keep the Mac on
+  America/New_York and awake, or launchd runs it at the next wake.
+
+  NOT INSTALLED BY install_schedule.command, on purpose. Install it by hand,
+  from the repo root (RUNBOOK §5.1b "Nightly local CI"):
+      sed "s|__STOCKPY_REPO__|$PWD|g" scripts/com.investyo.nightly-local-ci.plist > ~/Library/LaunchAgents/com.investyo.nightly-local-ci.plist
+      launchctl load ~/Library/LaunchAgents/com.investyo.nightly-local-ci.plist
+
+  The only path in this file is the placeholder __STOCKPY_REPO__ (launchd does
+  not expand ~ or $HOME, and there is no hard-coded user home here); the sed
+  above swaps in the real checkout. A plain cp installs a job that cannot
+  start.
+
+  UNINSTALL (takes effect immediately; nothing else to undo):
+      launchctl unload ~/Library/LaunchAgents/com.investyo.nightly-local-ci.plist
+      rm ~/Library/LaunchAgents/com.investyo.nightly-local-ci.plist
+
+  LOGS: the script writes them under settings.LOCAL_DATA_ROOT (default
+  ~/.stockpy_local), never inside the repo:
+      <LOCAL_DATA_ROOT>/logs/nightly_ci/latest.log     newest run
+      <LOCAL_DATA_ROOT>/logs/nightly_ci/last_status    "<stamp> exit=<rc> log=<path>"
+  There is no StandardOutPath/StandardErrorPath on purpose: those must be
+  absolute paths, and the script does its own logging.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.investyo.nightly-local-ci</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__STOCKPY_REPO__/scripts/nightly_local_ci.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd starts with a minimal PATH; make and git live in /usr/bin. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <!-- Every day at 22:30 local time (outside market hours). -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>22</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <!-- Do NOT run at load time, and never restart on exit. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>
