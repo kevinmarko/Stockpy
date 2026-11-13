@@ -374,19 +374,37 @@ class TestCli:
 
 
 class _Proc:
-    def __init__(self, rc):
+    def __init__(self, rc, stdout="", stderr=""):
         self.returncode = rc
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+_AUTH_ERR = "Failed to authenticate: OAuth session expired and could not be refreshed"
+
+
+def _write_review(out, *, ready=False, usable=True, day=None):
+    d = day or datetime.now(timezone.utc).date()
+    folder = ar.review_dir(d, out)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / ar.REVIEW_FILENAME).write_text(json.dumps(
+        {"day": d.isoformat(), "usable": usable, "burnin": {"ready": ready}}))
 
 
 class TestLaunch:
-    def test_runs_review_with_timeout_and_reviewer_tools(self):
+    """Success is a usable review.json written during the launch, never
+    claude's exit code (2026-11-13: an expired login exited 1, which the old
+    launcher read as a normal NOT READY day, so no alert was sent)."""
+
+    def test_runs_review_with_timeout_and_reviewer_tools(self, tmp_path):
         seen = {}
 
         def runner(cmd, **kw):
             seen.update(cmd=cmd, kw=kw)
-            return _Proc(1)  # NOT READY is a normal day
+            _write_review(tmp_path, ready=False)
+            return _Proc(0)
         notifier = mock.Mock()
-        assert ar.launch(runner=runner, notifier=notifier) == 0
+        assert ar.launch(runner=runner, notifier=notifier, output_dir=tmp_path) == ar.EXIT_NOT_READY
         assert seen["cmd"][:3] == ["claude", "-p", "/rh-agentic-review"]
         assert seen["kw"]["timeout"] == ar.LAUNCH_TIMEOUT_SECONDS
         tools = set(seen["cmd"][4].split(","))
@@ -394,20 +412,80 @@ class TestLaunch:
         assert not [t for t in tools if any(w in t for w in ("place_", "decline_", "cancel_", "Write"))]
         notifier.assert_not_called()
 
+    def test_ready_review_returns_ready(self, tmp_path):
+        def runner(cmd, **kw):
+            _write_review(tmp_path, ready=True)
+            return _Proc(0)
+        notifier = mock.Mock()
+        assert ar.launch(runner=runner, notifier=notifier, output_dir=tmp_path) == ar.EXIT_READY
+        notifier.assert_not_called()
+
+    def test_expired_login_alerts_with_claudes_message(self, tmp_path, capsys):
+        """The 2026-11-13 failure: exit 1, no review written."""
+        notifier = mock.Mock()
+        rc = ar.launch(runner=mock.Mock(return_value=_Proc(1, stdout=_AUTH_ERR)),
+                       notifier=notifier, output_dir=tmp_path)
+        assert rc == ar.EXIT_UNUSABLE
+        notifier.assert_called_once()
+        title, body = notifier.call_args.args[:2]
+        assert title == "Agentic burn-in review did not run"
+        assert "exited with code 1" in body and _AUTH_ERR in body
+        assert notifier.call_args.kwargs.get("priority") == "high"
+        line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert line["review_recorded"] is False and line["claude_exit"] == 1
+        assert _AUTH_ERR in line["output_tail"]
+
+    def test_clean_exit_without_a_review_still_alerts(self, tmp_path):
+        notifier = mock.Mock()
+        assert ar.launch(runner=mock.Mock(return_value=_Proc(0)), notifier=notifier,
+                         output_dir=tmp_path) == ar.EXIT_UNUSABLE
+        assert "without recording a review" in notifier.call_args.args[1]
+
+    def test_stale_review_from_before_the_launch_does_not_count(self, tmp_path):
+        _write_review(tmp_path, ready=True)
+        later = datetime.now(timezone.utc).timestamp() + 3600
+        notifier = mock.Mock()
+        rc = ar.launch(runner=mock.Mock(return_value=_Proc(0)), notifier=notifier, output_dir=tmp_path,
+                       clock=lambda: datetime.fromtimestamp(later, tz=timezone.utc))
+        assert rc == ar.EXIT_UNUSABLE
+        notifier.assert_called_once()
+
+    def test_unusable_review_does_not_count(self, tmp_path):
+        def runner(cmd, **kw):
+            _write_review(tmp_path, usable=False)
+            return _Proc(0)
+        notifier = mock.Mock()
+        assert ar.launch(runner=runner, notifier=notifier, output_dir=tmp_path) == ar.EXIT_UNUSABLE
+        notifier.assert_called_once()
+
+    def test_review_written_even_if_claude_then_errors_counts(self, tmp_path):
+        def runner(cmd, **kw):
+            _write_review(tmp_path, ready=False)
+            return _Proc(1, stderr="some late error")
+        notifier = mock.Mock()
+        assert ar.launch(runner=runner, notifier=notifier, output_dir=tmp_path) == ar.EXIT_NOT_READY
+        notifier.assert_not_called()
+
     @pytest.mark.parametrize("effect,frag", [
-        (subprocess.TimeoutExpired(["claude"], 1), "timed out"),
+        (subprocess.TimeoutExpired(["claude"], 1, output=_AUTH_ERR), "timed out"),
         (FileNotFoundError(), "not found"),
     ])
-    def test_failures_push_one_alert(self, effect, frag):
+    def test_failures_push_one_alert(self, tmp_path, effect, frag):
         notifier = mock.Mock()
-        assert ar.launch(runner=mock.Mock(side_effect=effect), notifier=notifier) == ar.EXIT_UNUSABLE
+        assert ar.launch(runner=mock.Mock(side_effect=effect), notifier=notifier,
+                         output_dir=tmp_path) == ar.EXIT_UNUSABLE
         notifier.assert_called_once()
         assert frag in notifier.call_args.args[1]
 
-    def test_unusable_exit_alerts(self):
-        notifier = mock.Mock()
-        assert ar.launch(runner=mock.Mock(return_value=_Proc(2)), notifier=notifier) == ar.EXIT_UNUSABLE
-        notifier.assert_called_once()
+    def test_notifier_failure_never_raises(self, tmp_path):
+        notifier = mock.Mock(side_effect=RuntimeError("ntfy down"))
+        assert ar.launch(runner=mock.Mock(return_value=_Proc(1)), notifier=notifier,
+                         output_dir=tmp_path) == ar.EXIT_UNUSABLE
+
+    def test_cli_passes_output_dir(self, tmp_path):
+        with mock.patch.object(ar, "launch", return_value=0) as launch:
+            assert ar.main(["--output-dir", str(tmp_path), "launch"]) == 0
+        assert launch.call_args.kwargs["output_dir"] == str(tmp_path)
 
 
 # ---------------------------------------------------------------------------

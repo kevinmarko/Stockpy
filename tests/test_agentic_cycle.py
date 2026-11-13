@@ -400,8 +400,10 @@ class TestAllowedTools:
 
 
 class _Proc:
-    def __init__(self, rc=0):
+    def __init__(self, rc=0, stdout="", stderr=""):
         self.returncode = rc
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 def _gate_ok(**over):
@@ -442,6 +444,27 @@ class TestLaunch:
         s = ac.read_cycle(RUN_ID, tmp_path)
         assert s["status"] == "failed" and s["failed_stage"] == "scout" and "timed out" in s["reason"]
         notifier.assert_called_once()
+
+    def test_auth_failure_alert_says_why(self, tmp_path):
+        """claude -p exits 1 with an expired login and never starts the cycle:
+        the existing fail_cycle alert must carry claude's own message."""
+        err = "Failed to authenticate: OAuth session expired and could not be refreshed"
+        notifier = mock.Mock(return_value=True)
+        with mock.patch.object(ac, "evaluate_gate", return_value=_gate_ok()):
+            rc = ac.launch(output_dir=tmp_path, runner=mock.Mock(return_value=_Proc(1, stdout=err)),
+                           notifier=notifier)
+        assert rc == ac.EXIT_ERROR
+        state = ac.read_cycle(RUN_ID, tmp_path)
+        assert state["failed_stage"] == "launch" and err in state["reason"]
+        notifier.assert_called_once()
+        assert err in " ".join(str(a) for a in notifier.call_args.args)
+
+    def test_output_tail_helpers(self):
+        p = _Proc(1, stdout="line one\n\nlast words  \n", stderr=b"stderr bytes".decode())
+        assert ac._output_tail(p).endswith("stderr bytes")
+        assert ac._last_line("a\n\n b \n") == "b"
+        assert ac._output_tail(object()) == "" and ac._last_line("") == ""
+        assert len(ac._output_tail(_Proc(1, stdout="x" * 2000))) == 500
 
     def test_missing_cli_recorded(self, tmp_path):
         notifier = mock.Mock(return_value=True)

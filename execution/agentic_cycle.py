@@ -613,6 +613,30 @@ def allowed_tools(agents_dir: Path = AGENTS_DIR) -> List[str]:
 # Launcher (what the launchd timer runs)
 # ---------------------------------------------------------------------------
 
+def _output_tail(proc: Any, limit: int = 500) -> str:
+    """Last ``limit`` characters of a finished (or timed-out) subprocess's
+    stdout + stderr, stripped. ``""`` when nothing was captured. Never raises.
+
+    The launchers run ``claude -p`` with ``capture_output=True``, so without
+    this an error like "Failed to authenticate: OAuth session expired" is
+    swallowed and the alert can only say "exited with code 1".
+    """
+    parts: List[str] = []
+    for attr in ("stdout", "stderr"):
+        val = getattr(proc, attr, None)
+        if isinstance(val, bytes):
+            val = val.decode("utf-8", errors="replace")
+        if isinstance(val, str) and val.strip():
+            parts.append(val.strip())
+    return "\n".join(parts)[-limit:].strip()
+
+
+def _last_line(text: str, limit: int = 300) -> str:
+    """The last non-empty line of ``text``, trimmed to ``limit`` characters."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    return lines[-1][:limit] if lines else ""
+
+
 def launch(*, output_dir: Optional[Any] = None, now: Optional[datetime] = None,
            runner: Callable[..., Any] = subprocess.run, claude_bin: str = "claude",
            notifier: Optional[Callable[..., bool]] = None) -> int:
@@ -638,8 +662,14 @@ def launch(*, output_dir: Optional[Any] = None, now: Optional[datetime] = None,
                           capture_output=True, text=True)
             if getattr(proc, "returncode", 1) != 0:
                 reason = f"coordinator exited with code {getattr(proc, 'returncode', '?')}"
-        except subprocess.TimeoutExpired:
+                said = _last_line(_output_tail(proc))
+                if said:
+                    reason = f"{reason}: {said}"
+        except subprocess.TimeoutExpired as exc:
             reason = f"timed out after {LAUNCH_TIMEOUT_SECONDS} s"
+            said = _last_line(_output_tail(exc))
+            if said:
+                reason = f"{reason}: {said}"
         except FileNotFoundError:
             reason = f"'{claude_bin}' CLI not found on PATH"
         except Exception as exc:
