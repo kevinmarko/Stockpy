@@ -93,7 +93,7 @@ scikit-learn==1.9.0
 scipy==1.17.1
 setuptools==84.1.0
 six==1.17.0
-soupsieve==2.9.0
+soupsieve==4.0.1
 stack-data==0.6.3
 statsmodels==0.14.6
 threadpoolctl==3.6.0
