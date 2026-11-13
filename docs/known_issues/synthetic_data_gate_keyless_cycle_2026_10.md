@@ -1,7 +1,7 @@
 # Synthetic-data gate missed keyless and injected-Mock cycles (2026-10)
 
-**Status: fixed in code (2026-11-13, PR `synthetic-data-gate-keyless`); not confirmed against the
-live daemon.** Found 2026-10-12 during step 5.4 (noted in `docs/FEATURE_TIER_HISTORY.md`, "Callers
+**Status: fixed in code (2026-11-13, PR `synthetic-data-gate-keyless`, and the inner-writer
+follow-up, branch `synthetic-data-gate-inner-writers`); not confirmed against the live daemon.** Found 2026-10-12 during step 5.4 (noted in `docs/FEATURE_TIER_HISTORY.md`, "Callers
 switched off `main.py`"), planned 2026-10-29
 (`.claude/synthetic_data_gate_keyless_implementation_plan.md`), approved 2026-11-13.
 
@@ -66,14 +66,40 @@ never covered `advisory.json`, `watch_state.json`, pushes or the snapshot.
   `tests/_synthetic_outputs.py`. The alert is stubbed suite-wide by
   `conftest.py::_stub_synthetic_cycle_alert_in_tests`.
 
-## Not fixed here (follow-up)
+## Follow-up: the inner writers (fixed 2026-11-13, branch `synthetic-data-gate-inner-writers`)
 
-The inner durable writers that run inside `RunPipelineStep` are not gated yet: the always-attached
-`ForecastTracker` ledger (`main_orchestrator.run_pipeline`), the `dead_letter.json` rewrite including
-its "cleared" branch (`ForecastingStep`), and the `SYMBOL_RATING_ENABLED` / `SIZING_CAP_AUDIT_ENABLED`
-writers. A keyless cycle against the live DB can still add $10 forecast rows (cleanup:
-`scripts/clean_forecast_ledger.py`, rule (d)) and clear a real `dead_letter.json`. The plan
-recommended a separate PR because the tracker-attach change touches forecasting coverage tests.
+The first fix left the durable writers inside `RunPipelineStep` ungated, because
+`main_orchestrator.run_pipeline` builds its own inner `RunContext` and the flag never reached it.
+A full audit (`.claude/synthetic_data_gate_inner_writers_walkthrough.md`) found more than the four
+writers named here before, and two that were worse than "adds fake rows":
+
+- `ForecastTracker.update_actuals` stamped the synthetic $10 price onto REAL past forecasts as their
+  realized actual (corrupting skill weights and the naive gate), on top of the $10 forecast rows.
+- `HistoricalStore.get_macro()`'s top-up upserted `MockDataEngine.fetch_macro_history()`'s
+  fabricated VIX/T10Y2Y series into `macro_history` under `source="fred"`, which later real cycles
+  read for the HMM until the next refresh.
+- Also: forecast model-cache artifacts (opt-in persistence; a Mock-trained model would be reloaded by
+  real cycles), the warm HMM fit (kept in memory for `retrain_freq_days`), the day's PIT feature
+  snapshot (one file per day, so it overwrote the real one), `dead_letter.json` incl. its "cleared"
+  rewrite, cap-audit and symbol-rating rows, the sizing-cap alert, and the advisory overlay's own
+  forecast-ledger rows.
+
+Fix: `RunPipelineStep` passes `data_is_synthetic`/`synthetic_reason` to `run_pipeline`, which copies
+them onto the inner context with `synthetic_gate.propagate_synthetic_flag` (no second log or alert).
+Each writer then skips: `generate_forecast(persist=False)` (ledger writes and model saves; reads and
+cached-model loads still run), `compute_hmm_risk_on_probability(persist=False)` (direct macro fetch,
+HMM fitted on a deep copy), and plain `is_cycle_synthetic` checks in `StrategyEvalStep`. The advisory
+overlay passes `evaluate(persist_forecast=False)`. Archives of real vendor data that do not depend on
+the synthetic inputs (FMP feeds, provider fundamentals/bars, news and social sentiment, sector
+correlations) are kept, with the reason for each in the walkthrough. Tests:
+`tests/test_synthetic_data_gate_inner_writers.py` (every gate mutation-checked). The suite also leaked
+cap-audit rows and PIT snapshots into the shared `LOCAL_DATA_ROOT`; two new root `conftest.py`
+fixtures (`_isolate_cap_audit_db_in_tests`, `_isolate_pit_feature_store_in_tests`) close that.
+
+Cleanup of anything already written by a past keyless cycle (forecast rows: `scripts/clean_forecast_ledger.py`
+rule (d)) is unchanged. No tool exists for fabricated `macro_history` rows: the table's key is
+`(series_id, date)`, so a later real top-up overwrites them only on dates FRED itself returns, and a
+Mock-only date (a holiday, or today before FRED publishes) stays until deleted by hand.
 
 ## Still unverified
 

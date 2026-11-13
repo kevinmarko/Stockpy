@@ -551,6 +551,7 @@ def evaluate(
     precomputed_forecast: Optional[float] = None,
     precomputed_forecast_is_fallback: Optional[bool] = None,
     historical_store: Optional[Any] = None,
+    persist_forecast: bool = True,
 ) -> Recommendation:
     """Produce a holding-aware advisory recommendation for ``symbol``.
 
@@ -628,6 +629,12 @@ def evaluate(
         from ``precomputed_forecast``'s own value, since a real fallback price
         is numerically indistinguishable from a real forecast (that's exactly
         the ambiguity this flag exists to resolve).
+    persist_forecast : bool (keyword-only)
+        ``False`` on a synthetic-data cycle (``pipeline/synthetic_gate.py``;
+        ``AdvisoryOverlayStep`` passes it): the fresh forecast in Step 6 is
+        computed as usual but writes no forecast-ledger rows or model-cache
+        artifacts (``ForecastingEngine.generate_forecast(persist=False)``).
+        Default ``True`` keeps every other caller unchanged.
     historical_store : HistoricalStore or None (keyword-only)
         Optional pre-built ``data.historical_store.HistoricalStore`` instance,
         analogous to the other engine injection params.  When ``None`` (the
@@ -891,6 +898,7 @@ def evaluate(
                 history_df=bars_df,
                 precomputed_garch_annual_vol=fresh_garch_vol,
                 precomputed_garch_term_structure=fresh_garch_term_structure,
+                persist=persist_forecast,
             )
             raw_f30 = fc_results.get("Forecast_30", 0.0)
             forecast_price = float(raw_f30) if raw_f30 and raw_f30 > 0 else None

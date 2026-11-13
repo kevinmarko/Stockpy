@@ -385,10 +385,21 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
                   robinhood_positions: Optional[dict] = None,
                   engines: Optional[EngineContext] = None,
                   progress: Optional[ProgressReporter] = None,
+                  *,
+                  data_is_synthetic: bool = False,
+                  synthetic_reason: Optional[str] = None,
 ) -> tuple:
     """
     Synchronous execution of the quantitative engines:
     Macro -> Trend & Volatility -> Processing -> Forecasting -> Strategy & Evaluation.
+
+    ``data_is_synthetic`` / ``synthetic_reason`` carry the outer cycle's
+    synthetic-data flag (``pipeline/synthetic_gate.py``) onto the inner
+    ``RunContext`` built here, so the inner steps compute as usual but skip
+    their durable writes (forecast ledger, model cache, macro history, PIT
+    snapshot, dead-letter report, cap-audit and symbol-rating rows, the
+    sizing-cap alert). ``RunPipelineStep`` passes them; a direct caller that
+    omits them gets today's behavior.
     """
     from pipeline.context import RunContext
     from pipeline.runner import PipelineRunner
@@ -414,6 +425,10 @@ def run_pipeline(tickers: list, macro_raw: dict, fund_raw: dict, tech_raw: dict,
     ctx.market = data_engine
     ctx.engine_context = engines
     ctx.context_extras["robinhood_positions"] = robinhood_positions
+    if data_is_synthetic:
+        from pipeline.synthetic_gate import propagate_synthetic_flag
+
+        propagate_synthetic_flag(ctx, synthetic_reason)
 
     runner = PipelineRunner([
         MacroStep(),
