@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 309,
+    "live_safe": 310,
     "no_op": 2,
     "restart_required": 78,
-    "total": 389
+    "total": 390
   },
   "dynamic_sites": [
     {
@@ -91,7 +91,7 @@
     {
       "expr": "getattr(settings, name)",
       "file": "execution/agentic_preflight.py",
-      "line": 308,
+      "line": 342,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -139,6 +139,7 @@
     "ADVISORY_REUSE_PIPELINE_COMPUTE",
     "AGENTIC_DISCOVERY_ENABLED",
     "AGENTIC_MAX_CANDIDATES",
+    "AGENTIC_QUEUE_RISK_ACCOUNT",
     "AI_CHAT_DEFAULT_MODEL",
     "AI_CHAT_DEFAULT_PROVIDER",
     "AI_CHAT_TIMEOUT_SECONDS",
@@ -452,13 +453,13 @@
   "read_forms": {
     "attr": 800,
     "factory_param": 4,
-    "getattr_const": 298,
+    "getattr_const": 299,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
     "attr": 255,
     "factory_param": 4,
-    "getattr_const": 171,
+    "getattr_const": 172,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -490,7 +491,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "settings_keysets.py:305",
+        "site": "settings_keysets.py:311",
         "via": []
       }
     ],

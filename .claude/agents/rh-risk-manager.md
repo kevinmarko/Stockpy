@@ -31,7 +31,10 @@ You have no order, decline or cancel tools.
    - `positions.json` ← `get_equity_positions(account_number)`; if the response
      has a non-empty `next`, fetch every page and save a JSON **list** of the
      page responses
-   - `quotes.json` ← `get_equity_quotes(symbols=[every queue symbol])`
+   - `quotes.json` ← `get_equity_quotes(symbols=[every queue symbol] + [every
+     symbol the account already holds])` — the held ones price the account's
+     portfolio heat; a held symbol with no quote vetoes every BUY
+     (`heat_unavailable`)
    - `approvals.json` ← `get_trade_approvals(account_number)` (all pages, as above)
    - optional `earnings.json` ← build `{"SYM": "YYYY-MM-DD" or null}` from
      `get_earnings_calendar` for the queue symbols, only when the operator asked
@@ -52,6 +55,12 @@ You have no order, decline or cancel tools.
    price / estimated notional, and each reason code in plain words (e.g.
    `buying_power_exhausted` = "the higher-conviction buys already use the
    account's cash"). Lead with any `run_blockers` — they veto everything.
+   Heat: `over_portfolio_heat` = "the Agentic account's open losses already
+   exceed `MAX_PORTFOLIO_HEAT`, so no new buys"; `heat_unavailable` = "a held
+   position had no quote or average cost, so heat could not be measured"
+   (`limits.heat_unpriced_symbols` names them). The daemon's queue may list
+   `deferred_checks` (`portfolio_heat`, `max_position_size`): it left those
+   to you because its own snapshot is the main account, not this one.
 
 ## Honest limits
 

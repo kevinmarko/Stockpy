@@ -2061,6 +2061,7 @@ const MOCK_DANGEROUS_KEYS = new Set([
   "DRY_RUN",
   "ROBINHOOD_EXECUTION_MODE",
   "DAEMON_AGENTIC_QUEUE_MODE",
+  "AGENTIC_QUEUE_RISK_ACCOUNT",
   "CORS_ALLOWED_ORIGINS",
   "FMP_BARS_ENABLED",
   "FMP_BARS_ADJUSTMENT",
@@ -4120,6 +4121,16 @@ const FEATURE_FLAGS_TUNABLE_DEFS: MockTunableDef[] = [
     options: ["off", "shadow", "primary"],
     description:
       "Which process writes the Robinhood execution queue. 'shadow' writes a comparison copy under OUTPUT_DIR/shadow/ only; 'primary' (step 5.3) hands the real queue to the daemon.",
+  },
+  {
+    group: "Write & Execution Gates",
+    key: "AGENTIC_QUEUE_RISK_ACCOUNT",
+    type: "enum",
+    value: "main",
+    default: "main",
+    options: ["main", "agentic"],
+    description:
+      "Which account the queue gate's portfolio-heat and position-size checks use. 'agentic' leaves them to the agentic preflight, which checks the Agentic account the orders go to.",
   },
   {
     group: "Write & Execution Gates",

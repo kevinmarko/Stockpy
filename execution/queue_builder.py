@@ -159,6 +159,24 @@ def _limit_buffer_bps() -> int:
         return 0
 
 
+# Risk-gate checks judged on the account snapshot. The daemon's snapshot is
+# the default (main) Robinhood account, not the Agentic account the orders go
+# to; with AGENTIC_QUEUE_RISK_ACCOUNT="agentic" these are left to the agentic
+# preflight, which enforces heat and position weight on the Agentic account.
+_ACCOUNT_DEPENDENT_CHECKS: Tuple[str, ...] = ("portfolio_heat", "max_position_size")
+
+
+def _deferred_checks() -> List[str]:
+    """Checks the queue gate leaves to the agentic preflight. Fails to ``[]``
+    (today's behaviour: every check runs) on any settings error."""
+    try:
+        from settings import settings
+        scope = str(getattr(settings, "AGENTIC_QUEUE_RISK_ACCOUNT", "main") or "main")
+    except Exception:
+        return []
+    return list(_ACCOUNT_DEPENDENT_CHECKS) if scope.strip().lower() == "agentic" else []
+
+
 def _build_risk_context(snapshot: Any, now: datetime, *, macro_dto: Optional[Any] = None) -> RiskContext:
     """Construct a best-effort `RiskContext` from the Robinhood account snapshot.
 
@@ -487,6 +505,9 @@ def build_execution_queue(
         # Set after construction (not as a constructor kwarg) so test doubles
         # that replace PreTradeRiskGate with a no-arg class keep working.
         gate.side_effects = False
+    deferred_checks = _deferred_checks()
+    if deferred_checks:
+        gate.deferred_checks = frozenset(deferred_checks)
     context = _build_risk_context(snapshot, now, macro_dto=resolved_macro)
 
     intents: List[Dict[str, Any]] = []
@@ -510,7 +531,7 @@ def build_execution_queue(
             logger.warning("queue_builder: failed to build intent for %s (%s)",
                            getattr(rec, "symbol", "?"), exc)
 
-    return {
+    payload: Dict[str, Any] = {
         "generated_at": now.isoformat(),
         "mode": resolved_mode,
         "kill_switch_active": kill_switch_active,
@@ -520,6 +541,12 @@ def build_execution_queue(
         "n_placeable": sum(1 for i in intents if i["allow_place"]),
         "intents": intents,
     }
+    if deferred_checks:
+        # Gate checks NOT evaluated here (left to the agentic preflight on the
+        # Agentic account). Absent = every check ran on the daemon's snapshot,
+        # which keeps the default ("main") queue byte-identical to before.
+        payload["deferred_checks"] = deferred_checks
+    return payload
 
 
 _NOTIFIED_FILENAME = "execution_queue_notified.json"

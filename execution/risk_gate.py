@@ -186,6 +186,14 @@ class PreTradeRiskGate:
         # count the dashboard shows. Default True keeps every existing
         # caller's behaviour.
         self.side_effects = bool(side_effects)
+        # Check names (e.g. "portfolio_heat") that run_all() reports as passed
+        # WITHOUT evaluating, because another layer enforces them on better
+        # data. Only the Robinhood execution queue uses it: with
+        # AGENTIC_QUEUE_RISK_ACCOUNT="agentic" its account snapshot is the
+        # wrong (main) account, so the account-dependent checks are left to
+        # the agentic preflight, which reads the Agentic account. Set after
+        # construction, like side_effects. Default empty = every check runs.
+        self.deferred_checks: frozenset[str] = frozenset()
 
         # Rolling deque of UTC timestamps for rate-limit tracking.
         # Only populated when ALL prior checks pass — blocked orders never burn budget.
@@ -627,8 +635,16 @@ class PreTradeRiskGate:
             self.minimum_validation_check,
             self.max_order_rate_check,  # always last
         ]
+        deferred = frozenset(getattr(self, "deferred_checks", None) or ())
         results: list[RiskCheckResult] = []
         for fn in checks:
+            check_name = str(getattr(fn, "__name__", "")).removesuffix("_check")
+            if check_name in deferred:
+                results.append(RiskCheckResult(
+                    check_name, True,
+                    "deferred to the agentic preflight (account-dependent)",
+                ))
+                continue
             result = fn(intent, context)
             results.append(result)
             if not result.passed:

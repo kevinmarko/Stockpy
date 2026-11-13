@@ -1700,6 +1700,12 @@ launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-review.plist
 A review that didn't run (timeout, `claude` not found, missing inputs) sends
 "Agentic burn-in review did not run". Logs: `output/agentic_review.out` / `.err`.
 
+**Every cycle skips with `no_actionable_intents`?** Look at the queue's `gate_reasons`. If every BUY says
+`portfolio_heat: … > limit`, the daemon judged heat on the **main** Robinhood account (its snapshot), not the
+Agentic one. Set `AGENTIC_QUEUE_RISK_ACCOUNT=agentic` (runtime flags store, typed confirmation) so the queue
+defers heat and position size to the preflight, which checks them on the Agentic account; the next queue lists
+them under `deferred_checks`. Details: `docs/known_issues/agentic_queue_gate_wrong_account_heat_2026_11.md`.
+
 ### Preflight
 
 `python scripts/preflight_check.py` includes the Robinhood execution checks —

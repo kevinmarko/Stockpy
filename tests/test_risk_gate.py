@@ -903,3 +903,54 @@ class TestRunAll:
         valid_ctx.timestamp = _rth_timestamp()
         passed, results = gate.run_all(_buy(), valid_ctx)
         assert passed  # Would fail if rate was charged for blocked orders
+
+
+# ---------------------------------------------------------------------------
+# deferred_checks (used only by the Robinhood execution queue when
+# AGENTIC_QUEUE_RISK_ACCOUNT="agentic")
+# ---------------------------------------------------------------------------
+
+class TestDeferredChecks:
+    @pytest.fixture(autouse=True)
+    def _macro_regime_gate_enabled(self, monkeypatch):
+        monkeypatch.setattr(settings, "MACRO_REGIME_GATE_ENABLED", True)
+
+    def _hot_context(self) -> RiskContext:
+        """Passes everything except portfolio_heat (7% > 6%)."""
+        ctx = TestRunAll()._valid_context()
+        ctx.open_positions = [_position("MSFT", unrealized_pl=-7000.0)]
+        return ctx
+
+    def test_default_is_empty_and_heat_still_blocks(self):
+        gate = PreTradeRiskGate(max_portfolio_heat=0.06, enforce_market_hours=True)
+        assert gate.deferred_checks == frozenset()
+        passed, results = gate.run_all(_buy(), self._hot_context())
+        assert not passed
+        assert results[-1].check_name == "portfolio_heat"
+
+    def test_deferred_check_passes_without_being_evaluated(self, monkeypatch):
+        gate = PreTradeRiskGate(max_portfolio_heat=0.06, enforce_market_hours=True)
+        gate.deferred_checks = frozenset({"portfolio_heat", "max_position_size"})
+        called = []
+
+        def portfolio_heat_check(*_a):  # same __name__ as the real check
+            called.append("heat")       # returns None: would crash if evaluated
+
+        monkeypatch.setattr(gate, "portfolio_heat_check", portfolio_heat_check)
+        passed, results = gate.run_all(_buy(), self._hot_context())
+        assert passed
+        assert called == []
+        assert len(results) == 11
+        by_name = {r.check_name: r for r in results}
+        for name in ("portfolio_heat", "max_position_size"):
+            assert by_name[name].passed
+            assert "deferred" in by_name[name].reason
+
+    def test_deferring_heat_does_not_defer_the_macro_kill_switch(self):
+        gate = PreTradeRiskGate(max_portfolio_heat=0.06, enforce_market_hours=True)
+        gate.deferred_checks = frozenset({"portfolio_heat", "max_position_size"})
+        ctx = self._hot_context()
+        ctx.macro = _macro(kill_switch=True)
+        passed, results = gate.run_all(_buy(), ctx)
+        assert not passed
+        assert results[-1].check_name == "macro_kill_switch"

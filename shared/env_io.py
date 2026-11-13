@@ -413,6 +413,7 @@ ALLOWED_KEYS: tuple[str, ...] = (
     # (step 5.2). Non-secret; a DANGEROUS_KEYS member (settings_keysets.py).
     "DAEMON_AGENTIC_QUEUE_MODE",
     "ROBINHOOD_MAX_NOTIONAL_PER_ORDER",
+    "AGENTIC_QUEUE_RISK_ACCOUNT",       # main | agentic -- queue gate account scope; DANGEROUS_KEYS member
     "ROBINHOOD_LIMIT_BUFFER_BPS",
     "ROBINHOOD_AUTO_REFRESH_ENABLED",
     "ROBINHOOD_SCHEDULED_LOGIN_ENABLED",  # bool — daemon's daily login prompt; DANGEROUS_KEYS member (settings_keysets.py)

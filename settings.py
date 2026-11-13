@@ -2354,6 +2354,26 @@ class Settings(BaseSettings):
             "to off."
         ),
     )
+    # Which account the execution queue's account-dependent risk checks
+    # (portfolio_heat, max_position_size) are judged on. The daemon's account
+    # snapshot is the robin_stocks DEFAULT (main) account, but agentic orders
+    # go to the separate Agentic account, which only the preflight
+    # (execution/agentic_preflight.py) reads. "agentic" defers those two checks
+    # to the preflight, which enforces heat and position weight on the real
+    # Agentic account; "main" (default) keeps today's behaviour. See
+    # docs/known_issues/agentic_queue_gate_wrong_account_heat_2026_11.md.
+    AGENTIC_QUEUE_RISK_ACCOUNT: str = Field(
+        default="main",
+        description=(
+            "Account the Robinhood execution queue's account-dependent risk checks "
+            "(portfolio_heat, max_position_size) are judged on: main | agentic "
+            "(default main). main = the daemon's account snapshot (the default "
+            "Robinhood account), today's behaviour. agentic = defer both checks to "
+            "the agentic preflight, which checks heat and position weight on the "
+            "Agentic account the orders actually go to. The queue lists deferred "
+            "checks in its deferred_checks field. Unknown values collapse to main."
+        ),
+    )
     # Number of worker threads for DataEngine.fetch_technical_raw() and
     # fetch_fundamentals_raw() (data_engine.py). Both were originally a serial
     # `for symbol in tickers:` loop making one blocking yfinance HTTP call at a
@@ -4783,6 +4803,14 @@ class Settings(BaseSettings):
         """
         v = str(value or "").strip().lower()
         return v if v in {"off", "shadow", "primary"} else "off"
+
+    @field_validator("AGENTIC_QUEUE_RISK_ACCOUNT")
+    @classmethod
+    def _coerce_agentic_queue_risk_account(cls, value: str) -> str:
+        """Fail-safe: any value outside {main, agentic} collapses to ``main``,
+        today's behaviour, so a typo never silently defers a risk check."""
+        v = str(value or "").strip().lower()
+        return v if v in {"main", "agentic"} else "main"
 
     @field_validator("ROBINHOOD_SCHEDULED_LOGIN_TIME_ET", "ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET")
     @classmethod

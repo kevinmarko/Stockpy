@@ -294,6 +294,12 @@ SAFETY_CRITICAL_KEY_REASONS: dict[str, str] = {
         "from. Same risk class as ROBINHOOD_EXECUTION_MODE, hence typed "
         "confirmation."
     ),
+    "AGENTIC_QUEUE_RISK_ACCOUNT": (
+        "main | agentic. 'agentic' tells the daemon's queue gate to skip "
+        "portfolio_heat and max_position_size and leave them to the agentic "
+        "preflight on the Agentic account. A silent flip changes which risk "
+        "checks stand in front of agentic orders, hence typed confirmation."
+    ),
     "MACRO_REGIME_GATE_ENABLED": (
         "The recession/credit-event BUY veto. When True, "
         "MacroEconomicDTO.killSwitch (Sahm Rule >= 0.5, VIX > 30, or HY OAS "

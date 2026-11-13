@@ -524,3 +524,71 @@ class TestMacroContext:
         p = qb.build_execution_queue(rr, mode="review", now=_RTH, macro_dto=_killswitch_macro())
         intent = p["intents"][0]
         assert not any(r.startswith("macro_kill_switch:") for r in intent["gate_reasons"])
+
+
+# ===========================================================================
+# AGENTIC_QUEUE_RISK_ACCOUNT: which account the account-dependent checks use
+# ===========================================================================
+
+
+class TestRiskAccountScope:
+    """The daemon's snapshot is the main Robinhood account; agentic orders go
+    to the Agentic account. 'agentic' leaves portfolio_heat and
+    max_position_size to the preflight (which reads the Agentic account)."""
+
+    @staticmethod
+    def _hot_rr():
+        # Main account: NVDA down $5,000 on $10,000 equity -> 50% heat.
+        held = {"NVDA": _Pos("NVDA", 10, 600.0, 100.0, 1000.0, -5000.0)}
+        return _rr([_Rec("AAPL", "BUY", 0.9, suggested_position_pct=0.01)], held=held)
+
+    @pytest.fixture
+    def scope(self, monkeypatch):
+        from settings import settings
+        def _set(value):
+            monkeypatch.setattr(settings, "AGENTIC_QUEUE_RISK_ACCOUNT", value)
+        return _set
+
+    def test_default_main_blocks_on_main_account_heat(self, cap5k, scope):
+        scope("main")
+        p = qb.build_execution_queue(self._hot_rr(), mode="review", now=_RTH)
+        assert "deferred_checks" not in p  # byte-identical to the pre-change queue
+        (i,) = p["intents"]
+        assert i["gate_allowed"] is False
+        assert any(r.startswith("portfolio_heat") for r in i["gate_reasons"])
+
+    def test_agentic_defers_heat_and_position_size(self, cap5k, scope):
+        scope("agentic")
+        p = qb.build_execution_queue(self._hot_rr(), mode="review", now=_RTH)
+        assert p["deferred_checks"] == ["portfolio_heat", "max_position_size"]
+        (i,) = p["intents"]
+        assert i["gate_allowed"] is True, i["gate_reasons"]
+        assert i["allow_place"] is False  # review mode is never placeable
+
+    def test_agentic_still_honours_kill_switch(self, cap5k, scope, monkeypatch):
+        scope("agentic")
+        monkeypatch.setattr(qb.GlobalKillSwitch, "is_active", lambda self: True)
+        p = qb.build_execution_queue(self._hot_rr(), mode="live", now=_RTH)
+        assert p["kill_switch_active"] is True
+        assert all(i["allow_place"] is False for i in p["intents"])
+
+    def test_agentic_still_honours_macro_kill_switch(self, cap5k, scope):
+        scope("agentic")
+        p = qb.build_execution_queue(self._hot_rr(), mode="review", now=_RTH,
+                                     macro_dto=_killswitch_macro())
+        (i,) = p["intents"]
+        assert i["gate_allowed"] is False
+        assert any(r.startswith("macro_kill_switch") for r in i["gate_reasons"])
+
+    def test_unknown_value_collapses_to_main(self):
+        from settings import Settings
+        assert Settings(AGENTIC_QUEUE_RISK_ACCOUNT="Agentic ").AGENTIC_QUEUE_RISK_ACCOUNT == "agentic"
+        assert Settings(AGENTIC_QUEUE_RISK_ACCOUNT="both").AGENTIC_QUEUE_RISK_ACCOUNT == "main"
+
+    def test_settings_error_defers_nothing(self, monkeypatch):
+        import settings as settings_mod
+        class _Boom:
+            def __getattr__(self, name):
+                raise RuntimeError("settings unavailable")
+        monkeypatch.setattr(settings_mod, "settings", _Boom())
+        assert qb._deferred_checks() == []

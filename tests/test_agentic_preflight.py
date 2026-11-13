@@ -8,6 +8,7 @@ get_trade_approvals), with made-up numbers.
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -29,9 +30,15 @@ def portfolio(total="1000", equity="0", bp="1000"):
 
 
 def positions(*rows):
-    return {"data": {"positions": [
-        {"symbol": s, "quantity": str(q), "shares_available_for_sells": str(sell)} for s, q, sell in rows
-    ]}}
+    """rows: (symbol, qty, sellable) or (symbol, qty, sellable, average_buy_price)."""
+    out = []
+    for row in rows:
+        s, q, sell = row[:3]
+        d = {"symbol": s, "quantity": str(q), "shares_available_for_sells": str(sell)}
+        if len(row) > 3:
+            d["average_buy_price"] = str(row[3])
+        out.append(d)
+    return {"data": {"positions": out}}
 
 
 def quotes(**prices):
@@ -62,6 +69,7 @@ def run(q, *, acct=None, qts=None, **kw):
     kw.setdefault("max_notional", 500.0)
     kw.setdefault("max_position_weight", 1.0)
     kw.setdefault("max_portfolio_gross", 2.0)
+    kw.setdefault("max_portfolio_heat", 0.06)
     acct = acct or ap.AccountState.from_mcp(portfolio(), positions())
     qts = qts if qts is not None else ap.quotes_from_mcp(quotes(AAPL=100.0, MSFT=50.0, F=12.34))
     return ap.preflight(q, acct, qts, now=NOW, **kw)
@@ -199,7 +207,7 @@ class TestPerIntent:
         assert ap.OVER_NOTIONAL_CAP in only(run(queue(intent("AAPL", notional=600)), max_notional=500)).reasons
 
     def test_over_position_weight_uses_live_holding(self):
-        acct = ap.AccountState.from_mcp(portfolio(total="1000", equity="300", bp="700"), positions(("AAPL", 3, 3)))
+        acct = ap.AccountState.from_mcp(portfolio(total="1000", equity="300", bp="700"), positions(("AAPL", 3, 3, 100)))
         # 3 held @100 = 300, +200 buy = 500 / 1000 = 0.5 > 0.4
         r = run(queue(intent("AAPL")), acct=acct, max_position_weight=0.4)
         assert ap.OVER_POSITION_WEIGHT in only(r).reasons
@@ -272,7 +280,7 @@ class TestCycleWide:
         assert by == {"a": True, "b": False}
 
     def test_sells_do_not_consume_buying_power(self):
-        acct = ap.AccountState.from_mcp(portfolio(total="250", equity="100", bp="200"), positions(("F", 10, 10)))
+        acct = ap.AccountState.from_mcp(portfolio(total="250", equity="100", bp="200"), positions(("F", 10, 10, 12.34)))
         q = queue(intent("F", "sell", qty=10), intent("AAPL", notional=200))
         assert all(v.passed for v in run(q, acct=acct).verdicts)
 
@@ -450,3 +458,77 @@ class TestCheck10:
         assert ap.EARNINGS_WITHIN_BLACKOUT in by["F"]["reasons"]    # Scout's date fed the blackout
         assert ap.THESIS_MISSING in by["F"]["reasons"]              # no thesis for F
         assert by["T"]["passed"] is True                           # thesis present, no earnings
+
+
+# ---------------------------------------------------------------------------
+# Check 9: portfolio heat on the Agentic account
+# ---------------------------------------------------------------------------
+
+class TestPortfolioHeat:
+    """The queue gate can defer heat to here (AGENTIC_QUEUE_RISK_ACCOUNT=agentic)
+    because the daemon's snapshot is the main account; this is the check on the
+    account the orders actually go to."""
+
+    def test_empty_account_has_zero_heat_and_buy_passes(self):
+        acct = ap.AccountState.from_mcp(portfolio(), positions())
+        r = run(queue(intent("AAPL")), acct=acct)
+        assert only(r).passed
+        assert r.limits["portfolio_heat"] == 0.0
+        assert r.limits["max_portfolio_heat"] == 0.06
+
+    def test_losing_position_over_limit_vetoes_buy(self):
+        # F bought @22.34, now 12.34: 10 * 10 = 100 adverse / 1000 = 10% > 6%
+        acct = ap.AccountState.from_mcp(portfolio(), positions(("F", 10, 10, 22.34)))
+        r = run(queue(intent("AAPL")), acct=acct)
+        assert ap.OVER_PORTFOLIO_HEAT in only(r).reasons
+        assert r.limits["portfolio_heat"] == pytest.approx(0.10)
+
+    def test_losing_position_under_limit_passes(self):
+        # 10 * 5 = 50 adverse / 1000 = 5% <= 6%
+        acct = ap.AccountState.from_mcp(portfolio(), positions(("F", 10, 10, 17.34)))
+        assert only(run(queue(intent("AAPL")), acct=acct)).passed
+
+    def test_gains_do_not_offset_losses(self):
+        # F loses 100, MSFT gains 500: heat counts only the adverse 100 (10%).
+        acct = ap.AccountState.from_mcp(
+            portfolio(), positions(("F", 10, 10, 22.34), ("MSFT", 10, 10, 0.01)))
+        assert ap.OVER_PORTFOLIO_HEAT in only(run(queue(intent("AAPL")), acct=acct)).reasons
+
+    def test_missing_average_cost_vetoes_fail_closed(self):
+        acct = ap.AccountState.from_mcp(portfolio(), positions(("F", 10, 10)))
+        r = run(queue(intent("AAPL")), acct=acct)
+        assert ap.HEAT_UNAVAILABLE in only(r).reasons
+        assert r.limits["portfolio_heat"] is None
+        assert r.limits["heat_unpriced_symbols"] == ["F"]
+
+    def test_held_symbol_without_quote_vetoes(self):
+        acct = ap.AccountState.from_mcp(portfolio(), positions(("TSLA", 1, 1, 200)))
+        r = run(queue(intent("AAPL")), acct=acct)
+        assert ap.HEAT_UNAVAILABLE in only(r).reasons
+        assert r.limits["heat_unpriced_symbols"] == ["TSLA"]
+
+    def test_unreadable_positions_or_total_value_vetoes(self):
+        acct = ap.AccountState(total_value=1000.0, equity_value=0.0, buying_power=1000.0, positions=None)
+        assert ap.HEAT_UNAVAILABLE in only(run(queue(intent("AAPL")), acct=acct)).reasons
+        acct = ap.AccountState(total_value=None, equity_value=0.0, buying_power=1000.0, positions={})
+        assert ap.HEAT_UNAVAILABLE in only(run(queue(intent("AAPL")), acct=acct)).reasons
+
+    def test_no_heat_limit_configured_vetoes(self):
+        acct = ap.AccountState.from_mcp(portfolio(), positions())
+        with patch.object(ap, "_settings_default", return_value=None):
+            r = ap.preflight(queue(intent("AAPL")), acct,
+                             ap.quotes_from_mcp(quotes(AAPL=100.0)), now=NOW,
+                             kill_switch_active=False, max_notional=500.0,
+                             max_position_weight=1.0, max_portfolio_gross=2.0)
+        assert ap.HEAT_UNAVAILABLE in only(r).reasons
+
+    def test_sells_are_never_heat_checked(self):
+        acct = ap.AccountState.from_mcp(portfolio(), positions(("F", 10, 10, 99.0)))
+        v = only(run(queue(intent("F", "sell", qty=10)), acct=acct))
+        assert v.passed
+        assert ap.OVER_PORTFOLIO_HEAT not in v.reasons
+
+    def test_zero_average_cost_is_unknown_not_a_gain(self):
+        acct = ap.AccountState.from_mcp(portfolio(), positions(("F", 10, 10, 0)))
+        assert acct.positions["F"].avg_cost is None
+        assert ap.HEAT_UNAVAILABLE in only(run(queue(intent("AAPL")), acct=acct)).reasons
