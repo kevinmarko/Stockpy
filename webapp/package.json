@@ -41,7 +41,9 @@
     "vitest": "4.1.12"
   },
   "overrides": {
-    "ejs": "^6.0.1"
+    "ejs": "^6.0.1",
+    "glob": "^14.0.6",
+    "minimatch": "^11.0.8"
   },
   "allowScripts": {
     "fsevents@2.3.3": true
