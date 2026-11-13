@@ -119,7 +119,7 @@ class _PassThroughRiskGate:
     wall-clock market-hours flakiness. The real gate is exercised in
     tests/test_risk_gate.py; here we only care about the orchestrator branches."""
 
-    def run_all(self, intent, context):
+    def run_all(self, intent, context, **_kw):
         return True, []
 
 

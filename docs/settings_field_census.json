@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "952cde40400a3bff8d9c37d0621aa9421fabeb29",
+    "git_commit": "754b5ff28d7d13650e639d9481eca590dbad2cb8",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -3450,7 +3450,7 @@
         },
         {
           "file": "execution/agentic_preflight.py",
-          "line": 308,
+          "line": 317,
           "expr": "getattr(settings, name)"
         },
         {

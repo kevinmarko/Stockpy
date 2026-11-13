@@ -183,7 +183,9 @@ class _MockRobinhoodMCP:
     def positions_payload(self) -> Dict[str, Any]:
         self.calls.append(("get_equity_positions", {"shape": "real"}))
         return {"data": {"positions": [
-            {"symbol": s, "quantity": str(q), "shares_available_for_sells": str(q)} for s, q in self.held.items()]}}
+            {"symbol": s, "quantity": str(q), "shares_available_for_sells": str(q),
+             # cost basis at the live quote: held flat, so portfolio heat is measurable and 0
+             "average_buy_price": str(self._quote_prices.get(s, 1.0))} for s, q in self.held.items()]}}
 
     def quotes_payload(self, symbols: List[str]) -> Dict[str, Any]:
         self.calls.append(("get_equity_quotes", {"symbols": symbols}))
@@ -377,7 +379,8 @@ def run_execution_skill(
     verdicts: Dict[str, Any] = {}
     preflight_ok = False
     if mode == "live" and use_preflight:
-        symbols = sorted({i["symbol"] for i in intents})
+        # queue ∪ held symbols, as rh-risk-manager fetches (heat needs held quotes)
+        symbols = sorted({i["symbol"] for i in intents} | set(mcp.held))
         approvals, unidentified = ap.approvals_from_mcp(mcp.approvals_payload())
         report = ap.preflight(
             payload,
