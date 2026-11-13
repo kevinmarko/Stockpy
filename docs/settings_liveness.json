@@ -91,7 +91,7 @@
     {
       "expr": "getattr(settings, name)",
       "file": "execution/agentic_preflight.py",
-      "line": 308,
+      "line": 317,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -131,7 +131,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 370,
+  "files_scanned": 368,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -559,7 +559,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:162",
+        "site": "execution/risk_gate.py:188",
         "via": []
       }
     ],
@@ -1602,7 +1602,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:172",
+        "site": "execution/risk_gate.py:198",
         "via": []
       }
     ],
@@ -1798,7 +1798,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:157",
+        "site": "execution/risk_gate.py:183",
         "via": []
       }
     ],
@@ -1809,7 +1809,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:167",
+        "site": "execution/risk_gate.py:193",
         "via": []
       }
     ],
@@ -1820,7 +1820,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:154",
+        "site": "execution/risk_gate.py:180",
         "via": []
       }
     ],
@@ -1831,7 +1831,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:151",
+        "site": "execution/risk_gate.py:177",
         "via": []
       }
     ],
@@ -2315,7 +2315,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:177",
+        "site": "execution/risk_gate.py:203",
         "via": []
       }
     ],
