@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "23e165e86cb3e8ca9bce9b7881be2f6c4d7fd143",
+    "git_commit": "179b611a1a18f010a4e5cfc9afb9b83d15893077",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2933,7 +2933,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 368,
+    "files_scanned": 369,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -2961,8 +2961,8 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 721,
-      "distinct_fields": 253,
+      "total_reads": 725,
+      "distinct_fields": 254,
       "counts": {
         "OUTPUT_DIR": 102,
         "LOCAL_DATA_ROOT": 25,
@@ -3004,6 +3004,8 @@
         "PROMPT_REGISTRY_ENABLED": 4,
         "PROMPT_REGISTRY_SIGNING_KEY": 4,
         "RH_LOGIN_DEADLINE_SECONDS": 4,
+        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 4,
+        "RUNTIME_FLAGS_REFRESH_ENABLED": 4,
         "SIZING_CAP_ALERT_THRESHOLD_PCT": 4,
         "SIZING_CAP_AUDIT_ENABLED": 4,
         "SIZING_CAP_ESCALATION_FACTOR": 4,
@@ -3029,8 +3031,6 @@
         "NEWS_EARNINGS_DAMPEN_DAYS": 3,
         "RISK_FREE_RATE": 3,
         "ROBINHOOD_AUTO_REFRESH_ENABLED": 3,
-        "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 3,
-        "RUNTIME_FLAGS_REFRESH_ENABLED": 3,
         "SECTOR_SELECTION_ENABLED": 3,
         "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE": 3,
         "SENTIMENT_SOURCES": 3,
@@ -3102,6 +3102,7 @@
         "RH_PASSWORD": 2,
         "RH_USERNAME": 2,
         "RLHF_CALIBRATION_ENABLED": 2,
+        "ROBINHOOD_EXECUTION_MODE": 2,
         "ROBINHOOD_SCHEDULED_LOGIN_ENABLED": 2,
         "RUNTIME_FLAGS_REFRESH_INTERVAL_SECONDS": 2,
         "SECTOR_HEAT_ENABLED": 2,
@@ -3124,6 +3125,7 @@
         "BROKER_TRADE_INGEST_ENABLED": 1,
         "COMMAND_EXECUTION_ENABLED": 1,
         "CORRELATION_CLUSTER_THRESHOLD": 1,
+        "DAEMON_AGENTIC_QUEUE_MODE": 1,
         "DAEMON_SHUTDOWN_TIMEOUT_SECONDS": 1,
         "DAILY_LOSS_LIMIT_PCT": 1,
         "DATA_FETCH_TASK_TIMEOUT_SECONDS": 1,
@@ -3182,7 +3184,6 @@
         "RLHF_CALIBRATION_AUTO_APPROVE_ENABLED": 1,
         "RLHF_CALIBRATION_AUTO_EXPORT_SFT_ENABLED": 1,
         "RLHF_CALIBRATION_CONFIDENCE_THRESHOLD": 1,
-        "ROBINHOOD_EXECUTION_MODE": 1,
         "ROBINHOOD_PASSWORD": 1,
         "ROBINHOOD_SCHEDULED_LOGIN_CUTOFF_ET": 1,
         "ROBINHOOD_SCHEDULED_LOGIN_TIME_ET": 1,
@@ -3504,7 +3505,6 @@
       "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE",
       "CLOSED_POSITION_RETENTION_DAYS",
       "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
-      "DAEMON_AGENTIC_QUEUE_MODE",
       "DATABASE_URL",
       "DATA_FETCH_MAX_CONCURRENCY",
       "DB_MAX_OVERFLOW",
@@ -3622,7 +3622,7 @@
       "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
       "VALIDATION_HARNESS_OOS_GATE_ENABLED"
     ],
-    "fields_only_via_b_or_d_count": 127,
+    "fields_only_via_b_or_d_count": 126,
     "fields_only_via_b": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -3634,7 +3634,6 @@
       "ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE",
       "CLOSED_POSITION_RETENTION_DAYS",
       "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED",
-      "DAEMON_AGENTIC_QUEUE_MODE",
       "DATABASE_URL",
       "DATA_FETCH_MAX_CONCURRENCY",
       "DB_MAX_OVERFLOW",

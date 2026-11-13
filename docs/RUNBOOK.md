@@ -1609,23 +1609,21 @@ declines anything for you, and places nothing if trade approvals are off.
 **Check without running anything:** `python -m execution.agentic_cycle gate`
 (exit 0 = would run, 3 = skip, with the reason).
 
-**Turn on the timer** (every 15 min; not installed by `install_schedule.command`):
-
-```bash
-sed "s|/Users/kevinlee/Desktop/Stockpy|$PWD|g" scripts/com.investyo.rh-agentic-cycle.plist > ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
-launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
-```
-
-Run it from the repo root: the plists use the placeholder path
-`/Users/kevinlee/Desktop/Stockpy` (like every plist in `scripts/`), and the
-`sed` swaps in the real checkout. A plain `cp` installs a job that points at a
-folder that may not exist and fails without any push. It needs `claude` logged
-in and the Robinhood MCP connected on that Mac (edit the plist's `PATH` if
-`which claude` is elsewhere). Start with
+**Turn on the timer** (every 15 min; not installed by `install_schedule.command`,
+which never starts the trading agents): from the repo root run
+`./scripts/install_agentic_timers.command`, which installs this timer and the
+Reviewer's (see "Phase 5 burn-in" below for `--burnin`, `--check` and
+`--uninstall`). The plists use the placeholder path
+`/Users/kevinlee/Desktop/Stockpy` (like every plist in `scripts/`) and a `PATH`
+that assumes `claude` is in that user's `~/.local/bin` or `~/.claude/local`; the
+installer rewrites both for this Mac. A plain `cp` installs a job that points at
+a folder that may not exist and fails without any push. It needs `claude` logged
+in and the Robinhood MCP connected on that Mac. Start with
 `ROBINHOOD_EXECUTION_MODE=review` (Phase 5 burn-in): the cycle runs end to end
 and pushes "Review run: N would pass, M vetoed" without sending anything.
 
-**Turn it off / roll back:** `launchctl unload ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist`.
+**Turn it off / roll back:** `launchctl unload ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist`
+(or `./scripts/install_agentic_timers.command --uninstall` for both timers).
 Setting the mode to `off` or activating the kill switch also stops it at the gate.
 
 **Skip reasons** (normal, no push): `mode_off`, `kill_switch_active`,
@@ -1658,18 +1656,31 @@ NOT READY" followed by what's missing. The verdict comes from
 `execution/agentic_review.py`; `review.json` per day is in
 `$OUTPUT_DIR/agentic/review/<YYYY-MM-DD>/`.
 
-1. **Start in review:** set `ROBINHOOD_EXECUTION_MODE=review` and a small
-   positive `ROBINHOOD_MAX_NOTIONAL_PER_ORDER`, keep trade approvals ON in the
-   Robinhood app, and load both timers:
+1. **Start in review:** keep trade approvals ON in the Robinhood app, then from
+   the repo root run:
 
 ```bash
-for n in rh-agentic-cycle rh-agentic-review; do sed "s|/Users/kevinlee/Desktop/Stockpy|$PWD|g" scripts/com.investyo.$n.plist > ~/Library/LaunchAgents/com.investyo.$n.plist; done
+./scripts/install_agentic_timers.command --burnin
 ```
+
+   It asks you to type `REVIEW`, then sets `ROBINHOOD_EXECUTION_MODE=review` and
+   a $50 `ROBINHOOD_MAX_NOTIONAL_PER_ORDER` (`--cap 25` for another amount; an
+   existing cap is kept) through the runtime flags store, and loads both timers.
+   It never sets `live` and refuses to touch a `live` setup. It finds `claude`
+   (PATH, then `~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`,
+   `/usr/local/bin`; `--claude PATH` to choose) and puts its folder first on
+   the timers' `PATH`, writes this repo's real path into both plists, and ends
+   by listing anything that would still make every cycle skip (mode off, no cap,
+   `DAEMON_AGENTIC_QUEUE_MODE` not `primary`, kill switch on). `--check` shows
+   that list without changing anything; `--uninstall` removes both timers.
+   Logic and tests: `scripts/agentic_timers.py`,
+   `tests/test_agentic_timer_installer.py`.
+
+   By hand instead (set the mode and cap yourself, and edit `PATH` in each
+   plist if `which claude` isn't in `~/.local/bin` or `~/.claude/local`):
+
 ```bash
-launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
-```
-```bash
-launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-review.plist
+for n in rh-agentic-cycle rh-agentic-review; do sed "s|/Users/kevinlee/Desktop/Stockpy|$PWD|g" scripts/com.investyo.$n.plist > ~/Library/LaunchAgents/com.investyo.$n.plist; launchctl load ~/Library/LaunchAgents/com.investyo.$n.plist; done
 ```
 
 2. **Each day:** read the push. A **SAFETY CHECK FAILED** push is high priority:

@@ -17,8 +17,10 @@
   & Risk Manager -> Trader. In live mode every order still goes to your phone:
   nothing executes until you tap Approve in the Robinhood app.
 
-  NOT INSTALLED BY install_schedule.command, on purpose. Load it by hand when you
-  want the cycle to run on its own (RUNBOOK "Agentic cycle (unattended)"):
+  NOT INSTALLED BY install_schedule.command, on purpose. Install it with
+      ./scripts/install_agentic_timers.command
+  (both agentic timers; finds claude and rewrites the paths and PATH below;
+  RUNBOOK "Phase 5 burn-in"), or by hand:
       (from the repo root; rewrites the placeholder repo path, see below)
       sed "s|/Users/kevinlee/Desktop/Stockpy|$PWD|g" scripts/com.investyo.rh-agentic-cycle.plist > ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
       launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-cycle.plist
