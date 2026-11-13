@@ -575,6 +575,14 @@ export interface Thresholds {
    * exists so static explainer copy can quote the window without a literal.
    */
   retrain_window_days: number;
+  /**
+   * Live settings.FORECAST_NAIVE_GATE_MIN_IMPROVEMENT (forecasting rebuild F3/F6a):
+   * a model is admitted to the gated blend only if its median |log error| is at
+   * most naive's x (1 - this). Help text quotes it instead of a literal.
+   */
+  forecast_gate_min_improvement: number;
+  /** Live settings.FORECAST_NAIVE_GATE_MIN_OBS — scored daily pairs a model needs before the gate can admit it. */
+  forecast_gate_min_obs: number;
 }
 
 /**

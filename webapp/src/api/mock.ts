@@ -9474,6 +9474,9 @@ export const mockApi = {
       robinhood_max_notional_per_order: 0.0,
       agentic_max_candidates: 25,
       retrain_window_days: MODEL_RETRAIN_WINDOW_DAYS,
+      // settings.FORECAST_NAIVE_GATE_MIN_IMPROVEMENT / _MIN_OBS field defaults.
+      forecast_gate_min_improvement: 0.005,
+      forecast_gate_min_obs: 60,
     });
   },
 

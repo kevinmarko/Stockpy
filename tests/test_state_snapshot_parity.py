@@ -145,6 +145,22 @@ ORCHESTRATOR_ONLY_FIELDS: set[str] = {
     "forecast_60_upper",
     "forecast_90_lower",
     "forecast_90_upper",
+    # Forecasting rebuild F6a: the published point forecast per horizon plus
+    # its fallback / gate-published-naive disclosures, read by
+    # pilots/forecasts.py (GET /forecasts). Daemon-only for the same reason as
+    # the bands above.
+    "forecast_10",
+    "forecast_30",
+    "forecast_60",
+    "forecast_90",
+    "forecast_10_is_fallback",
+    "forecast_30_is_fallback",
+    "forecast_60_is_fallback",
+    "forecast_90_is_fallback",
+    "forecast_10_gated_naive",
+    "forecast_30_gated_naive",
+    "forecast_60_gated_naive",
+    "forecast_90_gated_naive",
 }
 
 
@@ -401,7 +417,7 @@ class TestMacroKillSwitchPassthrough:
 # daemon the primary agentic writer, the orchestrator writer emits them too --
 # but only when StateSnapshotStep passes the cycle's recommendations
 # (primary), so off/shadow snapshots are unchanged.
-PRIMARY_MODE_SIGNAL_FIELDS = ("garch_vol", "suggested_exit_pct")
+PRIMARY_MODE_SIGNAL_FIELDS = ("garch_vol", "suggested_exit_pct", "advisory_forecast_effects")
 
 
 class TestPrimaryModeAdvisoryFields:
@@ -495,3 +511,74 @@ class TestOrchestratorForecastBands:
             assert sig[key] is None, f"{key} must be null when absent"
             assert sig[key] != 0.0
 
+
+class TestOrchestratorPublishedForecasts:
+    """Forecasting rebuild F6a: Forecast_{h} and its two disclosure flags
+    persist as forecast_{h} / forecast_{h}_is_fallback / forecast_{h}_gated_naive,
+    null (never 0.0) when absent."""
+
+    _KEYS = tuple(
+        f"forecast_{h}{suffix}"
+        for h in (10, 30, 60, 90)
+        for suffix in ("", "_is_fallback", "_gated_naive")
+    )
+
+    def _signals(self, tmp_path, monkeypatch, rows):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{tmp_path / 'rating_parity.db'}")
+        mo._write_state_snapshot({"market_regime": "RISK ON"}, pd.DataFrame(rows), ["AAPL", "MSFT"])
+        return json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))["signals"]
+
+    def test_round_trips_when_present(self, tmp_path, monkeypatch):
+        sigs = self._signals(tmp_path, monkeypatch, [{
+            "Symbol": "AAPL", "Action Signal": "BUY", "Price": 150.0,
+            "Forecast_10": 151.0, "Forecast_30": 155.5, "Forecast_60": 160.0, "Forecast_90": 150.0,
+            "Forecast_10_Is_Fallback": False, "Forecast_30_Is_Fallback": False,
+            "Forecast_60_Is_Fallback": False, "Forecast_90_Is_Fallback": True,
+            "Forecast_30_Gated_Naive": True,
+        }])
+        sig = _by_symbol(sigs, "AAPL")
+        assert sig["forecast_30"] == pytest.approx(155.5)
+        assert sig["forecast_90"] == pytest.approx(150.0)
+        assert sig["forecast_10_is_fallback"] == 0.0
+        assert sig["forecast_90_is_fallback"] == 1.0
+        assert sig["forecast_30_gated_naive"] == 1.0
+        assert sig["forecast_10_gated_naive"] is None
+
+    def test_is_null_when_absent(self, tmp_path, monkeypatch):
+        sigs = self._signals(tmp_path, monkeypatch, [
+            {"Symbol": "MSFT", "Action Signal": "HOLD", "Price": 300.0, "Forecast_30": float("nan")},
+        ])
+        sig = _by_symbol(sigs, "MSFT")
+        for key in self._KEYS:
+            assert sig[key] is None, f"{key} must be null when absent"
+
+
+class TestAdvisoryForecastEffectsField:
+    """Forecasting rebuild F6a: Recommendation.forecast_effects reaches the
+    primary-mode snapshot as a list ([] = no rule fired, null = no rec)."""
+
+    def _signals(self, tmp_path, monkeypatch, recs):
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{tmp_path / 'rating_parity.db'}")
+        final_df = pd.DataFrame([
+            {"Symbol": "AAPL", "Action Signal": "BUY", "Price": 150.0, "Shares": 10.0},
+            {"Symbol": "MSFT", "Action Signal": "HOLD", "Price": 300.0, "Shares": 0.0},
+        ])
+        mo._write_state_snapshot(
+            {"market_regime": "RISK ON"}, final_df, ["AAPL", "MSFT"], recommendations=recs,
+        )
+        return json.loads((tmp_path / "state_snapshot.json").read_text(encoding="utf-8"))["signals"]
+
+    def test_effects_round_trip_and_missing_rec_is_null(self, tmp_path, monkeypatch):
+        rec = _recommendation("AAPL")
+        rec.forecast_effects = ("case_a_exit",)
+        sigs = self._signals(tmp_path, monkeypatch, [rec])
+        assert _by_symbol(sigs, "AAPL")["advisory_forecast_effects"] == ["case_a_exit"]
+        assert _by_symbol(sigs, "MSFT")["advisory_forecast_effects"] is None
+
+    def test_no_effect_is_empty_list_not_null(self, tmp_path, monkeypatch):
+        rec = _recommendation("AAPL")
+        rec.forecast_effects = ()
+        sigs = self._signals(tmp_path, monkeypatch, [rec])
+        assert _by_symbol(sigs, "AAPL")["advisory_forecast_effects"] == []

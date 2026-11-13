@@ -1527,6 +1527,17 @@ class TestForecastSymmetry:
             f"Flat forecast on an appreciated holding should HOLD (Case C); got {rec.action}"
         )
 
+    # Forecasting rebuild F6a: Recommendation.forecast_effects records which
+    # forecast-driven rule fired (decision-neutral; see
+    # tests/test_pilots_forecasts.py::TestForecastEffectsAreDecisionNeutral).
+    def test_bullish_boost_is_recorded(self):
+        rec = self._run_held_gain(forecast_30=110.0)
+        assert rec.forecast_effects == ("bullish_conviction_boost",)
+
+    def test_case_c_hold_is_recorded(self):
+        rec = self._run_held_gain(forecast_30=100.5)
+        assert rec.forecast_effects == ("case_c_hold",)
+
 
 class TestTacticalRangesAndExitSizing:
     """buy_range/sell_range threading from StrategyEngine.evaluate_security(),
@@ -1585,6 +1596,8 @@ class TestTacticalRangesAndExitSizing:
         rec = self._run(position=position, forecast_30=94.0, raw_signal="HOLD", score=40)
         assert rec.action == "SELL"
         assert rec.suggested_exit_pct == CONFIG["exit_fraction_strong_sell"]
+        # Forecasting rebuild F6a: the case is recorded, not only in free text.
+        assert rec.forecast_effects == ("case_a_exit",)
 
     def test_base_signal_sell_suggests_partial_trim(self):
         """A held position with a base RISK REDUCE signal (no Case A trigger:
@@ -1613,6 +1626,17 @@ class TestTacticalRangesAndExitSizing:
         rec_hold = self._run(position=None, forecast_30=100.0, raw_signal="HOLD", score=50)
         assert rec_hold.action == "HOLD"
         assert rec_hold.suggested_exit_pct == 0.0
+
+    def test_no_forecast_rule_records_no_effect(self):
+        """F6a: a base-signal SELL on a held name with a flat forecast fires no
+        forecast-driven rule, so forecast_effects is empty."""
+        position = _StubPortfolioPosition(
+            symbol="TEST", quantity=50.0, average_cost=98.0, current_price=100.0,
+            market_value=5_000.0, unrealized_pl=100.0, unrealized_pl_pct=2.0,
+            dividends_received=0.0, name="Test Corp",
+        )
+        rec = self._run(position=position, forecast_30=100.5, raw_signal="RISK REDUCE", score=20)
+        assert rec.forecast_effects == ()
 
 
 # ============================================================================

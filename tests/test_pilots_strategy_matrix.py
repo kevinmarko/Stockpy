@@ -592,6 +592,10 @@ def test_pilots_read_helpers_stay_dependency_light(module_name):
         # lazy forecasting.forecast_tracker.ForecastTracker -- NOT the
         # AST-forbidden forecasting_engine.
         allowed = allowed | {"forecasting"}
+    if module_name == "forecasts":
+        # Forecasting rebuild F6a reader: lazy forecasting.forecast_tracker
+        # (NOT the AST-forbidden forecasting_engine) + stdlib re/datetime.
+        allowed = allowed | {"forecasting", "re", "datetime"}
     if module_name == "price_provider":
         allowed = allowed | {"data"}
     if module_name == "realized":

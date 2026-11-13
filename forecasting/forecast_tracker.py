@@ -1793,6 +1793,65 @@ class ForecastTracker:
             result["reason"] = "error"
             return result
 
+    def latest_gate_decisions(
+        self,
+        symbol: str,
+        horizons: Sequence[int],
+    ) -> Dict[str, object]:
+        """Forecasting rebuild F6a: the LAST recorded F3 gate decision per
+        horizon for one symbol -- what the gate actually did on its most
+        recent ``gated_blend`` row, read back for the Forecasts screen.
+
+        Returns ``{"by_horizon": {h: None | {"forecast_day", "forecast_ts",
+        "fallback_to_naive", "admitted"}}, "reason"}``. ``admitted`` is the
+        list stored in ``gate_admitted`` (models that carried weight);
+        ``fallback_to_naive`` is ``gate_fallback == 1`` (``None`` when the
+        column is NULL on that row). A horizon with no ``gated_blend`` row
+        maps to ``None``. ``reason`` is ``"ledger predates F3 (no gated_blend
+        rows yet)"`` when the gate columns do not exist and ``"error"`` when
+        the read failed. Read-only. Never raises (CONSTRAINT #6).
+        """
+        horizons = [int(h) for h in horizons]
+        result: Dict[str, object] = {"by_horizon": {h: None for h in horizons}, "reason": None}
+        if not horizons:
+            return result
+        try:
+            placeholders = ",".join("?" for _ in horizons)
+            with self._lock:
+                conn = self._get_conn()
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(forecast_errors)").fetchall()}
+                if not cols:
+                    result["reason"] = "no forecast ledger yet"
+                    return result
+                if "gate_fallback" not in cols or "gate_admitted" not in cols:
+                    result["reason"] = "ledger predates F3 (no gated_blend rows yet)"
+                    return result
+                rows = conn.execute(
+                    f"""SELECT horizon_days, forecast_ts, forecast_day, gate_fallback, gate_admitted
+                        FROM forecast_errors
+                        WHERE symbol = ? AND model_name = ?
+                          AND horizon_days IN ({placeholders})
+                        ORDER BY forecast_ts DESC, id DESC""",  # nosec B608
+                    [symbol.upper(), MODEL_GATED_BLEND, *horizons],
+                ).fetchall()
+            by_h = result["by_horizon"]
+            for h, ts, day, fallback, admitted in rows:
+                h = int(h)
+                if by_h.get(h) is not None:
+                    continue  # rows are newest-first; keep the first per horizon
+                by_h[h] = {
+                    "forecast_day": day,
+                    "forecast_ts": ts,
+                    "fallback_to_naive": None if fallback is None else bool(int(fallback)),
+                    "admitted": [n for n in str(admitted or "").split(",") if n],
+                }
+            return result
+        except Exception as exc:
+            logger.warning("ForecastTracker.latest_gate_decisions(%s) failed: %s", symbol, exc)
+            result["by_horizon"] = {h: None for h in horizons}
+            result["reason"] = "error"
+            return result
+
     def gate_side_by_side(
         self,
         horizon_days: int,

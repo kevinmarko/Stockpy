@@ -8,6 +8,8 @@ file is the **archival "why does X exist and what shipped in the PR that added i
 record** — read it when you need the full backstory, test surface, or Gravity-audit-step
 details for a specific subsystem named below.
 
+**2026-11-13 — Forecasting rebuild F6a: Forecasts read contract.** Read-only `GET /forecasts` (the published forecast, band, disclosures and "what the forecast changed this cycle" per symbol, from `state_snapshot.json`) and `GET /symbols/{ticker}/forecast-summary` (skill vs naive, naive-gate decision and evaluation, MC coverage per horizon, from the ledger) via the new `pilots/forecasts.py`; the snapshot gains `forecast_{h}`, `forecast_{h}_is_fallback`, `forecast_{h}_gated_naive` and (primary mode) `advisory_forecast_effects`; `engine.advisory.Recommendation.forecast_effects` records which forecast-driven rule fired (decision-neutral); `GET /thresholds` gains the gate's two settings. No new setting, no decision change. F6 was built before F5 on the operator's 2026-11-13 go-ahead (plan Q1). The webapp screen (F6b) and F5 are not built. Walkthrough: `.claude/forecasting_rebuild_f6_walkthrough.md`.
+
 **2026-09-30 — Alpaca removed.** The automated pipeline's only broker is `FMPPaperBroker`; market data is FMP then yfinance; `ALPACA_PAPER` became `PAPER_TRADING` (alias kept); going live places no automated orders. Alpaca code archived to `legacy/`. Walkthrough: `.claude/vendor_removal_alpaca_walkthrough.md`. Entries below that mention Alpaca are historical.
 
 Sections in this file (search for the `##` heading):
