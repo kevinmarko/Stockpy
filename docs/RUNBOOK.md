@@ -1708,6 +1708,12 @@ for n in rh-agentic-cycle rh-agentic-review; do sed "s|/Users/kevinlee/Desktop/S
 5. **Roll back:** set the mode back to `review` or `off`, or unload the cycle
    timer. The Reviewer can keep running; it only reads.
 
+**The agents can't reach Robinhood headlessly?** The timers run the `claude` CLI, which names the claude.ai Robinhood connector's tools `mcp__claude_ai_Robinhood__*`. The `rh-*` agents allow that spelling as well as `robinhood-trading` and `Robinhood`. Check that the CLI sees the connector:
+
+```bash
+claude mcp list | grep -i robinhood
+```
+
 A review that didn't run (timeout, `claude` not found, missing inputs) sends
 "Agentic burn-in review did not run". Logs: `output/agentic_review.out` / `.err`.
 

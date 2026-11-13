@@ -424,7 +424,8 @@ def test_reviewer_has_exactly_its_read_tools():
             "get_trade_approval_setting"}
     tools = ac.agent_tools("rh-reviewer")
     mcp = {t for t in tools if t.startswith("mcp__")}
-    assert mcp == {f"mcp__{s}__{t}" for s in ("robinhood-trading", "Robinhood") for t in read}
+    assert mcp == {f"mcp__{s}__{t}"
+                   for s in ("robinhood-trading", "Robinhood", "claude_ai_Robinhood") for t in read}
     assert set(tools) - mcp == {"Read", "Grep", "Glob", "Bash"}
 
 
