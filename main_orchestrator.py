@@ -1290,6 +1290,19 @@ def _build_daily_summary(ctx) -> "tuple[dict, list]":
 
     # --- Operational warnings read off the cycle state ---
     try:
+        from pipeline.synthetic_gate import (
+            SKIPPED_OUTPUTS, describe_reason, is_cycle_synthetic, synthetic_reason,
+        )
+
+        if is_cycle_synthetic(ctx):
+            warnings.append(
+                f"SYNTHETIC DATA: {describe_reason(synthetic_reason(ctx))}. This cycle "
+                f"wrote no {SKIPPED_OUTPUTS}; the previous files are unchanged."
+            )
+    except Exception as exc:
+        telemetry.debug("Daily summary: synthetic-data warning check skipped: %s", exc)
+
+    try:
         macro_dto = getattr(ctx, "macro_dto", None)
         if macro_dto is not None:
             if getattr(macro_dto, "killSwitch", False):
@@ -1460,6 +1473,20 @@ async def _main_body_impl(effective_dry_run: bool, strict: bool = False,
 
         close_cycle_queue_writer(ctx.context_extras)
 
+    # Synthetic-data gate (pipeline/synthetic_gate.py): the run is still
+    # recorded "succeeded" (the GET /status contract is frozen), so say why it
+    # wrote nothing in the run's existing progress message. ProgressReporter.
+    # finish() keeps a non-empty message, so it reaches RunRecord.progress and
+    # GET /run/{id}/status. Covers every mode (data / metrics / full).
+    try:
+        from pipeline.synthetic_gate import (
+            is_cycle_synthetic, synthetic_progress_message, synthetic_reason,
+        )
+
+        if progress is not None and is_cycle_synthetic(ctx):
+            progress.set_message(synthetic_progress_message(synthetic_reason(ctx)))
+    except Exception as exc:  # CONSTRAINT #6: a progress note never fails a cycle
+        telemetry.debug("Synthetic-data progress message skipped: %s", exc)
 
     if ctx.dashboard_df is not None:
         _validate_dashboard(ctx.dashboard_df, strict=strict)

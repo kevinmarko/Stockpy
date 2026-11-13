@@ -86,6 +86,7 @@ import pytest
 
 import transactions_store
 from tests._db_isolation import make_memory_db_init
+from tests._synthetic_outputs import allow_synthetic_outputs
 
 # Keep every test in this file on a single xdist worker so the module-scoped
 # orchestrator_run fixture (a full real pipeline run) builds once, not once
@@ -127,6 +128,13 @@ def orchestrator_run(tmp_path_factory):
         # Force the MockDataEngine path (see conftest's
         # _force_mock_data_engine_in_tests).
         mock.patch("data_engine.live_data_configured", return_value=False),
+        # Explicit opt-in (tests/_synthetic_outputs.py): this file asserts on
+        # the snapshot, history/, dashboards and printed payload that a cycle
+        # writes, and it can only run offline on MockDataEngine. Without this
+        # the synthetic-data gate (pipeline/synthetic_gate.py) correctly skips
+        # every one of those writes. The gate itself is covered by
+        # tests/test_synthetic_data_gate_keyless.py.
+        allow_synthetic_outputs(),
         # main_orchestrator.py's account-fetch integration point (module-top
         # `from data.robinhood_portfolio import fetch_account_snapshot` --
         # patching the original module's attribute below does NOT affect

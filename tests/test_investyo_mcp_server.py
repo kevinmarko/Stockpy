@@ -2263,16 +2263,9 @@ class TestGenerateHtmlReport:
         assert "not refreshed" not in result
         assert "port-1" in result  # the ignored portfolio_id is disclosed
         assert "run mode not reported" not in result  # mode "full" was reported
-        # A synthetic-data (market-data outage) cycle still renders the report and is
-        # still "succeeded"; the tool cannot see it and must say so, not imply real data.
-        assert "synthetic MockDataEngine data" in result
-        assert "still renders this report" in result and "still recorded as succeeded" in result
-        assert "cannot detect that" in result
-        assert "Synthetic (MockDataEngine) data detected" in result
-        # A keyless run (no FRED_API_KEY) is synthetic too but never logs that line
-        # (the data_is_synthetic marker is only set on the empty-fetch fallback).
-        assert "no FRED_API_KEY configured" in result
-        assert "FRED_API_KEY not configured" in result
+        # Since the synthetic-data gate a synthetic cycle renders no report, so a
+        # refreshed report carries no "cannot detect synthetic data" caution.
+        assert "cannot detect" not in result and "synthetic" not in result.lower()
         assert self.trigger_calls == 1
         assert self.status_calls == ["run-1"]
 
@@ -2305,9 +2298,10 @@ class TestGenerateHtmlReport:
         assert "Advisory paused by kill-switch sentinel" in result  # points at the real log line
         assert "NOT reported as fresh" in result
         assert "report was refreshed" not in result
-        # StateSnapshotStep does not honour data_is_synthetic: synthetic cycles DO
-        # render the report, so they must never be offered as a reason it is missing.
-        assert "synthetic" not in result.lower()
+        # The synthetic-data gate skips the report, so synthetic data is one of
+        # the possible causes offered, with the log line to look for.
+        assert "synthetic MockDataEngine data" in result
+        assert "'SYNTHETIC DATA'" in result
 
     def test_succeeded_but_dashboard_missing_is_not_fresh(self):
         # A stale legacy daily_report.html must never stand in for the dashboard.
@@ -2319,7 +2313,37 @@ class TestGenerateHtmlReport:
         assert "finished but report not refreshed" in result
         assert "does not exist" in result
         assert "report was refreshed" not in result
-        assert "synthetic" not in result.lower()
+        assert "synthetic MockDataEngine data" in result  # one of the possible causes
+
+    @pytest.mark.parametrize("file_state", ["fresh_mtime", "stale", "missing"])
+    def test_synthetic_run_is_named_and_never_credited_with_the_report(self, file_state):
+        # The run is "succeeded" (GET /status contract) but its progress message
+        # carries the synthetic-data gate's note: whatever file is there is NOT
+        # this run's, even one whose mtime is newer than started_at.
+        from pipeline.synthetic_gate import REASON_MOCK_ENGINE, synthetic_progress_message
+
+        if file_state == "fresh_mtime":
+            self._write_report(+30)
+        elif file_state == "stale":
+            self._write_report(-30)
+        status = _run_status("succeeded")
+        status["progress"] = {"state": "succeeded", "message": synthetic_progress_message(REASON_MOCK_ENGINE)}
+        self._install(self._accepted(), [status])
+
+        result = srv.generate_html_report("p")
+
+        assert "finished but report not refreshed" in result
+        assert "ran on synthetic data" in result and "by design wrote no report" in result
+        assert "MockDataEngine" in result and "FRED_API_KEY" in result
+        assert "NOT reported as fresh" in result
+        assert "report was refreshed" not in result
+
+    def test_non_synthetic_progress_message_is_ignored(self):
+        self._write_report(+30)
+        status = _run_status("succeeded")
+        status["progress"] = {"state": "succeeded", "message": "succeeded"}
+        self._install(self._accepted(), [status])
+        assert "report was refreshed" in srv.generate_html_report("p")
 
     # -- run mode (V2) ----------------------------------------------------
     @pytest.mark.parametrize("mode", ["data", "metrics"])
@@ -2668,18 +2692,15 @@ class TestGenerateHtmlReport:
             "ADVISORY_ONLY=false",
             "ORCHESTRATOR_DAEMON_TOKEN",
             "daily_report_dashboard.html",
-            # synthetic-data limitation (the tool cannot detect it) + where to look
-            "LIMITATION - synthetic data is NOT detected",
-            "still renders the report and still",
-            "counts as succeeded",
-            "Synthetic (MockDataEngine) data detected",
+            # synthetic-data cycles: succeeded, but no report (the gate)
+            "synthetic MockDataEngine data",
+            "still counts as succeeded but by design renders no report",
+            "not flag as synthetic",
             # non-full runs are never credited with the report
             "data-only or metrics-only",
         ):
             assert fragment in doc, fragment
-        # Synthetic cycles do NOT skip the report (StateSnapshotStep ignores the marker).
-        assert "synthetic-data or non-full-mode cycles skip" not in doc
-        assert "synthetic-data cycles skip" not in doc
+        assert "LIMITATION - synthetic data is NOT detected" not in doc
 
 
 class TestOperatorHintsDoNotMentionMainPy:

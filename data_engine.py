@@ -110,6 +110,29 @@ def live_data_configured() -> bool:
     return bool(settings.FRED_API_KEY)
 
 
+def is_synthetic_provider(engine: Any) -> bool:
+    """True when ``engine`` serves synthetic (fabricated) market data.
+
+    The one place that decides whether a cycle's data provider is synthetic.
+    ``AsyncDataFetchStep`` calls it (through this module attribute, so tests
+    can patch it) on the engine the cycle actually uses, whichever way that
+    engine got there: picked keyless in the step, built by
+    ``OrchestratorDaemon._build_data_engine`` (keyless OR after a FRED check
+    failure), or injected by a caller. A synthetic cycle still computes but
+    writes no durable or outward output (``pipeline/synthetic_gate.py``).
+
+    Positive identification on purpose: only ``MockDataEngine`` (and its
+    subclasses) count, so a test double such as a ``MagicMock`` engine stays
+    "real", exactly as before. A future engine that fabricates data must be
+    added here (``tests/test_synthetic_data_gate_keyless.py`` classifies every
+    ``IDataProvider`` subclass). Never raises.
+    """
+    try:
+        return isinstance(engine, MockDataEngine)
+    except Exception:  # pragma: no cover - isinstance cannot realistically raise
+        return False
+
+
 # =============================================================================
 # 2. OPERATIONAL YAHOO FINANCE & FRED ENGINE
 # =============================================================================
@@ -589,10 +612,12 @@ class MockDataEngine(IDataProvider):
         there is nothing to incrementally "top up" and no HistoricalStore
         involvement makes sense here. Exists purely so callers that
         unconditionally call ``fetch_technical_raw_cached()``
-        (``main_orchestrator.py``'s ``fetch_all_data_async``, which falls
-        back to a fresh ``MockDataEngine()`` when live data is not
-        configured or comes back empty) work identically whether
-        ``de`` is a real ``DataEngine`` or this test/offline-fallback fixture.
+        (``main_orchestrator.py``'s ``fetch_all_data_async``) work identically
+        whether ``de`` is a real ``DataEngine`` or this engine. The fallback to
+        a fresh ``MockDataEngine()`` (no FRED key, or the price fetch came back
+        empty) lives in ``pipeline/production_steps.py::AsyncDataFetchStep``
+        and ``desktop/daemon_runtime.py::_build_data_engine``, not in
+        ``fetch_all_data_async``.
         """
         return self.fetch_technical_raw(tickers)
 

@@ -11,7 +11,7 @@ import time
 
 logger = logging.getLogger(__name__)
 from functools import cache
-from typing import Any
+from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -1090,28 +1090,39 @@ _REPORT_DASHBOARD_FILENAME = "daily_report_dashboard.html"
 # (all verified against the pipeline code): the kill-switch sentinel (or any
 # ctx.stopped) skips StateSnapshotStep; an automatic interval cycle returns
 # CYCLE_SKIPPED when the data is still fresh; the render itself can fail and is
-# only logged ("Failed to generate daily HTML report"). Synthetic-data cycles are
-# deliberately NOT listed: StateSnapshotStep does not honour data_is_synthetic, so
-# they DO render the report (see _SYNTHETIC_DATA_CAUTION).
+# only logged ("Failed to generate daily HTML report"); and a cycle on synthetic
+# MockDataEngine data skips StateSnapshotStep's writes by design
+# (pipeline/synthetic_gate.py). The synthetic case is also named explicitly when
+# the run's progress message says so (_synthetic_run_note).
 _REPORT_NOT_REFRESHED_CAUSES = (
-    "kill switch, stopped cycle, interval cycle skipped on fresh data, or report render failure"
+    "kill switch, stopped cycle, synthetic MockDataEngine data (no FRED_API_KEY or a "
+    "market-data outage), interval cycle skipped on fresh data, or report render failure"
 )
 _REPORT_NOT_REFRESHED_LOG_HINT = (
-    "Check the daemon log (e.g. 'Advisory paused by kill-switch sentinel' or "
-    "'Failed to generate daily HTML report')."
-)
-# pipeline/production_steps.py sets ctx.context_extras['data_is_synthetic'] on a
-# market-data outage, but only AgenticQueueStep and BrokerExecutionStep honour it.
-# With no FRED_API_KEY the step picks MockDataEngine up front and never sets the
-# marker, so a keyless cycle is synthetic AND is not skipped by those two steps.
-_SYNTHETIC_DATA_CAUTION = (
-    "Caution: a cycle that ran on synthetic MockDataEngine data (a market-data outage, "
-    "or no FRED_API_KEY configured) still renders this report and is still recorded as "
-    "succeeded; this tool cannot detect that. Check the daemon log for 'Synthetic "
-    "(MockDataEngine) data detected' (outage) or 'FRED_API_KEY not configured' (no key)."
+    "Check the daemon log (e.g. 'Advisory paused by kill-switch sentinel', 'SYNTHETIC "
+    "DATA' or 'Failed to generate daily HTML report')."
 )
 _cycle_sleep = time.sleep
 _cycle_clock = time.monotonic
+
+
+def _synthetic_run_note(status: Any) -> Optional[str]:
+    """The run's synthetic-data progress message, or None.
+
+    A cycle on synthetic data is still recorded ``succeeded``; the daemon puts
+    ``pipeline.synthetic_gate.synthetic_progress_message`` in the run's
+    ``progress.message`` (``GET /run/{id}/status``). Never raises.
+    """
+    try:
+        from pipeline.synthetic_gate import SYNTHETIC_PROGRESS_MESSAGE_PREFIX
+
+        progress = status.get("progress") if isinstance(status, dict) else None
+        message = progress.get("message") if isinstance(progress, dict) else None
+        if isinstance(message, str) and message.startswith(SYNTHETIC_PROGRESS_MESSAGE_PREFIX):
+            return message[:500]
+    except Exception:  # noqa: BLE001 - a status we cannot read is simply "not flagged"
+        return None
+    return None
 
 
 def _describe_report_trigger_failure(trig: Any, port: Any) -> str:
@@ -1272,11 +1283,11 @@ def generate_html_report(portfolio_id: str) -> str:
     the cycle outlives the deadline, the message names the run_id and says it is
     still running.
 
-    LIMITATION - synthetic data is NOT detected: a cycle that fell back to synthetic
-    MockDataEngine data (market-data outage) still renders the report and still
-    counts as succeeded (only the execution queue and broker steps honour the
-    synthetic-data marker), so "refreshed" is not proof of real data. Check the
-    daemon log for "Synthetic (MockDataEngine) data detected".
+    Synthetic data: a cycle on synthetic MockDataEngine data (no FRED_API_KEY, or a
+    market-data outage) still counts as succeeded but by design renders no report
+    (pipeline/synthetic_gate.py), so it is reported as "not refreshed", naming the
+    synthetic data when the run's progress message says so. A report reported as
+    refreshed came from a cycle the pipeline did not flag as synthetic.
 
     Args:
         portfolio_id: Currently ignored - the daemon's report always covers the
@@ -1368,6 +1379,18 @@ def generate_html_report(portfolio_id: str) -> str:
             )
         mode_note = "" if run_mode else " (run mode not reported)"
 
+        synthetic_note = _synthetic_run_note(status)
+        if synthetic_note is not None:
+            # The synthetic-data gate skipped StateSnapshotStep's writes: whatever
+            # file is on disk came from an earlier cycle, never from this one.
+            return (
+                f"Daemon cycle {run_id}{attach_note} finished but report not refreshed: the "
+                f"cycle ran on synthetic data and by design wrote no report. Run detail: "
+                f"{synthetic_note} Any {report_path} on disk is from an earlier cycle and is "
+                "NOT reported as fresh. Set FRED_API_KEY (then restart the daemon) or fix "
+                "market-data connectivity."
+            )
+
         # A green cycle does not guarantee a fresh report (see
         # _REPORT_NOT_REFRESHED_CAUSES), so verify the file itself against the
         # run's start time.
@@ -1402,8 +1425,7 @@ def generate_html_report(portfolio_id: str) -> str:
             f"at: {report_path}{mode_note}\n"
             f"(last written {_iso_utc(mtime)}; cycle started {_iso_utc(started_ts)}. "
             f"portfolio_id '{portfolio_id}' is currently ignored - the report covers the full "
-            "tracked universe.)\n"
-            f"{_SYNTHETIC_DATA_CAUTION}"
+            "tracked universe.)"
         )
     except Exception as e:
         return f"Report generation failed: {e!s}"

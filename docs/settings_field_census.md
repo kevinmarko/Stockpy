@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `2db545ec782e94ed59c27702f0be56c4e1f14a93`
+- Measured at commit: `d8e53dfc7e65a358855fa099b584b1f573c5f09f`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -222,7 +222,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **368** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **369** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -236,7 +236,7 @@ _S.settings, _dsr_settings, _gravity_settings, _guard_settings, _mt_settings, _o
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
 | (a) `settings.KEY` | 712 | 252 |
-| (b) `getattr(settings, "KEY", default)` | 293 | 171 |
+| (b) `getattr(settings, "KEY", default)` | 294 | 171 |
 | (c) `getattr(settings, <var>)` (dynamic) | 16 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
 
@@ -277,7 +277,7 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `ATTENTION_INGESTION_MAX_SECONDS_PER_CYCLE` | b | 1 | 0 |
 | `CLOSED_POSITION_RETENTION_DAYS` | b | 2 | 0 |
 | `CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED` | b | 1 | 0 |
-| `DAEMON_AGENTIC_QUEUE_MODE` | b | 1 | 0 |
+| `DAEMON_AGENTIC_QUEUE_MODE` | b | 2 | 0 |
 | `DATABASE_URL` | b | 1 | 0 |
 | `DATA_FETCH_MAX_CONCURRENCY` | b | 3 | 0 |
 | `DB_MAX_OVERFLOW` | b | 2 | 0 |
@@ -416,8 +416,8 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |
 | `runtime_flags_writer.py:884` | `getattr(settings_module.settings, key, None)` |
 | `runtime_flags_writer.py:893` | `getattr(settings_module.settings, key, None)` |
-| `scripts/step5_4_verify_cycle.py:163` | `getattr(settings, key, None)` |
-| `scripts/step5_4_verify_cycle.py:271` | `getattr(settings, name)` |
+| `scripts/step5_4_verify_cycle.py:167` | `getattr(settings, key, None)` |
+| `scripts/step5_4_verify_cycle.py:275` | `getattr(settings, name)` |
 
 ### Fields read via `os.environ` (form d) — 2 field(s)
 

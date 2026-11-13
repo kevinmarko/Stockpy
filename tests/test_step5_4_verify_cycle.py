@@ -555,9 +555,17 @@ class TestUnverifiedCycles:
         ],
         ids=["flag", "mock-engine-class"],
     )
-    def test_synthetic_data_cycle_exits_4_and_says_it_overwrote_the_snapshot(self, install, capsys, ctx):
+    @pytest.mark.parametrize("writes_snapshot", [False, True], ids=["gated", "snapshot-anyway"])
+    def test_synthetic_data_cycle_exits_4_and_says_nothing_was_overwritten(
+        self, install, capsys, ctx, writes_snapshot,
+    ):
+        # "gated" is the real behaviour since the synthetic-data gate
+        # (pipeline/synthetic_gate.py): StateSnapshotStep writes no snapshot,
+        # so the synthetic check must run BEFORE the snapshot check or the
+        # cycle would be misreported as exit 3 "did not refresh the snapshot".
         async def mock_cycle(mod, rec):
-            _write_snapshot(settings_module.settings.OUTPUT_DIR)
+            if writes_snapshot:
+                _write_snapshot(settings_module.settings.OUTPUT_DIR)
             mod._dispatch_daily_summary(ctx)
 
         install(mock_cycle)
@@ -565,9 +573,25 @@ class TestUnverifiedCycles:
         captured = capsys.readouterr()
         assert code == vc.EXIT_UNVERIFIED == 4
         assert "VERIFY CYCLE INCOMPLETE" in captured.err and "SYNTHETIC MockDataEngine" in captured.err
+        assert "did not refresh the snapshot" not in captured.err
         assert "VERIFY CYCLE OK" not in captured.out
-        # The honest consequence (StateSnapshotStep ignores the flag): live files now hold mock data.
-        assert "OVERWRITTEN state_snapshot.json" in captured.out
+        assert "nothing of those was overwritten" in captured.out
+        assert "OVERWRITTEN" not in captured.out
+
+    def test_stopped_synthetic_cycle_keeps_the_stopped_explanation(self, install, capsys):
+        # Kill switch on a keyless worktree: the stop is the more useful reason.
+        ctx = _ctx(context_extras={"data_is_synthetic": True})
+        ctx.stopped = True
+        ctx.stop_reason = "kill_switch"
+
+        async def stopped_cycle(mod, rec):
+            mod._dispatch_daily_summary(ctx)
+
+        install(stopped_cycle)
+        code = vc.main([])
+        captured = capsys.readouterr()
+        assert code == vc.EXIT_SNAPSHOT_NOT_REFRESHED == 3
+        assert "stop_reason=kill_switch" in captured.err
 
     @pytest.mark.parametrize("n_signals", [0])
     def test_snapshot_with_no_signals_exits_4(self, install, capsys, n_signals):
@@ -595,7 +619,8 @@ class TestUnverifiedCycles:
         assert "VERIFY CYCLE OK" not in captured.out
 
     def test_helper_detects_the_flagless_mock_engine_case(self):
-        # No FRED key => the step picks MockDataEngine up front WITHOUT the flag.
+        # Since the synthetic-data gate the step flags a Mock engine itself; the
+        # engine check stays as a second line (e.g. a test that opted out).
         assert vc._used_synthetic_data(_ctx(market=MockDataEngine())) is True
         assert vc._used_synthetic_data(_ctx()) is False
         assert vc._used_synthetic_data(None) is False

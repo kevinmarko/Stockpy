@@ -123,11 +123,11 @@ not — read them a checklist only if they ask for one.
      `unauthorized` / `command_disabled` → `ORCHESTRATOR_DAEMON_TOKEN` is
      missing or wrong in `.env`; tell the operator and stop. A cycle that ends
      `failed` → say so and do not place. A cycle that ends `succeeded` does not
-     guarantee a new queue (a cycle writes nothing when its price fetch came back
-     empty and fell back to synthetic data, the advisory step failed, or no
-     BUY/SELL cleared the conviction floor; a daemon running with no
-     `FRED_API_KEY` is NOT covered by that skip, a known unfixed gap, so if the
-     queue's reference prices look implausible next to the live quotes
+     guarantee a new queue (a cycle writes nothing when it ran on synthetic
+     data -- no `FRED_API_KEY`, or a price fetch that came back empty; its run
+     progress message then starts `SYNTHETIC DATA` -- when the advisory step
+     failed, or when no BUY/SELL cleared the conviction floor; if the queue's
+     reference prices still look implausible next to the live quotes
      `review_equity_order` returns, say so and stop), so still apply the
      freshness hard stop below to the queue you then read.
    - **`off` or `shadow`** — the daemon is **not** the queue writer. That is

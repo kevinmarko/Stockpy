@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "2db545ec782e94ed59c27702f0be56c4e1f14a93",
+    "git_commit": "d8e53dfc7e65a358855fa099b584b1f573c5f09f",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2933,7 +2933,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 368,
+    "files_scanned": 369,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -3219,7 +3219,7 @@
       }
     },
     "form_b_getattr_literal": {
-      "total_reads": 293,
+      "total_reads": 294,
       "distinct_fields": 171,
       "counts": {
         "FMP_API_KEY": 13,
@@ -3250,6 +3250,7 @@
         "AI_CHAT_DEFAULT_PROVIDER": 2,
         "BARS_BACKFILL_DAYS": 2,
         "CLOSED_POSITION_RETENTION_DAYS": 2,
+        "DAEMON_AGENTIC_QUEUE_MODE": 2,
         "DB_MAX_OVERFLOW": 2,
         "DB_POOL_SIZE": 2,
         "FMP_FALLBACK_ENABLED": 2,
@@ -3285,7 +3286,6 @@
         "CNN_LSTM_PROCESS_POOL_WORKERS": 1,
         "CNN_LSTM_SUBPROCESS_ISOLATION_ENABLED": 1,
         "CNN_LSTM_SUBPROCESS_TIMEOUT_SECONDS": 1,
-        "DAEMON_AGENTIC_QUEUE_MODE": 1,
         "DATABASE_URL": 1,
         "DUAL_MOMENTUM_RISKY_ASSETS": 1,
         "DUAL_MOMENTUM_SAFE_ASSET": 1,
@@ -3470,12 +3470,12 @@
         },
         {
           "file": "scripts/step5_4_verify_cycle.py",
-          "line": 163,
+          "line": 167,
           "expr": "getattr(settings, key, None)"
         },
         {
           "file": "scripts/step5_4_verify_cycle.py",
-          "line": 271,
+          "line": 275,
           "expr": "getattr(settings, name)"
         }
       ]
