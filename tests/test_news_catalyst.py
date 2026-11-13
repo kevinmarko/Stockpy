@@ -1004,7 +1004,8 @@ class TestPreCompute:
         mock_client = MagicMock()
         with patch("settings.settings.FMP_API_KEY", "test_key"):
             with _patched_news_provider(mock_client):
-                sig.pre_compute(universe, ctx)
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    sig.pre_compute(universe, ctx)
         assert sig._news_scores == {}
 
 
@@ -1869,8 +1870,9 @@ class TestGetSymbolNewsCatalystDetails:
         ]
         with patch("signals.news_catalyst.fetch_company_headlines", return_value=headlines):
             with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
-                with patch("signals.news_catalyst.score_headlines", return_value=distributions):
-                    result = get_symbol_news_catalyst_details("AAPL")
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    with patch("signals.news_catalyst.score_headlines", return_value=distributions):
+                        result = get_symbol_news_catalyst_details("AAPL")
 
         assert result["provider_used"] == "fmp"
         assert len(result["headlines"]) == 2
@@ -1901,8 +1903,9 @@ class TestGetSymbolNewsCatalystDetails:
         ]
         with patch("signals.news_catalyst.fetch_company_headlines", return_value=headlines):
             with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
-                with patch("signals.news_catalyst.score_headlines", return_value=distributions):
-                    result = get_symbol_news_catalyst_details("AAPL", max_headlines=2)
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    with patch("signals.news_catalyst.score_headlines", return_value=distributions):
+                        result = get_symbol_news_catalyst_details("AAPL", max_headlines=2)
 
         titles = [h["title"] for h in result["headlines"]]
         assert titles == ["newest", "middle"]
@@ -1973,8 +1976,9 @@ class TestGetSymbolNewsCatalystDetails:
         distributions = [{"positive": 0.5, "neutral": 0.3, "negative": 0.2}]
         with patch("signals.news_catalyst.fetch_company_headlines", return_value=headlines):
             with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
-                with patch("signals.news_catalyst.score_headlines", return_value=distributions):
-                    result = get_symbol_news_catalyst_details("AAPL")
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    with patch("signals.news_catalyst.score_headlines", return_value=distributions):
+                        result = get_symbol_news_catalyst_details("AAPL")
         assert result["provider_used"] == "none"
 
 
@@ -2079,4 +2083,3 @@ print("COEXIST_OK")
             f"stdout:\n{proc.stdout[-1500:]}\nstderr:\n{proc.stderr[-1500:]}"
         )
         assert "COEXIST_OK" in proc.stdout
-

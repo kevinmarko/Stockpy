@@ -641,8 +641,11 @@ def get_symbol_news_catalyst_details(
         # Respect FINBERT_ENABLED -- MUST NOT call _get_finbert_pipeline()
         # unconditionally (that would ignore an explicit lexicon-only
         # override), matching _score_via_provider's own gate exactly.
-        pipeline = _get_finbert_pipeline() if _settings.FINBERT_ENABLED else None
-        distributions = score_headlines(headline_texts, pipeline=pipeline) if headline_texts else []
+        if headline_texts:
+            pipeline = _get_finbert_pipeline() if _settings.FINBERT_ENABLED else None
+            distributions = score_headlines(headline_texts, pipeline=pipeline)
+        else:
+            distributions = []
 
         headline_out: List[Dict[str, Any]] = []
         source_counts: Dict[str, int] = {}
