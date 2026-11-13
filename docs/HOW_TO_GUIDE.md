@@ -1620,6 +1620,13 @@ the thesis horizon), and flags anything unsafe, such as an order that executed
 without your tap. The Pending approvals card shows the same verdict. **Ready for
 live** is only a recommendation: you switch to live yourself, in settings.
 
+**Starting the burn-in** is one command on the Mac, from the repo folder:
+`./scripts/install_agentic_timers.command --burnin`. Type `REVIEW` when asked.
+It puts the agents in review mode with a $50 per-order cap (review sends
+nothing to your phone), turns on both timers, and lists anything that would
+still stop the agents from running. `--check` shows that list without changing
+anything; `--uninstall` turns both timers off.
+
 ## In-App Help & Glossary
 
 The web app's **Help & Glossary** screen (`/help`) gives instant access to every concept in

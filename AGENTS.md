@@ -438,7 +438,8 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   decline but never approve); the skill picks the path per order from `review_equity_order`'s
   `customer_approval_required`. Only `.claude/agents/rh-trader.md` may list order-power tools.
   `/rh-agentic-cycle` runs the four `rh-*` agents unattended (`execution/agentic_cycle.py` gates it;
-  optional launchd timer `scripts/com.investyo.rh-agentic-cycle.plist`, never auto-installed): it
+  optional launchd timer `scripts/com.investyo.rh-agentic-cycle.plist`, never auto-installed;
+  `scripts/install_agentic_timers.command [--burnin]` installs both agentic timers): it
   sends orders only to the phone, never asks in chat and never declines (`docs/RUNBOOK.md`).
   A fifth, read-only agent (`rh-reviewer`, `/rh-agentic-review`, `execution/agentic_review.py`) audits
   the burn-in daily; its READY verdict is advice, and going live stays the operator's settings change.
