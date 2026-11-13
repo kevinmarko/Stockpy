@@ -27,7 +27,7 @@ from execution.broker_base import (
     OrderType,
     PositionSnapshot,
 )
-from execution.risk_gate import HaltState, PreTradeRiskGate, RiskContext
+from execution.risk_gate import ACCOUNT_LEVEL_CHECKS, HaltState, PreTradeRiskGate, RiskContext
 from settings import settings
 
 
@@ -903,3 +903,44 @@ class TestRunAll:
         valid_ctx.timestamp = _rth_timestamp()
         passed, results = gate.run_all(_buy(), valid_ctx)
         assert passed  # Would fail if rate was charged for blocked orders
+
+    # -- run_all(skip=...) ---------------------------------------------------
+
+    def _hot_context(self) -> RiskContext:
+        """Valid context except portfolio heat (7%) is over a 6% cap."""
+        ctx = self._valid_context()
+        ctx.open_positions = [_position("MSFT", unrealized_pl=-7_000.0)]
+        return ctx
+
+    def test_skip_portfolio_heat_passes_and_does_not_run_it(self):
+        gate = PreTradeRiskGate(max_portfolio_heat=0.06, enforce_market_hours=True)
+        passed, results = gate.run_all(_buy(), self._hot_context(), skip={"portfolio_heat"})
+        assert passed
+        assert "portfolio_heat" not in [r.check_name for r in results]
+        assert len(results) == 10
+
+    def test_default_run_all_still_blocks_on_heat(self):
+        gate = PreTradeRiskGate(max_portfolio_heat=0.06, enforce_market_hours=True)
+        passed, results = gate.run_all(_buy(), self._hot_context())
+        assert not passed
+        assert results[-1].check_name == "portfolio_heat"
+
+    def test_unknown_skip_name_raises(self):
+        gate = PreTradeRiskGate(enforce_market_hours=True)
+        with pytest.raises(ValueError):
+            gate.run_all(_buy(), self._valid_context(), skip={"not_a_check"})
+
+    def test_run_order_unchanged(self):
+        gate = PreTradeRiskGate(enforce_market_hours=True)
+        passed, results = gate.run_all(_buy(), self._valid_context())
+        assert passed
+        assert results[0].check_name == "kill_switch_halt"
+        assert results[-1].check_name == "max_order_rate"
+
+    def test_skipping_all_account_level_checks_keeps_the_rest(self):
+        gate = PreTradeRiskGate(max_portfolio_heat=0.06, enforce_market_hours=True)
+        passed, results = gate.run_all(_buy(), self._hot_context(), skip=ACCOUNT_LEVEL_CHECKS)
+        assert passed
+        names = {r.check_name for r in results}
+        assert not names & ACCOUNT_LEVEL_CHECKS
+        assert {"kill_switch_halt", "macro_kill_switch", "max_order_rate"} <= names

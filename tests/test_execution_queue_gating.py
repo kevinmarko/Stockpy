@@ -156,7 +156,7 @@ def test_gate_blocked_flips_allow_place_false(monkeypatch):
     """Condition 2: gate blocks → allow_place False in live mode."""
 
     class _BlockingGate:
-        def run_all(self, intent, context):
+        def run_all(self, intent, context, **_kw):
             from execution.risk_gate import RiskCheckResult
             return False, [RiskCheckResult("max_position_size", False, "too big")]
 
@@ -237,7 +237,7 @@ def test_gate_intent_fails_closed_on_exception():
     """A gate whose run_all raises → gate_intent returns (False, [gate_error...])."""
 
     class _RaisingGate:
-        def run_all(self, intent, context):
+        def run_all(self, intent, context, **_kw):
             raise RuntimeError("boom")
 
     intent = OrderIntent(
@@ -254,7 +254,7 @@ def test_raising_gate_in_build_yields_no_placeable(monkeypatch):
     """A raising gate wired through build_execution_queue → no placeable intent."""
 
     class _RaisingGate:
-        def run_all(self, intent, context):
+        def run_all(self, intent, context, **_kw):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(queue_builder, "PreTradeRiskGate", _RaisingGate)
