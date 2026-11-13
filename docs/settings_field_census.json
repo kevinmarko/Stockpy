@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "c4d50abcc0d1b81c7483724fb2cf1478da989bbe",
+    "git_commit": "00fba602cde0fbc893b2ca335c1313eed8d02fba",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2961,7 +2961,7 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 714,
+      "total_reads": 717,
       "distinct_fields": 252,
       "counts": {
         "OUTPUT_DIR": 102,
@@ -3005,8 +3005,10 @@
         "PROMPT_REGISTRY_SIGNING_KEY": 4,
         "RH_LOGIN_DEADLINE_SECONDS": 4,
         "SIZING_CAP_ALERT_THRESHOLD_PCT": 4,
+        "SIZING_CAP_AUDIT_ENABLED": 4,
         "SIZING_CAP_ESCALATION_FACTOR": 4,
         "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES": 4,
+        "SYMBOL_RATING_ENABLED": 4,
         "ALERT_EMAIL_FROM": 3,
         "ALERT_EMAIL_TO": 3,
         "ALERT_NTFY_TOPIC": 3,
@@ -3030,8 +3032,6 @@
         "SECTOR_SELECTION_ENABLED": 3,
         "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE": 3,
         "SENTIMENT_SOURCES": 3,
-        "SIZING_CAP_AUDIT_ENABLED": 3,
-        "SYMBOL_RATING_ENABLED": 3,
         "WATCHLIST": 3,
         "WATCH_RULES_FILE": 3,
         "WEEKLY_DIGEST_ENABLED": 3,
@@ -3092,6 +3092,7 @@
         "ORCHESTRATOR_EXTENDED_HOURS_ONLY": 2,
         "ORCHESTRATOR_INTERVAL_SECONDS": 2,
         "PILOTS_API_PORT": 2,
+        "PIT_CAPTURE_ENABLED": 2,
         "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE": 2,
         "PROMPT_REGISTRY_BACKEND": 2,
         "PROMPT_REGISTRY_PINS": 2,
@@ -3163,7 +3164,6 @@
         "PIPELINE_STALL_ALERT_ENABLED": 1,
         "PIPELINE_STALL_ALERT_SECONDS": 1,
         "PIPELINE_STEP_TIMEOUT_SECONDS": 1,
-        "PIT_CAPTURE_ENABLED": 1,
         "PROMPT_CACHE_DIR": 1,
         "PROMPT_CACHE_KEEP_VERSIONS": 1,
         "PROMPT_REGISTRY_PUBLISH_TOKEN": 1,

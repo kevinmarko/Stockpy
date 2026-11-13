@@ -401,11 +401,11 @@ class TestGenerateForecastTickerThreading:
         monkeypatch.setattr(forecasting_engine, "PROPHET_AVAILABLE", True)
         captured = {}
 
-        def _fake_lstm(history_df, horizons=(10, 30, 60, 90), days_forward=None, ticker=None):
+        def _fake_lstm(history_df, horizons=(10, 30, 60, 90), days_forward=None, ticker=None, **_kw):
             captured["cnn_lstm_ticker"] = ticker
             return {h: 0.0 for h in horizons}
 
-        def _fake_prophet(history_series, days_forward, ticker=None):
+        def _fake_prophet(history_series, days_forward, ticker=None, **_kw):
             captured["prophet_ticker"] = ticker
             last = float(history_series.iloc[-1])
             return last, last, last
@@ -425,11 +425,11 @@ class TestGenerateForecastTickerThreading:
         monkeypatch.setattr(forecasting_engine, "PROPHET_AVAILABLE", True)
         captured = {}
 
-        def _fake_lstm(history_df, horizons=(10, 30, 60, 90), days_forward=None, ticker=None):
+        def _fake_lstm(history_df, horizons=(10, 30, 60, 90), days_forward=None, ticker=None, **_kw):
             captured["cnn_lstm_ticker"] = ticker
             return {h: 0.0 for h in horizons}
 
-        def _fake_prophet(history_series, days_forward, ticker=None):
+        def _fake_prophet(history_series, days_forward, ticker=None, **_kw):
             captured["prophet_ticker"] = ticker
             last = float(history_series.iloc[-1])
             return last, last, last

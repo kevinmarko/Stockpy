@@ -659,6 +659,46 @@ def _isolate_symbol_rating_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path
     monkeypatch.setattr(_srs, "resolve_database_url", lambda: isolated_url)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_cap_audit_db_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Redirect every bare ``CapAuditStore()`` (no explicit ``db_url``) to a
+    private per-test temp file instead of the operator's real
+    ``quant_platform.db`` under ``settings.LOCAL_DATA_ROOT``.
+
+    Same risk class as ``_isolate_symbol_rating_db_in_tests`` above:
+    ``settings.SIZING_CAP_AUDIT_ENABLED`` defaults to True, ``StrategyEvalStep``
+    writes ``sizing_cap_events`` rows on every real-data cycle, and
+    ``StrategyEngine.cap_audit_store`` builds a bare write-mode store too.
+    Before this fixture every test that drove ``StrategyEvalStep`` wrote
+    fixture rows into the shared DB. The synthetic-data gate now stops a Mock
+    cycle from writing them; this fixture covers real-engine tests and
+    opted-in Mock tests. A per-test temp FILE, for the reason the
+    symbol-rating fixture gives. A test passing an explicit ``db_url`` is
+    unaffected.
+    """
+    import sizing.cap_audit_store as _cas
+
+    isolated_url = f"sqlite:///{tmp_path / 'isolated_cap_audit.db'}"
+    monkeypatch.setattr(_cas, "resolve_database_url", lambda: isolated_url)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pit_feature_store_in_tests(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Point the default ``PITFeatureStore()`` cache directory at a per-test
+    temp dir instead of ``settings.LOCAL_DATA_ROOT / "ml_feature_cache"``.
+
+    ``settings.PIT_CAPTURE_ENABLED`` defaults to True, and ``StrategyEvalStep``
+    writes ``features_<YYYYMMDD>.parquet`` there (one file per day, so a test
+    overwrote the operator's real snapshot for today). ``ml.training_data``
+    reads the same default directory. Tests that seed their own cache keep
+    patching ``ml.data.store._CACHE_DIR`` or pass ``cache_dir=`` (both still
+    win: a test's own monkeypatch runs after this one).
+    """
+    import ml.data.store as _pit_store
+
+    monkeypatch.setattr(_pit_store, "_CACHE_DIR", tmp_path / "isolated_pit_feature_cache")
+
+
 # Set to "1" ONLY in the dedicated child process that
 # tests/test_rag_index.py::test_real_faiss_in_subprocess spawns to run the
 # real-faiss tests. See _block_real_faiss_in_pytest_process below.

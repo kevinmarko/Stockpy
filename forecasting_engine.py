@@ -517,7 +517,8 @@ class ForecastingEngine:
             return float('nan')
         return self.forecast_from_hw_fit(self.run_holt_winters_fit(history), days_forward, history)
 
-    def run_prophet_forecast(self, history_series: pd.Series, days_forward: int, ticker: Optional[str] = None) -> Tuple[float, float, float]:
+    def run_prophet_forecast(self, history_series: pd.Series, days_forward: int, ticker: Optional[str] = None,
+                             *, persist: bool = True) -> Tuple[float, float, float]:
         """
         Deploys a Facebook Prophet implementation to generate 30-day baseline price predictions,
         extracting the yhat, yhat_lower, and yhat_upper confidence intervals.
@@ -528,6 +529,10 @@ class ForecastingEngine:
         on the loaded model -- Prophet's Stan MAP fit is expensive and was previously run
         from scratch on every call. Any load/save failure degrades to the original
         fit-every-call path (never raises -- CONSTRAINT #6).
+
+        ``persist=False`` (a synthetic-data cycle, ``pipeline/synthetic_gate.py``)
+        still LOADS a fresh cached model but never SAVES one, so a model fitted
+        on synthetic bars is never reused by a later real cycle.
         """
         if not PROPHET_AVAILABLE:
             last_price = float(history_series.iloc[-1])
@@ -577,7 +582,7 @@ class ForecastingEngine:
                 model = Prophet(daily_seasonality=False, weekly_seasonality=True, yearly_seasonality=False)
                 model.fit(df_prophet)
 
-                if persistence_enabled and artifact is not None:
+                if persistence_enabled and persist and artifact is not None:
                     try:
                         import pickle
                         with open(artifact, "wb") as f:
@@ -873,6 +878,8 @@ class ForecastingEngine:
         horizons: Tuple[int, ...] = (10, 30, 60, 90),
         days_forward: Optional[int] = None,
         ticker: Optional[str] = None,
+        *,
+        persist: bool = True,
     ) -> Union[float, Dict[int, float]]:
         """Hybrid CNN-LSTM multi-horizon price forecaster.
 
@@ -897,7 +904,9 @@ class ForecastingEngine:
         on the loaded model -- the single-horizon path (``days_forward`` set) is
         intentionally left out of scope for persistence. Any load/inference failure
         (corrupt artifact, horizon-count mismatch, insufficient rows) degrades to a
-        fresh fit (never raises -- CONSTRAINT #6).
+        fresh fit (never raises -- CONSTRAINT #6). ``persist=False`` (a
+        synthetic-data cycle) keeps the load but skips every save, including
+        the subprocess worker's ``.keras`` save.
 
         Future direction (Stage 4): move to a single cross-ticker model.
         Per-ticker retraining is acceptable for ~4 tickers but will not scale to
@@ -1065,7 +1074,7 @@ class ForecastingEngine:
             if isolation_enabled:
                 from cnn_lstm_process_pool import run_in_subprocess
                 from cnn_lstm_worker import fit_predict_cnn_lstm
-                save_path = keras_path if persistence_enabled else None
+                save_path = keras_path if (persistence_enabled and persist) else None
                 result = run_in_subprocess(
                     fit_predict_cnn_lstm,
                     (X_seq, Y_seq, last_window, len(horizons), max(horizons), save_path),
@@ -1110,7 +1119,7 @@ class ForecastingEngine:
                 inv = scaler_y.inverse_transform([[float(pred_scaled[i])]])[0][0]
                 out[h] = float(inv)
 
-            if persistence_enabled and keras_path is not None:
+            if persistence_enabled and persist and keras_path is not None:
                 try:
                     import pickle
                     from forecasting.model_persistence import touch
@@ -1376,7 +1385,7 @@ class ForecastingEngine:
     # ORCHESTRATOR
     # =========================================================================
 
-    def generate_forecast(self, row: Union[pd.Series, Mapping[str, Any]], current_price: float, history_series: Optional[pd.Series] = None, history_df: Optional[pd.DataFrame] = None, precomputed_garch_annual_vol: Optional[float] = None, precomputed_garch_term_structure: Optional[Dict[int, float]] = None) -> Dict[str, Any]:
+    def generate_forecast(self, row: Union[pd.Series, Mapping[str, Any]], current_price: float, history_series: Optional[pd.Series] = None, history_df: Optional[pd.DataFrame] = None, precomputed_garch_annual_vol: Optional[float] = None, precomputed_garch_term_structure: Optional[Dict[int, float]] = None, *, persist: bool = True) -> Dict[str, Any]:
         """
         Generates forecasts and maps them to SCHEMA KEYS:
         Forecast_10, Forecast_30, Forecast_60, Forecast_90.
@@ -1397,6 +1406,14 @@ class ForecastingEngine:
         estimate cannot supply a genuine per-horizon answer, so when no term
         structure is supplied the engine fits one fresh from ``history_df``
         instead of naively broadcasting the scalar via ``sigma*sqrt(T)``.
+
+        ``persist=False`` (a synthetic-data cycle, ``pipeline/synthetic_gate.py``)
+        leaves no durable trace: no ``tracker.update_actuals`` (it would stamp
+        the synthetic price onto real past forecasts as their realized
+        actual), no ``tracker.record_forecasts`` and no model-artifact save.
+        The tracker READS (naive-gate stats, skill weights) and cached-model
+        loads still run, so the forecast is computed exactly as on a real
+        cycle, except that the reads do not see this cycle's own actuals.
         """
         results = {
             'Target_Days': 60,
@@ -1536,7 +1553,8 @@ class ForecastingEngine:
             lstm_multi: Dict[int, float] = {h: 0.0 for h in horizons}
             if TENSORFLOW_AVAILABLE and history_df is not None and len(history_df) >= 70:
                 lstm_multi = self.run_cnn_lstm_forecast(
-                    history_df, horizons=tuple(horizons), ticker=persist_ticker
+                    history_df, horizons=tuple(horizons), ticker=persist_ticker,
+                    persist=persist,
                 )
 
             # Run Facebook Prophet ONCE (30-day only; it is expensive) and stash its
@@ -1547,7 +1565,8 @@ class ForecastingEngine:
             prophet_30_upper = 0.0
             if PROPHET_AVAILABLE and history_series is not None and len(history_series) > 30:
                 prophet_yhat_30, prophet_30_lower, prophet_30_upper = self.run_prophet_forecast(
-                    history_series, days_forward=30, ticker=persist_ticker
+                    history_series, days_forward=30, ticker=persist_ticker,
+                    persist=persist,
                 )
 
             # Step 2a: update actuals for all horizons BEFORE generating new forecasts.
@@ -1559,7 +1578,7 @@ class ForecastingEngine:
             # consumers (pilots/observability.py's per-symbol error/reliability
             # views) depend on actual_price being filled in regardless of whether
             # skill-weighted blending is enabled.
-            if self._tracker is not None:
+            if self._tracker is not None and persist:
                 for h in horizons:
                     try:
                         self._tracker.update_actuals(symbol, h, current_price, now_utc)
@@ -1728,7 +1747,7 @@ class ForecastingEngine:
                         and math.isfinite(gated_price) and gated_price > 0):
                     recordable_forecasts[MODEL_GATED_BLEND] = float(gated_price)
                     gate_meta = {MODEL_GATED_BLEND: (gate_fell_back, gate_decision["admitted"])}
-                if self._tracker is not None and recordable_forecasts:
+                if self._tracker is not None and persist and recordable_forecasts:
                     try:
                         record_kwargs: Dict[str, Any] = {}
                         if gate_meta is not None:

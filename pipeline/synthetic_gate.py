@@ -20,16 +20,30 @@ How it works
   ``StateSnapshotStep`` (``state_snapshot.json`` + ``history/``, the HTML
   dashboards, the printed payload) and the freshness marker
   ``last_data_refresh.txt``.
+* ``RunPipelineStep`` builds its own inner ``RunContext`` in
+  ``main_orchestrator.run_pipeline``; it hands the flag over with
+  :func:`propagate_synthetic_flag` (silently: the outer cycle already logged
+  and alerted), so the inner writers skip too: the forecast ledger
+  (``update_actuals``/``record_forecasts``) and the model-artifact cache
+  (``ForecastingStep``, via ``generate_forecast(persist=False)``), the
+  ``macro_history`` top-up and the warm HMM fit (``MacroStep``), the PIT
+  feature snapshot, ``dead_letter.json``, the cap-audit and symbol-rating
+  rows and the sizing-cap alert (``StrategyEvalStep``). ``AdvisoryOverlayStep``
+  passes ``persist_forecast=False`` to ``engine.advisory.evaluate`` so its
+  own forecast ledger rows are skipped as well.
 * The run is still recorded as ``succeeded`` (the ``GET /status`` contract is
   frozen). ``main_orchestrator._main_body_impl`` puts
   :func:`synthetic_progress_message` in the run's progress ``message`` (so
   ``RunRecord.progress["message"]`` and ``GET /run/{id}/status`` say why
   nothing was written) and ``_build_daily_summary`` adds a warning line.
 
-Deliberately NOT gated yet (follow-up): the inner durable writers that run
-inside ``RunPipelineStep`` (the always-attached forecast ledger, the
-``dead_letter.json`` rewrite, symbol-rating and cap-audit rows). See
-``.claude/synthetic_data_gate_keyless_walkthrough.md``.
+Deliberately kept on a synthetic cycle: archives of REAL vendor data that do
+not depend on the cycle's synthetic inputs (FMP analyst/earnings/insider/
+sector rows, fundamentals and bars fetched through
+``data.market_data.get_provider()``, news/social sentiment documents and
+FinBERT scores, sector-selection correlations). A real cycle would write the
+same rows. The full inventory, with the reason for each, is in
+``.claude/synthetic_data_gate_inner_writers_walkthrough.md``.
 
 This module is a dependency-light leaf (stdlib only at import time) so the MCP
 server and the verify helper can import its constants cheaply.
@@ -82,7 +96,9 @@ _REMEDY_TEXT = {
 #: the alert and the docs say the same thing.
 SKIPPED_OUTPUTS = (
     "execution queue, advisory source, watch state, pushes, paper orders, "
-    "state snapshot, HTML dashboards or data-freshness marker"
+    "state snapshot, HTML dashboards, data-freshness marker, forecast ledger, "
+    "forecast model cache, macro history, PIT feature snapshot, dead-letter "
+    "report, cap-audit or symbol-rating rows"
 )
 
 
@@ -143,6 +159,20 @@ def send_synthetic_cycle_alert(reason: Optional[str]) -> None:
         )
     except Exception as exc:  # noqa: BLE001 - an alert failure never fails the cycle
         logger.warning("Synthetic-data alert could not be sent (non-critical): %s", exc)
+
+
+def propagate_synthetic_flag(ctx: Any, reason: Optional[str]) -> None:
+    """Mark an INNER context synthetic without logging or alerting again.
+
+    ``main_orchestrator.run_pipeline`` builds its own ``RunContext`` for the
+    inner steps (``MacroStep`` ... ``StrategyEvalStep``); the outer cycle has
+    already called :func:`mark_cycle_synthetic`, so this only copies the flag
+    and reason across. Deliberately NOT wrapped, for the same fail-closed
+    reason as :func:`mark_cycle_synthetic`.
+    """
+    extras = ctx.context_extras
+    extras[SYNTHETIC_FLAG_KEY] = True
+    extras[SYNTHETIC_REASON_KEY] = reason
 
 
 def mark_cycle_synthetic(ctx: Any, reason: str) -> None:
