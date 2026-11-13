@@ -44,7 +44,7 @@ const NAV_TARGETS: { label: string; path: string }[] = [
   { label: "Activity Feed", path: "/activity" },
   { label: "Agentic Trading", path: "/agentic" },
   { label: "Commands", path: "/commands" },
-  { label: "Forecast Viewer", path: "/forecast" },
+  { label: "Forecasts", path: "/forecast" },
   { label: "Signal Breakdown", path: "/signals" },
   { label: "Observability / Mission Control", path: "/observability" },
   { label: "Console / Terminal", path: "/console" },

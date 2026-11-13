@@ -9,7 +9,9 @@ Citations are `path:line` at that commit. Numbers marked "arithmetic" are derive
 The operator answered "go with your recommendations" on 2026-11-13. Applied: **Q1** F6 before F5;
 every F6 question takes the "(proposed)" option; **Q10** new flags OK, each defaulting off. **F6a is built**
 (branch `forecasting-rebuild-f6`; walkthrough `.claude/forecasting_rebuild_f6_walkthrough.md`), adding no
-setting. F6b (webapp screen), F5-1..F5-3 and Q2/Q7/Q8 plus the flip decisions in Q6/Q9 remain open.
+setting; merged as #1144. **F6b is built** (branch `forecasting-rebuild-f6b`; walkthrough
+`.claude/forecasting_rebuild_f6b_walkthrough.md`): the webapp Forecasts screen on the F6a routes, no backend change.
+F5-1..F5-3 and Q2/Q7/Q8 plus the flip decisions in Q6/Q9 remain open.
 Deviation found while re-verifying against `origin/main` @ `d8e53dfc`: the snapshot did not carry the
 point `Forecast_{h}` values, so F6a adds them (with `_is_fallback`/`_gated_naive`) to `signals[]`.
 

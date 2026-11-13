@@ -173,7 +173,14 @@ import type { StrategyReportCardSnapshot,
   SignalImportance,
   SignalImportanceRow,
   SignalModuleScore,
-  ForecastResult,
+  ForecastsView,
+  ForecastSummary,
+  ForecastRow,
+  ForecastHorizonCell,
+  ForecastImpact,
+  ForecastSummaryHorizon,
+  ForecastSkillRow,
+  ForecastGateSettings,
   SentimentDynamics,
   SentimentHistory,
   SizingCapAuditTrail,
@@ -11228,33 +11235,13 @@ export const mockApi = {
     return delay<SentimentHistory>({ symbol: sym, points, reason: null });
   },
 
-  async getForecastResult(symbol: string): Promise<ForecastResult> {
-    if (symbol.toUpperCase() === "ZZZZ") throw notFoundSymbol(symbol); // 404 branch
-    const base = 100 + symbol.charCodeAt(0);
-    const mid10 = base * 1.01;
-    const mid30 = base * 1.03;
-    const mid60 = base * 1.05;
-    return delay<ForecastResult>({
-      Forecast_10: round2(mid10),
-      Forecast_30: round2(mid30),
-      Forecast_60: round2(mid60),
-      // honest null: the h=90 fit didn't converge this run
-      Forecast_90: null,
-      ARIMA: round2(base * 1.028),
-      MC_Lower: round2(base * 0.94),
-      MC_Upper: round2(base * 1.12),
-      // Confidence bands WIDEN with horizon (±2% @10d → ±5% @30d → ±8% @60d)
-      // so the cone visibly fans out. h=90 has no band (its mid is null).
-      Forecast_10_Lower: round2(mid10 * 0.98),
-      Forecast_10_Upper: round2(mid10 * 1.02),
-      Forecast_30_Lower: round2(mid30 * 0.95),
-      Forecast_30_Upper: round2(mid30 * 1.05),
-      Forecast_60_Lower: round2(mid60 * 0.92),
-      Forecast_60_Upper: round2(mid60 * 1.08),
-      // null horizon → null band (never a fabricated 0 — CONSTRAINT #4)
-      Forecast_90_Lower: null,
-      Forecast_90_Upper: null,
-    });
+  // ---- Forecasts screen (forecasting rebuild F6) ----
+  async getForecasts(): Promise<ForecastsView> {
+    return delay(mockForecastsView());
+  },
+
+  async getForecastSummary(ticker: string): Promise<ForecastSummary> {
+    return delay(mockForecastSummary(ticker));
   },
 
   // ---- Agentic Trading tab ----
@@ -12419,6 +12406,323 @@ export function mockAiDisagreementsEmpty(): AiDisagreementsResponse {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+// ---- Forecasts screen fixtures (forecasting rebuild F6) ---------------------
+// Mirrors pilots/forecasts.py's shapes and its verbatim reason strings. One
+// symbol per honesty branch, so the screen's null handling is exercised:
+//   AAPL — fully populated; gate admitted two models and rejected two with reasons;
+//          forecast moved the tier (BUY vs HOLD without it); sell-zone top from the forecast.
+//   MSFT — the gate admitted nothing: 30d/60d published naive (`gated_naive`), the
+//          gate evaluation falls back to naive; no advisory rule fired ([]).
+//   JNJ  — 90d is a fallback forecast with no band; alignment points not recorded
+//          (null); no advisory recommendation (null); "Sell Now" -> no sell zone (null);
+//          pre-F3 ledger (no recorded gate decision).
+//   AGNC — 60d/90d not recorded at all; Case A exit fired; the ledger read errored.
+//   any other symbol — not in the snapshot; ledger cold start (empty, with reasons).
+//   ZZZZ — the ledger reader is unavailable (empty `horizons`, reason).
+// Every row carries z/err/err_n = null with the backend's z_reason (F5 not built).
+const MOCK_Z_REASON = "forecast z is not measured yet (forecasting rebuild F5 is not built)";
+const MOCK_TIER_NOTE =
+  "approximate: score minus the forecast_alignment contribution, cut at the " +
+  "StrategyEngine tiers; the choppy-market downgrade and the macro kill-switch " +
+  "overlay are not in the snapshot";
+const MOCK_FORECAST_GATE: ForecastGateSettings = {
+  // settings.py field defaults (gate in shadow; mirrors getThresholds above).
+  enabled: false,
+  min_improvement: 0.005,
+  min_obs: 60,
+  window_days: 180,
+};
+
+function mockHorizon(
+  forecast: number | null,
+  band: number | null,
+  opts: { fallback?: boolean | null; naive?: boolean | null } = {},
+): ForecastHorizonCell {
+  return {
+    forecast,
+    lower: forecast != null && band != null ? round2(forecast * (1 - band)) : null,
+    upper: forecast != null && band != null ? round2(forecast * (1 + band)) : null,
+    is_fallback: opts.fallback === undefined ? false : opts.fallback,
+    gated_naive: opts.naive === undefined ? false : opts.naive,
+    z: null,
+    z_reason: MOCK_Z_REASON,
+    err: null,
+    err_n: null,
+  };
+}
+
+function mockImpact(p: Partial<ForecastImpact>): ForecastImpact {
+  return {
+    alignment_points: null,
+    score: null,
+    action: null,
+    action_tier: null,
+    action_tier_without_forecast: null,
+    tier_changed_by_forecast: null,
+    tier_note: MOCK_TIER_NOTE,
+    advisory_action: null,
+    advisory_effects: null,
+    sell_range: null,
+    sell_hi_from_forecast: null,
+    ...p,
+  };
+}
+
+export function mockForecastsView(): ForecastsView {
+  const rows: ForecastRow[] = [
+    {
+      symbol: "AAPL",
+      price: 190.0,
+      held: true,
+      horizons: {
+        "10": mockHorizon(192.4, 0.03),
+        "30": mockHorizon(205.3, 0.06),
+        "60": mockHorizon(209.8, 0.09),
+        "90": mockHorizon(214.1, 0.12),
+      },
+      impact: mockImpact({
+        alignment_points: 6.0,
+        score: 58.0,
+        action: "BUY",
+        action_tier: "BUY",
+        action_tier_without_forecast: "HOLD",
+        tier_changed_by_forecast: true,
+        advisory_action: "BUY",
+        advisory_effects: ["bullish_conviction_boost"],
+        // LO = 190 + 1.5*4 = 196; ATR leg HI = 2*196 - 190 = 202; HI 205.30 > 202 -> forecast leg.
+        sell_range: "Sell Zone: $196.00 - $205.30 | Stop @ $182.00",
+        sell_hi_from_forecast: true,
+      }),
+    },
+    {
+      symbol: "MSFT",
+      price: 410.0,
+      held: false,
+      horizons: {
+        "10": mockHorizon(412.6, 0.025),
+        // The gate admitted no model: the published forecast is naive (= price).
+        "30": mockHorizon(410.0, 0.05, { naive: true, fallback: true }),
+        "60": mockHorizon(410.0, 0.07, { naive: true, fallback: true }),
+        "90": mockHorizon(418.2, 0.1),
+      },
+      impact: mockImpact({
+        alignment_points: 0.0,
+        score: 47.0,
+        action: "HOLD",
+        action_tier: "HOLD",
+        action_tier_without_forecast: "HOLD",
+        tier_changed_by_forecast: false,
+        advisory_action: "HOLD",
+        advisory_effects: [],
+        // LO = 410 + 1.5*8 = 422; ATR leg = 434 = HI -> not from the forecast.
+        sell_range: "Sell Zone: $422.00 - $434.00 | Stop @ $394.00",
+        sell_hi_from_forecast: false,
+      }),
+    },
+    {
+      symbol: "JNJ",
+      price: 152.5,
+      held: true,
+      horizons: {
+        "10": mockHorizon(153.1, 0.02),
+        "30": mockHorizon(154.0, 0.04),
+        "60": mockHorizon(155.2, 0.06),
+        // Fallback forecast with no MC band recorded at 90d.
+        "90": mockHorizon(152.5, null, { fallback: true }),
+      },
+      impact: mockImpact({
+        alignment_points: null,
+        score: 41.0,
+        action: "HOLD",
+        action_tier: "HOLD",
+        advisory_action: null,
+        advisory_effects: null,
+        sell_range: "Sell Now",
+        sell_hi_from_forecast: null,
+      }),
+    },
+    {
+      symbol: "AGNC",
+      price: 9.42,
+      held: true,
+      horizons: {
+        "10": mockHorizon(9.31, 0.04),
+        "30": mockHorizon(9.05, 0.08),
+        // Not recorded on this snapshot at all (null flags too, not false).
+        "60": mockHorizon(null, null, { fallback: null, naive: null }),
+        "90": mockHorizon(null, null, { fallback: null, naive: null }),
+      },
+      impact: mockImpact({
+        alignment_points: -4.0,
+        score: 31.0,
+        action: "RISK REDUCE",
+        action_tier: "RISK REDUCE",
+        action_tier_without_forecast: "HOLD",
+        tier_changed_by_forecast: true,
+        advisory_action: "SELL",
+        advisory_effects: ["case_a_exit"],
+        sell_range: null,
+        sell_hi_from_forecast: null,
+      }),
+    },
+  ];
+  return {
+    as_of: new Date(Date.now() - 5_400_000).toISOString(),
+    source: "state_snapshot.json",
+    gate: { ...MOCK_FORECAST_GATE },
+    z: null,
+    horizons: [10, 30, 60, 90],
+    rows: [...rows].sort((a, b) => a.symbol.localeCompare(b.symbol)),
+    reason: null,
+  };
+}
+
+const MOCK_EVAL_NOTE =
+  "what the gate would decide now on matured outcomes, with every model that has stats as a candidate";
+
+function mockSkill(
+  model: string,
+  n: number,
+  err: number,
+  naiveErr: number,
+  beat: number,
+  p: number | null,
+  hit: number | null,
+): ForecastSkillRow {
+  const wins = Math.round(n * beat);
+  const ties = 0;
+  return {
+    model,
+    n,
+    median_abs_log_error: err,
+    naive_median_abs_log_error: naiveErr,
+    pct_beating_naive: wins / n,
+    wins,
+    losses: n - wins - ties,
+    ties,
+    sign_test_p: p,
+    direction_hit_rate: hit,
+    direction_n: hit == null ? 0 : n - 3,
+  };
+}
+
+function mockSummaryHorizon(
+  kind: "populated" | "naive" | "preF3" | "error" | "cold",
+  h: number,
+  asOf: Date,
+): ForecastSummaryHorizon {
+  const published = MOCK_FORECAST_GATE.enabled ? "gated_blend" : "blend";
+  const day = new Date(asOf.getTime() - 86_400_000);
+  const lastDecision = (admitted: string[], fallback: boolean) => ({
+    forecast_day: day.toISOString().slice(0, 10),
+    forecast_ts: day.toISOString(),
+    fallback_to_naive: fallback,
+    admitted,
+  });
+  const scale = h / 30;
+  if (kind === "error") {
+    return {
+      published_model: published,
+      skill: [],
+      skill_reason: "error",
+      gate: { last_decision: null, evaluation: null, evaluation_note: MOCK_EVAL_NOTE, reason: "error" },
+      mc_coverage: { n: 0, empirical: null, nominal: null, reason: "error" },
+    };
+  }
+  if (kind === "cold" || (kind === "populated" && h === 90)) {
+    // h=90 on AAPL: the 180-day window cannot yet hold matured 90-day outcomes.
+    return {
+      published_model: published,
+      skill: [],
+      skill_reason: "no completed forecasts in window",
+      gate: {
+        last_decision: kind === "cold" ? null : lastDecision([], true),
+        evaluation: { admitted: [], rejected: {}, fallback_to_naive: true },
+        evaluation_note: MOCK_EVAL_NOTE,
+        reason: "no completed forecasts in window",
+      },
+      mc_coverage: { n: 0, empirical: null, nominal: 0.9, reason: "insufficient_history (n=0 < min_obs=5)" },
+    };
+  }
+  if (kind === "naive") {
+    return {
+      published_model: published,
+      skill: [
+        mockSkill("arima", 72, round2(0.031 * scale * 1000) / 1000, round2(0.028 * scale * 1000) / 1000, 0.42, 0.21, 0.49),
+        mockSkill("blend", 72, round2(0.029 * scale * 1000) / 1000, round2(0.028 * scale * 1000) / 1000, 0.47, 0.72, 0.51),
+        mockSkill("monte_carlo", 72, round2(0.034 * scale * 1000) / 1000, round2(0.028 * scale * 1000) / 1000, 0.38, 0.05, null),
+      ],
+      skill_reason: null,
+      gate: {
+        last_decision: lastDecision([], true),
+        evaluation: {
+          admitted: [],
+          rejected: {
+            arima: "does not beat naive by the required margin",
+            blend: "does not beat naive by the required margin",
+            monte_carlo: "does not beat naive by the required margin",
+          },
+          fallback_to_naive: true,
+        },
+        evaluation_note: MOCK_EVAL_NOTE,
+        reason: null,
+      },
+      mc_coverage: { n: 72, empirical: 0.93, nominal: 0.9, reason: null },
+    };
+  }
+  // populated / preF3
+  const skill = [
+    mockSkill("arima", 84, round2(0.024 * scale * 1000) / 1000, round2(0.029 * scale * 1000) / 1000, 0.6, 0.08, 0.57),
+    mockSkill("blend", 84, round2(0.025 * scale * 1000) / 1000, round2(0.029 * scale * 1000) / 1000, 0.56, 0.31, 0.55),
+    mockSkill("cnn_lstm", 22, round2(0.027 * scale * 1000) / 1000, round2(0.03 * scale * 1000) / 1000, 0.55, null, null),
+    mockSkill("holt_winters", 84, round2(0.026 * scale * 1000) / 1000, round2(0.029 * scale * 1000) / 1000, 0.58, 0.16, 0.54),
+    mockSkill("monte_carlo", 84, round2(0.03 * scale * 1000) / 1000, round2(0.029 * scale * 1000) / 1000, 0.45, 0.47, null),
+  ];
+  return {
+    published_model: published,
+    skill,
+    skill_reason: null,
+    gate: {
+      last_decision: kind === "preF3" ? null : lastDecision(["arima", "holt_winters"], false),
+      evaluation: {
+        admitted: ["arima", "holt_winters"],
+        rejected: {
+          blend: "does not beat naive by the required margin",
+          cnn_lstm: "too few scored pairs",
+          monte_carlo: "does not beat naive by the required margin",
+        },
+        fallback_to_naive: false,
+      },
+      evaluation_note: MOCK_EVAL_NOTE,
+      reason: kind === "preF3" ? "ledger predates F3 (no gated_blend rows yet)" : null,
+    },
+    mc_coverage: { n: 84, empirical: 0.83, nominal: 0.9, reason: null },
+  };
+}
+
+export function mockForecastSummary(ticker: string): ForecastSummary {
+  const sym = ticker.trim().toUpperCase();
+  const gate = { ...MOCK_FORECAST_GATE };
+  if (sym === "ZZZZ") {
+    // pilots/forecasts.py::_empty_summary — the ledger reader could not open.
+    return { symbol: sym, as_of: null, window_days: gate.window_days, gate, horizons: {}, reason: "forecast ledger unavailable" };
+  }
+  const asOf = new Date();
+  const kind =
+    sym === "AAPL" ? "populated" : sym === "MSFT" ? "naive" : sym === "JNJ" ? "preF3" : sym === "AGNC" ? "error" : "cold";
+  const horizons: Record<string, ForecastSummaryHorizon> = {};
+  for (const h of [10, 30, 60, 90]) horizons[String(h)] = mockSummaryHorizon(kind, h, asOf);
+  const anyData = kind === "populated" || kind === "naive" || kind === "preF3";
+  return {
+    symbol: sym,
+    as_of: asOf.toISOString(),
+    window_days: gate.window_days,
+    gate,
+    horizons,
+    reason: anyData ? null : "No matured forecast history for this symbol yet.",
+  };
 }
 
 function notFound(id: string) {

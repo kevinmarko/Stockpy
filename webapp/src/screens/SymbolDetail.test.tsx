@@ -38,6 +38,12 @@ describe("SymbolDetail screen (real mock API)", () => {
     expect(screen.getByText("demo")).toBeInTheDocument();
   });
 
+  it("the Forecast skill card links to the Forecasts screen for this symbol (F6b)", async () => {
+    renderSymbol("NVDA");
+    await screen.findByRole("heading", { name: "NVDA" });
+    expect(screen.getByTestId("symbol-forecasts-link").getAttribute("href")).toBe("/forecast?symbol=NVDA");
+  });
+
   it("the 'Held by Pilots' section links into at least one Pilot detail page", async () => {
     renderSymbol("NVDA");
     await screen.findByRole("heading", { name: "NVDA" });

@@ -254,6 +254,22 @@ def _news_earnings_suppress_hours() -> float:
     return settings.NEWS_EARNINGS_SUPPRESS_HOURS
 
 
+def _forecast_gate_enabled() -> bool:
+    return bool(settings.FORECAST_NAIVE_GATE_ENABLED)
+
+
+def _forecast_gate_min_improvement_pct() -> float:
+    return round(settings.FORECAST_NAIVE_GATE_MIN_IMPROVEMENT * 100, 4)
+
+
+def _forecast_gate_min_obs() -> int:
+    return int(settings.FORECAST_NAIVE_GATE_MIN_OBS)
+
+
+def _forecast_skill_window_days() -> int:
+    return int(settings.FORECAST_SKILL_WINDOW_DAYS)
+
+
 # Suggested-exit fractions come from engine.advisory.CONFIG (constant per
 # process, like the VIX/Sahm thresholds above).
 _EXIT_FRACTION_STRONG_PCT = int(_ADVISORY_CONFIG["exit_fraction_strong_sell"] * 100)
@@ -945,6 +961,28 @@ GLOSSARY: Dict[str, GlossaryEntry] = {
             "held — there is nothing to size in that case."
         ),
         "#price-ranges",
+    ),
+    # ── Forecasting rebuild F3/F6: the naive gate ────────────────────────────
+    "naive gate": _g(
+        "Naive Gate",
+        lambda: (
+            "A check on each forecasting model before it is blended: a model is "
+            "admitted only if, on matured outcomes over the last "
+            f"{_forecast_skill_window_days()} days, its median log error is at least "
+            f"{_forecast_gate_min_improvement_pct():g}% lower than that of the naive "
+            "'price stays flat' forecast, on at least "
+            f"{_forecast_gate_min_obs()} scored pairs; if none qualifies the naive "
+            "forecast is published.  "
+            + (
+                "The gate is ON: the gated blend is the published forecast."
+                if _forecast_gate_enabled()
+                else "The gate is in shadow (off): its decisions are recorded, the "
+                "plain blend is published."
+            )
+            + "  The web app's Forecasts screen shows each symbol's admitted and "
+            "rejected models with the reason."
+        ),
+        "#the-forecasts-screen-web-app",
     ),
 }
 

@@ -598,6 +598,13 @@ export function SymbolDetail() {
                 }}
               >
                 <h2 style={{ fontSize: "var(--t-input)", margin: 0 }}>Forecast skill</h2>
+                <Link
+                  to={`/forecast?symbol=${encodeURIComponent(data.symbol)}`}
+                  style={{ fontSize: "var(--t-caption)", color: "var(--accent)" }}
+                  data-testid="symbol-forecasts-link"
+                >
+                  Forecasts: gate & skill vs naive →
+                </Link>
                 <div
                   className="segmented"
                   role="tablist"

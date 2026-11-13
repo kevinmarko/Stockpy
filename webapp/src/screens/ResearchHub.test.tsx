@@ -67,7 +67,7 @@ describe("ResearchHub screen", () => {
       "Signal Breakdown",
       "Sentiment Dynamics",
       "Sector Selection",
-      "Forecast Viewer",
+      "Forecasts",
       "Search Attention",
       "Data Explorer",
     ]) {
@@ -106,7 +106,7 @@ describe("ResearchHub screen", () => {
     ["Signal Breakdown", "landed:signals"],
     ["Sentiment Dynamics", "landed:sentiment"],
     ["Sector Selection", "landed:sector-selection"],
-    ["Forecast Viewer", "landed:forecast"],
+    ["Forecasts", "landed:forecast"],
     ["Search Attention", "landed:trends"],
     ["Data Explorer", "landed:data-explorer"],
   ])("clicking the %s card's body navigates to its route", async (label, marker) => {

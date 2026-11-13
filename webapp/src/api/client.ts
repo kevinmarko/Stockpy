@@ -111,7 +111,8 @@ import type { StrategyReportCardSnapshot,
   QuotesResponse,
   SignalBreakdown,
   SignalImportance,
-  ForecastResult,
+  ForecastsView,
+  ForecastSummary,
   CommandManifest,
   ExecutionQueue,
   ScanConfigRequest,
@@ -431,6 +432,12 @@ const liveApi = {
     http<ForecastSkill>(
       `/symbols/${encodeURIComponent(ticker)}/forecast?horizon=${horizon}`
     ),
+  // Forecasts screen (forecasting rebuild F6): persisted reads only, no refit.
+  getForecasts: () => http<ForecastsView>("/forecasts"),
+  getForecastSummary: (ticker: string) =>
+    http<ForecastSummary>(
+      `/symbols/${encodeURIComponent(ticker)}/forecast-summary`
+    ),
   getRollingBeta: (ticker: string, window = 60) =>
     http<RollingBeta>(
       `/symbols/${encodeURIComponent(ticker)}/rolling-beta?window=${window}`
@@ -628,8 +635,6 @@ const liveApi = {
     http<AiResearchResponse>(`/data/ai/research/${encodeURIComponent(symbol)}`, {
       method: "POST",
     }),
-  getForecastResult: (symbol: string) =>
-    http<ForecastResult>(`/metrics/forecast/${encodeURIComponent(symbol)}`),
   setStrategyModules: (body: StrategyModulesUpdate) =>
     http<StrategyModulesUpdateResult>("/strategy/modules", {
       method: "PUT",
