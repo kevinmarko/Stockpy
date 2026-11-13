@@ -8,6 +8,7 @@ A robust agentic trading system architecture comprises perception, memory, reaso
 2. **Tool use / API boundaries**: Enforcing least privilege and human-in-the-loop checkpoints.
 3. **Deterministic limits**: Placing rigid, hard-coded boundaries (e.g., volume and price caps) that AI cannot override.
 4. **State validation**: Mathematically or logically verifying the outcomes of proposed actions.
+   - **2026-11-13:** account-level gate checks (`ACCOUNT_LEVEL_CHECKS`: position size, portfolio heat, correlation, daily loss) moved out of the Robinhood queue, whose context is the main-account snapshot, into the Agentic preflight; heat is now measured on the live Agentic account (`portfolio_heat_over_limit` / `portfolio_heat_unavailable`). See `docs/known_issues/rh_queue_gated_on_main_account_2026_11.md`.
 5. **Model alignment**: System instructions that ensure refusal of out-of-bounds or unsafe requests.
 6. **Observability**: Creating rich audit trails, logging, and performance metrics.
 7. **Human override**: Providing manual kill switches and pause mechanisms.

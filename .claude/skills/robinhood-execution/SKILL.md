@@ -283,7 +283,7 @@ overrides (the coordinator passes them verbatim):
 4b. **Portfolio & Risk preflight (live only).** Before placing anything, get
    the preflight for THIS queue — the code-enforced check of every intent
    against the live Agentic account (cumulative buying power, concentration,
-   notional cap, sellable shares, pending approvals, staleness, kill switch):
+   portfolio heat, notional cap, sellable shares, pending approvals, staleness, kill switch):
    - Run the `rh-risk-manager` agent (or follow its procedure yourself), which
      saves fresh `get_portfolio` / `get_equity_positions` / `get_equity_quotes`
      / `get_trade_approvals` output and runs `python3 -m execution.agentic_preflight`.

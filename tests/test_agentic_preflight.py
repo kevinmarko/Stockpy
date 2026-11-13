@@ -11,7 +11,7 @@ import json
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from hypothesis import given, settings as hsettings, strategies as st
+from hypothesis import example, given, settings as hsettings, strategies as st
 
 from execution import agentic_preflight as ap
 from execution.receipts_store import make_dedup_key
@@ -28,10 +28,16 @@ def portfolio(total="1000", equity="0", bp="1000"):
                      "buying_power": {"buying_power": bp, "display_currency": "USD"}}}
 
 
-def positions(*rows):
-    return {"data": {"positions": [
-        {"symbol": s, "quantity": str(q), "shares_available_for_sells": str(sell)} for s, q, sell in rows
-    ]}}
+def positions(*rows, avg=None):
+    """rows are (symbol, qty, sellable[, avg_cost]); a missing cost basis defaults to
+    ``avg`` and, if that is None too, to a very low basis so the holding is never a loser."""
+    out = []
+    for r in rows:
+        s, q, sell = r[:3]
+        cost = r[3] if len(r) > 3 else (avg if avg is not None else 0.01)
+        out.append({"symbol": s, "quantity": str(q), "shares_available_for_sells": str(sell),
+                    "average_buy_price": str(cost)})
+    return {"data": {"positions": out}}
 
 
 def quotes(**prices):
@@ -81,7 +87,7 @@ class TestParsers:
         a = ap.AccountState.from_mcp(portfolio(total="250", equity="0", bp="250.0000"),
                                      positions(("F", 3, 2)))
         assert (a.total_value, a.equity_value, a.buying_power) == (250.0, 0.0, 250.0)
-        assert a.positions["F"] == ap.Holding(qty=3.0, sellable=2.0)
+        assert a.positions["F"] == ap.Holding(qty=3.0, sellable=2.0, avg_cost=0.01)
 
     def test_empty_positions_is_known_empty_not_unknown(self):
         assert ap.AccountState.from_mcp(portfolio(), {"data": {"positions": []}}).positions == {}
@@ -121,6 +127,114 @@ class TestParsers:
             {"approval_id": "a3"},
         ]}}
         assert ap.approvals_from_mcp(payload) == ([("AAPL", "buy"), ("MSFT", "sell")], 1)
+
+
+class TestCostBasisParsing:
+    @staticmethod
+    def _acct(row):
+        base = {"symbol": "F", "quantity": "3", "shares_available_for_sells": "3"}
+        return ap.AccountState.from_mcp(portfolio(), {"data": {"positions": [{**base, **row}]}})
+
+    def test_average_buy_price_parsed(self):
+        assert self._acct({"average_buy_price": "12.5000"}).positions["F"].avg_cost == 12.5
+
+    def test_average_cost_fallback(self):
+        assert self._acct({"average_cost": "11.25"}).positions["F"].avg_cost == 11.25
+
+    def test_average_buy_price_wins_over_average_cost(self):
+        assert self._acct({"average_buy_price": "10", "average_cost": "99"}).positions["F"].avg_cost == 10.0
+
+    @pytest.mark.parametrize("bad", ["abc", "0", "-3", None, ""])
+    def test_garbage_or_non_positive_is_none(self, bad):
+        assert self._acct({"average_buy_price": bad}).positions["F"].avg_cost is None
+
+    def test_absent_is_none(self):
+        assert self._acct({}).positions["F"].avg_cost is None
+
+
+class TestPortfolioHeat:
+    @staticmethod
+    def _acct(*rows, total="1000"):
+        return ap.AccountState.from_mcp(portfolio(total=total), positions(*rows))
+
+    def test_empty_account_is_zero(self):
+        assert ap.portfolio_heat(self._acct(), {}) == 0.0
+
+    def test_winners_only_is_zero(self):
+        qts = ap.quotes_from_mcp(quotes(F=20.0, AAPL=100.0))
+        assert ap.portfolio_heat(self._acct(("F", 10, 10, 15.0), ("AAPL", 1, 1, 100.0)), qts) == 0.0
+
+    def test_one_loser_exact_fraction_and_winners_do_not_offset(self):
+        qts = ap.quotes_from_mcp(quotes(F=12.0, AAPL=200.0))
+        acct = self._acct(("F", 10, 10, 20.0), ("AAPL", 5, 5, 100.0))  # F loses 80, AAPL wins 500
+        assert ap.portfolio_heat(acct, qts) == pytest.approx(0.08, abs=1e-9)
+
+    def test_priced_off_bid_when_no_last(self):
+        payload = {"data": {"results": [{"quote": {"symbol": "F", "bid_price": "12", "ask_price": "12.1",
+                                                   "state": "active", "has_traded": True}}]}}
+        qts = ap.quotes_from_mcp(payload)
+        assert ap.portfolio_heat(self._acct(("F", 10, 10, 20.0)), qts) == pytest.approx(0.08, abs=1e-9)
+
+    def test_missing_cost_basis_is_none(self):
+        acct = ap.AccountState.from_mcp(portfolio(), {"data": {"positions": [
+            {"symbol": "F", "quantity": "3", "shares_available_for_sells": "3"}]}})
+        assert ap.portfolio_heat(acct, ap.quotes_from_mcp(quotes(F=12.0))) is None
+
+    def test_missing_quote_for_held_symbol_is_none(self):
+        assert ap.portfolio_heat(self._acct(("F", 10, 10, 20.0)), ap.quotes_from_mcp(quotes(AAPL=1.0))) is None
+
+    def test_positions_unreadable_is_none(self):
+        acct = ap.AccountState.from_mcp(portfolio(), None)
+        assert ap.portfolio_heat(acct, {}) is None
+
+    def test_losses_with_unknown_total_value_is_none(self):
+        acct = ap.AccountState.from_mcp({"data": {}}, positions(("F", 10, 10, 20.0)))
+        assert ap.portfolio_heat(acct, ap.quotes_from_mcp(quotes(F=12.0))) is None
+
+
+class TestPreflightHeat:
+    """BUY-only heat veto on the live Agentic account. The cap is always passed
+    explicitly so the operator's real MAX_PORTFOLIO_HEAT never leaks in."""
+
+    @staticmethod
+    def _acct(avg):  # F: 10 sh quoted 12.34 -> loss (avg-12.34)*10 on a 1000 account
+        return ap.AccountState.from_mcp(portfolio(total="1000", bp="1000"), positions(("F", 10, 10, avg)))
+
+    def _run(self, q, acct, cap):
+        return run(q, acct=acct, max_portfolio_heat=cap)
+
+    def test_heat_under_cap_buy_passes(self):
+        r = self._run(queue(intent("AAPL", notional=100.0)), self._acct(12.34), 0.10)
+        v = only(r)
+        assert ap.PORTFOLIO_HEAT_OVER_LIMIT not in v.reasons
+        assert ap.PORTFOLIO_HEAT_UNAVAILABLE not in v.reasons
+        assert v.passed
+
+    def test_heat_over_cap_blocks_buy_but_not_sell(self):
+        acct = self._acct(22.34)  # loss 100 -> heat 0.10
+        q = queue(intent("AAPL", "buy", notional=100.0), intent("F", "sell", notional=None, qty=2))
+        r = self._run(q, acct, 0.05)
+        buy, sell = r.verdicts
+        assert ap.PORTFOLIO_HEAT_OVER_LIMIT in buy.reasons and not buy.passed
+        assert ap.PORTFOLIO_HEAT_OVER_LIMIT not in sell.reasons
+        assert ap.PORTFOLIO_HEAT_UNAVAILABLE not in sell.reasons
+
+    def test_heat_none_blocks_buy_as_unavailable(self):
+        acct = ap.AccountState.from_mcp(portfolio(), {"data": {"positions": [
+            {"symbol": "F", "quantity": "10", "shares_available_for_sells": "10"}]}})  # no cost basis
+        v = only(self._run(queue(intent("AAPL", notional=100.0)), acct, 0.10))
+        assert ap.PORTFOLIO_HEAT_UNAVAILABLE in v.reasons and not v.passed
+
+    def test_cap_none_blocks_buy_as_unavailable(self, monkeypatch):
+        from settings import settings
+        monkeypatch.setattr(settings, "MAX_PORTFOLIO_HEAT", None, raising=False)
+        v = only(self._run(queue(intent("AAPL", notional=100.0)), self._acct(12.34), None))
+        assert ap.PORTFOLIO_HEAT_UNAVAILABLE in v.reasons
+
+    def test_limits_carry_heat_and_cap(self):
+        r = self._run(queue(intent("AAPL", notional=100.0)), self._acct(22.34), 0.05)
+        assert r.limits["portfolio_heat"] == pytest.approx(0.10, abs=1e-9)
+        assert r.limits["max_portfolio_heat"] == 0.05
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +419,8 @@ _intent_st = st.builds(
 
 
 @hsettings(max_examples=150, deadline=None)
+@example(intents=[intent("S0", "buy", notional=1.375, conviction=0.0, allow=False, coid="c0buy")],
+         price=1.375, bp=0.0, held=0.0)  # round(1 * 1.375, 2) == 1.38: cent rounding, not an upsize
 @given(intents=st.lists(_intent_st, max_size=6, unique_by=lambda d: d["client_order_id"]),
        price=st.floats(0.5, 900), bp=st.floats(0, 5_000), held=st.floats(0, 50))
 def test_never_adds_flips_or_upsizes(intents, price, bp, held):
@@ -317,7 +433,8 @@ def test_never_adds_flips_or_upsizes(intents, price, bp, held):
     assert [(v.client_order_id, v.side) for v in r.verdicts] == [(i["client_order_id"], i["side"]) for i in intents]
     for v, i in zip(r.verdicts, intents):
         if v.side == "buy" and v.est_notional is not None:
-            assert v.est_notional <= i["target_notional"] + 1e-6
+            # est_notional is rounded to cents, so allow half a cent of rounding
+            assert v.est_notional <= i["target_notional"] + 0.005 + 1e-9
         if v.side == "sell" and v.qty is not None:
             assert v.qty <= (i["qty"] if i["qty"] is not None else held) + 1e-9
     spent = sum(v.est_notional for v in r.verdicts if v.passed and v.side == "buy")

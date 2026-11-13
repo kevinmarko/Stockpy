@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -122,6 +122,32 @@ class RiskContext:
     halt_state: Optional[HaltState | str] = None
     halt_reason: Optional[str] = None
     timestamp: Optional[datetime] = None
+
+
+# check method -> the ``check_name`` it reports (the name ``run_all(skip=...)``
+# takes). Insertion order IS the run order of ``run_all``: kill-switch halt
+# first, order rate always last.
+_CHECK_NAME_BY_METHOD = {
+    "kill_switch_halt_check": "kill_switch_halt",
+    "max_position_size_check": "max_position_size",
+    "portfolio_heat_check": "portfolio_heat",
+    "max_correlation_check": "max_correlation",
+    "daily_loss_limit_check": "daily_loss_limit",
+    "macro_kill_switch_check": "macro_kill_switch",
+    "hmm_regime_check": "hmm_regime",
+    "stress_scenario_check": "stress_scenario",
+    "market_hours_check": "market_hours",
+    "minimum_validation_check": "minimum_validation",
+    "max_order_rate_check": "max_order_rate",
+}
+_ALL_CHECK_NAMES = frozenset(_CHECK_NAME_BY_METHOD.values())
+
+#: Checks that judge a specific ACCOUNT's state (size vs equity, open-position
+#: heat, correlation with holdings, intraday P&L) rather than the market or the
+#: system. The Robinhood queue skips these; see ``run_all``.
+ACCOUNT_LEVEL_CHECKS = frozenset({
+    "max_position_size", "portfolio_heat", "max_correlation", "daily_loss_limit",
+})
 
 
 class PreTradeRiskGate:
@@ -603,10 +629,23 @@ class PreTradeRiskGate:
     # ------------------------------------------------------------------
 
     def run_all(
-        self, intent: OrderIntent, context: RiskContext
+        self,
+        intent: OrderIntent,
+        context: RiskContext,
+        *,
+        skip: Iterable[str] = (),
     ) -> tuple[bool, list[RiskCheckResult]]:
         """
         Run all checks in sequence; short-circuit at the first failure.
+
+        ``skip`` names checks (their ``check_name``) that are NOT run at all.
+        The default ``()`` runs every check, exactly as before. The Robinhood
+        queue builder passes :data:`ACCOUNT_LEVEL_CHECKS`: its context comes
+        from the daemon's main-account snapshot, while the queue is executed
+        in the separate Agentic account, so account-level checks there would
+        judge the wrong account. The Agentic preflight
+        (``execution/agentic_preflight.py``) owns them against the live
+        Agentic account instead.
 
         Returns
         -------
@@ -614,18 +653,18 @@ class PreTradeRiskGate:
             ``all_passed`` is True only when every check returned passed=True.
             ``results`` contains checks evaluated up to and including the first failure.
         """
+        skipped = frozenset(skip)
+        unknown = skipped - _ALL_CHECK_NAMES
+        if unknown:
+            # A typo here would silently re-enable a check the caller meant to
+            # defer (or vice versa), so refuse it loudly.
+            raise ValueError(f"run_all: unknown check name(s) in skip: {sorted(unknown)}")
+        # Order matters: kill switch first, order rate always last. Looked up
+        # by attribute name so a test that patches one check still works.
         checks = [
-            self.kill_switch_halt_check,  # Check #0: kill-switch soft/hard halt
-            self.max_position_size_check,
-            self.portfolio_heat_check,
-            self.max_correlation_check,
-            self.daily_loss_limit_check,
-            self.macro_kill_switch_check,
-            self.hmm_regime_check,
-            self.stress_scenario_check,
-            self.market_hours_check,
-            self.minimum_validation_check,
-            self.max_order_rate_check,  # always last
+            getattr(self, method)
+            for method, check_name in _CHECK_NAME_BY_METHOD.items()
+            if check_name not in skipped
         ]
         results: list[RiskCheckResult] = []
         for fn in checks:

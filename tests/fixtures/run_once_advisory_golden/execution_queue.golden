@@ -4,6 +4,13 @@
   "kill_switch_active": false,
   "max_notional_per_order": 0.0,
   "limit_buffer_bps": 0,
+  "deferred_account_checks": [
+    "daily_loss_limit",
+    "max_correlation",
+    "max_position_size",
+    "portfolio_heat"
+  ],
+  "account_checks_owner": "agentic_preflight",
   "n_intents": 3,
   "n_placeable": 0,
   "intents": [

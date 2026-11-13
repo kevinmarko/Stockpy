@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `a0875d09ba460c270dfb76b533ef51f9ca066f2f`
+- Measured at commit: `c4d50abcc0d1b81c7483724fb2cf1478da989bbe`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -412,7 +412,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/pilots_api.py:5262` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:84` | `getattr(_settings, name, None)` |
-| `execution/agentic_preflight.py:308` | `getattr(settings, name)` |
+| `execution/agentic_preflight.py:317` | `getattr(settings, name)` |
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |
 | `runtime_flags_writer.py:884` | `getattr(settings_module.settings, key, None)` |
 | `runtime_flags_writer.py:893` | `getattr(settings_module.settings, key, None)` |

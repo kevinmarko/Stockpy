@@ -29,7 +29,7 @@ import pytest
 from dto_models import MacroEconomicDTO
 from execution import queue_builder as qb
 from execution.broker_base import OrderIntent, OrderSide
-from execution.risk_gate import RiskContext
+from execution.risk_gate import ACCOUNT_LEVEL_CHECKS, RiskContext
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ class TestAllowPlaceGating:
     def test_gate_failure_fails_closed(self, cap5k, monkeypatch):
         # A gate that raises must never produce an allowed intent.
         class _BoomGate:
-            def run_all(self, intent, ctx):
+            def run_all(self, intent, ctx, **_kw):
                 raise RuntimeError("gate exploded")
         monkeypatch.setattr(qb, "PreTradeRiskGate", lambda *a, **k: _BoomGate())
         rr = _rr([_Rec("NVDA", "SELL", 0.9)])
@@ -469,7 +469,7 @@ class TestGateIntent:
 
     def test_gate_intent_fails_closed_on_exception(self):
         class _BoomGate:
-            def run_all(self, intent, ctx):
+            def run_all(self, intent, ctx, **_kw):
                 raise ValueError("nope")
         intent = OrderIntent(strategy_id="advisory", symbol="AAPL",
                              side=OrderSide.SELL, qty=1.0)
@@ -524,3 +524,50 @@ class TestMacroContext:
         p = qb.build_execution_queue(rr, mode="review", now=_RTH, macro_dto=_killswitch_macro())
         intent = p["intents"][0]
         assert not any(r.startswith("macro_kill_switch:") for r in intent["gate_reasons"])
+
+
+# ---------------------------------------------------------------------------
+# Account-level checks are deferred to the Agentic preflight: the queue's
+# RiskContext is the daemon's MAIN-account snapshot, but orders only ever
+# execute in the separate Agentic account.
+# ---------------------------------------------------------------------------
+
+class TestDeferredAccountChecks:
+    def _hot_rr(self):
+        # ~35% heat on the main account: 1000 sh bought at 100, now 65 -> -35,000 of 100,000.
+        held = {"MSFT": _Pos("MSFT", 1000, 100.0, 65.0, 65_000.0, -35_000.0)}
+        return _rr([_Rec("NVDA", "BUY", 0.9, suggested_position_pct=0.02)],
+                   equity=100_000.0, held=held)
+
+    def test_main_account_heat_no_longer_blocks_buy(self, cap5k):
+        p = qb.build_execution_queue(self._hot_rr(), mode="review", now=_RTH)
+        intent = p["intents"][0]
+        assert intent["gate_allowed"] is True
+        assert not any(r.startswith("portfolio_heat") for r in intent["gate_reasons"])
+
+    def test_gate_intent_skips_account_checks_with_real_gate(self):
+        # Same 35% heat through gate_intent directly, default real gate.
+        from execution.broker_base import AccountSnapshot, PositionSnapshot
+        intent = OrderIntent(strategy_id="advisory", symbol="NVDA", side=OrderSide.BUY, qty=1.0)
+        ctx = RiskContext(
+            account=AccountSnapshot(equity=100_000.0, cash=50_000.0, buying_power=50_000.0),
+            open_positions=[PositionSnapshot(symbol="MSFT", qty=1000.0, avg_entry_price=100.0,
+                                             market_value=65_000.0, unrealized_pl=-35_000.0)],
+            current_prices={"NVDA": 100.0},
+            start_of_day_equity=100_000.0,
+            timestamp=_RTH,
+        )
+        allowed, reasons = qb.gate_intent(intent, ctx)
+        assert allowed is True, reasons
+
+    def test_market_level_block_still_blocks(self, cap5k):
+        p = qb.build_execution_queue(self._hot_rr(), mode="review", now=_RTH,
+                                     macro_dto=_killswitch_macro())
+        intent = p["intents"][0]
+        assert intent["gate_allowed"] is False
+        assert any(r.startswith("macro_kill_switch:") for r in intent["gate_reasons"])
+
+    def test_payload_declares_deferred_checks_and_owner(self, no_cap):
+        p = qb.build_execution_queue(_rr([_Rec("NVDA", "SELL", 0.9)]), mode="review", now=_RTH)
+        assert p["deferred_account_checks"] == sorted(ACCOUNT_LEVEL_CHECKS)
+        assert p["account_checks_owner"] == "agentic_preflight"

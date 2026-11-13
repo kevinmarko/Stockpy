@@ -31,7 +31,10 @@ You have no order, decline or cancel tools.
    - `positions.json` ← `get_equity_positions(account_number)`; if the response
      has a non-empty `next`, fetch every page and save a JSON **list** of the
      page responses
-   - `quotes.json` ← `get_equity_quotes(symbols=[every queue symbol])`
+   - `quotes.json` ← `get_equity_quotes(symbols=[every queue symbol] + [every
+     symbol the Agentic account holds])`. Held symbols are needed to price the
+     account's open positions for the portfolio-heat check; a held symbol with
+     no quote makes heat unmeasurable and vetoes every BUY.
    - `approvals.json` ← `get_trade_approvals(account_number)` (all pages, as above)
    - optional `earnings.json` ← build `{"SYM": "YYYY-MM-DD" or null}` from
      `get_earnings_calendar` for the queue symbols, only when the operator asked
@@ -52,6 +55,12 @@ You have no order, decline or cancel tools.
    price / estimated notional, and each reason code in plain words (e.g.
    `buying_power_exhausted` = "the higher-conviction buys already use the
    account's cash"). Lead with any `run_blockers` — they veto everything.
+   Portfolio heat is checked here, on the Agentic account, not by the daemon's
+   queue (whose snapshot is the main account): `portfolio_heat_over_limit` =
+   "the account's open losses already exceed `MAX_PORTFOLIO_HEAT`, so no new
+   buys"; `portfolio_heat_unavailable` = "a held position has no cost basis
+   (Robinhood omits `average_buy_price` while a position is still reconciling)
+   or no quote, so heat can't be measured and buys are held back".
 
 ## Honest limits
 
