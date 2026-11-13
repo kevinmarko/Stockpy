@@ -23,10 +23,11 @@ Plans written in this sweep (review before any code): `.claude/synthetic_data_ga
 ## Open: yours to decide
 - [ ] `pip-audit` is RED (59 advisories: pillow 39, filelock 17, certifi 2, setuptools 1) on pins in `requirements.txt` that predate this PR - separate dependency PR
 - [ ] Gate plan Q1-Q5 and F5/F6 plan Q1-Q10
-- [ ] Branch protection: remove any required checks from the deleted workflows (a GitHub setting, not in the repo), or the PR keeps showing "blocked". Confirmed 2026-10-30/31/11-02: three squash-merge attempts refused with 405 (CodeQL results + "5 of 5 required status checks are expected"); no tool in this session can edit rulesets
+- [ ] Branch protection (re-checked 2026-11-13: still on in both the "main" ruleset and the classic `main` rule; the operator's own account can bypass them, this session's cannot): remove any required checks from the deleted workflows (a GitHub setting, not in the repo), or the PR keeps showing "blocked". Confirmed 2026-10-30/31/11-02: three squash-merge attempts refused with 405 (CodeQL results + "5 of 5 required status checks are expected"); no tool in this session can edit rulesets
 - [x] **Operator: standing policy, no GitHub Actions ever** (2026-11-02): rule added to CLAUDE.md/AGENTS.md; the PR template's test plan now asks for the `make local-ci` table (and its stale Streamlit GUI path is now `webapp/`)
 - [ ] Nothing schedules the daily network + slow run now (`make local-ci ARGS="--profile nightly"` runs it on demand). A launchd job would be new capability, so it needs your OK under the feature freeze. CodeQL has no local equivalent (bandit covers part)
-- [ ] PR #1131 (merge after one small hardening fix) and #1132 (safe to merge)
+- [x] PR #1131 merged by the operator 2026-11-13 (merged into this branch as `a4bbd2f`; the 6 test files it touched: 214 passed)
+- [ ] PR #1132 (docs-only skill fix; claims re-verified 2026-11-13, merges cleanly) - blocked by the same `main` rules as this PR
 
 ## Found, deliberately not fixed here
 - **Live-backend UI pass is still owed.** The audit ran against the offline mock only (`VITE_USE_MOCK=false` not exercised); only a few screens were reviewed as screenshots
