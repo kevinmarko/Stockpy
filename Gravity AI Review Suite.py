@@ -11436,7 +11436,7 @@ class GravityAIAuditor:
               ``None``, never a fabricated progress dict (CONSTRAINT #4) (soft).
           3.  ``compute_percent(0,0,0,0)==0.0`` and ``compute_percent(6,6,0,0)==100.0``
               — clamped, no div-by-zero (soft).
-          5.  ``shared.progress_ui.busy`` importable (Agent 4's helper) (soft).
+          5.  (retired 2026-11) ``shared.progress_ui`` was archived to ``legacy/shared/``.
           6.  The retired ``"PROGRESS_POLL_SECONDS"`` is NOT in ``shared.env_io.ALLOWED_KEYS``
               (hard): a writable key with no reader would be a dead control.
           7.  ``settings`` has no ``PROGRESS_POLL_SECONDS`` field (hard).
@@ -11520,14 +11520,8 @@ class GravityAIAuditor:
                     False, "skipped — reporting.progress not present", soft=True,
                 )
 
-            # 5. shared.progress_ui.busy (Agent 4's helper) — soft-guard.
-            try:
-                import shared.progress_ui as _pui  # type: ignore
-                ok5 = hasattr(_pui, "busy") and callable(_pui.busy)
-                detail5 = "" if ok5 else "busy not yet defined"
-            except Exception as exc:
-                ok5, detail5 = False, f"shared.progress_ui not importable (not yet merged?): {exc}"
-            _chk("shared.progress_ui.busy importable", ok5, detail5, soft=True)
+            # 5. retired 2026-11: shared.progress_ui (Streamlit-only) was archived to
+            # legacy/shared/ and streamlit left requirements.txt.
 
             # 6. The retired PROGRESS_POLL_SECONDS is no longer GUI-writable (hard).
             try:
@@ -11734,7 +11728,7 @@ class GravityAIAuditor:
     def step_76_help_content_audit(self) -> None:
         """Step 76 — GUI Help Explainers content store smoke check (Prompts 1–5).
 
-        Verifies that the three help-content modules are importable and expose
+        Verifies that the help-content modules are importable and expose
         the expected public API surfaces.  This is the lightweight predecessor
         to ``step_77_help_explainers_audit`` which runs the full 10-check suite.
         """
@@ -11747,11 +11741,8 @@ class GravityAIAuditor:
             audit["checks"].append({"check": "help_content_importable", "pass": c1})
             all_pass = all_pass and c1
 
-            # C2 — shared.help_widgets importable
-            from shared.help_widgets import explain, metric_with_help, why_callout
-            c2 = callable(explain) and callable(metric_with_help) and callable(why_callout)
-            audit["checks"].append({"check": "help_widgets_importable", "pass": c2})
-            all_pass = all_pass and c2
+            # C2 retired 2026-11: shared.help_widgets (Streamlit-only) was archived to
+            # legacy/shared/ and streamlit left requirements.txt.
 
             # C3 — shared.onboarding importable
             from shared.onboarding import should_show_tour, mark_onboarded
@@ -11783,11 +11774,11 @@ class GravityAIAuditor:
         5.  Nine required glossary terms present: kelly target, pbo, dsr, sahm rule,
             iv rank (or ivr), hmm, advisory mode, conviction, calibration.
         6.  No duplicate keys in GLOSSARY.
-        7.  ``shared.help_widgets.explain`` is callable.
+        7.  (retired 2026-11) ``shared.help_widgets`` was archived to ``legacy/shared/``.
         8.  ``shared.onboarding.mark_onboarded`` / ``should_show_tour`` round-trip:
             True → mark → False, marker file created, ``.tmp`` sibling gone.
-        9.  ``gui/panels.py`` contains ≥ 10 ``help_widgets.explain(`` calls and
-            each of the 10 tab IDs appears in at least one such call.
+        9.  (retired 2026-11) checked the deleted Streamlit panels package, so it
+            could never pass.
         10. ``tests/test_help_content.py`` exists.
         """
         import re
@@ -11904,13 +11895,7 @@ class GravityAIAuditor:
             audit["checks"].append({"check": "no_duplicate_glossary_keys", "pass": bool(c6)})
             all_pass = all_pass and c6
 
-            # ----------------------------------------------------------------
-            # C7 — shared.help_widgets.explain is callable
-            # ----------------------------------------------------------------
-            from shared.help_widgets import explain
-            c7 = callable(explain)
-            audit["checks"].append({"check": "explain_callable", "pass": bool(c7)})
-            all_pass = all_pass and c7
+            # C7 retired 2026-11: shared.help_widgets was archived to legacy/shared/.
 
             # ----------------------------------------------------------------
             # C8 — mark_onboarded / should_show_tour round-trip
@@ -11940,37 +11925,8 @@ class GravityAIAuditor:
             })
             all_pass = all_pass and c8
 
-            # ----------------------------------------------------------------
-            # C9 — panels has ≥10 explain() calls, all 10 tab IDs covered.
-            # Post the gui/panels package refactor (2026-06-29) each tab's
-            # ``render_*`` function — and its ``help_widgets.explain(...)``
-            # call — lives in its own per-tab module under gui/panels/, not
-            # in the (now ~110-line re-export stub) __init__.py. Concatenate
-            # every module in the package so this check's original intent
-            # (does the *panels package* wire up help text everywhere it
-            # should) still holds.
-            # ----------------------------------------------------------------
-            panels_dir = Path("legacy/streamlit_command_center/panels")
-            panels_src = "\n".join(
-                p.read_text(encoding="utf-8")
-                for p in sorted(panels_dir.glob("*.py"))
-                if p.exists()
-            ) if panels_dir.exists() else ""
-            total_calls = panels_src.count("help_widgets.explain(")
-            tab_ids_in_panels = [
-                t for t in expected_tabs
-                if f'help_widgets.explain("{t}"' in panels_src
-                or f"help_widgets.explain('{t}'" in panels_src
-            ]
-            missing_tab_calls = sorted(expected_tabs - set(tab_ids_in_panels))
-            c9 = total_calls >= 10 and len(missing_tab_calls) == 0
-            audit["checks"].append({
-                "check": "panels_explain_calls_gte10",
-                "pass": bool(c9),
-                "total_calls": total_calls,
-                "missing_tab_calls": missing_tab_calls,
-            })
-            all_pass = all_pass and c9
+            # C9 retired 2026-11: it read legacy/streamlit_command_center/panels/,
+            # which no longer exists, so it could never pass.
 
             # ----------------------------------------------------------------
             # C10 — tests/test_help_content.py exists

@@ -62,7 +62,7 @@ from execution.broker_base import (
 )
 from execution.kill_switch import GlobalKillSwitch
 from execution.order_manager import make_client_order_id
-from execution.risk_gate import PreTradeRiskGate, RiskContext
+from execution.risk_gate import ACCOUNT_LEVEL_CHECKS, PreTradeRiskGate, RiskContext
 
 logger = logging.getLogger(__name__)
 
@@ -213,12 +213,24 @@ def _build_risk_context(snapshot: Any, now: datetime, *, macro_dto: Optional[Any
     )
 
 
+#: Account-level gate checks the queue does NOT run. The queue's RiskContext is
+#: built from the daemon's Robinhood snapshot, which is the DEFAULT (main)
+#: account, but the queue is only ever executed in the separate Agentic
+#: account. Judging an Agentic order by the main account's open-position heat
+#: blocked every BUY (2026-11-13, 34.78% main-account heat vs an 11% cap). The
+#: Agentic preflight (execution/agentic_preflight.py) owns these against the
+#: live Agentic account. See
+#: docs/known_issues/rh_queue_gated_on_main_account_2026_11.md.
+QUEUE_DEFERRED_CHECKS = ACCOUNT_LEVEL_CHECKS
+ACCOUNT_CHECKS_OWNER = "agentic_preflight"
+
+
 def gate_intent(
     intent: OrderIntent,
     context: RiskContext,
     gate: Optional[PreTradeRiskGate] = None,
 ) -> Tuple[bool, List[str]]:
-    """Run the pre-trade risk gate for one intent.
+    """Run the pre-trade risk gate for one intent, minus :data:`QUEUE_DEFERRED_CHECKS`.
 
     Returns ``(allowed, reasons)``.  ``reasons`` lists the failing checks when
     blocked, or is empty when allowed.  Any exception fails CLOSED — an intent
@@ -227,7 +239,7 @@ def gate_intent(
     """
     gate = gate or PreTradeRiskGate()
     try:
-        allowed, results = gate.run_all(intent, context)
+        allowed, results = gate.run_all(intent, context, skip=QUEUE_DEFERRED_CHECKS)
         reasons = [f"{r.check_name}: {r.reason}" for r in results if not r.passed]
         return bool(allowed), reasons
     except Exception as exc:
@@ -516,6 +528,8 @@ def build_execution_queue(
         "kill_switch_active": kill_switch_active,
         "max_notional_per_order": max_notional,
         "limit_buffer_bps": limit_buffer_bps,
+        "deferred_account_checks": sorted(QUEUE_DEFERRED_CHECKS),
+        "account_checks_owner": ACCOUNT_CHECKS_OWNER,
         "n_intents": len(intents),
         "n_placeable": sum(1 for i in intents if i["allow_place"]),
         "intents": intents,

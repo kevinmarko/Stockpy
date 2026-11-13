@@ -7,6 +7,7 @@
 #              the Fama-French 3-Factor regression model for Alpha isolation.
 # ==============================================================================
 
+import copy
 import logging
 import datetime
 from typing import Dict, Any, FrozenSet, Optional, List, Tuple
@@ -153,7 +154,9 @@ class MacroEngine:
     # Minimum rows required for a numerically stable Gaussian HMM fit.
     HMM_MIN_FIT_ROWS = 100
 
-    def compute_hmm_risk_on_probability(self, spy_price_df: Optional[pd.DataFrame]) -> Optional[Dict[str, Any]]:
+    def compute_hmm_risk_on_probability(
+        self, spy_price_df: Optional[pd.DataFrame], *, persist: bool = True,
+    ) -> Optional[Dict[str, Any]]:
         """
         Computes the HMM second opinion's risk_on_probability at the latest
         available date, for use as MacroEconomicDTO.hmm_risk_on_probability.
@@ -168,6 +171,15 @@ class MacroEngine:
         - the HMM fit/predict raises (logged, not propagated -- a statistical
           second opinion failing must never crash the primary rules-based
           pipeline).
+
+        ``persist=False`` (a synthetic-data cycle, ``pipeline/synthetic_gate.py``)
+        computes the same way but leaves nothing behind: the macro history is
+        read straight from ``self.data_engine`` instead of through
+        ``HistoricalStore.get_macro()`` (whose top-up would upsert the
+        engine's fabricated series into ``macro_history`` under
+        ``source="fred"``), and the HMM is fitted on a deep copy of the warm
+        detector, so a fit on synthetic SPY bars cannot be reused by later
+        real cycles for up to ``retrain_freq_days``.
         """
         if spy_price_df is None or spy_price_df.empty or 'Close' not in spy_price_df.columns:
             logger.warning("HMM regime: no SPY price history available; skipping (hmm_risk_on_probability=None).")
@@ -182,6 +194,11 @@ class MacroEngine:
         inflation_series: Optional[pd.Series] = None
         try:
             from settings import settings as _s
+            if not persist:
+                # Synthetic cycle: the store's top-up would persist the
+                # engine's fabricated macro series. Same fallback as the
+                # store being disabled (below).
+                raise RuntimeError("synthetic-data cycle: macro history not persisted")
             if _s.HISTORICAL_STORE_ENABLED:
                 from data.historical_store import HistoricalStore
                 _store = HistoricalStore()
@@ -259,8 +276,12 @@ class MacroEngine:
             return None
 
         try:
-            self._hmm_detector.fit(features)
-            result = self._hmm_detector.predict_proba(features)
+            # Synthetic cycle: fit a throwaway copy. The copy starts from the
+            # warm detector's exact state, so this cycle's result is the same
+            # as fitting in place; only the warm fit is left untouched.
+            detector = self._hmm_detector if persist else copy.deepcopy(self._hmm_detector)
+            detector.fit(features)
+            result = detector.predict_proba(features)
             return result
         except Exception as e:
             logger.error(f"HMM regime: fit/predict failed: {e}. Falling back to None (rules-based stays primary).")

@@ -61,7 +61,7 @@ class _FakeEngineHealthy:
     model contributed every horizon (Is_Fallback=False everywhere)."""
 
     def generate_forecast(self, row, price, history_series, history_df=None,
-                           precomputed_garch_term_structure=None):
+                           precomputed_garch_term_structure=None, **_kw):
         return {
             "Target_Days": 60, "ARIMA": price, "MC_Target": price,
             "MC_Lower": price * 0.9, "MC_Upper": price * 1.1,

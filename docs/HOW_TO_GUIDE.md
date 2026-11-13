@@ -1672,8 +1672,8 @@ The web app keeps its own help text in `webapp/src/help/helpContent.ts`
 (`TAB_HELP` and `GLOSSARY`); that is what the screens render. The Python-side catalog,
 `shared/help_content.py`, is keyed the old way — metric tooltips by `"<tab>.<metric_name>"`
 in `METRIC_HELP`, where a missing key returns `""` and **never raises** (CONSTRAINT #6) —
-and its only consumers are the Streamlit-era wrappers in `shared/help_widgets.py`, the
-`MODEL_RETRAIN_WINDOW_DAYS` constant, and tests. Its `TAB_HELP` ids are the legacy tab
+and its only consumers are the `MODEL_RETRAIN_WINDOW_DAYS` constant and tests (the
+Streamlit-era wrappers that rendered it were archived to `legacy/shared/help_widgets.py`). Its `TAB_HELP` ids are the legacy tab
 ids; each entry says which web app screen replaced the tab (or that the surface was
 archived). `tests/test_help_content_live_surfaces.py` fails if that text describes the
 deleted Streamlit app or the archived `--agent` loop as live.
