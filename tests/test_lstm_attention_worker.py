@@ -5,12 +5,16 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+import importlib.machinery
+
 mock_tf = types.ModuleType('tensorflow')
 mock_models = types.ModuleType('tensorflow.keras.models')
 mock_layers = types.ModuleType('tensorflow.keras.layers')
 mock_callbacks = types.ModuleType('tensorflow.keras.callbacks')
 
 mock_tf.keras = types.ModuleType('keras')
+for _m in (mock_tf, mock_tf.keras, mock_models, mock_layers, mock_callbacks):
+    _m.__spec__ = importlib.machinery.ModuleSpec(_m.__name__, None)
 mock_tf.keras.models = mock_models
 mock_tf.keras.layers = mock_layers
 mock_tf.keras.callbacks = mock_callbacks

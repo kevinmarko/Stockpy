@@ -1004,7 +1004,8 @@ class TestPreCompute:
         mock_client = MagicMock()
         with patch("settings.settings.FMP_API_KEY", "test_key"):
             with _patched_news_provider(mock_client):
-                sig.pre_compute(universe, ctx)
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    sig.pre_compute(universe, ctx)
         assert sig._news_scores == {}
 
 
@@ -1869,8 +1870,9 @@ class TestGetSymbolNewsCatalystDetails:
         ]
         with patch("signals.news_catalyst.fetch_company_headlines", return_value=headlines):
             with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
-                with patch("signals.news_catalyst.score_headlines", return_value=distributions):
-                    result = get_symbol_news_catalyst_details("AAPL")
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    with patch("signals.news_catalyst.score_headlines", return_value=distributions):
+                        result = get_symbol_news_catalyst_details("AAPL")
 
         assert result["provider_used"] == "fmp"
         assert len(result["headlines"]) == 2
@@ -1901,8 +1903,9 @@ class TestGetSymbolNewsCatalystDetails:
         ]
         with patch("signals.news_catalyst.fetch_company_headlines", return_value=headlines):
             with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
-                with patch("signals.news_catalyst.score_headlines", return_value=distributions):
-                    result = get_symbol_news_catalyst_details("AAPL", max_headlines=2)
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    with patch("signals.news_catalyst.score_headlines", return_value=distributions):
+                        result = get_symbol_news_catalyst_details("AAPL", max_headlines=2)
 
         titles = [h["title"] for h in result["headlines"]]
         assert titles == ["newest", "middle"]
@@ -1973,8 +1976,9 @@ class TestGetSymbolNewsCatalystDetails:
         distributions = [{"positive": 0.5, "neutral": 0.3, "negative": 0.2}]
         with patch("signals.news_catalyst.fetch_company_headlines", return_value=headlines):
             with patch("signals.news_catalyst.fetch_next_earnings_any", return_value=None):
-                with patch("signals.news_catalyst.score_headlines", return_value=distributions):
-                    result = get_symbol_news_catalyst_details("AAPL")
+                with patch("signals.news_catalyst._get_finbert_pipeline", return_value=None):
+                    with patch("signals.news_catalyst.score_headlines", return_value=distributions):
+                        result = get_symbol_news_catalyst_details("AAPL")
         assert result["provider_used"] == "none"
 
 
@@ -1984,32 +1988,51 @@ class TestFinbertOpenMPCoexistence:
     def test_get_finbert_pipeline_caps_torch_threads_and_coexists_with_lightgbm(
         self, monkeypatch
     ):
+        import importlib.machinery
+        import importlib.util
+        import types
         import numpy as np
         import signals.news_catalyst as nc
 
-        pytest.importorskip("torch")
-        import lightgbm as lgb
-        import torch
-        import torch.nn as nn
+        # Check availability via find_spec (NOT pytest.importorskip("torch"),
+        # which eagerly imports torch before _get_finbert_pipeline()'s
+        # `import lightgbm` pre-emption can run and causes LightGBM's OpenMP
+        # worker thread to SIGSEGV in __kmp_suspend_initialize_thread).
+        if importlib.util.find_spec("torch") is None:
+            pytest.skip("torch not installed")
 
         # Other test modules (test_cnn_lstm_worker.py, test_forecasting_lookahead.py,
         # test_lstm_attention_worker.py) install spec-less ``types.ModuleType``
-        # tensorflow stubs in sys.modules at import time. transformers probes
-        # tensorflow with importlib.util.find_spec, which raises
-        # "ValueError: tensorflow.__spec__ is None" on such a stub, so this test
-        # failed whenever one of those modules shared its xdist worker. Hide the
-        # stubs for this test only (monkeypatch restores them afterwards).
+        # tensorflow stubs in sys.modules at import time. Hide any spec-less
+        # stubs for this test (monkeypatch restores them afterwards).
         for _mod_name, _mod in list(sys.modules.items()):
             if (_mod_name == "tensorflow" or _mod_name.startswith("tensorflow.")) and getattr(
                 _mod, "__spec__", None
             ) is None:
                 monkeypatch.delitem(sys.modules, _mod_name)
 
+        # Stub `transformers` in sys.modules rather than calling
+        # `patch("transformers.pipeline", ...)`: unittest.mock.patch resolves
+        # `transformers.pipeline` BEFORE entering the `with` block, which both
+        # triggers transformers._LazyModule to import `torch` ahead of
+        # `_get_finbert_pipeline()`'s `import lightgbm` pre-emption AND swaps
+        # `sys.modules["transformers"]` so `from transformers import pipeline`
+        # inside `_get_finbert_pipeline()` still binds the real unmocked
+        # HuggingFace pipeline loader.
+        fake_transformers = types.ModuleType("transformers")
+        fake_transformers.__spec__ = importlib.machinery.ModuleSpec("transformers", None)
+        sentinel_pipe = MagicMock(name="finbert_pipeline_sentinel")
+        fake_transformers.pipeline = MagicMock(return_value=sentinel_pipe)
+        monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
         monkeypatch.setattr(nc, "_FINBERT_LOAD_ATTEMPTED", False)
         monkeypatch.setattr(nc, "_FINBERT_PIPELINE", None)
-        with patch("transformers.pipeline", return_value=MagicMock()):
-            pipe = nc._get_finbert_pipeline()
-            assert pipe is not None
+        pipe = nc._get_finbert_pipeline()
+        assert pipe is sentinel_pipe
+
+        import lightgbm as lgb
+        import torch
+        import torch.nn as nn
 
         assert torch.get_num_threads() == 1
 
@@ -2025,4 +2048,5 @@ class TestFinbertOpenMPCoexistence:
         layer = nn.Linear(5, 3)
         out = torch.softmax(layer(torch.randn(4, 5)), dim=-1)
         assert out.shape == (4, 3)
+
 

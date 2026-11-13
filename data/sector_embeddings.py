@@ -26,6 +26,7 @@ the difference is measurable, not assumed.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import logging
 from pathlib import Path
@@ -38,18 +39,39 @@ from settings import settings
 
 logger = logging.getLogger(__name__)
 
+
+def _sbert_installed() -> bool:
+    """True when ``sentence_transformers`` can be imported, without importing it.
+
+    ``find_spec`` raises ``ValueError`` (not ``ImportError``) when
+    ``sys.modules`` already holds a spec-less stub of the package, as some
+    tests install; treat that as "not installed" so this module still imports
+    and degrades to ``SBERT_AVAILABLE = False`` instead of crashing.
+    """
+    try:
+        return importlib.util.find_spec("sentence_transformers") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 try:
-    try:
-        import lightgbm  # noqa: F401
-    except ImportError:
-        pass
-    try:
-        import torch
-        torch.set_num_threads(1)
-    except Exception:
-        pass
-    from sentence_transformers import SentenceTransformer, models  # noqa: F401
-    SBERT_AVAILABLE = True
+    # Only touch lightgbm/torch when SBERT is actually installed, and import
+    # lightgbm BEFORE torch so LightGBM's OpenMP runtime loads first
+    # (docs/known_issues/pytorch_lightgbm_libomp_collision.md).
+    if _sbert_installed():
+        try:
+            import lightgbm  # noqa: F401
+        except ImportError:
+            pass
+        try:
+            import torch
+            torch.set_num_threads(1)
+        except Exception:
+            pass
+        from sentence_transformers import SentenceTransformer, models  # noqa: F401
+        SBERT_AVAILABLE = True
+    else:
+        SBERT_AVAILABLE = False
 except ImportError:
     SBERT_AVAILABLE = False
 
