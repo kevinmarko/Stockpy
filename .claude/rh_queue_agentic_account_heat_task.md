@@ -11,11 +11,12 @@ Plan: `.claude/rh_queue_agentic_account_heat_implementation_plan.md`
 - [x] 7. PR artifacts (plan, task, walkthrough)
 
 ## Verification and merge
-- [ ] Targeted tests green (risk_gate, queue_builder, agentic_preflight, robinhood_e2e, agentic_cycle)
-- [ ] `make ci`
-- [ ] `make local-ci` (paste the table into the PR)
-- [ ] Live read-only replay: queue rebuilt, BUYs `gate_allowed=True`, `deferred_account_checks` present, cycle reason no longer `no_actionable_intents`
-- [ ] MCP positions field check: real avg-cost field name in the Agentic `get_equity_positions` payload
+- [x] Targeted tests green (risk_gate, queue_builder, agentic_preflight, robinhood_e2e, agentic_cycle)
+- [x] `make ci`
+- [x] `make local-ci` (paste the table into the PR)
+- [x] Live read-only replay: queue gate passes the 3 BUYs on the cached snapshot; preflight heat 0.0 on real Agentic reads
+- [ ] After restart: a daemon-written queue has `deferred_account_checks` and the cycle reason is no longer `no_actionable_intents`
+- [x] MCP positions field check: real avg-cost field name in the Agentic `get_equity_positions` payload
 - [ ] PR opened, self-reviewed, merged; main checkout synced
 - [ ] Stack restarted (`launchctl kickstart -k gui/$UID/com.investyo.stack`)
 - [ ] First Reviewer run after the restart counts a day (`python -m execution.agentic_review status`)

@@ -44,5 +44,30 @@ was the only account-level check that actually bit; the other three were already
 
 ## Verification
 
-TODO (lead): paste targeted-test results, `make ci`, the `make local-ci` table, the live read-only
-replay, and the MCP positions avg-cost field check.
+All runs 2026-11-13 on this branch.
+
+- **Targeted tests:** risk_gate, queue_builder, agentic_preflight, robinhood_e2e, agentic_cycle,
+  agentic_review, execution_queue_gating, daemon_agentic_queue_primary, execute_broker_orders and
+  compose: **471 passed**.
+- **`make local-ci`** (first run, then re-run after the fixes):
+
+  | step | result |
+  |---|---|
+  | lint | PASS |
+  | offline | PASS on re-run: 12152 passed, 15 skipped. The first run failed on two goldens and the generated settings census/liveness artifacts; all were regenerated, and the only diffs are line-number shifts plus the two new queue keys. |
+  | coverage | PASS |
+  | slow | PASS |
+  | bandit | PASS |
+  | pip-audit | FAIL: new pip / pyjwt advisories. No dependency changes in this PR, so it fails the same way on main. |
+  | webapp-typecheck / test / build | FAIL exit 127: `tsc` isn't installed in this worktree (no `node_modules`). This PR doesn't touch `webapp/`. |
+  | ml-audit / ml-lookahead | SKIPPED (no watched path changed) |
+
+- **Live replay, queue gate** (read-only, cached main-account snapshot, no login, `side_effects=False`):
+  - Before: MFIN, SHEL and WFC all blocked at `portfolio heat 34.78% > limit 11.00%`.
+  - After: all three gate-allowed.
+- **Live replay, preflight** on real Agentic MCP reads (read-only `get_portfolio`, `get_equity_positions`, `get_equity_quotes`; $250 cash, no positions):
+  - Heat is `0.0`.
+  - MFIN passes (3 shares, $40.20).
+  - SHEL and WFC veto as `qty_below_one_share`: one share costs more than the $50 cap. That veto is pre-existing and unrelated to heat.
+- **MCP field check:** `get_equity_positions` returns `average_buy_price`. Its guide says the field may be omitted while a position is reconciling; in that case the preflight fails closed with `portfolio_heat_unavailable`.
+- **Changes after the subagents' pass:** the `robinhood-execution` skill (both mirrors) now lists portfolio heat among the preflight's checks.
