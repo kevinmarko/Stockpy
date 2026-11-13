@@ -63,10 +63,21 @@ Applies to whichever agent does the work — Claude Code or Antigravity — with
 
 - **Verification is mandatory, not advisory.** A task is not done until the relevant check has been
   run and shown to pass — not "should pass." Python changes: the corresponding
-  `tests/test_<module>.py` (or the fuller `make ci` gate) must show zero failures. `webapp/src/`
+  `tests/test_<module>.py` (or the fuller `make ci` gate) must show zero failures. GitHub Actions is
+  no longer used (2026-10-29) and `.github/workflows/` was deleted (2026-10-30; the last copy of
+  each file is in the parent of the commit that deleted it: `git show "$(git log --diff-filter=D -1
+  --format=%H -- .github/workflows/ci.yml)^:.github/workflows/ci.yml"`): there is no remote CI, so
+  `make local-ci` (it runs what the old workflows ran) is the pre-merge gate and its result goes in
+  the PR. `webapp/src/`
   changes: `npm run --prefix webapp typecheck` clean AND, for anything UI-visible, an actual
   `npm run dev` + browser check (console errors + visual confirmation) — a clean typecheck proves
   the code compiles, not that a screen renders or behaves as intended.
+- **Standing policy: no GitHub Actions, ever (operator, 2026-11-02).** CI is this repo's own local
+  system (`make local-ci`), not GitHub. Never add, restore or stub a workflow — not even one that
+  only reports a check name to satisfy a branch rule — and never wait on, re-run or cite remote CI
+  as evidence. Paste the `make local-ci` table into the PR as its verification. A GitHub branch rule
+  that still requires CodeQL or the old workflow checks cannot be met by any push; only the operator
+  can remove it (repo Settings → Rules), so say so once and don't retry the merge until they have.
 - **Claude Code enforces the Python half automatically.** `.claude/hooks/verify_targeted_tests.sh`
   (`PostToolUse`, non-blocking) runs the mapped `tests/test_<module>.py` after every edit to a
   tracked `.py` file. `.claude/hooks/verify_before_stop.sh` (`Stop`) is the enforcement gate: it
@@ -102,7 +113,7 @@ Applies to whichever agent does the work — Claude Code or Antigravity — with
   `model:` unset so it inherits the session's model; Antigravity — use `model: pro`.
 - **`CLAUDE.md` and `AGENTS.md` are exact mirrors** (`AGENTS.md`'s first line is `# CLAUDE.md`).
   `.claude/hooks/sync_agent_docs.sh` / `.agents/hooks/sync_agent_docs.sh` copy whichever was just
-  edited onto the other; `tests/test_agent_docs_sync.py` fails CI if they differ.
+  edited onto the other; `tests/test_agent_docs_sync.py` fails `make ci` if they differ.
 
 ## Project
 
@@ -230,6 +241,7 @@ python -c "from shared import daemon_client as d; print(d.trigger_run())"   # on
 # ── Tests & gates ─────────────────────────────────────────────────────────────
 pytest tests/test_<module>.py        # targeted tests; add ::test_name for one test
 make ci                              # offline suite: pytest -m "not network and not slow" -n auto --dist loadgroup
+make local-ci [ARGS="--profile quick"]   # everything the retired GitHub Actions ran: lint, offline+slow suites, coverage floor, webapp, bandit, pip-audit, ML leakage (scripts/local_ci.py; --list shows the steps)
 make verify                          # env check + pytest + one standalone dry-run cycle (queue mode forced off: no queue/orders/pushes; fails on synthetic data) + summary (./verify.command = same)
 python scripts/preflight_check.py [--json]   # pre-live readiness gate (exit 0 = all pass)
 
@@ -415,7 +427,15 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   forces the kill switch on.
 - **Robinhood trading** is queue-driven: the pipeline writes `execution_queue.json`; the
   `robinhood-execution` skill / `/rh-execute` previews and, only in `ROBINHOOD_EXECUTION_MODE=live`
-  with per-trade human confirmation, places orders. Paper first.
+  with per-trade human confirmation, places orders. Paper first. With Robinhood trade approvals on
+  for the Agentic account, that confirmation is the operator's tap in the Robinhood app (an agent can
+  decline but never approve); the skill picks the path per order from `review_equity_order`'s
+  `customer_approval_required`. Only `.claude/agents/rh-trader.md` may list order-power tools.
+  `/rh-agentic-cycle` runs the four `rh-*` agents unattended (`execution/agentic_cycle.py` gates it;
+  optional launchd timer `scripts/com.investyo.rh-agentic-cycle.plist`, never auto-installed): it
+  sends orders only to the phone, never asks in chat and never declines (`docs/RUNBOOK.md`).
+  A fifth, read-only agent (`rh-reviewer`, `/rh-agentic-review`, `execution/agentic_review.py`) audits
+  the burn-in daily; its READY verdict is advice, and going live stays the operator's settings change.
 - **Robinhood login is device-approval only.** `data/robinhood_portfolio.py::_login_with` rejects by
   default (`RobinhoodApprovalRequired`) and logs in only inside the isolated worker
   (`data/robinhood_login_worker.py`, `RH_LOGIN_WORKER=1`), launched per attempt as a killable,

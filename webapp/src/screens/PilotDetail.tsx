@@ -55,7 +55,13 @@ export function PilotDetail() {
     return (
       <div className="screen">
         <BackLink />
-        <ErrorState message={error ?? "Not found"} status={status} onRetry={reload} />
+        <ErrorState
+          message={error ?? "Not found"}
+          status={status}
+          onRetry={reload}
+          // The catalog is static: a 404 here means the id is wrong, not that the pipeline hasn't run.
+          notFound={`There is no pilot with the id "${id}".`}
+        />
       </div>
     );
   }

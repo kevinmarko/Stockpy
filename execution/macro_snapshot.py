@@ -16,8 +16,8 @@ not a direct fail-open on capital (every one of these bridges structurally
 forbids live placement outside narrow, already-gated conditions), but a
 misleading annotation shown to whoever reviews the queue.
 
-``main.py``'s advisory cycle already builds a real ``MacroEconomicDTO`` once
-per cycle (``_build_macro_dto()``) and now threads it explicitly into
+The daemon's advisory cycle already builds a real ``MacroEconomicDTO`` once
+per cycle (``pipeline.advisory_inputs.build_macro_dto()``) and now threads it explicitly into
 ``compose_and_emit``/``emit_options_execution_queue``. But two callers have
 no such value in scope: ``execution/kill_switch.py``'s
 ``GlobalKillSwitch.activate()`` (which can fire from a CLI invocation, a
@@ -65,7 +65,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # FRED series IDs → MacroEconomicDTO constructor kwargs. Mirrors
-# main.py::_build_macro_dto()'s own mapping exactly, so a cached value here
+# pipeline/advisory_inputs.py::build_macro_dto()'s own mapping exactly, so a cached value here
 # means the same thing it would have meant coming from a live fetch.
 _REQUIRED_SERIES = {
     "VIXCLS": "vix_value",

@@ -26,7 +26,7 @@ Design constraints (mirrors :mod:`pilots.scan_config_store`):
   :class:`WatchlistEnvPrecedenceError` rather than reporting a write that would
   not take effect — the caller surfaces that honestly instead of lying.
 * Appending never places an order and is not retroactive — it takes effect on
-  the next ``main.py`` / ``main_orchestrator.py`` universe build.
+  the next daemon / ``main_orchestrator.py`` universe build.
 """
 from __future__ import annotations
 
@@ -52,8 +52,8 @@ __all__ = [
     "DEFAULT_WATCHLIST_PATH",
 ]
 
-# Same relative path ``main.WATCHLIST_FILE`` reads (CWD-relative — the Pilots API
-# and main.py both run from the repo root), so a write here is read back there.
+# Same relative path ``pipeline.advisory_inputs.WATCHLIST_FILE`` reads (CWD-relative — the
+# Pilots API and the daemon both run from the repo root), so a write here is read back there.
 DEFAULT_WATCHLIST_PATH = Path("watchlist.txt")
 
 # A conservative ticker shape: 1-6 letters, optional ``.``/``-`` class suffix

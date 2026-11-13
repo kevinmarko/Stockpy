@@ -1,10 +1,10 @@
 """
-shared/ — live backend logic shared by the Pilots PWA/API layer and the
-frozen legacy Streamlit Command Center (legacy/streamlit_command_center/).
+shared/ — live backend logic shared by the Pilots PWA/API layer (the
+Streamlit Command Center it also served was deleted in 2026-09).
 
 These modules originated in gui/ but are NOT part of the decommissioned
 UI — they are imported directly by production code (api/pilots_api.py,
-api/data_api.py, api/_jobs.py, pilots/*, main.py, evaluation_engine.py,
+api/data_api.py, api/_jobs.py, pilots/*, evaluation_engine.py,
 alerting.py, diagnostics_and_visuals.py, and scripts/). Keep this file free
 of any real import statement — tests/test_pilots_api.py's
 test_gui_package_init_stays_import_inert enforces this, since

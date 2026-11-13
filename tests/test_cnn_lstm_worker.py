@@ -27,11 +27,15 @@ import pytest
 # Mock TensorFlow before importing cnn_lstm_worker, mirroring
 # tests/test_forecasting_lookahead.py's established pattern.
 # ---------------------------------------------------------------------------
+import importlib.machinery
+
 mock_tf = types.ModuleType('tensorflow')
 mock_keras = types.ModuleType('tensorflow.keras')
 mock_models = types.ModuleType('tensorflow.keras.models')
 mock_layers = types.ModuleType('tensorflow.keras.layers')
 mock_callbacks = types.ModuleType('tensorflow.keras.callbacks')
+for _m in (mock_tf, mock_keras, mock_models, mock_layers, mock_callbacks):
+    _m.__spec__ = importlib.machinery.ModuleSpec(_m.__name__, None)
 
 mock_tf.keras = mock_keras
 mock_keras.models = mock_models

@@ -26,6 +26,7 @@ import {
   StaleDataNotice,
 } from "../components/ui";
 import { ExecutionQueueSection } from "../components/ExecutionQueueSection";
+import { PendingApprovalsSection } from "../components/PendingApprovalsSection";
 import { CopyCommandBlock } from "../components/CopyCommandBlock";
 import { DecisionModal } from "../components/DecisionModal";
 import { KillSwitchToggle } from "../components/KillSwitchToggle";
@@ -204,6 +205,7 @@ export function AgenticTrading() {
             .dashboard-layout > [data-grid-area="agent_status"] { grid-column: span 12; }
             .dashboard-layout > [data-grid-area="discovery"] { grid-column: span 12; }
             .dashboard-layout > [data-grid-area="execution"] { grid-column: span 12; }
+            .dashboard-layout > [data-grid-area="approvals"] { grid-column: span 12; }
             .dashboard-layout > [data-grid-area="advanced_visuals"] { grid-column: span 12; }
             .dashboard-layout > [data-grid-area="rlhf"] { grid-column: span 12; }
             .dashboard-layout > [data-grid-area="decision"] { grid-column: span 6; }
@@ -226,6 +228,11 @@ export function AgenticTrading() {
           {/* Execution Queue */}
           <div id="execution-queue" data-grid-area="execution" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <ExecutionQueueSection />
+          </div>
+
+          {/* Pending approvals (four-agent cycle; read-only, approve in the Robinhood app) */}
+          <div id="pending-approvals" data-grid-area="approvals" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+            <PendingApprovalsSection refreshToken={refreshToken} />
           </div>
 
           {/* Advanced Quantitative Visualizations Section */}

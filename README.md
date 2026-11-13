@@ -2,8 +2,8 @@
 
 An automated quantitative analysis pipeline: fetches market/macro data, computes
 technical & fundamental indicators, runs multi-horizon forecasts, backtests
-strategies, persists signals to SQLite, and publishes results to Google Sheets /
-an HTML report.
+strategies, persists signals to SQLite, and serves the results to the Pilots PWA /
+an HTML dashboard report.
 
 > **Advisory-only by default.** The platform ships with `ADVISORY_ONLY=true`. No
 > orders are submitted to any broker. The pipeline produces recommendations,
@@ -35,14 +35,10 @@ an HTML report.
 cp .env.example .env
 # edit .env — see "Required .env keys" below
 
-# 3. Share the Google Sheet with the service-account email
-#    Open credentials.json → find "client_email"
-#    In the Sheet: Share → paste the email → Editor role
-
-# 4. Verify everything works before relying on it
+# 3. Verify everything works before relying on it
 make verify           # env check + tests + one dry-run cycle (or double-click verify.command)
 
-# 5. Launch
+# 4. Launch
 ./launch_webapp.command   # web app + backend; or install the always-on stack (docs/RUNBOOK.md §0.1)
 ```
 
@@ -59,8 +55,8 @@ Copy [`.env.example`](.env.example) to `.env` and fill in the values. **Never co
 | `RH_USERNAME` | Optional | Robinhood read-only snapshot (held symbols always included) |
 | `RH_PASSWORD` | Optional | Robinhood login is device-approval push — after these two are set, you approve the login by tapping "approve" in the Robinhood app on your phone; no MFA/TOTP secret is configured or needed anywhere in this codebase |
 | `PAPER_TRADING` | Optional | `true` (default) = paper trading on the local FMP paper ledger (an old `ALPACA_PAPER` in `.env` still works as an alias). With `PAPER_TRADING=false` and `ADVISORY_ONLY=false` the automated pipeline places **no orders** (real orders go only through the Robinhood queue). Has no effect while `ADVISORY_ONLY=true` |
-| `NTFY_TOPIC` | Optional | Phone push alerts via ntfy.sh — set a random string, subscribe in the ntfy app |
-| `WATCHLIST` | Optional | Comma-separated tickers (alternatives: `watchlist.txt` one per line, or Sheet2 column A — see "Ticker universe" below) |
+| `ALERT_NTFY_TOPIC` | Optional | Phone push alerts via ntfy.sh — set a random string, subscribe in the ntfy app. A bare `NTFY_TOPIC` is not read |
+| `WATCHLIST` | Optional | Comma-separated tickers (alternative: `watchlist.txt`, one per line — see "Ticker universe" below) |
 | `DISCORD_WEBHOOK_URL` | Optional | Discord channel alerts |
 | `SLACK_WEBHOOK_URL` | Optional | Slack channel alerts |
 | `MACRO_REGIME_GATE_ENABLED` | Optional | `true` (default). When `false`, the orchestrator's macro kill-switch check is bypassed (hybrid mode) |
@@ -73,17 +69,21 @@ safe defaults — see the full list in [`.env.example`](.env.example).
 
 ## Ticker universe
 
-The pipeline (`pipeline/advisory_inputs.py::build_universe_detailed()`) builds its evaluation universe from up to three sources, in priority order:
+The pipeline (`pipeline/advisory_inputs.py::build_universe_detailed()`, called by the daemon's `AsyncDataFetchStep`) builds its evaluation universe from these sources:
 
 1. **Robinhood held positions** — always included when the snapshot is available.
 2. **`WATCHLIST` env var or `watchlist.txt`** — merged in whenever present.
-3. **Google Sheet → "Sheet2" column A** — consulted **only as a last-resort fallback**
-   when sources 1 and 2 are both empty (e.g. Robinhood is unreachable and no
-   watchlist is configured). Requires `credentials.json`; silently skipped if the
-   sheet, tab, or credential is missing.
+3. **Discovered scan candidates** (`scan_candidates.json`) — always merged in.
+4. **`DEFAULT_TICKERS`** — used **only as a fallback** when sources 1–3 are all empty.
+5. **Recently-closed positions** (`CLOSED_POSITION_RETENTION_DAYS`) and open pipeline paper
+   positions — unioned in last, so they are never rating-dropped and never suppress the
+   `DEFAULT_TICKERS` fallback.
 
-If all three are empty, the run logs a warning naming every remediation path and
-exits cleanly without evaluating anything.
+With `SYMBOL_RATING_AUTO_DROP_ENABLED` on, non-held symbols on a long enough BAD-rating streak are
+subtracted from sources 1–3 first. The former Google Sheet ("Sheet2") fallback was retired in
+2026-09 along with the Sheet publisher.
+
+If every source, including `DEFAULT_TICKERS`, is empty, the universe is empty.
 
 ---
 
@@ -180,7 +180,8 @@ The platform's default mode is **advisory** (`ADVISORY_ONLY=true` in `.env`):
   import — no orders are submitted regardless of `PAPER_TRADING`.
 - The web app shows an "Advisory Only Mode (Live Execution Disabled)" status banner.
 - `scripts/preflight_check.py` auto-skips broker-readiness checks
-  (`paper_trading_mode`, `dry_run_disabled`, `paper_trading_duration`)
+  (`paper_trading_mode`, `dry_run_disabled`, `paper_trading_duration`, `heartbeat_fresh`,
+  `validation_reports`, `no_unexpected_risk_blocks`)
   and instead enforces the `advisory_only_active` check.
 
 ### Pause the recommendation engine
@@ -277,7 +278,7 @@ from a local `.env` file (never committed). The most important key is `FRED_API_
 
 ## Security — rotating the leaked FRED key
 
-A FRED API key was previously hardcoded in `main.py` and `main_orchestrator.py`
+A FRED API key was previously hardcoded in `main.py` (since archived to `legacy/main.py`) and `main_orchestrator.py`
 and committed to git history. **It is compromised and must be rotated.** The
 application now reads the key from the environment and prints a CRITICAL warning
 (detected via a stored SHA-256 digest, so the literal lives nowhere in source)
@@ -330,7 +331,8 @@ Fails closed if stress results are missing.
 
 ## Daily report
 
-Every full pipeline run writes an HTML report to `output/`. The report leads with:
+Every full daemon cycle (`pipeline/production_steps.py`) writes the HTML dashboard report
+`output/daily_report_dashboard.html` (the older `daily_report.html` writer was archived in step 5.5). The report leads with:
 
 - **Δ Since Last Run band** — new BUYs, action flips (HOLD → BUY etc.), conviction
   deltas above `SNAPSHOT_CONVICTION_DELTA_THRESHOLD` (default 0.2), holdings added /

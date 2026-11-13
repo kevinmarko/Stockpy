@@ -158,6 +158,8 @@ class TestFreshFitIsolationDispatch:
         # import target via sys.modules rather than a module-level name, and
         # scope it to this test via monkeypatch so it can't leak into other
         # test files' collection order.
+        import importlib.machinery
+
         mock_callbacks = types.ModuleType('tensorflow.keras.callbacks')
         mock_callbacks.EarlyStopping = mock.MagicMock()
         mock_keras = types.ModuleType('tensorflow.keras')
@@ -165,6 +167,8 @@ class TestFreshFitIsolationDispatch:
         mock_tf = types.ModuleType('tensorflow')
         mock_tf.keras = mock_keras
         mock_tf.random = mock.MagicMock()  # tf.random.set_seed(...) -- CNN-LSTM reproducibility seed
+        for _m in (mock_tf, mock_keras, mock_callbacks):
+            _m.__spec__ = importlib.machinery.ModuleSpec(_m.__name__, None)
         monkeypatch.setitem(sys.modules, 'tensorflow', mock_tf)
         monkeypatch.setitem(sys.modules, 'tensorflow.keras', mock_keras)
         monkeypatch.setitem(sys.modules, 'tensorflow.keras.callbacks', mock_callbacks)

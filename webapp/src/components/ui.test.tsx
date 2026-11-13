@@ -14,7 +14,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { Button, DeployableBadge, Input, InfoTip } from "./ui";
+import { Button, DeployableBadge, ErrorState, Input, InfoTip } from "./ui";
 
 describe("Input", () => {
   it("wires the label to the input via htmlFor/id", () => {
@@ -212,5 +212,29 @@ describe("DeployableBadge", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     const badge = within(screen.getByRole("link")).getByText("● Deployable");
     expect(badge.tagName).toBe("SPAN");
+  });
+});
+
+describe("ErrorState", () => {
+  it("a plain 404 is still the cold-start 'Nothing here yet' with no Retry", () => {
+    render(<ErrorState message="x" status={404} onRetry={() => {}} />);
+    expect(screen.getByText("Nothing here yet")).toBeInTheDocument();
+    expect(screen.getByText(/Run the Stockpy pipeline/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
+  it("a 404 with notFound says the thing does not exist and never suggests running the pipeline", () => {
+    render(<ErrorState message="x" status={404} onRetry={() => {}} notFound={'There is no pilot with the id "zz".'} />);
+    expect(screen.getByText("Not found")).toBeInTheDocument();
+    expect(screen.getByText('There is no pilot with the id "zz".')).toBeInTheDocument();
+    expect(screen.queryByText(/Run the Stockpy pipeline/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
+  it("notFound does not change a non-404 error: it shows the message and offers Retry", () => {
+    render(<ErrorState message="Server error 500" status={500} onRetry={() => {}} notFound="unused" />);
+    expect(screen.getByText("Couldn't load")).toBeInTheDocument();
+    expect(screen.getByText("Server error 500")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 });

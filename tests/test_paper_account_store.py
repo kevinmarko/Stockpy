@@ -1083,8 +1083,10 @@ def test_transactions_store_bridge_lands_row_fast_and_correctly(tmp_path, monkey
     # Generous bound: a genuinely-contended second connection under this
     # file's own busy_timeout=5000ms PRAGMA would take multiple seconds;
     # the fixed (session-shared) path costs the same single write as any
-    # other apply_fill call, empirically ~5ms.
-    assert elapsed < 1.0, f"bridge write took {elapsed:.3f}s -- possible regression to lock contention"
+    # other apply_fill call, empirically ~5ms alone. 1.0 s was too tight for
+    # a loaded `make ci` run (1.025 s seen under -n auto, 2026-11-10); 2.5 s
+    # still fails a multi-second stall (checked by injecting a 3 s one).
+    assert elapsed < 2.5, f"bridge write took {elapsed:.3f}s -- possible regression to lock contention"
 
     import transactions_store
     ts = transactions_store.TransactionsStore(db_url=db_url)

@@ -351,3 +351,142 @@ def test_reconcile_fetcher_failure_degrades_to_no_fills(out_dir):
     assert report["ok"] is False
     assert len(report["unmatched_placed"]) == 1
     assert report["unexpected_fills"] == []
+
+
+# ---------------------------------------------------------------------------
+# Robinhood trade-approval mode (four-agent plan, Phase 1)
+# ---------------------------------------------------------------------------
+
+def test_make_ref_id_is_deterministic_uuid():
+    import uuid
+    a = rs.make_ref_id("coid-123")
+    assert a == rs.make_ref_id("coid-123")          # retry → same ref_id
+    assert a != rs.make_ref_id("coid-124")          # new logical order → new ref_id
+    assert str(uuid.UUID(a)) == a                   # a real UUID string
+
+
+def test_make_ref_id_pinned_namespace():
+    """The namespace must never change: ref_ids already sent to Robinhood were
+    derived from it. Pin one known output so a namespace edit fails loudly."""
+    import uuid
+    expected = str(uuid.uuid5(uuid.UUID("6f1c2e0a-5b7d-4c3e-9a41-8d2f6b0e7c15"), "pin"))
+    assert rs.make_ref_id("pin") == expected
+
+
+@pytest.mark.parametrize("blank", [None, "", "   "])
+def test_make_ref_id_blank_is_none_not_random(blank):
+    assert rs.make_ref_id(blank) is None
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("pending", "pending"),
+    ("APPROVED", "approved"),
+    ("STATE_DECLINED", "declined"),
+    ("approval_state_expired", "expired"),
+    ("auto-approved", "auto_approved"),
+    ("Auto Approved", "auto_approved"),
+    ("STATE_AUTO_APPROVED", "auto_approved"),
+    ("cancelled", "unknown"),
+    (None, "unknown"),
+])
+def test_normalise_approval_state(raw, expected):
+    assert rs.normalise_approval_state(raw) == expected
+
+
+def test_append_placed_carries_approval_fields_and_legacy_rows_get_none(out_dir):
+    rs.append_placed({"symbol": "AAPL", "side": "buy", "ts": "2026-07-06T10:00:00Z"}, out_dir)
+    rs.append_placed(
+        {"symbol": "MSFT", "side": "buy", "ts": "2026-07-06T10:01:00Z",
+         "approval_id": "appr-1", "ref_id": "ref-1", "run_id": "run-1"},
+        out_dir,
+    )
+    legacy, new = rs.read_placed_ledger(out_dir)
+    assert legacy["approval_id"] is None and legacy["ref_id"] is None and legacy["run_id"] is None
+    assert (new["approval_id"], new["ref_id"], new["run_id"]) == ("appr-1", "ref-1", "run-1")
+
+
+def test_approval_events_last_line_wins_and_pending_ids(out_dir):
+    assert rs.append_approval_event({"approval_id": "a1", "state": "pending"}, out_dir)
+    assert rs.append_approval_event({"approval_id": "a2", "state": "pending"}, out_dir)
+    assert rs.append_approval_event({"approval_id": "a1", "state": "STATE_APPROVED"}, out_dir)
+
+    latest = rs.latest_approval_states(out_dir)
+    assert latest["a1"]["state"] == "approved"
+    assert latest["a1"]["state_raw"] == "STATE_APPROVED"
+    assert latest["a2"]["state"] == "pending"
+    assert rs.pending_approval_ids(out_dir) == ["a2"]
+    files = {p.name for p in out_dir.iterdir()}
+    assert not any(name.endswith(".tmp") for name in files)
+
+
+def test_append_approval_event_without_id_is_refused(out_dir):
+    assert rs.append_approval_event({"state": "pending"}, out_dir) is False
+    assert rs.read_approval_events(out_dir) == []
+
+
+def test_unknown_approval_state_kept_raw_not_guessed(out_dir):
+    rs.append_approval_event({"approval_id": "a9", "state": "STATE_WEIRD"}, out_dir)
+    rec = rs.latest_approval_states(out_dir)["a9"]
+    assert rec["state"] == "unknown"
+    assert rec["state_raw"] == "STATE_WEIRD"
+
+
+def test_reconcile_declined_and_expired_are_not_approved_not_discrepancies(out_dir):
+    ts = "2026-07-06T14:00:00+00:00"
+    rs.append_placed({"symbol": "AAPL", "side": "buy", "ts": ts, "approval_id": "d1"}, out_dir)
+    rs.append_placed({"symbol": "MSFT", "side": "buy", "ts": ts, "approval_id": "e1"}, out_dir)
+    rs.append_approval_event({"approval_id": "d1", "state": "pending"}, out_dir)
+    rs.append_approval_event({"approval_id": "d1", "state": "declined"}, out_dir)
+    rs.append_approval_event({"approval_id": "e1", "state": "expired"}, out_dir)
+
+    report = rs.reconcile(out_dir, orders_fetcher=lambda: [], symbol_resolver=_resolver({}), force=True)
+    assert report["ok"] is True
+    assert report["unmatched_placed"] == []
+    assert sorted(r["symbol"] for r in report["not_approved"]) == ["AAPL", "MSFT"]
+    assert {r["approval_state"] for r in report["not_approved"]} == {"declined", "expired"}
+    assert report["awaiting_approval"] == []
+
+
+def test_reconcile_pending_approval_is_awaiting(out_dir):
+    ts = "2026-07-06T14:00:00+00:00"
+    rs.append_placed({"symbol": "AAPL", "side": "buy", "ts": ts, "approval_id": "p1"}, out_dir)
+    rs.append_approval_event({"approval_id": "p1", "state": "pending"}, out_dir)
+
+    report = rs.reconcile(out_dir, orders_fetcher=lambda: [], symbol_resolver=_resolver({}), force=True)
+    assert report["ok"] is True
+    assert [r["symbol"] for r in report["awaiting_approval"]] == ["AAPL"]
+    assert report["unmatched_placed"] == []
+
+
+def test_reconcile_approved_but_unfilled_or_unrecorded_stays_unmatched(out_dir):
+    """An approved request with no fill, or one whose outcome was never
+    recorded, is still a real gap — it must not be hidden in a quiet bucket."""
+    ts = "2026-07-06T14:00:00+00:00"
+    rs.append_placed({"symbol": "AAPL", "side": "buy", "ts": ts, "approval_id": "ok1"}, out_dir)
+    rs.append_placed({"symbol": "MSFT", "side": "buy", "ts": ts, "approval_id": "nolog"}, out_dir)
+    rs.append_approval_event({"approval_id": "ok1", "state": "approved"}, out_dir)
+
+    report = rs.reconcile(out_dir, orders_fetcher=lambda: [], symbol_resolver=_resolver({}), force=True)
+    assert report["ok"] is False
+    assert sorted(r["symbol"] for r in report["unmatched_placed"]) == ["AAPL", "MSFT"]
+    assert report["not_approved"] == [] and report["awaiting_approval"] == []
+
+
+def test_approved_and_filled_matches_normally(out_dir):
+    ts = "2026-07-06T14:00:00+00:00"
+    rs.append_placed({"symbol": "AAPL", "side": "buy", "qty": 3, "ts": ts, "approval_id": "f1"}, out_dir)
+    rs.append_approval_event({"approval_id": "f1", "state": "approved"}, out_dir)
+    orders = [_raw_order("url/AAPL/", "buy", 3, 190.0, ts, "o1")]
+    report = rs.reconcile(out_dir, orders_fetcher=lambda: orders,
+                          symbol_resolver=_resolver({"url/AAPL/": "AAPL"}), force=True)
+    assert report["ok"] is True
+    assert report["filled_matched"] == 1
+
+
+def test_declined_request_still_blocks_same_day_resubmit(out_dir):
+    """A decline is an operator decision: the dedup_key ledger line must keep
+    the same symbol/side from being re-submitted that UTC day."""
+    d = datetime(2026, 7, 6, 14, 0, tzinfo=timezone.utc)
+    rs.append_placed({"symbol": "AAPL", "side": "buy", "ts": d.isoformat(), "approval_id": "d1"}, out_dir)
+    rs.append_approval_event({"approval_id": "d1", "state": "declined"}, out_dir)
+    assert rs.already_placed("AAPL", "buy", out_dir, on_date=d) is True

@@ -1818,8 +1818,10 @@ export interface TunablesUpdateResult {
 export interface SettingsReferenceField {
   key: string;
   category: "allowed" | "secret" | "excluded";
-  value: number | boolean | string | null;
-  default: number | boolean | string | null;
+  /** Scalars, or the raw list/dict the backend sends for JSON-valued settings
+   *  (SIGNAL_WEIGHTS, DEFAULT_TICKERS, ...). Render through `fmtRefValue`. */
+  value: number | boolean | string | unknown[] | Record<string, unknown> | null;
+  default: number | boolean | string | unknown[] | Record<string, unknown> | null;
   type: TunableFieldType;
   description: string | null;
   domain: string;
@@ -3101,6 +3103,63 @@ export interface AgentLoopStatus {
   last_cycle_iso: string | null;
   backlog_count: number;
   reason: string | null;
+}
+
+/** One Robinhood trade approval the agents sent to the operator's phone. */
+export interface AgenticApprovalRow {
+  approval_id: string;
+  symbol: string | null;
+  side: "buy" | "sell" | string | null;
+  /** Shares sent; null when no placed record matches (never a guessed 0). */
+  qty: number | null;
+  /** Last state the Trader agent recorded — not a live Robinhood read. */
+  state: "pending" | "approved" | "declined" | "expired" | "auto_approved" | "unknown" | string;
+  submitted_at: string | null;
+  recorded_at: string | null;
+  run_id: string | null;
+  /** Quoted only when the run's validator accepted it; otherwise null. */
+  thesis: string | null;
+  invalidation: string | null;
+}
+
+/** The latest unattended /rh-agentic-cycle run (cycle.json). */
+export interface AgenticCycleStatus {
+  run_id: string | null;
+  status: "running" | "completed" | "failed" | string | null;
+  mode: "review" | "live" | string | null;
+  launched_by: "timer" | "manual" | string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  failed_stage: string | null;
+  reason: string | null;
+  summary_title: string | null;
+}
+
+/**
+ * GET /agentic/approvals — trade approvals the four-agent cycle sent to the
+ * operator's phone, plus the last cycle's status. Read-only: approving and
+ * declining happen in the Robinhood app, never here.
+ */
+/** Latest Agent 5 (Reviewer) burn-in verdict. READY is advice; going live is the operator's call. */
+export interface AgenticBurnin {
+  day: string | null;
+  ready: boolean;
+  review_days: number | null;
+  required_days: number | null;
+  /** Every criterion still unmet, in plain words. */
+  unmet: string[];
+  /** Safety invariants that failed (e.g. "order_without_phone_approval"); empty = all pass. */
+  safety_failures: string[];
+}
+
+export interface AgenticApprovals {
+  pending: AgenticApprovalRow[];
+  recent: AgenticApprovalRow[];
+  n_pending: number;
+  last_cycle: AgenticCycleStatus | null;
+  /** Null until the Reviewer has run once. */
+  burnin: AgenticBurnin | null;
+  note: string;
 }
 
 /**

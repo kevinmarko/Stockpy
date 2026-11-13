@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { SettingsReference } from "./SettingsReference";
+import { SettingsReference, fmtRefValue } from "./SettingsReference";
 import { api } from "../api/client";
 import { mockApi } from "../api/mock";
 import type { SettingsReferenceResponse } from "../api/types";
@@ -162,6 +162,57 @@ describe("SettingsReference", () => {
     // Edit link
     const editLink = screen.getByTestId("edit-link-ADVISORY_ONLY");
     expect(editLink).toHaveAttribute("href", "/settings/feature-flags");
+  });
+
+  it("renders dict- and list-valued settings as readable JSON, never [object Object] (regression: the live backend sends them raw; the mock never did)", async () => {
+    const base = mockResponse.fields[0];
+    vi.spyOn(api, "getSettingsReference").mockResolvedValue({
+      total: 2,
+      domains: ["Financial/Risk/Sizing"],
+      fields: [
+        { ...base, key: "SIGNAL_WEIGHTS", type: "string", dangerous: false, writable: false,
+          value: { technical: 0.4, fundamental: 0.6 }, default: { technical: 0.5, fundamental: 0.5 } },
+        { ...base, key: "DEFAULT_TICKERS", type: "string", dangerous: false, writable: false,
+          value: ["AAPL", "MSFT"], default: [] },
+      ],
+    });
+    const { container } = render(
+      <MemoryRouter>
+        <SettingsReference />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(screen.getByText("SIGNAL_WEIGHTS")).toBeInTheDocument());
+    expect(container.textContent).not.toContain("[object Object]");
+    expect(container.textContent).toContain('"technical": 0.4');
+    expect(container.textContent).toContain('[ "AAPL", "MSFT" ]');
+  });
+
+  it("fmtRefValue: scalars keep String(), null is the word null, objects are one-line JSON", () => {
+    expect(fmtRefValue(true)).toBe("true");
+    expect(fmtRefValue(0.5)).toBe("0.5");
+    expect(fmtRefValue(null)).toBe("null");
+    expect(fmtRefValue(undefined)).toBe("null");
+    expect(fmtRefValue({ a: 1 })).toBe('{ "a": 1 }');
+    expect(fmtRefValue([])).toBe("[]");
+    expect(fmtRefValue(["a", "b"])).toBe('[ "a", "b" ]');
+  });
+
+  it("long keys and values may wrap (regression: /settings/reference scrolled sideways on a 390px phone)", async () => {
+    const base = mockResponse.fields[0];
+    vi.spyOn(api, "getSettingsReference").mockResolvedValue({
+      total: 1,
+      domains: ["Financial/Risk/Sizing"],
+      fields: [{ ...base, key: "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE", type: "string", dangerous: false, writable: false,
+        value: "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173", default: "" }],
+    });
+    render(
+      <MemoryRouter>
+        <SettingsReference />
+      </MemoryRouter>
+    );
+    const row = await screen.findByTestId("field-row-PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE");
+    // overflow-wrap is inherited, so the row covers the description, the key and both values.
+    expect(row.style.overflowWrap).toBe("anywhere");
   });
 
   it("filters fields by search query", async () => {

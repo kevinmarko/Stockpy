@@ -13,6 +13,7 @@ import type { StrategyReportCardSnapshot,
   BatchRetrospectiveInsightsResponse,
   BridgeReliabilityResponse,
   AgenticDiscovery,
+  AgenticApprovals,
   AgenticStatus,
   AgentLoopStatus,
   AiChartResponse,
@@ -2038,7 +2039,6 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
     "data/market_data.py:2287",
   ],
   FUNDAMENTALS_SOURCE: ["data/market_data.py:1892"],
-  DASHBOARD_REFRESH_SECONDS: ["api/pilots_api.py:4194", "pilots/settings_domains.py:132"],
   CORS_ALLOWED_ORIGINS: ["api/control_api.py:169", "api/data_api.py:131", "api/metrics_api.py:74", "api/pilots_api.py:342", "api/state_api.py:87"],
   SENTIMENT_SOURCES: ["data/sentiment_sources.py:1932"],
   SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: ["data/sentiment_sources.py:1962"],
@@ -2709,30 +2709,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   // ---- Runtime & Ops ----
   {
     group: "Runtime & Ops",
-    key: "DASHBOARD_REFRESH_SECONDS",
-    type: "number",
-    value: 1800,
-    default: 1800,
-    min: 1,
-    max: 86400,
-    step: 1,
-    description:
-      "Auto-refresh interval for the Streamlit observability dashboard (seconds). Default 1800 = 30 min.",
-  },
-  {
-    group: "Runtime & Ops",
-    key: "PROGRESS_POLL_SECONDS",
-    type: "number",
-    value: 5,
-    default: 5,
-    min: 1,
-    max: 3600,
-    step: 1,
-    description:
-      "Poll interval (seconds) for the Launcher pipeline-progress indicator.",
-  },
-  {
-    group: "Runtime & Ops",
     key: "LOG_LEVEL",
     type: "enum",
     value: "INFO",
@@ -2895,7 +2871,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     default: true,
     type: "boolean",
     description:
-      "Fix for the CNN-LSTM/TensorFlow deadlock documented in docs/known_issues/cnn_lstm_tf_deadlock.md (issue #381). Root cause: TensorFlow and pyarrow each ship an independently-compiled copy of the same Abseil sync primitive; whichever library's Python-level init runs first in the PROCESS wins that symbol, and if pandas/pyarrow initialize first, the first real multi-threaded TF eager op (a Conv1D/LSTM .fit()) deadlocks forever. Reordering forecasting_engine.py's own imports (always-on, unconditional) only helps when this module is the first thing in the whole process to touch pandas -- true in an isolated test script, false in main.py/main_orchestrator.py/pipeline/production_steps.py, which all import pandas before forecasting_engine is ever reached (those three files carry their own guarded `import tensorflow` before their own `import pandas` as a defense-in-depth second layer -- see Fix 2 in the doc -- but that convention is unenforced for any OTHER entry point, script, or notebook that happens to reach this code path). When True (the default), ForecastingEngine.run_cnn_lstm_forecast runs the actual TF-touching work (model fit+predict, and cached-model load+predict) in a persistent worker pool (repo-root cnn_lstm_process_pool.py) whose worker module (repo-root cnn_lstm_worker.py -- deliberately NOT inside forecasting/, since that package's __init__ eagerly imports pandas) imports tensorflow before anything else and runs as its own genuine OS process, launched via subprocess.Popen -- a fresh interpreter per worker means the parent process's import order can no longer matter, unlike the module-level reorder alone or the entry-point guards. This is what actually removes the process-scope constraint, rather than merely mitigating it by convention: it protects EVERY caller, known or not, not just the three files that remember the guard. As of 2026-08-04 (Round 8 of the known-issues doc), workers are launched with subprocess.Popen rather than multiprocessing -- a second, distinct deadlock (unrelated to the Abseil ODR collision above) was found in multiprocessing-managed worker processes specifically; see Round 8 for the full ablation matrix. All feature engineering / windowing / scaling stays in the parent process unchanged (pandas-only, never touches TF). Any subprocess failure (timeout, a dead/unresponsive worker, real training exception) is caught by run_cnn_lstm_forecast's existing outer try/except and degrades to the zero-result sentinel -- never crashes the pipeline (CONSTRAINT #6). This default flipped True on 2026-07-31 (Round 7 of the known-issues doc) once Round 6 (2026-07-27) verified subprocess isolation end-to-end against the real native deadlock on real production data in the actual macOS arm64 + Framework-Python environment the deadlock was originally confirmed on -- the earlier caveat about this being verified only against the mocked test suite no longer applies. Set False only to restore the legacy in-process path (byte-identical to this flag's original pre-2026-07-31 default); doing so re-exposes the process-scope import-order hazard for any entry point that doesn't carry its own guarded `import tensorflow` before `import pandas`/`import pyarrow`.",
+      "Fix for the CNN-LSTM/TensorFlow deadlock documented in docs/known_issues/cnn_lstm_tf_deadlock.md (issue #381). Root cause: TensorFlow and pyarrow each ship an independently-compiled copy of the same Abseil sync primitive; whichever library's Python-level init runs first in the PROCESS wins that symbol, and if pandas/pyarrow initialize first, the first real multi-threaded TF eager op (a Conv1D/LSTM .fit()) deadlocks forever. Reordering forecasting_engine.py's own imports (always-on, unconditional) only helps when this module is the first thing in the whole process to touch pandas -- true in an isolated test script, false in main_orchestrator.py/pipeline/production_steps.py, which all import pandas before forecasting_engine is ever reached (those two files carry their own guarded `import tensorflow` before their own `import pandas` as a defense-in-depth second layer -- see Fix 2 in the doc -- but that convention is unenforced for any OTHER entry point, script, or notebook that happens to reach this code path). When True (the default), ForecastingEngine.run_cnn_lstm_forecast runs the actual TF-touching work (model fit+predict, and cached-model load+predict) in a persistent worker pool (repo-root cnn_lstm_process_pool.py) whose worker module (repo-root cnn_lstm_worker.py -- deliberately NOT inside forecasting/, since that package's __init__ eagerly imports pandas) imports tensorflow before anything else and runs as its own genuine OS process, launched via subprocess.Popen -- a fresh interpreter per worker means the parent process's import order can no longer matter, unlike the module-level reorder alone or the entry-point guards. This is what actually removes the process-scope constraint, rather than merely mitigating it by convention: it protects EVERY caller, known or not, not just the three files that remember the guard. As of 2026-08-04 (Round 8 of the known-issues doc), workers are launched with subprocess.Popen rather than multiprocessing -- a second, distinct deadlock (unrelated to the Abseil ODR collision above) was found in multiprocessing-managed worker processes specifically; see Round 8 for the full ablation matrix. All feature engineering / windowing / scaling stays in the parent process unchanged (pandas-only, never touches TF). Any subprocess failure (timeout, a dead/unresponsive worker, real training exception) is caught by run_cnn_lstm_forecast's existing outer try/except and degrades to the zero-result sentinel -- never crashes the pipeline (CONSTRAINT #6). This default flipped True on 2026-07-31 (Round 7 of the known-issues doc) once Round 6 (2026-07-27) verified subprocess isolation end-to-end against the real native deadlock on real production data in the actual macOS arm64 + Framework-Python environment the deadlock was originally confirmed on -- the earlier caveat about this being verified only against the mocked test suite no longer applies. Set False only to restore the legacy in-process path (byte-identical to this flag's original pre-2026-07-31 default); doing so re-exposes the process-scope import-order hazard for any entry point that doesn't carry its own guarded `import tensorflow` before `import pandas`/`import pyarrow`.",
     group: "Forecasting",
   },
   {
@@ -4554,6 +4530,20 @@ function mockSettingsReference(): SettingsReferenceResponse {
       // backend's _build_editable_at_index() checks /settings/feature-flags
       // before /settings/tunables, first-match-wins -- this must match.
       editable_at: "/settings/feature-flags",
+    },
+    {
+      // The real GET /settings/reference sends dict/list-valued settings RAW with type "string"
+      // (api/pilots_api.py get_settings_reference); a scalar-only mock hid "[object Object]".
+      key: "SIGNAL_WEIGHTS",
+      category: "allowed",
+      value: { technical: 0.4, fundamental: 0.35, sentiment: 0.25 },
+      default: { technical: 0.4, fundamental: 0.35, sentiment: 0.25 },
+      type: "string",
+      description: "Per-module weights for the weighted-sum signal aggregator.",
+      domain: "Financial/Risk/Sizing",
+      dangerous: false,
+      liveness: mockLiveness("SIGNAL_WEIGHTS"),
+      editable_at: "/settings/modules",
     },
     {
       key: "KELLY_FRACTION",
@@ -7454,6 +7444,90 @@ const MOCK_COMMAND_MANIFEST: CommandManifest = {
  * `sources` (a Pilot-follow intent has no underlying news/sentiment sources
  * of its own) to exercise the "field genuinely absent" rendering path too.
  */
+// Honest fixture for GET /agentic/approvals: one pending approval WITH a
+// validated thesis, one pending WITHOUT one (validator rejected it -> null,
+// never invented), a decided history including an "unknown" state, and a
+// last cycle that FAILED so the degraded shape is exercised.
+const MOCK_AGENTIC_APPROVALS: AgenticApprovals = {
+  pending: [
+    {
+      approval_id: "mock-appr-1",
+      symbol: "T",
+      side: "buy",
+      qty: 7,
+      state: "pending",
+      submitted_at: "2026-11-10T15:06:12+00:00",
+      recorded_at: "2026-11-10T15:06:40+00:00",
+      run_id: "20261110T150000Z",
+      thesis: "Conviction 0.95 with momentum 0.42 leads the queue; regime is risk-on.",
+      invalidation: "A close below the 50-day average.",
+    },
+    {
+      approval_id: "mock-appr-2",
+      symbol: "F",
+      side: "sell",
+      qty: null,
+      state: "pending",
+      submitted_at: "2026-11-10T14:36:02+00:00",
+      recorded_at: "2026-11-10T14:36:30+00:00",
+      run_id: null,
+      thesis: null,
+      invalidation: null,
+    },
+  ],
+  recent: [
+    {
+      approval_id: "mock-appr-0",
+      symbol: "AAPL",
+      side: "buy",
+      qty: 1,
+      state: "declined",
+      submitted_at: "2026-11-07T15:05:00+00:00",
+      recorded_at: "2026-11-07T15:35:00+00:00",
+      run_id: "20261107T150000Z",
+      thesis: null,
+      invalidation: null,
+    },
+    {
+      approval_id: "mock-appr-00",
+      symbol: "MSFT",
+      side: "buy",
+      qty: 1,
+      state: "unknown",
+      submitted_at: "2026-11-06T15:05:00+00:00",
+      recorded_at: "2026-11-06T15:20:00+00:00",
+      run_id: null,
+      thesis: null,
+      invalidation: null,
+    },
+  ],
+  n_pending: 2,
+  last_cycle: {
+    run_id: "20261110T153000Z",
+    status: "failed",
+    mode: "live",
+    launched_by: "timer",
+    started_at: "2026-11-10T15:31:00+00:00",
+    finished_at: "2026-11-10T15:33:10+00:00",
+    failed_stage: "risk",
+    reason: "preflight.json missing for this queue",
+    summary_title: null,
+  },
+  // Mid-burn-in: NOT READY with the unmet items spelled out (never a bare flag).
+  burnin: {
+    day: "2026-11-10",
+    ready: false,
+    review_days: 4,
+    required_days: 10,
+    unmet: [
+      "6 more day(s) with a completed review cycle (4/10)",
+      "1 failed cycle(s) in the last 3 cycle days: 20261110T153000Z",
+    ],
+    safety_failures: [],
+  },
+  note: "States are the last ones the Trader agent recorded; the Robinhood app is the live source. Approve or decline there.",
+};
+
 const MOCK_EXECUTION_QUEUE: ExecutionQueue = {
   generated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
   mode: "review",
@@ -11181,6 +11255,10 @@ export const mockApi = {
   },
 
   // ---- Agentic Trading tab ----
+  async getAgenticApprovals(): Promise<AgenticApprovals> {
+    return delay(MOCK_AGENTIC_APPROVALS);
+  },
+
   async getAgenticStatus(): Promise<AgenticStatus> {
     return delay({
       mode: MOCK_EXECUTION_QUEUE.mode,

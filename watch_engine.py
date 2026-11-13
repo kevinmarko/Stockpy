@@ -22,7 +22,7 @@ Design principles
   wrapped in try/except; one bad rule never aborts the rest.  No rules, missing
   YAML, or a fully empty recommendation list are all silent no-ops.
 * **ntfy integration**: ``dispatch_watch_alerts`` calls ``alerting.notify()``,
-  which is itself a no-op when ``NTFY_TOPIC`` is unset — so the entire engine
+  which is itself a no-op when ``ALERT_NTFY_TOPIC`` is unset — so the entire engine
   is silently inert with zero configuration.
 * **Secrets are never embedded in alert bodies** (CONSTRAINT #3).
 
@@ -80,9 +80,9 @@ watch_rules.yaml schema
         priority: default
         label: "AAPL Action Change"
 
-Integration in main.py
------------------------
-Called inside ``_run_cycle()`` after ``run_once()`` returns a ``RunResult``::
+Integration (daemon: pipeline/agentic_queue.py::run_watch_engine)
+-----------------------------------------------------------------
+Called once per cycle with the cycle's recommendations (the archived main.py did the same)::
 
     rules  = load_watch_rules(settings.WATCH_RULES_FILE)
     prev   = load_watch_state(settings.OUTPUT_DIR / "watch_state.json")
@@ -709,7 +709,7 @@ def dispatch_watch_alerts(
 ) -> None:
     """Dispatch fired alerts as ntfy push notifications.
 
-    Calls ``alerting.notify()`` for each alert.  When ``NTFY_TOPIC`` is unset
+    Calls ``alerting.notify()`` for each alert.  When ``ALERT_NTFY_TOPIC`` is unset
     ``notify()`` is already a no-op, so this function is silently inert with
     no ntfy configuration.  Each per-alert dispatch is individually wrapped in
     try/except — a network failure on one alert never blocks the rest

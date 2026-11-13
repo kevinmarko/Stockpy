@@ -14,7 +14,6 @@ graceful-shutdown budget:
     FORECAST_PROPHET_WEIGHT                (float [0,1] — Prophet ensemble overlay weight)
     FUNDAMENTALS_SOURCE                    ("yahoo" | "yfinance_info")
     BETA_LOOKBACK_DAYS                     (int — beta computation lookback)
-    PROGRESS_POLL_SECONDS                  (int — Launcher progress-bar poll interval)
     DAEMON_SHUTDOWN_TIMEOUT_SECONDS        (float — daemon graceful-shutdown budget)
 
 Each key previously had its own near-identical file re-asserting the same
@@ -53,7 +52,6 @@ NEW_KEYS: dict[str, tuple[object, str]] = {
     "FORECAST_PROPHET_WEIGHT": (0.35, "0.35"),
     "FUNDAMENTALS_SOURCE": ("yfinance_info", "yfinance_info"),
     "BETA_LOOKBACK_DAYS": (252, "252"),
-    "PROGRESS_POLL_SECONDS": (10, "10"),
     "DAEMON_SHUTDOWN_TIMEOUT_SECONDS": (30.0, "30.0"),
 }
 

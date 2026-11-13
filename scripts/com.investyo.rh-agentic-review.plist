@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.investyo.rh-agentic-review.plist
+  ====================================
+  macOS launchd timer for Agent 5 (Reviewer), Phase 5 of the Robinhood agentic
+  plan. Once a day on weekdays at 16:40 local time (after the US close when the
+  Mac is on Eastern time; adjust Hour/Minute otherwise) it runs the
+  /rh-agentic-review command through the Claude Code CLI (via
+  `python -m execution.agentic_review launch`, hard 20-minute timeout). The
+  Reviewer is read-only: it reconciles the agents' orders with real fills,
+  checks the safety invariants and sends one push such as
+  "Burn-in day 4/10: NOT READY".
+
+  NOT INSTALLED BY install_schedule.command, on purpose. Load it by hand during
+  the burn-in (RUNBOOK "Phase 5 burn-in"):
+      cp scripts/com.investyo.rh-agentic-review.plist ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/com.investyo.rh-agentic-review.plist
+  Stop: launchctl unload ~/Library/LaunchAgents/com.investyo.rh-agentic-review.plist
+
+  The launcher passes exactly rh-reviewer's read-only tools plus the
+  coordinator's, parsed from .claude/agents/rh-reviewer.md at run time. Needs `claude` logged in and the Robinhood MCP connected on this Mac.
+  Paths are absolute: edit them if the repo lives elsewhere.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.investyo.rh-agentic-review</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/kevinlee/Desktop/Stockpy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/kevinlee/Desktop/Stockpy/.venv/bin/python3</string>
+        <string>-m</string>
+        <string>execution.agentic_review</string>
+        <string>launch</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/kevinlee/.local/bin:/Users/kevinlee/.claude/local:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <!-- Weekdays (Mon=1 .. Fri=5) at 16:40 local time. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>40</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>40</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>40</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>40</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>40</integer></dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/agentic_review.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/kevinlee/Desktop/Stockpy/output/agentic_review.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -125,8 +125,6 @@ _OVERRIDE_DOMAINS: Dict[str, str] = {
     "DAEMON_AGENTIC_QUEUE_MODE": "Execution/Brokers",
     "PIPELINE_STEP_TIMEOUT_SECONDS": "Orchestrator/Daemon/Jobs",
     "DAEMON_SHUTDOWN_TIMEOUT_SECONDS": "Orchestrator/Daemon/Jobs",
-    "PROGRESS_POLL_SECONDS": "Orchestrator/Daemon/Jobs",
-    "DASHBOARD_REFRESH_SECONDS": "Orchestrator/Daemon/Jobs",
 
     # Alerting / Observability
     "PIPELINE_STALL_ALERT_ENABLED": "Alerting/Observability",

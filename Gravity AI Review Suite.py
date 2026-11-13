@@ -13,7 +13,7 @@ mathematically accurate, and profitable in a simulated environment.
 
 # ---------------------------------------------------------------------------
 # Auto-route to the project's .venv interpreter (must be first executable
-# code, before any heavy import). Identical pattern to main.py /
+# code, before any heavy import). Identical pattern to
 # main_orchestrator.py. Without this, running the suite under system Python
 # (or any interpreter other than .venv) silently degrades vectorbt/backtrader
 # to "not installed" (see VBT_AVAILABLE/BT_AVAILABLE below), which produces a
@@ -4120,7 +4120,7 @@ class GravityAIAuditor:
         """Step 32 — Validates the rebuilt daily HTML report (Holdings & P&L + Rationale).
 
         ``diagnostics_and_visuals.generate_html_report`` is the ACTIVE report
-        path (called by both ``main.py`` and ``main_orchestrator.py``).  The
+        path (called by the daemon's ``StateSnapshotStep``).  The
         2026-06 redesign leads with holdings/P&L and action/rationale and adds
         an optional ``account_summary`` portfolio band.  This audit pins the
         new contract and — critically — verifies the rendered HTML never leaks
@@ -11415,21 +11415,19 @@ class GravityAIAuditor:
         multiple concurrent agents: ``reporting/progress.py`` (the
         ``ProgressReporter`` + ``read_progress``/``clear_progress`` writer,
         atomically persisting ``output/progress.json``), orchestrator
-        instrumentation (``main_orchestrator.py``/``main.py``/``pipeline/*`` +
-        the daemon's ``RunRecord.progress`` field), ``gui/orchestrator_runner.py``'s
-        ``compute_run_progress``, and ``gui/progress_ui.py``'s ``busy`` context
-        manager. This audit only owns the pieces of that surface that live in
-        ``settings.py`` / ``gui/env_io.py`` — ``PROGRESS_POLL_SECONDS`` — and
-        exercises the rest of the contract defensively.
+        instrumentation (``main_orchestrator.py``/``pipeline/*`` +
+        the daemon's ``RunRecord.progress`` field), and ``gui/progress_ui.py``'s
+        ``busy`` context manager. ``compute_run_progress`` and its
+        ``PROGRESS_POLL_SECONDS`` setting served only the deleted Streamlit
+        Launcher's progress bar and were removed (2026-11-10, dead-code plan D7);
+        checks 6 and 7 now pin that removal.
 
         Because this step may run before every sibling agent's branch has
         merged, EVERY check below is independently try/except-guarded so a
         missing sibling module (``reporting.progress``, ``shared.orchestrator_runner``
         additions, ``shared.progress_ui``) degrades to a soft/noted check rather
-        than crashing the whole step or failing the audit outright. Only the two
-        checks this file's owner is directly responsible for (the
-        ``PROGRESS_POLL_SECONDS`` allowlist entry and the ``settings`` field)
-        gate ``overall_pass`` — everything else is recorded for visibility.
+        than crashing the whole step or failing the audit outright. Only checks
+        6 and 7 gate ``overall_pass`` — everything else is recorded for visibility.
 
         Checks:
           1.  ``reporting.progress.ProgressReporter`` + ``read_progress`` importable
@@ -11438,12 +11436,10 @@ class GravityAIAuditor:
               ``None``, never a fabricated progress dict (CONSTRAINT #4) (soft).
           3.  ``compute_percent(0,0,0,0)==0.0`` and ``compute_percent(6,6,0,0)==100.0``
               — clamped, no div-by-zero (soft).
-          4.  ``shared.orchestrator_runner.compute_run_progress`` importable
-              (Agent 3's function) (soft).
           5.  ``shared.progress_ui.busy`` importable (Agent 4's helper) (soft).
-          6.  ``"PROGRESS_POLL_SECONDS"`` is in ``shared.env_io.ALLOWED_KEYS`` and
-              NOT in ``shared.env_io.SECRET_KEYS`` (hard).
-          7.  ``settings.PROGRESS_POLL_SECONDS`` exists and is an ``int`` (hard).
+          6.  The retired ``"PROGRESS_POLL_SECONDS"`` is NOT in ``shared.env_io.ALLOWED_KEYS``
+              (hard): a writable key with no reader would be a dead control.
+          7.  ``settings`` has no ``PROGRESS_POLL_SECONDS`` field (hard).
         """
         audit = {
             "step": "step_74_progress_indicator_audit",
@@ -11524,15 +11520,6 @@ class GravityAIAuditor:
                     False, "skipped — reporting.progress not present", soft=True,
                 )
 
-            # 4. shared.orchestrator_runner.compute_run_progress (Agent 3's fn) — soft-guard.
-            try:
-                import shared.orchestrator_runner as _orr  # type: ignore
-                ok4 = hasattr(_orr, "compute_run_progress") and callable(_orr.compute_run_progress)
-                detail4 = "" if ok4 else "compute_run_progress not yet defined (Agent 3 branch not merged?)"
-            except Exception as exc:
-                ok4, detail4 = False, str(exc)
-            _chk("shared.orchestrator_runner.compute_run_progress importable", ok4, detail4, soft=True)
-
             # 5. shared.progress_ui.busy (Agent 4's helper) — soft-guard.
             try:
                 import shared.progress_ui as _pui  # type: ignore
@@ -11542,32 +11529,27 @@ class GravityAIAuditor:
                 ok5, detail5 = False, f"shared.progress_ui not importable (not yet merged?): {exc}"
             _chk("shared.progress_ui.busy importable", ok5, detail5, soft=True)
 
-            # 6. PROGRESS_POLL_SECONDS allowlisted, not a secret — this file's owner (hard).
+            # 6. The retired PROGRESS_POLL_SECONDS is no longer GUI-writable (hard).
             try:
                 import shared.env_io as _env_io
-                ok6 = (
-                    "PROGRESS_POLL_SECONDS" in _env_io.ALLOWED_KEYS
-                    and "PROGRESS_POLL_SECONDS" not in _env_io.SECRET_KEYS
-                )
-                detail6 = ""
+                ok6 = "PROGRESS_POLL_SECONDS" not in _env_io.ALLOWED_KEYS
+                detail6 = "" if ok6 else "retired key is still in ALLOWED_KEYS"
             except Exception as exc:
                 ok6, detail6 = False, str(exc)
             hard_pass = _chk(
-                "PROGRESS_POLL_SECONDS in shared.env_io.ALLOWED_KEYS and not in SECRET_KEYS",
+                "retired PROGRESS_POLL_SECONDS not in shared.env_io.ALLOWED_KEYS",
                 ok6, detail6,
             ) and hard_pass
 
-            # 7. settings.PROGRESS_POLL_SECONDS exists and is an int — this file's owner (hard).
+            # 7. The retired PROGRESS_POLL_SECONDS is no longer a Settings field (hard).
             try:
-                from settings import settings as _settings
-                ok7 = hasattr(_settings, "PROGRESS_POLL_SECONDS") and isinstance(
-                    _settings.PROGRESS_POLL_SECONDS, int
-                )
-                detail7 = ""
+                from settings import Settings as _Settings
+                ok7 = "PROGRESS_POLL_SECONDS" not in _Settings.model_fields
+                detail7 = "" if ok7 else "retired field is still declared in settings.py"
             except Exception as exc:
                 ok7, detail7 = False, str(exc)
             hard_pass = _chk(
-                "settings.PROGRESS_POLL_SECONDS exists and is an int", ok7, detail7
+                "retired PROGRESS_POLL_SECONDS is not a Settings field", ok7, detail7
             ) and hard_pass
 
             audit["overall_pass"] = hard_pass

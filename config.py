@@ -110,7 +110,7 @@ COLUMN_SCHEMA = [
     # columns -- how many consecutive BAD-tier cycles this symbol currently
     # has, and whether it would be (or is) subtracted from the tracked
     # universe by settings.SYMBOL_RATING_AUTO_DROP_ENABLED. See
-    # data/portfolio_sync.py::resolve_universe / main.py::_build_universe.
+    # data/portfolio_sync.py::resolve_universe / pipeline/advisory_inputs.py::build_universe_detailed.
     {"header": "Symbol Rating Bad Cycles", "key": "Symbol_Rating_Consecutive_Bad_Cycles", "format": "number"},
     {"header": "Symbol Rating Excluded", "key": "Symbol_Rating_Excluded", "format": "string"},
     {"header": "Buy Range", "key": "buyRange", "format": "string"},
