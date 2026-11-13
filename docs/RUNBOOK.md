@@ -1719,7 +1719,7 @@ from `claude`'s exit code.
 cd ~/Stockpy-live && .venv/bin/python -m execution.agentic_review launch
 ```
 
-- `output/agentic_review.out` gets one JSON line per launch: `review_recorded`, `claude_exit`, `reason`
+- `output/agentic_review.out` gets one JSON line per launch: `review_recorded`, `claude_exit`, `reason`, `claude_said`
   and `output_tail`.
 - The 15-minute cycle timer uses the same login. Its "Agentic cycle failed" alert now carries the same
   `claude` message.

@@ -11,7 +11,7 @@ and empty logs. Details: `docs/known_issues/agentic_review_launch_silent_auth_fa
     mtime is at or after the launch start (1 s slack).
   - Exit codes: 0 or 1 from that file's `burnin.ready`, otherwise 2 plus one high-priority alert.
     The alert says the reason, "No review was recorded today.", and "claude said: <last line>".
-  - It always prints `{"review_recorded", "claude_exit", "reason", "output_tail"}`.
+  - It always prints `{"review_recorded", "claude_exit", "reason", "claude_said", "output_tail"}`.
   - New keyword arguments, `output_dir` (the CLI passes `--output-dir`) and `clock`, exist for tests.
 - **`execution/agentic_cycle.py`.**
   - `_output_tail(proc)` returns the last 500 characters of stdout + stderr, and also works on
@@ -41,3 +41,11 @@ and empty logs. Details: `docs/known_issues/agentic_review_launch_silent_auth_fa
 ## Not verified
 The live run needs the operator to log in again first. Before that, a manual `launch` reproduces the
 alert; after it, `launch` should print `review_recorded: true`.
+
+## Follow-up in the same PR: quote claude, not stderr noise
+The second live run (after the operator re-logged the CLI in) exited 0 without a review. The alert's
+"claude said" line was an MCP SDK `SEP-2352` warning from stderr, not Claude's real explanation:
+the Robinhood MCP failed to connect.
+- `agentic_cycle._said(proc)` now takes the last line of stdout and falls back to stderr only when
+  stdout is empty.
+- Both launchers use it, and the review's JSON line gained `claude_said`.

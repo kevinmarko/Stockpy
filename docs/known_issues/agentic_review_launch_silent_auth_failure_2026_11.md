@@ -29,7 +29,7 @@ failure gives `fail_cycle` and an alert. That alert only said "exited with code 
   - On success it returns that file's verdict.
   - Otherwise it pushes "Agentic burn-in review did not run", with the reason and `claude`'s last output
     line, and returns 2.
-  - Every launch prints one JSON summary line (`review_recorded`, `claude_exit`, `reason`,
+  - Every launch prints one JSON summary line (`review_recorded`, `claude_exit`, `reason`, `claude_said`,
     `output_tail`) to the launchd `.out` log.
 - **`agentic_cycle.launch()` appends `claude`'s last output line to its failure reason**, using the
   shared `_output_tail` and `_last_line` helpers.

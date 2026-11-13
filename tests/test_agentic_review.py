@@ -435,6 +435,19 @@ class TestLaunch:
         assert line["review_recorded"] is False and line["claude_exit"] == 1
         assert _AUTH_ERR in line["output_tail"]
 
+    def test_alert_quotes_claudes_message_not_stderr_noise(self, tmp_path, capsys):
+        """2026-11-13 second run: claude exited 0 with its real explanation on
+        stdout and MCP SDK warnings trailing on stderr."""
+        proc = _Proc(0, stdout="The review did not run. The Robinhood MCP server failed to connect.\n",
+                      stderr="[mcp-sdk] SEP-2352: stored OAuth credential has no 'issuer' stamp\n" * 3)
+        notifier = mock.Mock()
+        assert ar.launch(runner=mock.Mock(return_value=proc), notifier=notifier,
+                         output_dir=tmp_path) == ar.EXIT_UNUSABLE
+        body = notifier.call_args.args[1]
+        assert "Robinhood MCP server failed to connect" in body and "SEP-2352" not in body
+        line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+        assert line["claude_said"].startswith("The review did not run")
+
     def test_clean_exit_without_a_review_still_alerts(self, tmp_path):
         notifier = mock.Mock()
         assert ar.launch(runner=mock.Mock(return_value=_Proc(0)), notifier=notifier,

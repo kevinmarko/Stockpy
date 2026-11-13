@@ -588,7 +588,7 @@ def launch(*, runner: Callable[..., Any] = None, claude_bin: str = "claude",
     launchd ``.out`` log shows what happened.
     """
     import subprocess
-    from execution.agentic_cycle import REPO_ROOT, _last_line, _output_tail
+    from execution.agentic_cycle import REPO_ROOT, _output_tail, _said
 
     clock = clock or (lambda: datetime.now(timezone.utc))
     runner = runner or subprocess.run
@@ -596,16 +596,19 @@ def launch(*, runner: Callable[..., Any] = None, claude_bin: str = "claude",
     reason: Optional[str] = None
     rc: Optional[int] = None
     tail = ""
+    said = ""
     try:
         cmd = [claude_bin, "-p", "/rh-agentic-review", "--allowedTools", ",".join(allowed_tools())]
         proc = runner(cmd, cwd=str(REPO_ROOT), timeout=LAUNCH_TIMEOUT_SECONDS,
                       capture_output=True, text=True)
         rc = getattr(proc, "returncode", None)
         tail = _output_tail(proc)
+        said = _said(proc)
         if rc != 0:
             reason = f"claude exited with code {rc}"
     except subprocess.TimeoutExpired as exc:
         tail = _output_tail(exc)
+        said = _said(exc)
         reason = f"timed out after {LAUNCH_TIMEOUT_SECONDS} s"
     except FileNotFoundError:
         reason = f"'{claude_bin}' CLI not found on PATH"
@@ -618,12 +621,11 @@ def launch(*, runner: Callable[..., Any] = None, claude_bin: str = "claude",
         reason = "the session ended without recording a review"
     print(json.dumps({"review_recorded": review is not None, "claude_exit": rc,
                       "reason": None if review is not None else reason,
-                      "output_tail": tail}))
+                      "claude_said": said, "output_tail": tail}))
     if review is not None:
         return EXIT_READY if (review.get("burnin") or {}).get("ready") else EXIT_NOT_READY
 
     body = f"{reason}. No review was recorded today."
-    said = _last_line(tail)
     if said:
         body = f"{body} claude said: {said}"
     try:

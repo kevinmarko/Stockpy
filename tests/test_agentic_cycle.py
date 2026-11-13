@@ -466,6 +466,13 @@ class TestLaunch:
         assert ac._output_tail(object()) == "" and ac._last_line("") == ""
         assert len(ac._output_tail(_Proc(1, stdout="x" * 2000))) == 500
 
+    def test_said_prefers_claudes_stdout_over_stderr_warnings(self):
+        noisy = _Proc(0, stdout="The review did not run: Robinhood MCP failed to connect.\n",
+                      stderr="[mcp-sdk] SEP-2352: stored OAuth credential has no 'issuer' stamp\n")
+        assert ac._said(noisy).startswith("The review did not run")
+        assert ac._said(_Proc(1, stderr="only stderr")) == "only stderr"
+        assert ac._said(object()) == ""
+
     def test_missing_cli_recorded(self, tmp_path):
         notifier = mock.Mock(return_value=True)
         with mock.patch.object(ac, "evaluate_gate", return_value=_gate_ok()):
