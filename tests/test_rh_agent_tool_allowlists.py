@@ -21,6 +21,16 @@ REPO = Path(__file__).resolve().parent.parent
 AGENT_DIRS = [REPO / ".claude" / "agents", REPO / ".agents" / "agents"]
 TRADER = REPO / ".claude" / "agents" / "rh-trader.md"
 
+# The Robinhood MCP's tool-name prefixes, one per way it can be connected:
+#   robinhood-trading   `claude mcp add robinhood-trading --transport http ...`
+#   Robinhood           a server registered under that name
+#   claude_ai_Robinhood the claude.ai connector, as the headless `claude -p`
+#                       CLI names it. The launchd timers run that CLI, so
+#                       without this spelling every agentic cycle and review
+#                       was blocked from Robinhood (2026-11-13).
+RH_SERVERS = ("robinhood-trading", "Robinhood", "claude_ai_Robinhood")
+RH_AGENTS = ("rh-research-scout.md", "rh-reviewer.md", "rh-risk-manager.md", "rh-trader.md")
+
 # Any Robinhood tool that moves money, cancels, exercises or declines.
 ORDER_POWER_TOOL = re.compile(r"\b(?:mcp__[\w-]+__)?((?:place|cancel|exercise|decline)_\w+)")
 
@@ -93,7 +103,7 @@ def test_rh_risk_manager_is_read_only_and_complete():
     spellings, and nothing that can submit, decline, cancel or edit."""
     tools = _frontmatter_tools(RISK_MANAGER)
     assert not ORDER_POWER_TOOL.findall(tools)
-    for server in ("robinhood-trading", "Robinhood"):
+    for server in RH_SERVERS:
         for t in _RISK_READ_TOOLS:
             assert f"mcp__{server}__{t}" in tools, f"rh-risk-manager missing {server}/{t}"
     listed = {t.strip() for t in tools.split(":", 1)[1].split(",")}
@@ -115,7 +125,7 @@ def _mcp_tools(path: Path) -> set:
 
 
 @pytest.mark.parametrize("agent,servers,allowed", [
-    ("rh-research-scout.md", ("robinhood-trading", "Robinhood"),
+    ("rh-research-scout.md", RH_SERVERS,
      ("get_accounts", "get_scans", "run_scan", "get_scanner_filter_specs", "get_equity_quotes",
       "get_equity_fundamentals", "get_earnings_calendar", "get_earnings_results",
       "get_equity_analyst_ratings", "get_sec_filing_index")),
@@ -136,3 +146,17 @@ def test_phase3_agents_defer_to_the_validator():
     for agent in ("rh-research-scout.md", "rh-strategy-analyst.md"):
         body = (REPO / ".claude" / "agents" / agent).read_text(encoding="utf-8")
         assert "python3 -m execution.agentic_research validate" in body
+
+
+@pytest.mark.parametrize("agent", RH_AGENTS)
+def test_robinhood_tools_identical_under_every_server_spelling(agent):
+    """Each agent lists the same Robinhood tools under every prefix, so how the
+    MCP is connected never changes what an agent may do (no spelling adds
+    a tool, and none is missing one)."""
+    tools = _mcp_tools(REPO / ".claude" / "agents" / agent)
+    by_server = {s: {t.split("__", 2)[2] for t in tools if t.startswith(f"mcp__{s}__")}
+                 for s in RH_SERVERS}
+    base = by_server["robinhood-trading"]
+    assert base, f"{agent} lists no Robinhood tools"
+    for server, names in by_server.items():
+        assert names == base, f"{agent}: {server} differs from robinhood-trading"
