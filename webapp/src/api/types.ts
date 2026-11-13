@@ -2702,35 +2702,147 @@ export interface SignalImportance {
   n_symbols_scored: number;
 }
 
-/**
- * GET /metrics/forecast/{symbol} — multi-horizon blended forecast + Monte
- * Carlo bands from `ForecastingEngine.generate_forecast`. Every price field
- * may be `null` (NaN→null); the backend 404s when there are no bars at all,
- * so a rendered response always has *some* horizon populated.
- */
-export interface ForecastResult {
-  Forecast_10: number | null;
-  Forecast_30: number | null;
-  Forecast_60: number | null;
-  Forecast_90: number | null;
-  ARIMA: number | null;
-  MC_Lower: number | null;
-  MC_Upper: number | null;
-  // Per-horizon confidence band (price levels). A band is `null` when the
-  // matching `Forecast_{h}` horizon didn't converge — a null horizon has no
-  // band (never a fabricated 0 — CONSTRAINT #4). Bands widen with horizon.
-  Forecast_10_Lower: number | null;
-  Forecast_10_Upper: number | null;
-  Forecast_30_Lower: number | null;
-  Forecast_30_Upper: number | null;
-  Forecast_60_Lower: number | null;
-  Forecast_60_Upper: number | null;
-  Forecast_90_Lower: number | null;
-  Forecast_90_Upper: number | null;
-  // Prophet overlay (present only when Prophet ran); index signature carries
-  // any additional model columns the engine emits without silently dropping
-  // them.
-  [key: string]: number | null;
+// ---------------------------------------------------------------------------
+// Forecasts screen (forecasting rebuild F6) — pilots_api.py :8602,
+// pilots/forecasts.py. Both routes READ persisted state only: the pipeline's
+// published forecast from state_snapshot.json and the forecast_errors ledger.
+// Neither refits a model (the old GET /metrics/forecast/{symbol} refit is no
+// longer called by the webapp). Every value the backend cannot measure is
+// `null` with a `reason` (CONSTRAINT #4) — never 0.
+// ---------------------------------------------------------------------------
+
+/** The live F3 naive-gate settings (FORECAST_NAIVE_GATE_* / FORECAST_SKILL_WINDOW_DAYS). */
+export interface ForecastGateSettings {
+  /** FORECAST_NAIVE_GATE_ENABLED — true: the gated blend is published; false: the gate runs in shadow only. */
+  enabled: boolean;
+  min_improvement: number | null;
+  min_obs: number | null;
+  window_days: number | null;
+}
+
+/** Forecast z settings (F5). `null` on the wire until F5-1 lands. */
+export interface ForecastZSettings {
+  enabled: boolean;
+  threshold: number | null;
+  min_obs: number | null;
+}
+
+/** One horizon of one symbol's PUBLISHED forecast (GET /forecasts). */
+export interface ForecastHorizonCell {
+  forecast: number | null;
+  lower: number | null;
+  upper: number | null;
+  /** true = this horizon's forecast is a fallback (the models did not converge); null = not recorded. */
+  is_fallback: boolean | null;
+  /** true = the naive gate admitted no model, so the published forecast is naive ("price stays flat"); null = not recorded. */
+  gated_naive: boolean | null;
+  /** Forecast z (F5). null until F5-1, with `z_reason` saying why. */
+  z: number | null;
+  z_reason: string | null;
+  err: number | null;
+  err_n: number | null;
+}
+
+/** What the forecast changed this cycle, for one symbol. */
+export interface ForecastImpact {
+  /** score_components.forecast_alignment — the forecast's points in the composite score; null = not recorded. */
+  alignment_points: number | null;
+  score: number | null;
+  action: string | null;
+  action_tier: string | null;
+  /** Approximate: score minus alignment_points, cut at the StrategyEngine tiers (see tier_note). */
+  action_tier_without_forecast: string | null;
+  tier_changed_by_forecast: boolean | null;
+  tier_note: string;
+  advisory_action: string | null;
+  /** Advisory holding rules the forecast fired: [] = none fired; null = no advisory recommendation recorded. */
+  advisory_effects: string[] | null;
+  sell_range: string | null;
+  /** true = the sell-zone top came from the 30-day forecast; false = from the ATR leg; null = no active sell zone / not derivable. */
+  sell_hi_from_forecast: boolean | null;
+}
+
+export interface ForecastRow {
+  symbol: string;
+  price: number | null;
+  held: boolean;
+  /** Keyed "10" | "30" | "60" | "90". */
+  horizons: Record<string, ForecastHorizonCell>;
+  impact: ForecastImpact;
+}
+
+/** GET /forecasts — the universe table. Cold start = empty rows + `reason`, not a 404. */
+export interface ForecastsView {
+  as_of: string | null;
+  source: string;
+  gate: ForecastGateSettings;
+  z: ForecastZSettings | null;
+  horizons: number[];
+  rows: ForecastRow[];
+  reason: string | null;
+}
+
+/** One model's skill vs the naive baseline over the ledger window. */
+export interface ForecastSkillRow {
+  model: string;
+  n: number | null;
+  /** Median |ln(forecast / actual)| — a log error (0.02 is about 2%). */
+  median_abs_log_error: number | null;
+  naive_median_abs_log_error: number | null;
+  /** Share (0-1) of pairs where the model's error was strictly below naive's. */
+  pct_beating_naive: number | null;
+  wins: number | null;
+  losses: number | null;
+  ties: number | null;
+  sign_test_p: number | null;
+  direction_hit_rate: number | null;
+  direction_n: number | null;
+}
+
+/** The last gate decision actually recorded on a `gated_blend` ledger row. */
+export interface ForecastGateDecision {
+  forecast_day: string | null;
+  forecast_ts: string | null;
+  fallback_to_naive: boolean | null;
+  admitted: string[];
+}
+
+/** What the gate would decide now on matured outcomes. */
+export interface ForecastGateEvaluation {
+  admitted: string[];
+  /** model -> rejection reason, verbatim from compute_naive_gate. */
+  rejected: Record<string, string>;
+  fallback_to_naive: boolean;
+}
+
+export interface ForecastSummaryHorizon {
+  /** "gated_blend" when the gate is on, else "blend". */
+  published_model: string;
+  skill: ForecastSkillRow[];
+  skill_reason: string | null;
+  gate: {
+    last_decision: ForecastGateDecision | null;
+    evaluation: ForecastGateEvaluation | null;
+    evaluation_note: string;
+    reason: string | null;
+  };
+  mc_coverage: {
+    n: number;
+    empirical: number | null;
+    nominal: number | null;
+    reason: string | null;
+  };
+}
+
+/** GET /symbols/{ticker}/forecast-summary — one symbol's ledger view. No history = empty + `reason`, not a 404. */
+export interface ForecastSummary {
+  symbol: string;
+  as_of: string | null;
+  window_days: number | null;
+  gate: ForecastGateSettings;
+  /** Keyed "10" | "30" | "60" | "90"; `{}` when the ledger is unavailable. */
+  horizons: Record<string, ForecastSummaryHorizon>;
+  reason: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -91,7 +91,7 @@
     {
       "expr": "getattr(settings, name)",
       "file": "execution/agentic_preflight.py",
-      "line": 308,
+      "line": 317,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -131,7 +131,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 371,
+  "files_scanned": 369,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -450,13 +450,13 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 804,
+    "attr": 811,
     "factory_param": 4,
     "getattr_const": 298,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 256,
+    "attr": 257,
     "factory_param": 4,
     "getattr_const": 171,
     "os_environ": 2
@@ -559,7 +559,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:162",
+        "site": "execution/risk_gate.py:188",
         "via": []
       }
     ],
@@ -1547,7 +1547,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:147",
+        "site": "macro_engine.py:148",
         "via": []
       }
     ],
@@ -1558,7 +1558,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:150",
+        "site": "macro_engine.py:151",
         "via": []
       }
     ],
@@ -1569,7 +1569,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:148",
+        "site": "macro_engine.py:149",
         "via": []
       }
     ],
@@ -1580,7 +1580,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:145",
+        "site": "macro_engine.py:146",
         "via": []
       }
     ],
@@ -1591,7 +1591,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:146",
+        "site": "macro_engine.py:147",
         "via": []
       }
     ],
@@ -1602,7 +1602,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:172",
+        "site": "execution/risk_gate.py:198",
         "via": []
       }
     ],
@@ -1613,7 +1613,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "macro_engine.py:149",
+        "site": "macro_engine.py:150",
         "via": []
       }
     ],
@@ -1798,7 +1798,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:157",
+        "site": "execution/risk_gate.py:183",
         "via": []
       }
     ],
@@ -1809,7 +1809,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:167",
+        "site": "execution/risk_gate.py:193",
         "via": []
       }
     ],
@@ -1820,7 +1820,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:154",
+        "site": "execution/risk_gate.py:180",
         "via": []
       }
     ],
@@ -1831,7 +1831,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:151",
+        "site": "execution/risk_gate.py:177",
         "via": []
       }
     ],
@@ -2315,7 +2315,7 @@
         "rules": [
           "init_self_assign"
         ],
-        "site": "execution/risk_gate.py:177",
+        "site": "execution/risk_gate.py:203",
         "via": []
       }
     ],

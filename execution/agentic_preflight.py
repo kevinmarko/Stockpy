@@ -1,4 +1,4 @@
-"""Agent 3 (Portfolio & Risk Manager) preflight for the Robinhood queue: a pure, veto-only check of every queued intent against the LIVE Agentic account (cumulative buying power, concentration, notional cap, sellable shares, pending approvals, staleness, kill switch). It never adds, enlarges or flips an order; it only removes them, with a stable reason code."""
+"""Agent 3 (Portfolio & Risk Manager) preflight for the Robinhood queue: a pure, veto-only check of every queued intent against the LIVE Agentic account (cumulative buying power, concentration, portfolio heat, notional cap, sellable shares, pending approvals, staleness, kill switch). It never adds, enlarges or flips an order; it only removes them, with a stable reason code."""
 
 # =============================================================================
 # MODULE: AGENTIC PREFLIGHT  (four-agent Robinhood plan, Phase 2)
@@ -73,6 +73,10 @@ ACCOUNT_VALUES_UNAVAILABLE = "account_values_unavailable"
 OVER_POSITION_WEIGHT = "over_position_weight"
 BUYING_POWER_EXHAUSTED = "buying_power_exhausted"
 OVER_PORTFOLIO_GROSS = "over_portfolio_gross"
+# Portfolio heat on the AGENTIC account (BUYs only). The daemon's queue no
+# longer runs the risk gate's heat check: its snapshot is the main account.
+PORTFOLIO_HEAT_OVER_LIMIT = "portfolio_heat_over_limit"
+PORTFOLIO_HEAT_UNAVAILABLE = "portfolio_heat_unavailable"
 # Plan check 10 (Phase 3) — only when the caller passes critical_gap_fields.
 THESIS_MISSING = "thesis_missing"
 THESIS_INVALID = "thesis_invalid"
@@ -134,6 +138,7 @@ def _parse_dt(ts: Any) -> Optional[datetime]:
 class Holding:
     qty: Optional[float]
     sellable: Optional[float]   # Robinhood's shares_available_for_sells
+    avg_cost: Optional[float] = None  # per-share cost basis; None = not reported
 
 
 @dataclass(frozen=True)
@@ -170,9 +175,13 @@ class AccountState:
                         sym = str((row or {}).get("symbol") or "").upper()
                         if not sym:
                             raise ValueError("position without symbol")
+                        avg = _pos(row.get("average_buy_price"))
+                        if avg is None:
+                            avg = _pos(row.get("average_cost"))
                         holdings[sym] = Holding(
                             qty=_num(row.get("quantity")),
                             sellable=_num(row.get("shares_available_for_sells")),
+                            avg_cost=avg,
                         )
             except Exception as exc:  # unreadable → unknown, never "holds nothing"
                 logger.warning("agentic_preflight: positions unreadable (%s)", exc)
@@ -311,6 +320,37 @@ def _settings_default(name: str) -> Optional[float]:
         return None
 
 
+def portfolio_heat(account: AccountState, quotes: Mapping[str, Quote]) -> Optional[float]:
+    """Adverse open P&L on the live account as a fraction of its total value.
+
+    The same measure as ``PreTradeRiskGate.portfolio_heat_check``: the sum of
+    the losses on losing positions (winners don't offset), divided by account
+    value. Priced off the last trade, else the bid. ``0.0`` when the account
+    holds nothing. ``None`` (unmeasurable, the caller vetoes) when the
+    positions or the account value can't be read, or any held position with
+    shares lacks a cost basis or a quote. A heat computed over only some
+    positions would understate it, so a single gap makes it unknown.
+    """
+    if account.positions is None:
+        return None
+    adverse = 0.0
+    for sym, h in account.positions.items():
+        if h.qty is None:
+            return None
+        if h.qty <= _EPS:
+            continue
+        q = quotes.get(sym)
+        price = (q.last or q.bid) if q is not None else None
+        if h.avg_cost is None or price is None:
+            return None
+        adverse += max(0.0, (h.avg_cost - price) * h.qty)
+    if adverse <= 0.0:
+        return 0.0
+    if account.total_value is None or account.total_value <= 0:
+        return None
+    return adverse / account.total_value
+
+
 def _resolve_quantity(intent: Mapping[str, Any], side: str, quote: Quote,
                       holding: Optional[Holding]) -> Tuple[Optional[float], Optional[float], Optional[float], List[str]]:
     """Return ``(qty, price_used, limit_price, reasons)`` — the skill's sizing rules, in code.
@@ -370,6 +410,7 @@ def preflight(
     max_notional: Optional[float] = None,
     max_position_weight: Optional[float] = None,
     max_portfolio_gross: Optional[float] = None,
+    max_portfolio_heat: Optional[float] = None,
     stale_after_minutes: float = DEFAULT_STALE_AFTER_MINUTES,
     earnings_dates: Optional[Mapping[str, Optional[date]]] = None,
     earnings_blackout_days: Optional[int] = None,
@@ -396,6 +437,8 @@ def preflight(
     cap = max_notional if max_notional is not None else _settings_default("ROBINHOOD_MAX_NOTIONAL_PER_ORDER")
     weight_cap = max_position_weight if max_position_weight is not None else _settings_default("MAX_POSITION_WEIGHT")
     gross_cap = max_portfolio_gross if max_portfolio_gross is not None else _settings_default("MAX_PORTFOLIO_GROSS")
+    heat_cap = max_portfolio_heat if max_portfolio_heat is not None else _settings_default("MAX_PORTFOLIO_HEAT")
+    heat = portfolio_heat(account, quotes)
 
     # -- run-level blockers --------------------------------------------------
     blockers: List[str] = []
@@ -492,6 +535,12 @@ def preflight(
                     v.reasons.append(OVER_POSITION_WEIGHT)
             elif weight_cap is None:
                 v.reasons.append(ACCOUNT_VALUES_UNAVAILABLE)
+            # 9. portfolio heat on the REAL Agentic account (moved here from the
+            # daemon's queue gate, which only sees the main account)
+            if heat is None or heat_cap is None:
+                v.reasons.append(PORTFOLIO_HEAT_UNAVAILABLE)
+            elif heat > heat_cap + _EPS:
+                v.reasons.append(PORTFOLIO_HEAT_OVER_LIMIT)
         else:
             # 6. never sell more than Robinhood says is sellable
             if holding is None or holding.sellable is None:
@@ -533,6 +582,7 @@ def preflight(
         limits={"critical_gap_fields": sorted(critical) or None,
                 "max_notional_per_order": cap, "max_position_weight": weight_cap,
                 "max_portfolio_gross": gross_cap, "buying_power": bp,
+                "portfolio_heat": heat, "max_portfolio_heat": heat_cap,
                 "total_value": account.total_value, "equity_value": equity},
     )
 

@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `c7d414a1f06de84207d2c63f540a10fe06588dbb`
+- Measured at commit: `179b611a1a18f010a4e5cfc9afb9b83d15893077`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -222,7 +222,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **371** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **369** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -235,7 +235,7 @@ _S.settings, _dsr_settings, _gravity_settings, _guard_settings, _mt_settings, _o
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 718 | 253 |
+| (a) `settings.KEY` | 725 | 254 |
 | (b) `getattr(settings, "KEY", default)` | 298 | 171 |
 | (c) `getattr(settings, <var>)` (dynamic) | 16 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |
@@ -261,7 +261,7 @@ referenced by name somewhere and is probably read dynamically.
 | `SENTIMENT_PIT_MIN_MONTHS` | _none_ | no read and no name reference found |
 | `UNIVERSE_SYNC_ENABLED` | `api/data_api.py:1624`, `pilots/feature_flags.py:49` | likely read dynamically |
 
-### Fields reachable ONLY via form (b) or (d), never via (a) — **127**
+### Fields reachable ONLY via form (b) or (d), never via (a) — **126**
 
 These are exactly the keys an attribute-only static analysis would miss entirely.
 
@@ -342,7 +342,6 @@ These are exactly the keys an attribute-only static analysis would miss entirely
 | `FORECAST_MAX_CONCURRENCY` | b | 2 | 0 |
 | `FORECAST_MC_RANDOM_SEED` | b | 1 | 0 |
 | `FORECAST_MODEL_PERSISTENCE_ENABLED` | b | 2 | 0 |
-| `FORECAST_NAIVE_GATE_ENABLED` | b | 5 | 0 |
 | `FORECAST_PROPHET_WEIGHT` | b | 2 | 0 |
 | `FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED` | b | 1 | 0 |
 | `FRED_KEY_ROTATED_DATE` | b | 1 | 0 |
@@ -411,7 +410,7 @@ The key is not a literal, so no static analysis can attribute these to a field n
 | `api/pilots_api.py:5262` | `getattr(settings, key, None)` |
 | `data/brokerage_credentials.py:125` | `getattr(_settings, k, None)` |
 | `data/robinhood_portfolio.py:84` | `getattr(_settings, name, None)` |
-| `execution/agentic_preflight.py:308` | `getattr(settings, name)` |
+| `execution/agentic_preflight.py:317` | `getattr(settings, name)` |
 | `llm/status_store.py:212` | `getattr(settings, attr, None)` |
 | `runtime_flags_writer.py:884` | `getattr(settings_module.settings, key, None)` |
 | `runtime_flags_writer.py:893` | `getattr(settings_module.settings, key, None)` |

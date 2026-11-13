@@ -441,9 +441,9 @@ export function Marketplace() {
             </Link>
             <Link to="/forecast" className="card card-pad" style={{ textDecoration: "none" }}>
               <div style={{ fontSize: "var(--t-display)" }} aria-hidden>📈</div>
-              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Forecast viewer</div>
+              <div style={{ fontWeight: 700, marginTop: "var(--s-1-5)" }}>Forecasts</div>
               <div style={{ color: theme.textMuted, fontSize: "var(--t-caption)", marginTop: "var(--s-0-5)" }}>
-                Multi-horizon price forecast &amp; MC band
+                Published forecasts, skill vs naive &amp; the naive gate
               </div>
             </Link>
             <Link to="/commands" className="card card-pad" style={{ textDecoration: "none" }}>

@@ -283,6 +283,10 @@ class RunPipelineStep(PipelineStep):
                 robinhood_positions=ctx.context_extras.get("robinhood_positions"),
                 engines=ctx.engine_context,
                 progress=ctx.progress,
+                # The inner steps run on their own RunContext; hand the
+                # synthetic-data flag over so their durable writers skip too.
+                data_is_synthetic=is_cycle_synthetic(ctx),
+                synthetic_reason=synthetic_reason(ctx),
             )
         except Exception as pipe_err:
             main_orchestrator.telemetry.critical(f"Platform execution pipeline crashed: {pipe_err}", exc_info=True)
@@ -328,7 +332,11 @@ class MacroStep(PipelineStep):
             ctx.macro_raw, sahm_val, fabricated_keys=macro_raw_fabricated_keys,
         )
 
-        hmm_result = me.compute_hmm_risk_on_probability(ctx.tech_raw.get('SPY'))
+        # Synthetic-data cycle: same computation, but no macro_history upsert
+        # and no change to the warm detector's fit (pipeline/synthetic_gate.py).
+        hmm_result = me.compute_hmm_risk_on_probability(
+            ctx.tech_raw.get('SPY'), persist=not is_cycle_synthetic(ctx),
+        )
         hmm_risk_on_probability = hmm_result["risk_on_probability"] if hmm_result else None
         hmm_regime_state = hmm_result["regime_state_label"] if hmm_result else None
 
@@ -567,6 +575,11 @@ class ForecastingStep(PipelineStep):
             forecast_cols += ['Forecast_10_Gated_Naive', 'Forecast_30_Gated_Naive',
                               'Forecast_60_Gated_Naive', 'Forecast_90_Gated_Naive']
 
+        # Synthetic-data cycle (pipeline/synthetic_gate.py): forecast as
+        # usual but write nothing durable -- no forecast-ledger actuals or
+        # rows, no model-artifact save (generate_forecast's `persist`).
+        persist_forecasts = not is_cycle_synthetic(ctx)
+
         def _forecast_one(row) -> tuple[str, dict | None]:
             ticker = row['Symbol']
             price = row['Price']
@@ -589,6 +602,7 @@ class ForecastingStep(PipelineStep):
                 forecasts = fe.generate_forecast(
                     row, price, history_series, history_df=history_df,
                     precomputed_garch_term_structure=precomputed_term_structure,
+                    persist=persist_forecasts,
                 )
                 if ctx.progress is not None:
                     ctx.progress.advance_symbol(f"Forecasting: {ticker}")
@@ -1960,6 +1974,13 @@ class StrategyEvalStep(PipelineStep):
         if ctx.progress is not None:
             ctx.progress.start_stage("strategy", symbols_total=len(ctx.dashboard_df))
 
+        # Synthetic-data gate (pipeline/synthetic_gate.py): on a MockDataEngine
+        # cycle every scoring/sizing step below still runs; only this step's
+        # durable/outward writes are skipped -- the PIT feature snapshot,
+        # dead_letter.json, the cap-audit and symbol-rating rows and the
+        # sizing-cap alert.
+        synthetic = is_cycle_synthetic(ctx)
+
         # Populate the six paper_* ML-inference features on ctx.dashboard_df
         # as early as possible in this step -- BEFORE both of this cycle's
         # real consumers: (1) global_registry.run_pre_compute() below, which
@@ -2024,8 +2045,12 @@ class StrategyEvalStep(PipelineStep):
         global_registry.run_pre_compute(ctx.dashboard_df, shared_context)
         ctx.context_extras["shared_context"] = shared_context
 
-        # PIT snapshot capture
-        if settings.PIT_CAPTURE_ENABLED:
+        # PIT snapshot capture. Skipped on a synthetic cycle: the store keeps
+        # ONE file per day (features_<YYYYMMDD>.parquet), so a Mock cycle
+        # would overwrite today's real snapshot that ML retraining reads.
+        if settings.PIT_CAPTURE_ENABLED and synthetic:
+            telemetry.info("PIT snapshot not written: synthetic-data cycle.")
+        elif settings.PIT_CAPTURE_ENABLED:
             try:
                 from ml.feature_engineering import build_pit_feature_matrix
                 from ml.data.store import PITFeatureStore
@@ -2483,28 +2508,37 @@ class StrategyEvalStep(PipelineStep):
                     exc_info=True,
                 )
 
-        # Write dead-letter
+        # Write dead-letter. Skipped on a synthetic cycle: the rewrite would
+        # replace (or, with no failures, "clear") the last REAL cycle's report
+        # with one about fabricated data. The failures are still logged.
         dl_path = settings.OUTPUT_DIR / "dead_letter.json"
-        try:
-            import json as _json
-            dl_payload = {
-                "run_id": datetime.now(timezone.utc).isoformat(),
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "entries": dead_letter_entries,
-            }
-            dl_tmp = dl_path.with_suffix(".tmp")
-            dl_path.parent.mkdir(parents=True, exist_ok=True)
-            dl_tmp.write_text(_json.dumps(dl_payload, indent=2), encoding="utf-8")
-            dl_tmp.replace(dl_path)
-            if dead_letter_entries:
-                telemetry.warning(
-                    "Dead-letter report: %d symbol(s) failed — see %s",
-                    len(dead_letter_entries), dl_path,
-                )
-            else:
-                telemetry.info("All symbols processed cleanly — dead_letter.json cleared.")
-        except Exception as dl_exc:
-            telemetry.warning("Failed to write dead-letter report: %s", dl_exc)
+        if synthetic:
+            telemetry.info(
+                "dead_letter.json not written: synthetic-data cycle (%d symbol(s) "
+                "dead-lettered this cycle; the previous report stays in place).",
+                len(dead_letter_entries),
+            )
+        else:
+            try:
+                import json as _json
+                dl_payload = {
+                    "run_id": datetime.now(timezone.utc).isoformat(),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "entries": dead_letter_entries,
+                }
+                dl_tmp = dl_path.with_suffix(".tmp")
+                dl_path.parent.mkdir(parents=True, exist_ok=True)
+                dl_tmp.write_text(_json.dumps(dl_payload, indent=2), encoding="utf-8")
+                dl_tmp.replace(dl_path)
+                if dead_letter_entries:
+                    telemetry.warning(
+                        "Dead-letter report: %d symbol(s) failed — see %s",
+                        len(dead_letter_entries), dl_path,
+                    )
+                else:
+                    telemetry.info("All symbols processed cleanly — dead_letter.json cleared.")
+            except Exception as dl_exc:
+                telemetry.warning("Failed to write dead-letter report: %s", dl_exc)
 
         try:
             _apply_strategy_score_column(ctx.dashboard_df, eval_results)
@@ -2688,8 +2722,13 @@ class StrategyEvalStep(PipelineStep):
         # symbol-rating block below would raise UnboundLocalError whenever
         # cap-event auditing is disabled but symbol rating isn't.
         cycle_id = datetime.now(timezone.utc).isoformat()
+        # Synthetic cycle: no cap-audit rows (they feed StrategyEngine's
+        # consecutive-capped-cycles escalation read) and no symbol-rating rows
+        # (they drive BAD streaks and universe auto-drops).
+        if synthetic and (settings.SIZING_CAP_AUDIT_ENABLED or settings.SYMBOL_RATING_ENABLED):
+            telemetry.info("Cap-audit and symbol-rating rows not written: synthetic-data cycle.")
         try:
-            if settings.SIZING_CAP_AUDIT_ENABLED and not ctx.dashboard_df.empty:
+            if settings.SIZING_CAP_AUDIT_ENABLED and not synthetic and not ctx.dashboard_df.empty:
                 from sizing.cap_audit_store import CapAuditStore
 
                 events = []
@@ -2730,7 +2769,11 @@ class StrategyEvalStep(PipelineStep):
         # exercised directly in tests without going through the whole of
         # StrategyEvalStep.run().
         # Once per trading day only — see _daemon_should_record_ratings.
-        if _daemon_should_record_ratings(datetime.now(timezone.utc)):
+        # A synthetic cycle skips even the cadence check (it opens a
+        # write-mode store); logged with the cap-audit skip above.
+        if synthetic:
+            pass
+        elif _daemon_should_record_ratings(datetime.now(timezone.utc)):
             try:
                 n_rated = _record_symbol_ratings(ctx.dashboard_df, cycle_id)
                 telemetry.info(f"Symbol ratings recorded for cycle {cycle_id}: {n_rated} symbols.")
@@ -2754,7 +2797,8 @@ class StrategyEvalStep(PipelineStep):
             ctx.dashboard_df['Symbol_Rating_Excluded'] = "No"
 
         try:
-            if settings.SIZING_CAP_ALERT_ENABLED and not ctx.dashboard_df.empty:
+            # No outward alert about sizing computed from synthetic data.
+            if settings.SIZING_CAP_ALERT_ENABLED and not synthetic and not ctx.dashboard_df.empty:
                 _capped_mask = ctx.dashboard_df["Sizing_Was_Capped"].astype(str).str.strip().str.lower() == "yes"
                 _capped_frac = float(_capped_mask.mean())
                 if _capped_frac >= settings.SIZING_CAP_ALERT_THRESHOLD_PCT:
@@ -2914,6 +2958,10 @@ class AdvisoryOverlayStep(PipelineStep):
             )
             symbols.extend(dict.fromkeys(dashboard_only))
 
+        # Synthetic-data cycle: evaluate() still forecasts, but its forecast
+        # ledger rows / model-cache saves are skipped (pipeline/synthetic_gate.py).
+        persist_forecast = not is_cycle_synthetic(ctx)
+
         market = _get_market_provider()
         bars_dict = fetch_bars_for_universe(symbols, market)
         context_extras = build_context_extras(symbols, bars_dict, ctx.macro_dto, market)
@@ -2946,6 +2994,7 @@ class AdvisoryOverlayStep(PipelineStep):
                     precomputed_garch=garch,
                     precomputed_forecast=forecast,
                     precomputed_forecast_is_fallback=forecast_is_fallback,
+                    persist_forecast=persist_forecast,
                 )
                 if ctx.progress is not None:
                     ctx.progress.advance_symbol(f"Advisory: {symbol}")

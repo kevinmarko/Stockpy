@@ -175,7 +175,7 @@ class _FakeMacroEngine:
     def __init__(self, data_engine=None, **_kw) -> None:
         self.data_engine = data_engine
 
-    def compute_hmm_risk_on_probability(self, spy_df):
+    def compute_hmm_risk_on_probability(self, spy_df, **_kw):
         assert spy_df is not None and len(spy_df) == _N_BARS
         return {"risk_on_probability": 0.72, "regime_state_label": "bull"}
 

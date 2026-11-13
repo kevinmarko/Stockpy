@@ -236,7 +236,7 @@ class TestProphetEnsemble:
         monkeypatch.setattr(
             forecasting_engine.ForecastingEngine,
             "run_prophet_forecast",
-            lambda self, series, days_forward, ticker=None: (150.0, 140.0, 160.0),
+            lambda self, series, days_forward, ticker=None, **_kw: (150.0, 140.0, 160.0),
         )
 
         recorded = []  # (preferred_model unused) -> capture model_forecasts per call
@@ -266,7 +266,7 @@ class TestProphetEnsemble:
         monkeypatch.setattr(
             forecasting_engine.ForecastingEngine,
             "run_prophet_forecast",
-            lambda self, series, days_forward, ticker=None: prophet_spy(series, days_forward),
+            lambda self, series, days_forward, ticker=None, **_kw: prophet_spy(series, days_forward),
         )
 
         history = _price_series(90, seed=22)

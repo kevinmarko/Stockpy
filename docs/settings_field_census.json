@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "c7d414a1f06de84207d2c63f540a10fe06588dbb",
+    "git_commit": "179b611a1a18f010a4e5cfc9afb9b83d15893077",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2933,7 +2933,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 371,
+    "files_scanned": 369,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -2961,8 +2961,8 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 718,
-      "distinct_fields": 253,
+      "total_reads": 725,
+      "distinct_fields": 254,
       "counts": {
         "OUTPUT_DIR": 102,
         "LOCAL_DATA_ROOT": 25,
@@ -2970,7 +2970,7 @@
         "FRED_API_KEY": 13,
         "DEFAULT_TICKERS": 11,
         "DISABLED_SIGNAL_MODULES": 11,
-        "FORECAST_SKILL_WINDOW_DAYS": 10,
+        "FORECAST_SKILL_WINDOW_DAYS": 11,
         "REGIME_SIGNAL_WEIGHTS": 9,
         "FORECAST_SKILL_MIN_OBS": 8,
         "KELLY_CAP": 7,
@@ -3007,14 +3007,18 @@
         "ROBINHOOD_MAX_NOTIONAL_PER_ORDER": 4,
         "RUNTIME_FLAGS_REFRESH_ENABLED": 4,
         "SIZING_CAP_ALERT_THRESHOLD_PCT": 4,
+        "SIZING_CAP_AUDIT_ENABLED": 4,
         "SIZING_CAP_ESCALATION_FACTOR": 4,
         "SIZING_CAP_ESCALATION_THRESHOLD_CYCLES": 4,
+        "SYMBOL_RATING_ENABLED": 4,
         "ALERT_EMAIL_FROM": 3,
         "ALERT_EMAIL_TO": 3,
         "ALERT_NTFY_TOPIC": 3,
         "ANTHROPIC_API_KEY": 3,
         "BROWSER_DIAGNOSTICS_ENABLED": 3,
         "BROWSER_DIAGNOSTICS_TIMEOUT_SECONDS": 3,
+        "FORECAST_NAIVE_GATE_MIN_IMPROVEMENT": 3,
+        "FORECAST_NAIVE_GATE_MIN_OBS": 3,
         "FUNDAMENTALS_NEG_CACHE_TTL_SECONDS": 3,
         "FUNDAMENTALS_REFRESH_DAYS": 3,
         "GEMINI_API_KEY": 3,
@@ -3030,8 +3034,6 @@
         "SECTOR_SELECTION_ENABLED": 3,
         "SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE": 3,
         "SENTIMENT_SOURCES": 3,
-        "SIZING_CAP_AUDIT_ENABLED": 3,
-        "SYMBOL_RATING_ENABLED": 3,
         "WATCHLIST": 3,
         "WATCH_RULES_FILE": 3,
         "WEEKLY_DIGEST_ENABLED": 3,
@@ -3055,8 +3057,6 @@
         "FMP_API_KEY": 2,
         "FMP_PAPER_STARTING_CASH": 2,
         "FORECAST_BACKFILL_DEADLINE_SECONDS": 2,
-        "FORECAST_NAIVE_GATE_MIN_IMPROVEMENT": 2,
-        "FORECAST_NAIVE_GATE_MIN_OBS": 2,
         "FORECAST_USE_GARCH_SIGMA": 2,
         "FRED_REQUEST_TIMEOUT_SECONDS": 2,
         "FUNDAMENTALS_CACHE_TTL_SECONDS": 2,
@@ -3092,6 +3092,7 @@
         "ORCHESTRATOR_EXTENDED_HOURS_ONLY": 2,
         "ORCHESTRATOR_INTERVAL_SECONDS": 2,
         "PILOTS_API_PORT": 2,
+        "PIT_CAPTURE_ENABLED": 2,
         "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE": 2,
         "PROMPT_REGISTRY_BACKEND": 2,
         "PROMPT_REGISTRY_PINS": 2,
@@ -3134,6 +3135,7 @@
         "FOLLOW_API_TOKEN": 1,
         "FORECAST_BACKFILL_ENABLED": 1,
         "FORECAST_MODEL_RETRAIN_DAYS": 1,
+        "FORECAST_NAIVE_GATE_ENABLED": 1,
         "FORECAST_SKILL_WEIGHTING_ENABLED": 1,
         "FUNDAMENTALS_SOURCE": 1,
         "GENERAL_SETTINGS_WRITES_ENABLED": 1,
@@ -3165,7 +3167,6 @@
         "PIPELINE_STALL_ALERT_ENABLED": 1,
         "PIPELINE_STALL_ALERT_SECONDS": 1,
         "PIPELINE_STEP_TIMEOUT_SECONDS": 1,
-        "PIT_CAPTURE_ENABLED": 1,
         "PROMPT_CACHE_DIR": 1,
         "PROMPT_CACHE_KEEP_VERSIONS": 1,
         "PROMPT_REGISTRY_PUBLISH_TOKEN": 1,
@@ -3451,7 +3452,7 @@
         },
         {
           "file": "execution/agentic_preflight.py",
-          "line": 308,
+          "line": 317,
           "expr": "getattr(settings, name)"
         },
         {
@@ -3569,7 +3570,6 @@
       "FORECAST_MAX_CONCURRENCY",
       "FORECAST_MC_RANDOM_SEED",
       "FORECAST_MODEL_PERSISTENCE_ENABLED",
-      "FORECAST_NAIVE_GATE_ENABLED",
       "FORECAST_PROPHET_WEIGHT",
       "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED",
       "FRED_KEY_ROTATED_DATE",
@@ -3622,7 +3622,7 @@
       "VALIDATION_DSR_SINGLE_TRIAL_CORRECTION_ENABLED",
       "VALIDATION_HARNESS_OOS_GATE_ENABLED"
     ],
-    "fields_only_via_b_or_d_count": 127,
+    "fields_only_via_b_or_d_count": 126,
     "fields_only_via_b": [
       "ADVISORY_MAX_CONCURRENCY",
       "ADVISORY_REUSE_PIPELINE_COMPUTE",
@@ -3699,7 +3699,6 @@
       "FORECAST_MAX_CONCURRENCY",
       "FORECAST_MC_RANDOM_SEED",
       "FORECAST_MODEL_PERSISTENCE_ENABLED",
-      "FORECAST_NAIVE_GATE_ENABLED",
       "FORECAST_PROPHET_WEIGHT",
       "FORECAST_TRACKER_DUE_DATE_LOOKUP_ENABLED",
       "FRED_KEY_ROTATED_DATE",

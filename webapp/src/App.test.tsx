@@ -218,7 +218,7 @@ describe("App — Settings gear + nav", () => {
       "Models",
       "Strategy Health",
       "Signal Breakdown",
-      "Forecast Viewer",
+      "Forecasts",
       "Data Explorer",
     ]) {
       expect(within(dialog).getByText(label)).toBeInTheDocument();

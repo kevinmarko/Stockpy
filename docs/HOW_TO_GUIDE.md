@@ -268,7 +268,7 @@ The web app is a graphical front-end over the same pipeline. Its main screens:
   [§12](#12-the-observability-dashboard).
 - **Portfolio** (`/portfolio`) — holdings, P&L, and held-vs-signal reconciliation.
 - **Signal Breakdown** (`/signals`),
-  **Symbol Screener**, **Forecast Viewer**, and other research screens.
+  **Symbol Screener**, **Forecasts** (`/forecast`; see [The Forecasts screen](#the-forecasts-screen-web-app)), and other research screens.
 - **Calibration** (`/calibration`) and **Attribution** (`/attribution`) — decision journal,
   conviction calibration, and Brinson-Fachler attribution.
 - **Search Attention** (`/research/trends`) — Google Trends search interest per ticker, with the stitching work shown; see [Reading the Search Attention screen](#reading-the-search-attention-screen).
@@ -402,6 +402,34 @@ never fabricated). The report contains no credentials.
 ### State snapshot (for the dashboard)
 
 `output/state_snapshot.json` — machine-readable summary read by the web app's backend (Mission Control, symbol pages, and more). Updated every pipeline run. A timestamped copy is ALSO written to `output/history/state_snapshot_<UTC>.json` and pruned after `SNAPSHOT_HISTORY_DAYS` (default 30); the daily HTML report's "Δ Since Last Run" band reads the two most recent rotated copies via `scripts/snapshot_diff.py`.
+
+### The Forecasts screen (web app)
+
+**Forecasts** (`/forecast`; Research hub, Marketplace "Explore", the desktop sidebar, the command palette, and
+"Forecasts" links on Symbol Detail's *Forecast skill* card and the Agentic Trading *Model Health* panel) shows the
+pipeline's own forecasts as they were **published** in the last run, read from `output/state_snapshot.json` and the
+forecast ledger. Nothing is refit when you open it, so it shows exactly what the pipeline used.
+
+- **Published forecasts** (top table): one row per symbol in the latest snapshot, with the 10/30/60/90-day forecast,
+  its change from the price, and its Monte Carlo band (hover a cell). A **naive** badge means the naive gate admitted
+  no model for that horizon, so the published forecast is the naive one (price stays flat). A **fallback** badge means
+  the models did not converge. "Forecast pts" is the forecast's contribution to the composite score
+  (`forecast_alignment`); the tier column shows the action tier with, and in brackets without, those points.
+- **Naive gate line**: whether the gate is on (the gated blend is published) or in shadow (the plain blend is
+  published and the gate's decisions are only recorded), and the live minimum improvement, minimum scored pairs and
+  window. The numbers come from the backend's settings, never from the page.
+- **Symbol panel** (click a row, type a symbol, or arrive with `?symbol=`): the four horizons with their badges; a
+  price chart with the forecast cone; **What the forecast changed this cycle** (score points, the tier without them,
+  the advisory rules it fired such as Case A or Case C, and whether the sell-zone top came from the 30-day forecast);
+  and the **Forecast ledger** per horizon: the published model, the gate's last recorded decision and what it would
+  decide now (admitted models, and each rejected model with its reason), skill against naive per model (median
+  absolute log error, naive's, share of days closer than naive, sign-test p, direction hit rate), and Monte Carlo
+  band coverage against its nominal level.
+- **Honest gaps**: a symbol not in the snapshot says so (the screen never refits to fill it); a horizon that was not
+  recorded shows "—"; a ledger with no matured outcomes, a ledger that predates the gate, or a read error shows the
+  backend's reason. The "tier without the forecast" is approximate (the snapshot has the rounded score but not the
+  choppy-market downgrade or the kill-switch overlay). Forecast z, E and n show "unavailable" until forecasting
+  rebuild F5 lands.
 
 ### Manual Execution Journal (Reports tab)
 
@@ -1651,8 +1679,8 @@ The web app keeps its own help text in `webapp/src/help/helpContent.ts`
 (`TAB_HELP` and `GLOSSARY`); that is what the screens render. The Python-side catalog,
 `shared/help_content.py`, is keyed the old way — metric tooltips by `"<tab>.<metric_name>"`
 in `METRIC_HELP`, where a missing key returns `""` and **never raises** (CONSTRAINT #6) —
-and its only consumers are the Streamlit-era wrappers in `shared/help_widgets.py`, the
-`MODEL_RETRAIN_WINDOW_DAYS` constant, and tests. Its `TAB_HELP` ids are the legacy tab
+and its only consumers are the `MODEL_RETRAIN_WINDOW_DAYS` constant and tests (the
+Streamlit-era wrappers that rendered it were archived to `legacy/shared/help_widgets.py`). Its `TAB_HELP` ids are the legacy tab
 ids; each entry says which web app screen replaced the tab (or that the surface was
 archived). `tests/test_help_content_live_surfaces.py` fails if that text describes the
 deleted Streamlit app or the archived `--agent` loop as live.

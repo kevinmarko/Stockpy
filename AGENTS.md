@@ -301,8 +301,10 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   outward. `AsyncDataFetchStep` decides it once, from the engine's identity
   (`data_engine.is_synthetic_provider`) or the empty-fetch fallback, and sets
   `ctx.context_extras["data_is_synthetic"]`; any step that writes a file, DB row, push or order must
-  honor it (`pipeline/synthetic_gate.py::is_cycle_synthetic`). The inner `RunPipelineStep` writers
-  are a known follow-up (`docs/known_issues/synthetic_data_gate_keyless_cycle_2026_10.md`).
+  honor it (`pipeline/synthetic_gate.py::is_cycle_synthetic`). `run_pipeline`'s inner context gets
+  it via `propagate_synthetic_flag`; a writer with no `ctx` takes a `persist=False` keyword from its
+  caller (e.g. `ForecastingEngine.generate_forecast`). Inventory and the real-vendor archives that are
+  kept: `.claude/synthetic_data_gate_inner_writers_walkthrough.md`.
 - **Degenerate-std guard.** Any ratio dividing by a computed std or drawdown guards with `< 1e-12`
   (or `>= 1e-12` to proceed), never an exact `== 0`/`> 0` check (e.g.
   `validation/metrics.py::_DEGENERATE_STD`).
@@ -359,7 +361,8 @@ Each rule is short; the pointer names where the detail or the enforcing test liv
   in the root `conftest.py` that redirects it (pattern: `_isolate_validation_runs_db_in_tests`,
   `_isolate_broker_fills_db_in_tests`, `_isolate_paper_and_transactions_db_in_tests`,
   `_isolate_forecast_tracker_db_in_tests`, `_isolate_runtime_flags_store_in_tests`,
-  `_isolate_symbol_rating_db_in_tests`). Without one, the suite writes fake rows into the operator's live DB (it has happened:
+  `_isolate_symbol_rating_db_in_tests`, `_isolate_cap_audit_db_in_tests`,
+  `_isolate_pit_feature_store_in_tests`). Without one, the suite writes fake rows into the operator's live DB (it has happened:
   `docs/known_issues/pr872_live_db_test_contamination_2026.md`).
   Network-touching defaults get the same treatment (`_force_mock_data_engine_in_tests`,
   `_stub_paper_marking_network_in_tests`).
