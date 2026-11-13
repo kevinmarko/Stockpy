@@ -549,39 +549,89 @@ def allowed_tools() -> List[str]:
     return sorted(set(agent_tools(REVIEWER_AGENT)) | set(COORDINATOR_TOOLS))
 
 
+def _recorded_review(days: Sequence[date], started: datetime,
+                     output_dir: Optional[Any] = None) -> Optional[Dict[str, Any]]:
+    """A usable ``review.json`` for one of ``days`` written at or after ``started``.
+
+    This, not ``claude``'s exit code, is what proves the review ran: ``claude
+    -p`` exits 0 when the session ran and 1 when it errored (expired login,
+    API error), whatever the burn-in verdict was.
+    """
+    for day in days:
+        path = review_dir(day, output_dir) / REVIEW_FILENAME
+        try:
+            written = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            continue
+        # 1 s slack: some filesystems store mtimes at 1 s resolution.
+        if written.timestamp() + 1.0 < started.timestamp():
+            continue  # a stale file from an earlier run, not this one
+        r = _read_json(path)
+        if isinstance(r, dict) and r.get("usable"):
+            return r
+    return None
+
+
 def launch(*, runner: Callable[..., Any] = None, claude_bin: str = "claude",
-           notifier: Optional[Callable[..., bool]] = None) -> int:
+           notifier: Optional[Callable[..., bool]] = None,
+           output_dir: Optional[Any] = None,
+           clock: Optional[Callable[[], datetime]] = None) -> int:
     """Run ``/rh-agentic-review`` headless with a hard timeout. Never raises.
 
-    On a timeout, a missing CLI or exit code 2 (inputs unusable), push one
-    alert so a silent burn-in gap can't go unnoticed. Exit codes 0 and 1 are
-    normal (READY / NOT READY); the review itself sends that day's push.
+    Success means a usable ``review.json`` for today (UTC, the day ``run``
+    uses) was written during this launch; then the exit code follows its
+    verdict (0 READY, 1 NOT READY) and the review itself has sent that day's
+    push. Anything else (timeout, missing CLI, a session that errored, a
+    session that ended without recording a review) pushes one
+    "did not run" alert with the reason and the last line ``claude`` printed,
+    and returns 2. One JSON summary line always goes to stdout, so the
+    launchd ``.out`` log shows what happened.
     """
     import subprocess
-    from execution.agentic_cycle import REPO_ROOT
+    from execution.agentic_cycle import REPO_ROOT, _output_tail, _said
 
+    clock = clock or (lambda: datetime.now(timezone.utc))
     runner = runner or subprocess.run
+    started = clock()
     reason: Optional[str] = None
+    rc: Optional[int] = None
+    tail = ""
+    said = ""
     try:
         cmd = [claude_bin, "-p", "/rh-agentic-review", "--allowedTools", ",".join(allowed_tools())]
         proc = runner(cmd, cwd=str(REPO_ROOT), timeout=LAUNCH_TIMEOUT_SECONDS,
                       capture_output=True, text=True)
-        rc = getattr(proc, "returncode", 1)
-        if rc not in (0, 1):
-            reason = f"review exited with code {rc}"
-    except subprocess.TimeoutExpired:
+        rc = getattr(proc, "returncode", None)
+        tail = _output_tail(proc)
+        said = _said(proc)
+        if rc != 0:
+            reason = f"claude exited with code {rc}"
+    except subprocess.TimeoutExpired as exc:
+        tail = _output_tail(exc)
+        said = _said(exc)
         reason = f"timed out after {LAUNCH_TIMEOUT_SECONDS} s"
     except FileNotFoundError:
         reason = f"'{claude_bin}' CLI not found on PATH"
     except Exception as exc:
         reason = f"launch error: {exc}"
-    if reason is None:
-        return 0
+
+    days = sorted({started.date(), clock().date()})
+    review = _recorded_review(days, started, output_dir)
+    if review is None and reason is None:
+        reason = "the session ended without recording a review"
+    print(json.dumps({"review_recorded": review is not None, "claude_exit": rc,
+                      "reason": None if review is not None else reason,
+                      "claude_said": said, "output_tail": tail}))
+    if review is not None:
+        return EXIT_READY if (review.get("burnin") or {}).get("ready") else EXIT_NOT_READY
+
+    body = f"{reason}. No review was recorded today."
+    if said:
+        body = f"{body} claude said: {said}"
     try:
         if notifier is None:
             from alerting import notify as notifier
-        notifier("Agentic burn-in review did not run", f"{reason}. No review was recorded today.",
-                 priority="high")
+        notifier("Agentic burn-in review did not run", body, priority="high")
     except Exception as exc:
         logger.warning("agentic_review: alert not sent (%s)", exc)
     return EXIT_UNUSABLE
@@ -610,7 +660,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     if args.cmd == "launch":
-        return launch()
+        return launch(output_dir=args.output_dir)
 
     if args.cmd == "save":
         try:

@@ -1714,8 +1714,21 @@ for n in rh-agentic-cycle rh-agentic-review; do sed "s|/Users/kevinlee/Desktop/S
 claude mcp list | grep -i robinhood
 ```
 
-A review that didn't run (timeout, `claude` not found, missing inputs) sends
-"Agentic burn-in review did not run". Logs: `output/agentic_review.out` / `.err`.
+A review that didn't run sends "Agentic burn-in review did not run", with the reason and the last
+line `claude` printed. That covers a timeout, `claude` not found, a session that errored, and a session
+that ended without writing a usable `review.json` for today. The launcher decides from that file, not
+from `claude`'s exit code.
+- **Commonest cause: the Claude Code login expired.** The message reads "Failed to authenticate: OAuth
+  session expired". Run `claude` in Terminal, type `/login`, then re-run the day's review:
+
+```bash
+cd ~/Stockpy-live && .venv/bin/python -m execution.agentic_review launch
+```
+
+- `output/agentic_review.out` gets one JSON line per launch: `review_recorded`, `claude_exit`, `reason`, `claude_said`
+  and `output_tail`.
+- The 15-minute cycle timer uses the same login. Its "Agentic cycle failed" alert now carries the same
+  `claude` message.
 
 ### Preflight
 
