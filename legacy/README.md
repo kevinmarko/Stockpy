@@ -9,6 +9,27 @@ one you need to put the moved module back first.
 
 Add to this directory only when archiving, and record each move below.
 
+## Streamlit leftovers and the `streamlit` dependency (2026-11)
+
+Why: the Streamlit app was deleted in 2026-09, but `streamlit>=1.37.0` was still in
+`requirements.txt` because two Streamlit-only helpers remained in `shared/`. Nothing active
+imported either one; only their own tests and three Gravity checks did. `streamlit` is now
+gone from `requirements.txt`. The packages it brought along that active code uses (`uvicorn`,
+`websockets`, `pyarrow`, `pillow`, `protobuf`, ...) are pinned in their own right or come
+from FastAPI.
+
+| Moved | Why |
+|---|---|
+| `shared/help_widgets.py` -> `legacy/shared/help_widgets.py` | Streamlit wrappers (`explain`, `metric_with_help`, ...) around `shared/help_content.py`. The webapp renders its own help (`webapp/src/help/`). |
+| `shared/progress_ui.py` -> `legacy/shared/progress_ui.py` | The Streamlit `busy(label)` spinner. The webapp has its own loading states. |
+| `tests/test_help_widgets.py`, `tests/test_progress_ui.py` -> `legacy/tests/` | Their suites. |
+
+Gravity: step 76 check C2 and step 77 checks C7 and C9 (C9 read the deleted
+`legacy/streamlit_command_center/panels/` folder, so it could never pass) and step 74's soft
+check 5 for `shared.progress_ui.busy` are retired, with a comment where each was.
+
+To restore: `git mv` the files back and re-add `streamlit` to `requirements.txt`.
+
 ## Step 5.5: main.py retired (2026-10)
 
 Why: the orchestrator daemon (`python -m desktop.orchestrator_daemon`) has been the one runtime and the real execution-queue writer (`DAEMON_AGENTIC_QUEUE_MODE=primary`) since 2026-10-12, so `main.py` and the advisory-only code that only it called were archived after the soak. One cycle is now `POST /run` (or `shared.daemon_client.trigger_run()`); `main.py --refresh-account` is gone (use the daemon's 08:40 ET scheduled login or Settings -> Brokers -> Refresh).

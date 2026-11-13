@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "952cde40400a3bff8d9c37d0621aa9421fabeb29",
+    "git_commit": "a0875d09ba460c270dfb76b533ef51f9ca066f2f",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2933,7 +2933,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 370,
+    "files_scanned": 368,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
