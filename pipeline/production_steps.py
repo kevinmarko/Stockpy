@@ -138,15 +138,15 @@ class AsyncDataFetchStep(PipelineStep):
         ctx.context_extras["robinhood_positions"] = rh_positions
         # Kept for AdvisoryOverlayStep / AgenticQueueStep (step 5.2), which
         # used to fetch the same 20 h-cached snapshot a second time. None on
-        # failure; AdvisoryOverlayStep substitutes main.py's empty snapshot.
+        # failure; AdvisoryOverlayStep substitutes an empty snapshot (as main.py did).
         ctx.snapshot = snapshot
 
         # One universe builder for both orchestrators (step 5.1):
         # held ∪ WATCHLIST/watchlist.txt ∪ discovered, rating auto-drop,
         # DEFAULT_TICKERS only when that whole union is empty, then
-        # recently-closed retention unioned LAST. main.py calls the same
-        # pipeline.advisory_inputs.build_universe_detailed(), so the two can
-        # no longer diverge. Before 5.1 this step left held out of the union
+        # recently-closed retention unioned LAST. main.py (archived) called the same
+        # pipeline.advisory_inputs.build_universe_detailed(), so the two could
+        # not diverge. Before 5.1 this step left held out of the union
         # (so DEFAULT_TICKERS could fire while positions were held) and had
         # no closed-position retention -- see
         # docs/known_issues/daemon_universe_watchlist_divergence.md.
@@ -783,16 +783,16 @@ def _daemon_should_record_ratings(now_utc: datetime) -> bool:
     into ~5 hours. Operator decision (2026-10-05): one rating cycle per
     trading day. Writes only when the US market is open (holiday-aware, the
     same check the broker step uses) AND no rating cycle exists yet for
-    today's America/New_York date. main.py still records its cycle at ~08:47
-    ET, before the open, so while it runs the daemon skips; if main.py did
-    not run, or once it is retired (step 5.5), the first in-hours daemon
+    today's America/New_York date. main.py used to record its cycle at ~08:47
+    ET, before the open, so while it ran the daemon skipped; since main.py was
+    archived (step 5.5), the first in-hours daemon
     cycle records the day's one cycle (a cycle with no rateable rows writes
     nothing, so the next in-hours cycle tries again). Any error means "don't
     write" -- a read failure must never produce a duplicate cycle
     (CONSTRAINT #6). Disclosed limit: the check and the write are not one
     transaction. Daemon cycles are single-flight, so the only overlap is a
-    manual main.py run during market hours, which could add a second cycle
-    that day.
+    manual standalone ``main_orchestrator.py`` run during market hours, which
+    could add a second cycle that day.
     See docs/known_issues/daemon_strategy_score_always_nan.md.
     """
     if not settings.SYMBOL_RATING_ENABLED:
@@ -1066,7 +1066,7 @@ def _apply_sector_selection(dashboard_df: pd.DataFrame) -> None:
     Only recomputes a symbol whose most-recently-persisted ``as_of`` isn't
     TODAY's trading day: ``SectorCorrelationStore.record_correlations()``
     appends rows with no de-dup, so calling this every cycle under
-    ``main.py --interval N`` without this check would insert duplicate
+    the daemon's interval timer without this check would insert duplicate
     per-sector rows for the same day on every pass. After the first cycle of
     a trading day this degrades to one cheap ``get_latest()`` read per
     symbol and zero SBERT/heat computation.
@@ -1977,7 +1977,7 @@ class StrategyEvalStep(PipelineStep):
         # Finding 15: raw returns and percentile ranks are now sourced from
         # ONE helper (_compute_xsec_momentum) instead of two independent
         # formula implementations that could silently diverge.
-        # Ranked over the cycle universe only (main.py's cross-section): tech_raw
+        # Ranked over the cycle universe only (as main.py's cross-section was): tech_raw
         # also holds the benchmark, which must not shift every symbol's rank.
         xsec_return_dict, xsec_rank_series = _compute_xsec_momentum(
             {t: ctx.tech_raw[t] for t in ctx.symbols if t in ctx.tech_raw}
@@ -2780,7 +2780,7 @@ def _select_precomputed_for_row(row: Optional[dict], reuse_pipeline_compute: boo
 
     ``settings.ADVISORY_REUSE_PIPELINE_COMPUTE`` off (or no dashboard row for
     the ticker): all three are None, so evaluate() refits GARCH and the
-    forecast itself, exactly as main.py does. On: the row's own
+    forecast itself, exactly as the retired main.py did. On: the row's own
     ``GARCH_Vol``/``Forecast_30`` are passed through, and
     ``Forecast_30_Is_Fallback`` only when it is an actual bool -- the cell can
     also be NaN (the row skipped forecasting) or absent, neither of which says
@@ -2797,8 +2797,8 @@ def _select_precomputed_for_row(row: Optional[dict], reuse_pipeline_compute: boo
 
 
 def _empty_account_snapshot():
-    """The empty account main.py's AccountStep evaluates with when the
-    Robinhood snapshot is unavailable (pipeline/steps.py)."""
+    """The empty account main.py's AccountStep evaluated with when the
+    Robinhood snapshot was unavailable (archived pipeline/steps.py)."""
     from data.robinhood_portfolio import AccountSnapshot
 
     return AccountSnapshot(
@@ -2812,25 +2812,25 @@ def _empty_account_snapshot():
 
 class AdvisoryOverlayStep(PipelineStep):
     """Runs ``engine.advisory.evaluate()`` for every universe symbol, the same
-    way main.py's run_once() does, and keeps the full ``Recommendation``
+    way main.py's run_once() (archived in step 5.5) did, and keeps the full ``Recommendation``
     objects in ``ctx.recommendations``.
 
     Split out of ``BrokerExecutionStep`` in step 5.2. It is a SYNC step so
     ``AsyncPipelineRunner`` runs it under ``PIPELINE_STEP_TIMEOUT_SECONDS``
-    (the async broker step has no timeout). Its inputs match main.py's:
+    (the async broker step has no timeout). Its inputs matched main.py's:
 
     * the universe is ``ctx.symbols`` (the same ``build_universe_detailed``
-      main.py uses, since step 5.1), in the same order;
+      main.py used, since step 5.1), in the same order;
     * the account snapshot is the one ``AsyncDataFetchStep`` already fetched
       (``ctx.snapshot``; before 5.2 this step fetched it a second time), or
       main.py's empty snapshot when that fetch failed;
     * the context extras come from ``pipeline.advisory_inputs``'s
       ``fetch_bars_for_universe`` + ``build_context_extras`` -- the same
-      functions main.py calls. Before 5.2 this step passed only the pipeline's
+      functions main.py called. Before 5.2 this step passed only the pipeline's
       xsec ranks and multifactor scores.
 
     ``ctx.macro_dto`` is the daemon's own (built by ``RunPipelineStep``), so a
-    difference from main.py's macro inputs still shows up here; see the plan's
+    difference from main.py's former macro inputs shows up here; see the plan's
     section 1 "Macro".
 
     It writes the same five ``Advisory_*`` dashboard columns as before.
@@ -2876,7 +2876,7 @@ class AdvisoryOverlayStep(PipelineStep):
         if ctx.snapshot is None:
             telemetry.warning(
                 "Advisory: Robinhood account snapshot unavailable — evaluating "
-                "with an empty account (main.py's fallback); Kelly sizing still runs."
+                "with an empty account; Kelly sizing still runs."
             )
             ctx.snapshot = _empty_account_snapshot()
         snapshot = ctx.snapshot
@@ -2990,7 +2990,7 @@ class AdvisoryOverlayStep(PipelineStep):
 
 
 # The mode resolver lives in the light pipeline.agentic_queue module (main.py
-# reads it too); re-exported here under the names 5.2 introduced.
+# read it too); re-exported here under the names 5.2 introduced.
 from pipeline.agentic_queue import (  # noqa: E402
     DAEMON_AGENTIC_QUEUE_MODES,
     MODE_USED_KEY,
@@ -3053,8 +3053,8 @@ def archive_shadow_run(
 ) -> None:
     """Keep a timestamped copy of this cycle's shadow files under
     ``shadow/history/`` so ``scripts/compare_shadow_queue.py`` can find the
-    shadow run nearest after main.py's morning queue (the live shadow files
-    are overwritten every cycle). Only files written THIS cycle are copied: a
+    shadow run nearest after the real queue (main.py's, now archived; the live
+    shadow files are overwritten every cycle). Only files written THIS cycle are copied: a
     ``None`` queue path means compose wrote nothing, so the previous shadow
     queue is not re-archived under a new timestamp. Best effort; never raises.
     """
@@ -3076,30 +3076,30 @@ class AgenticQueueStep(PipelineStep):
     """Writes the daemon's copy of the Robinhood execution queue from
     ``ctx.recommendations``, behind ``settings.DAEMON_AGENTIC_QUEUE_MODE``.
 
-    * ``off`` (default): does nothing. main.py stays the only queue writer.
+    * ``off`` (default): does nothing, so nothing writes the queue (main.py, the old writer, is archived).
     * ``shadow`` (step 5.2): writes ``queue_sources/advisory.json`` and
       ``execution_queue.json`` under ``OUTPUT_DIR/shadow/`` ONLY, with the same
       ``write_advisory_source`` + ``compose_and_emit`` calls main.py's
-      ``_run_cycle`` makes. ``side_effects=False`` means no push notification,
+      ``_run_cycle`` made. ``side_effects=False`` means no push notification,
       no risk-gate alert and no ``risk_gate_blocks.jsonl`` entry. Refuses to
       write if a link makes a shadow path resolve to a real queue path. A
       timestamped copy of each cycle's shadow files goes to
       ``shadow/history/`` for ``scripts/compare_shadow_queue.py``.
-    * ``primary`` (step 5.3): the daemon is the writer. In main.py's
+    * ``primary`` (step 5.3): the daemon is the writer. In main.py's (archived)
       ``_run_cycle`` order it (1) logs the run summary and sends main.py's
       summary push, (2) runs the symbol watch engine (``watch_state.json`` +
       watch alerts), and (3) writes the REAL ``queue_sources/advisory.json``
       and ``execution_queue.json`` under ``OUTPUT_DIR`` with the same
       ``write_advisory_source`` + ``compose_and_emit`` calls, WITH their side
       effects (the new-intent push, risk-gate alerts and block log), exactly
-      as main.py does. main.py skips all of these in primary
+      as main.py did. main.py skipped all of these in primary
       (``pipeline.agentic_queue.daemon_owns_agentic_side_effects``).
 
     Skips (and logs why): in every mode, the whole step when the cycle
     stopped, the data is synthetic (MockDataEngine fallback) or the advisory
     overlay did not finish; the queue write alone when there are no
     recommendations (primary still sends the summary push, which then reports
-    the per-symbol errors, and runs the watch engine, as main.py does).
+    the per-symbol errors, and runs the watch engine, as main.py did).
 
     ``compose_and_emit`` leaves the previous ``execution_queue.json`` in place
     when nothing is composable, the source is stale/corrupt, or the account
@@ -3255,7 +3255,7 @@ class AgenticQueueStep(PipelineStep):
             telemetry.info(
                 "Shadow agentic queue: advisory source written to %s; no queue composed "
                 "(ROBINHOOD_EXECUTION_MODE=%s, or nothing composable -- any previous shadow "
-                "queue is left in place, as main.py leaves the real one).",
+                "queue is left in place).",
                 source_path, execution_mode,
             )
         else:
@@ -3334,7 +3334,7 @@ class AgenticQueueStep(PipelineStep):
             telemetry.info(
                 "Agentic queue (primary): advisory source written to %s; no queue composed "
                 "(ROBINHOOD_EXECUTION_MODE=%s, nothing composable, or ownership lost) -- "
-                "the previous execution_queue.json is left in place, as main.py leaves it.",
+                "the previous execution_queue.json is left in place.",
                 source_path, execution_mode,
             )
         else:
@@ -3418,7 +3418,7 @@ class StateSnapshotStep(PipelineStep):
             universe_funnel=ctx.context_extras.get("universe_funnel"),
         )
         # Step 5.3: once the daemon is the primary agentic writer, main.py
-        # stops writing its advisory snapshot, so this writer adds the two
+        # stopped writing its advisory snapshot, so this writer adds the two
         # per-signal fields only that writer had (garch_vol,
         # suggested_exit_pct). Keyed on the mode AgenticQueueStep actually
         # used this cycle, so off/shadow snapshots stay byte-identical.

@@ -7,7 +7,7 @@ completion is instant and never imports the heavy engines (unlike argcomplete,
 which would import the target module on every keypress).
 
 The completion hooks ``python`` / ``python3``: when the command line invokes a
-known entry point (``python main.py``, ``python -m execution.kill_switch``,
+known entry point (``python main_orchestrator.py``, ``python -m execution.kill_switch``,
 ``python scripts/preflight_check.py``, …) it offers that command's flags,
 subcommands and — for zsh — their descriptions; otherwise it falls back to
 ordinary file completion, so it never interferes with unrelated ``python`` runs.
@@ -45,7 +45,7 @@ COMPLETIONS_DIR = _REPO_ROOT / "completions"
 # --------------------------------------------------------------------------- #
 @dataclass
 class Context:
-    ctx_id: str  # "main.py" | "prompt_registry" | "prompt_registry/get"
+    ctx_id: str  # "main_orchestrator.py" | "prompt_registry" | "prompt_registry/get"
     kind: str  # "opts" | "subs"
     cands: List[str]  # completion candidates (option aliases, or subcommand names)
     disp: List[str]  # zsh display strings (candidate + " -- description")

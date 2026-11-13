@@ -91,9 +91,12 @@ describe("PilotDetail screen (real mock API)", () => {
     expect(screen.getAllByText(/not deployable/i).length).toBeGreaterThan(0);
   });
 
-  it("an unknown pilot id renders the honest 404 'Nothing here yet' state", async () => {
+  it("an unknown pilot id says the pilot does not exist, never 'run the pipeline' (a static catalog's 404 is not a cold start)", async () => {
     renderDetail("does-not-exist");
-    expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
+    expect(await screen.findByText("Not found")).toBeInTheDocument();
+    expect(screen.getByText('There is no pilot with the id "does-not-exist".')).toBeInTheDocument();
+    expect(screen.queryByText(/Run the Stockpy pipeline/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Nothing here yet")).not.toBeInTheDocument();
   });
 
   it("renders macro_benchmark_note as always-visible text near the S&P 500 legend, never a hover-only tooltip", async () => {

@@ -12,10 +12,10 @@
     "This is a STATIC analysis of read SITES. It cannot see reflection, importlib-driven dispatch, or a value copied into another long-lived object by code that never names the settings field."
   ],
   "counts": {
-    "live_safe": 310,
+    "live_safe": 309,
     "no_op": 2,
-    "restart_required": 79,
-    "total": 391
+    "restart_required": 78,
+    "total": 389
   },
   "dynamic_sites": [
     {
@@ -56,21 +56,21 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4313,
+      "line": 4311,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 4418,
+      "line": 4416,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, key, None)",
       "file": "api/pilots_api.py",
-      "line": 5228,
+      "line": 5226,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -131,7 +131,7 @@
       "rules": []
     }
   ],
-  "files_scanned": 372,
+  "files_scanned": 368,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -350,7 +350,6 @@
     "PIPELINE_STEP_TIMEOUT_SECONDS",
     "PIT_CAPTURE_ENABLED",
     "PROCESSING_FUNDAMENTALS_MAX_SECONDS_PER_CYCLE",
-    "PROGRESS_POLL_SECONDS",
     "PROMPT_CACHE_DIR",
     "PROMPT_CACHE_KEEP_VERSIONS",
     "PROMPT_REGISTRY_BACKEND",
@@ -451,15 +450,15 @@
   ],
   "poisoned_dynamic_sites": [],
   "read_forms": {
-    "attr": 797,
+    "attr": 798,
     "factory_param": 4,
-    "getattr_const": 294,
+    "getattr_const": 293,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
-    "attr": 254,
+    "attr": 255,
     "factory_param": 4,
-    "getattr_const": 172,
+    "getattr_const": 171,
     "os_environ": 2
   },
   "regenerate": "python3 scripts/settings_liveness.py --write",
@@ -482,7 +481,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4843",
+        "site": "api/pilots_api.py:4841",
         "via": []
       },
       {
@@ -561,26 +560,6 @@
           "init_self_assign"
         ],
         "site": "execution/risk_gate.py:162",
-        "via": []
-      }
-    ],
-    "DASHBOARD_REFRESH_SECONDS": [
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "api/pilots_api.py:4176",
-        "via": []
-      },
-      {
-        "discarded": false,
-        "form": "name_literal",
-        "rules": [
-          "dynamic_name_literal_unattributable"
-        ],
-        "site": "pilots/settings_domains.py:129",
         "via": []
       }
     ],
@@ -1229,7 +1208,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4794",
+        "site": "api/pilots_api.py:4792",
         "via": []
       }
     ],
@@ -1240,7 +1219,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4793",
+        "site": "api/pilots_api.py:4791",
         "via": []
       }
     ],
@@ -1286,7 +1265,7 @@
         "rules": [
           "dynamic_name_literal_unattributable"
         ],
-        "site": "api/pilots_api.py:4914",
+        "site": "api/pilots_api.py:4912",
         "via": []
       }
     ],
@@ -2259,7 +2238,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "shared/orchestrator_runner.py:1063",
+        "site": "shared/orchestrator_runner.py:1065",
         "via": []
       }
     ],
@@ -2491,7 +2470,7 @@
   ],
   "restart_required_reason_counts": {
     "cross_module_init_helper": 86,
-    "dynamic_name_literal_unattributable": 9,
+    "dynamic_name_literal_unattributable": 7,
     "indirect_init_helper_d1": 7,
     "init_body": 8,
     "init_self_assign": 41,
@@ -2502,7 +2481,6 @@
   "restart_required_via_name_literal_only": [
     "BROKER_BACKEND",
     "CORRELATION_CLUSTER_LOOKBACK_DAYS",
-    "DASHBOARD_REFRESH_SECONDS",
     "EDGAR_FULLTEXT_CHUNK_TOKENS",
     "EDGAR_FULLTEXT_FORMS",
     "FMP_ECON_INDICATORS",

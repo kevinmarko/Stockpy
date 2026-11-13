@@ -1,15 +1,15 @@
-"""Mutable state carrier threaded through main.py's run_once() pipeline steps.
+"""Mutable state carrier threaded through the daemon pipeline's steps.
 
-RunContext deliberately holds NO reference to ``main.py`` at runtime — the
-pipeline steps in ``pipeline/steps.py`` never import ``main`` (that would be
-circular, since ``main.run_once()`` imports the pipeline package). Instead,
-``main.run_once()`` builds one ``RunContext`` per cycle and injects the seven
+RunContext was written for ``main.py``'s ``run_once()`` (archived to ``legacy/``
+in step 5.5), whose steps never imported ``main`` (that would be circular).
+Instead ``run_once()`` built one ``RunContext`` per cycle and injected the seven
 functions below as plain callables, read from its OWN module scope at call
-time. This preserves every existing ``mock.patch("main.<name>", ...)`` test
-seam exactly: those patches replace the attribute on the ``main`` module
-object, and ``run_once()`` still resolves the bare name via ``main``'s module
-globals when it builds the RunContext — the same resolution that already
-made the pre-refactor mocks work.
+time, which kept every ``mock.patch("main.<name>", ...)`` test seam working.
+
+The live pipeline (``main_orchestrator.py``) builds one ``RunContext`` per cycle
+too, but fills those seven fields with no-op stubs: no live step reads them
+(``pipeline/production_steps.py`` uses ``ctx.symbols``, ``ctx.snapshot`` and
+the other mutable fields below), so they are vestigial.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class RunContext:
-    """Per-cycle mutable state for the run_once() pipeline."""
+    """Per-cycle mutable state for the daemon pipeline."""
 
     # ── Immutable run parameters ────────────────────────────────────────────
     force_account: bool
@@ -37,7 +37,7 @@ class RunContext:
 
     # ── Injected dependencies ────────────────────────────────────────────────
     # Bound from main.py's own module globals inside run_once() at call time
-    # (see module docstring). Never imported directly by pipeline/steps.py.
+    # (see module docstring); main_orchestrator.py now passes no-op stubs.
     fetch_account_snapshot_fn: Callable[..., "AccountSnapshot"]
     build_universe_fn: Callable[["AccountSnapshot"], List[str]]
     build_macro_dto_fn: Callable[[], "MacroEconomicDTO"]
@@ -73,8 +73,8 @@ class RunContext:
 
     # ── Progress instrumentation (reporting/progress.py) ─────────────────────
     # Set by PipelineRunner.run() from its own `progress` argument (never
-    # constructed here) so AdvisoryEvalStep -- the only step with a per-symbol
-    # loop -- can call ctx.progress.advance_symbol() without PipelineStep.run()
+    # constructed here) so the per-symbol steps in production_steps.py can call
+    # ctx.progress.advance_symbol() without PipelineStep.run()
     # needing a second parameter. None (the default) is a complete no-op;
     # every read of this field elsewhere is guarded by `if ctx.progress is
     # not None`.

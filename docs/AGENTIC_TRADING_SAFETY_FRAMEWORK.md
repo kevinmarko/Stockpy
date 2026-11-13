@@ -16,13 +16,13 @@ An effective system heavily relies on "deterministic limits" which place rigid b
 
 ## Refreshed Stockpy capability map
 
-This map supersedes the previous 2026-07-18 synthesis, reflecting updates up through Jules integration, options-desk automation, and settings revisions.
+This map supersedes the previous 2026-07-18 synthesis, reflecting updates up through Jules integration, options-desk automation, and settings revisions. Rows below were corrected on 2026-10-29 for the later archivals (options desk, Follow-a-Pilot, the `main.py` agent loop); `legacy/README.md` records each move.
 
 | Capability | Status | Key files / settings |
 |---|---|---|
-| Copy-a-strategy Pilots + follow/mirror rebalance | **Production-ready** | `pilots/catalog.py`, `pilots/mirror.py`, `pilots/follows_store.py` |
+| Copy-a-strategy Pilots catalog | **Production-ready** — the follow/mirror rebalance half (Follow-a-Pilot) was archived in step 4c (2026-09) | `pilots/catalog.py`; archived: `legacy/pilots/mirror.py`, `legacy/pilots/follows_store.py` |
 | Holding-aware recommendations | **Production-ready** | `engine/advisory.py` |
-| Advisory-only adaptive-cadence agent loop policy | **Partial** — wired only into `main.py`'s legacy `--agent` subprocess loop; the daemon backend (`desktop/daemon_runtime.py`) imports only the narrower `is_automatic_run_gated` helper, not the backlog-reminder/cadence policy itself | `engine/advisory_agent.py` |
+| Advisory-only adaptive-cadence agent loop policy | **Archived (step 5.5, 2026-10)** — the `main.py --agent` loop went to `legacy/` with `main.py`. The daemon has no equivalent cadence/backlog-reminder policy; it imports only the narrower `is_automatic_run_gated` helper (`shared/market_hours.py`, split out of the agent loop) | `legacy/engine/advisory_agent.py`, `shared/market_hours.py`, `desktop/daemon_runtime.py` |
 | Gated dry-run order queue → human execution | **Production-ready, gated** | `execution/queue_builder.py`, `.claude/skills/robinhood-execution/SKILL.md` (or `.agents/skills/...`) |
 | Decision journal | **Production-ready** — lives in `shared/` and is the live backing store read by `api/pilots_api.py`/`pilots/calibration.py` and surfaced in `webapp/src/screens/Calibration.tsx` | `shared/decision_log.py` |
 | Paper trading book | **Production-ready** | `data/paper_account_store.py` (virtual cash/positions/order history for the default `settings.BROKER_BACKEND="fmp_paper"` engine); `transactions_store.py` is a separate closed-trade ledger feeding Kelly sizing/evaluation, not the paper book itself |
@@ -31,7 +31,7 @@ This map supersedes the previous 2026-07-18 synthesis, reflecting updates up thr
 | Autonomous placement w/o per-trade human gate | **Intentionally absent** | Blocked by AST guard `tests/test_pipeline_smoke.py::TestNoOrderFunctions` |
 | Robinhood device-approval login | **Production-ready** | `api/_rh_login.py`, `data/robinhood_login.py` |
 | Third-party autonomous coding agent (Jules) | **Production-ready, opt-in** (`JULES_ENABLED` default `False`) — built and verified entirely offline per `docs/JULES_INTEGRATION.md`; no live Jules API call has ever been made or is possible in this sandboxed environment | `docs/JULES_INTEGRATION.md`, `data/jules_client.py`, `settings.py::JULES_ENABLED` |
-| Options Desk Automation (Phases 19-36) | **Partial** — 0DTE lifecycle management (`manage_0dte_exits`) is wired into the daemon's `_timer_loop`; `PAPER_OPTIONS_AUTO_EXECUTE_ENABLED`'s exit-management, new-position auto-execution, and delta-hedging behaviors run only via the legacy `main.py` subprocess loop, with **no** `main_orchestrator.py`/`desktop/daemon_runtime.py` equivalent | `settings.py` (`PAPER_OPTIONS_AUTO_EXECUTE_ENABLED`, `OPTIONS_0DTE_ENABLED`), `docs/known_issues/options_lifecycle_daemon_gate_gap_2026_08_22.md` |
+| Options Desk Automation (Phases 19-36) | **Archived (steps 3d-4b, 2026-09)** — the options desk (0DTE lifecycle, paper options auto-execution, delta hedging, options queue builder) is in `legacy/`; nothing in the active tree runs it, and `manage_0dte_exits`, `PAPER_OPTIONS_AUTO_EXECUTE_ENABLED` and `OPTIONS_0DTE_ENABLED` are no longer in the active code. Kept in core: `data/option_symbols.py` (paper option marking) | `legacy/README.md` (Step 4b), `legacy/execution/options_lifecycle.py`; history only: `docs/known_issues/options_lifecycle_daemon_gate_gap_2026_08_22.md` |
 | Runtime settings read/write store | **Production-ready** | `runtime_flags.py` (read path), `runtime_flags_writer.py` (write path), `settings.py` (schema) |
 
 ## Guardrail-by-guardrail status
@@ -62,7 +62,7 @@ This map supersedes the previous 2026-07-18 synthesis, reflecting updates up thr
    - **Partially implemented**. Alignment is governed almost entirely by skill-level prose (`.claude/skills/robinhood-execution/SKILL.md`, `.claude/skills/jules-delegation/SKILL.md`); there is no custom model fine-tuning anywhere in this platform. `prompt_registry/guardrails.py::validate_prompt()` (deny-lists phrases instructing a model to disable a platform safety gate; requires every `master_preprompt` version to name `ADVISORY_ONLY`) is a related but distinct, non-alignment mechanism — its own docstring states its premise explicitly: *"A fetched prompt can change what an AI is told. It cannot change what the platform is permitted to do."* It is a code-level content boundary that exists precisely because model alignment cannot be relied on, not an instance of alignment itself.
 
 6. **Observability**
-   - **Partially implemented**. Per-surface durable audit trails exist — `shared/decision_log.py` (human decision journal), `data/execution_audit_store.py` (SEC Rule 606 execution audit), `desktop/run_history_store.py` (durable pipeline run history), `validation/validation_history_store.py` (backtest/validation run history), `output/jules_dispatched.jsonl` (Jules dispatch ledger) — but none share a common schema or are joined. There is no single query answering "which agent (Claude Code, Antigravity, or Jules) took this specific action" across all of them.
+   - **Partially implemented**. Per-surface durable audit trails exist — `shared/decision_log.py` (human decision journal), `desktop/run_history_store.py` (durable pipeline run history), `validation/validation_history_store.py` (backtest/validation run history), `output/jules_dispatched.jsonl` (Jules dispatch ledger; the SEC Rule 606 execution audit, `data/execution_audit_store.py`, was archived in step 4b) — but none share a common schema or are joined. There is no single query answering "which agent (Claude Code, Antigravity, or Jules) took this specific action" across all of them.
 
 7. **Human override (Kill switches)**
    - **Implemented**. `execution/kill_switch.py::GlobalKillSwitch` enforces a file-sentinel kill switch offering a `KILL_SWITCH` (hard halt blocking all orders) and `SOFT_HALT` (blocks new BUY orders but allows risk-reducing SELLs).

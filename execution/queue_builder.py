@@ -37,7 +37,7 @@
 # to the legacy MARKET-only behaviour (no `limit_offset_bps` key emitted).
 #
 # Proactive notification: `emit_execution_queue` fires an `alerting.notify()`
-# push (ntfy, no-op unless NTFY_TOPIC is set) whenever the written queue
+# push (ntfy, no-op unless ALERT_NTFY_TOPIC is set) whenever the written queue
 # contains an intent the operator hasn't already been told about — so the
 # operator can be pulled into the `robinhood-execution` skill from outside
 # the chat window instead of having to remember to check. See
@@ -550,7 +550,7 @@ _NOTIFIED_STATE_DEFAULTS: Dict[str, Any] = {
 def _load_notified_state(path: Path) -> Dict[str, Any]:
     """Read the notify-dedup sidecar; tolerant of missing/corrupt/legacy files.
 
-    The GUI's `gui/robinhood_execution_panel.py` reads this same file
+    The Pilots API's `shared/robinhood_execution_panel.py` reads this same file
     (read-only) to render a "last notification sent" indicator, so its schema
     is a small public contract, not purely internal state.
     """
@@ -578,11 +578,11 @@ def _notify_new_intents(payload: Dict[str, Any], output_dir: Path) -> None:
     """Push an ntfy notification when the queue holds a genuinely new intent.
 
     Best-effort and silent: `alerting.notify` is itself a no-op when
-    `NTFY_TOPIC` is unset, and any failure here is caught so a notification
+    `ALERT_NTFY_TOPIC` is unset, and any failure here is caught so a notification
     problem can never affect whether the queue file itself was written. When a
     push is attempted, records `last_notified_at`/`title`/`count`/`priority`
     in the sidecar (timestamped from `payload["generated_at"]`, this build's
-    own clock) so the GUI can show "last notification sent" without needing
+    own clock) so the webapp can show "last notification sent" without needing
     its own timer.
     """
     intents = payload.get("intents") or []

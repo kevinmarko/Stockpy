@@ -1,1 +1,1 @@
-"""Command/mediator pipeline for main.py's run_once() advisory cycle."""
+"""Command/mediator pipeline: the ordered per-cycle steps the orchestrator daemon runs."""

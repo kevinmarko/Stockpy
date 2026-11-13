@@ -1,8 +1,8 @@
 """
-gui/ai_control_center.py — headless helpers for the AI Control Center tab.
+shared/ai_control_center.py — helpers for the AI Control Center (/settings/ai).
 ==========================================================================
 
-The Streamlit wiring lives in :func:`legacy.streamlit_command_center.panels.render_ai_control_center`.
+Served by api/pilots_api.py (GET /llm/status, toggle writes) to the webapp screen AIControlCenter.tsx.
 This module hosts the pure logic it depends on so it is unit-testable WITHOUT
 Streamlit — mirrors :mod:`shared.ai_insights_panel` / :mod:`shared.gravity_ai_panel`.
 
@@ -25,7 +25,7 @@ Design invariants
 -----------------
 * No Streamlit import — everything here is testable cold.
 * Operator-only — this module never triggers an AI call; it only describes
-  state and validates writes. Triggering happens via the panel's buttons.
+  state and validates writes. Triggers live elsewhere (Symbol Detail, Console).
 * No secret exposure — key-presence is reported as a bool, never the value.
 """
 
@@ -68,8 +68,8 @@ class AICapability:
         gate Opal until its backend ships). ``None`` = always built.
     trigger :
         ``"on_demand"`` (a per-symbol / run-now button) or ``"scheduled"``
-        (fires automatically only during an operator-started --interval/--agent
-        run — e.g. Gemini alert commentary).
+        (fires automatically inside a daemon cycle, e.g. Gemini alert commentary
+        when watch_engine.py sends an alert).
     toggle_key :
         The ``.env`` key the Control Center toggle writes (must be in
         ``ALLOWED_KEYS``). ``None`` = read-only status row.
@@ -109,7 +109,7 @@ CAPABILITIES: Tuple[AICapability, ...] = (
         module="llm.commentary",
         trigger="on_demand",
         toggle_key="LLM_COMMENTARY_ENABLED",
-        help="Per-symbol analyst 'why' note. On-demand button (Section B). "
+        help="Per-symbol analyst 'why' note. On-demand button on Symbol Detail. "
              "Provider is operator-chosen (Claude or Gemini) via "
              "LLM_COMMENTARY_RATIONALE_PROVIDER.",
         provider_selector_setting="LLM_COMMENTARY_RATIONALE_PROVIDER",
@@ -122,8 +122,8 @@ CAPABILITIES: Tuple[AICapability, ...] = (
         module="llm.commentary",
         trigger="scheduled",
         toggle_key="LLM_COMMENTARY_ENABLED",
-        help="Concise ntfy alert bodies. Fires automatically during a scheduled run "
-             "(Section D). Provider is operator-chosen (Claude or Gemini) via "
+        help="Concise ntfy alert bodies. Fires automatically inside a daemon cycle "
+             "when an alert is sent. Provider is operator-chosen (Claude or Gemini) via "
              "LLM_COMMENTARY_ALERT_PROVIDER.",
         provider_selector_setting="LLM_COMMENTARY_ALERT_PROVIDER",
     ),
@@ -135,7 +135,7 @@ CAPABILITIES: Tuple[AICapability, ...] = (
         module="llm.chart_insight",
         trigger="on_demand",
         toggle_key="LLM_COMMENTARY_ENABLED",
-        help="Chart-pattern interpretation from a rendered chart. On-demand button (Section B).",
+        help="Chart-pattern interpretation from a rendered chart. On-demand button on Symbol Detail.",
     ),
     AICapability(
         key="gravity_ai_runner",
@@ -145,7 +145,7 @@ CAPABILITIES: Tuple[AICapability, ...] = (
         module="engine.gravity_ai_runner",
         trigger="on_demand",
         toggle_key="GRAVITY_AI_RUNNER_ENABLED",
-        help="AI audit of the codebase — Claude auditor + Gemini cross-checker. Run-now button (Section C).",
+        help="AI audit of the codebase — Claude auditor + Gemini cross-checker. Run-now from the Console.",
     ),
     AICapability(
         key="opal_research",
@@ -172,7 +172,7 @@ CAPABILITIES: Tuple[AICapability, ...] = (
         toggle_key="SENTIMENT_LLM_VERIFICATION_ENABLED",
         help="AI-assisted check of borderline-credibility sentiment documents "
              "(Sentiment Pipeline Phase 2). Fires automatically during ingestion "
-             "when a document's heuristic score is inconclusive (Section D). "
+             "when a document's heuristic score is inconclusive. "
              "Provider is operator-chosen (Claude, Gemini, or OpenAI) via "
              "SENTIMENT_LLM_VERIFICATION_PROVIDER.",
         provider_selector_setting="SENTIMENT_LLM_VERIFICATION_PROVIDER",
@@ -199,13 +199,13 @@ CAPABILITIES: Tuple[AICapability, ...] = (
 # Every key here is read FRESH via ``getattr(settings, ...)`` on each call --
 # by ``_is_enabled``/``_keys_present``/``_active_provider`` below (called anew
 # from every ``control_center_overview``/``capability_status`` invocation, in
-# both ``GET /llm/status`` and the Streamlit panel's own rerender), and by
+# ``GET /llm/status``), and by
 # ``llm/router.py``'s ``getattr(settings, "OPAL_RESEARCH_MODEL", "")`` read at
 # call time -- NEVER cached/captured into an engine object at construction
 # time. Writing one of these via ``shared.env_io.write_setting`` and then
 # ``setattr(settings, key, value)`` is therefore safe: the very next read (in
-# this same process -- the daemon hosting ``api/pilots_api.py``, or a
-# Streamlit session) sees the new value immediately, no restart needed.
+# this same process -- the daemon hosting ``api/pilots_api.py``) sees the
+# new value immediately, no restart needed.
 #
 # This is DELIBERATELY narrower than "every ALLOWED_KEYS write live-patches
 # settings": most OTHER GUI-writable settings (Kelly fraction, VOL_TARGET,

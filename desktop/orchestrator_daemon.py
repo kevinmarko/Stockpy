@@ -27,8 +27,8 @@ the orchestrator daemon itself.
 
 SIGTERM hardening
 ------------------
-This reuses the EXACT pattern already proven in ``app_shell.py`` (see that
-module's docstring for the full "why" — the short version: a plain
+This reuses the EXACT pattern already proven in ``app_shell.py`` (the since-deleted
+Streamlit shell; its docstring is in git history for the full "why" — the short version: a plain
 ``signal.signal(SIGTERM, ...)`` handler is only invoked when the interpreter's
 bytecode loop regains control, which is not guaranteed while a blocking
 native call/loop owns a thread; a real ``kill -TERM`` against
@@ -71,8 +71,8 @@ import runtime_flags
 # .env loading convention (mirrors main_orchestrator.py's async main() /
 # app_shell.py's main() — invoked inside run_forever(), NOT at module top, so
 # importing this module never pollutes os.environ as a side effect of import
-# alone (same pytest-pollution rationale documented on main.py's run_once()
-# and repeated in app_shell.py's module docstring).
+# alone (same pytest-pollution rationale documented on the archived main.py's
+# run_once(), legacy/main.py).
 # ---------------------------------------------------------------------------
 from dotenv import load_dotenv as _load_dotenv
 
@@ -89,7 +89,7 @@ logger = logging.getLogger("InvestYo.orchestrator_daemon")
 # in-flight-run-poll within whatever timeout it's given (see
 # desktop/daemon_runtime.py's `shutdown()`). See `_teardown()` below for the
 # actual per-stage derivation, and docs/RUNBOOK.md's shutdown-budget-ladder
-# table for how every OUTER supervisor (launch_app.command, launchd
+# table for how every OUTER supervisor (launchd
 # ExitTimeOut, systemd TimeoutStopSec) is sized to exceed this total.
 _SHUTDOWN_API_JOIN_SECONDS = 5.0
 

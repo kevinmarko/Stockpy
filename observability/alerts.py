@@ -80,13 +80,13 @@ Two-system note (root ``alerting.py``)
 This module is the general multi-channel dispatcher for strategy / risk /
 execution-layer alerts (CRITICAL / WARNING / INFO fanned out to Discord,
 Slack, email, the JSON-lines file log, and console). Root-level
-``alerting.py`` is a *separate, narrower* module: it owns ``main.py``'s
-advisory-loop mobile push notification (ntfy.sh) plus root-logger setup for
+``alerting.py`` is a *separate, narrower* module: it owns the daemon's
+advisory-cycle mobile push notification (ntfy.sh) plus root-logger setup for
 that same entry point. The two modules are deliberately **not merged** — they
 serve genuinely different audiences and channels (a personal phone push vs.
 a team/ops channel dispatcher) and share no code. If you are adding a new
 alert trigger, use *this* module unless the alert is specifically a
-personal mobile push tied to ``main.py``'s advisory loop, in which case use
+personal mobile push tied to the daemon's advisory cycle, in which case use
 ``alerting.notify()`` instead. See ``alerting.py``'s module docstring for its
 own side of this cross-reference.
 """

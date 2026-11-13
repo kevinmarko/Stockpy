@@ -36,10 +36,10 @@ A practical reference for running, configuring, and interpreting every part of t
 InvestYo is an **automated quantitative analysis pipeline**. Every time you run it, it:
 
 1. **Fetches live data** — price history *and* company fundamentals (using Financial Modeling Prep as the primary provider, with Yahoo's free financial statements as fallback), macroeconomic indicators from FRED (Federal Reserve Economic Data)
-2. **Computes indicators** — RSI, MACD, Aroon, ATR, GARCH volatility, Graham Number, implied volatility rank, and more
+2. **Computes indicators** — RSI, MACD, Aroon, ATR, GARCH volatility, Graham Number, and more
 3. **Runs forecasts** — ARIMA, Monte Carlo simulation, Holt-Winters exponential smoothing, and a CNN-LSTM deep learning model, all multi-horizon
 4. **Detects the macro regime** — classifies the current environment as RISK ON / NEUTRAL / RECESSION / CREDIT EVENT using yield curve, credit spreads, VIX, and a Hidden Markov Model (HMM) second opinion
-5. **Generates signals** — for each ticker: STRONG BUY / BUY / HOLD / RISK REDUCE, plus an options overlay recommendation
+5. **Generates signals** — for each ticker: STRONG BUY / BUY / HOLD / RISK REDUCE, with a conviction score and buy / sell price ranges
 6. **Sizes positions** — calculates a Kelly Target (% of capital to allocate) based on your actual trade history
 7. **Submits paper orders** — when `ADVISORY_ONLY=false`, sends buy/sell orders to the local FMP paper ledger (never when going live; real orders go only through the Robinhood queue)
 8. **Produces reports** — an HTML dashboard, an interactive Plotly volatility chart, and a JSON payload
@@ -136,7 +136,7 @@ In the Pilots PWA under **Settings → Modules & Integrations → Settings Refer
 - **Search and Filter**: Filter settings by keyword or functional domain (e.g., Risk & Circuit Breakers, Options Desk & Volatility, LLM & AI Services).
 - **Turn any on/off flag on or off right here**: every non-secret boolean field — not just ones already covered by a specialized editor — shows a real toggle switch you can flip directly on this screen. A safety-critical field (marked "Dangerous") asks you to type its exact name to confirm before it saves, the same protection every other settings editor already enforces. A field marked with a "not read anywhere" warning is genuinely dead code — toggling it is accepted but has no effect, so no switch is shown for it.
 - **Liveness Indicators**: Each setting displays whether updates apply immediately or require an engine/daemon restart, plus any active capture sites.
-- **Direct Navigation**: If a setting is also grouped with related fields in one of the webapp's specialized settings editors (e.g., General Tunables, Feature Flags, Sentiment, Sector Selection, Paper Broker, FMP, Cache Long/Short), an **Edit here →** button navigates directly to that editor.
+- **Direct Navigation**: If a setting is also grouped with related fields in one of the webapp's specialized settings editors (e.g., General Tunables, Feature Flags, Sentiment, Sector Selection, Paper Broker, FMP), an **Edit here →** button navigates directly to that editor.
 - **Secret Protection**: API keys and passwords are masked (`•••• (set)` or `(not set)`) everywhere — including their platform default — and can never be leaked or edited through the browser.
 
 ---
@@ -258,7 +258,9 @@ already running (attach to it), a 423 means the kill switch is on.
 The web app is a graphical front-end over the same pipeline. Its main screens:
 
 - **Pipeline** (`/pipeline`) — daemon status, run triggers ("Run full advisory pipeline"
-  plus stage-scoped ones), run history, and the dead-letter queue with per-symbol retry.
+  plus stage-scoped ones), run history, and the dead-letter queue. Its Retry button is not a
+  per-symbol retry: it triggers one full daemon cycle over the whole universe (it needs
+  `DEAD_LETTER_RETRY_ENABLED`).
 - **Console** (`/console`) and **Commands** (`/commands`) — launch jobs and CLI targets
   (including strategy validation) and follow their output.
 - **Mission Control** (`/observability`) — regime, portfolio risk, equity/drawdown,
@@ -289,7 +291,7 @@ web app equivalent yet.
 python3 main_orchestrator.py
 ```
 
-This runs the full async pipeline: data fetch → macro regime → options analysis → processing → forecasting → strategy signals → HTML report → paper broker orders (if `ADVISORY_ONLY=false`).
+This runs the full async pipeline: data fetch → macro regime → processing → forecasting → strategy signals → HTML report → paper broker orders (if `ADVISORY_ONLY=false`).
 
 It auto-activates the `.venv` virtual environment if you haven't done so manually.
 
@@ -344,10 +346,9 @@ The pipeline prints a JSON payload at the end:
         "Price": 195.42,
         "Action Signal": "BUY",
         "buyRange": "Buy Zone: $191.20 - $194.80",
+        "sellRange": "Sell Zone: $201.30 - $208.10 | Stop @ $186.40",
         "Kelly Target": 0.142,
-        "Option Strategy": "Bull Call Spread",
-        "GARCH_Vol": 0.183,
-        "True_IVR": 52.3
+        "GARCH_Vol": 0.183
     },
     ...
 ]
@@ -693,8 +694,10 @@ subsection for the exact per-subfolder layout.
 ### Staleness warning
 
 If the orchestrator heartbeat (`output/heartbeat.txt`) is older than 120 s, Mission Control's
-Heartbeat section shows a stale status and the attention strip lists it. This means no fresh
-signals are available.
+Heartbeat section shows a stale status and the attention strip lists it. Only a standalone
+`python3 main_orchestrator.py` run writes that file; the persistent daemon never does, so under
+a daemon deployment the section reads "No heartbeat" — use the Pipeline screen for daemon
+liveness instead.
 
 ---
 
@@ -769,9 +772,9 @@ ntfy.sh is a free, open-source push-notification service with native iOS and And
 1. Install the **ntfy** app on your phone — search "ntfy" on the App Store or Google Play.
 2. Choose a topic name that is **long and random** (it acts as your password — anyone who knows it can see your notifications). Example: `investyo-kml-x9f2q7`.
 3. In the ntfy app, tap **Subscribe to topic** → enter your topic name.
-4. Add to `.env`:
+4. Add to `.env` (the key is `ALERT_NTFY_TOPIC`; a bare `NTFY_TOPIC` line is ignored):
    ```
-   NTFY_TOPIC=investyo-kml-x9f2q7
+   ALERT_NTFY_TOPIC=investyo-kml-x9f2q7
    ```
 
 #### What gets sent
@@ -779,15 +782,15 @@ ntfy.sh is a free, open-source push-notification service with native iOS and And
 | Event | Priority | When |
 |-------|----------|------|
 | ⚠ Errors Detected | **HIGH** (always makes a sound) | Any symbol-level pipeline failure |
-| ✓ Refresh Complete | Default | Once per launch (not per interval tick) |
+| ✓ Refresh Complete | Default | At most once per US/Eastern day (not per cycle) |
 
 The error notification lists which symbols failed and at which pipeline stage. The "refresh complete" notification includes the full run summary (BUY/SELL/HOLD counts, top 3 recommendations, duration).
 
-**Daemon timer** (`ORCHESTRATOR_INTERVAL_SECONDS`): the "refresh complete" notification fires at most once per ET day, not once per cycle. Error notifications fire every cycle where errors occur.
+**Daemon** (`ORCHESTRATOR_INTERVAL_SECONDS`): the "refresh complete" notification fires at most once per ET day, not once per cycle. Error notifications fire every cycle where errors occur. The daemon sends these only with `DAEMON_AGENTIC_QUEUE_MODE=primary`; in `off` or `shadow` it sends none.
 
 #### Without NTFY_TOPIC
 
-When `NTFY_TOPIC` is unset `notify()` is a silent no-op — the app runs identically. Only the rotating log file (`logs/investyo.log`, under `$LOCAL_DATA_ROOT` — see below) is written.
+When `ALERT_NTFY_TOPIC` is unset `notify()` is a silent no-op — the app runs identically. Only the rotating log file (`logs/investyo.log`, under `$LOCAL_DATA_ROOT` — see below) is written.
 
 ---
 
@@ -1022,14 +1025,14 @@ result = test_cointegration(price_series_a, price_series_b)
 
 ## 17. Adjusting Signal Weights
 
-The final score for each ticker is a weighted sum of 14 signal modules. Weights are set in `settings.py` (or overridden in `.env` as a JSON dict via `SIGNAL_WEIGHTS`).
+The final score for each ticker is a weighted sum of the registered signal modules (the table below lists the core ones; `settings.SIGNAL_WEIGHTS` is the full list). Weights are set in `settings.py` (or overridden in `.env` as a JSON dict via `SIGNAL_WEIGHTS`).
 
 ### Current weights and what each module measures
 
 | Module | Default weight | What it measures |
 |--------|----------------|-----------------|
 | `macro_regime` | 45.0 | Is the macro environment supportive? (highest weight — regime gates everything) |
-| `edge_garch` | 35.0 | Options IV rank vs realized GARCH vol — is IV mispriced? |
+| `edge_garch` | 35.0 | Mathematical edge ratio and GARCH tail-risk volatility |
 | `dividend_quality` | 25.0 | Dividend history, payout ratio, yield stability |
 | `rsi_extremes` | 20.0 | RSI overbought/oversold extremes |
 | `graham_value` | 15.0 | Price vs Benjamin Graham intrinsic value |
@@ -1059,8 +1062,8 @@ You must include all modules in the dict (or it falls back to the defaults). The
 ## 18. Google Sheets Integration (Legacy)
 
 **Retired in step 4e (2026-09).** The Pilots PWA (`webapp/`) is the platform's only
-frontend, and nothing reads or writes the Google Sheet anymore. `main.py` (now archived) had
-no Sheet write path or a Sheet2-column-A universe fallback (see
+frontend, and nothing reads or writes the Google Sheet anymore. After step 4e, `main.py` (now
+archived) had no Sheet write path and no Sheet2-column-A universe fallback (see
 [Section 4](#4-choosing-your-ticker-universe)).
 
 The old code (`reporting/sheet_publisher.py`, `reporting/sheets_client.py`) was moved
@@ -1190,7 +1193,7 @@ MacroEngine: HMM fit failed — [reason] — returning None
 
 **This is almost never a "not enough data yet" problem.** If the warning text contains a Python error like `got an unexpected keyword argument 'method'`, it is an **`arch` library API mismatch**, not a model failure — and it means *every* ticker is silently using the cruder 20-day historical-vol fallback instead of the real GJR-GARCH estimate, no matter how much price history you have.
 
-The fix is already applied in `technical_options_engine.py`: `estimate_gjr_garch_volatility()` calls `model.fit(update_freq=0, disp='off')` with no `method=` kwarg (`arch ≥ 8.0` removed it; the default SLSQP optimizer converges fine). If you see this warning again after a dependency upgrade, check the `arch` version (`.venv/bin/python3 -c "import arch; print(arch.__version__)"`) and re-inspect the `fit()` signature — do not re-add `method=` or `options={"method": ...}`. Verify with:
+The fix is already applied in `volatility/garch.py`: `GarchVolatilityEstimator.estimate_gjr_garch_volatility()` calls `model.fit(update_freq=0, disp='off')` with no `method=` kwarg (`arch ≥ 8.0` removed it; the default SLSQP optimizer converges fine). If you see this warning again after a dependency upgrade, check the `arch` version (`.venv/bin/python3 -c "import arch; print(arch.__version__)"`) and re-inspect the `fit()` signature — do not re-add `method=` or `options={"method": ...}`. Verify with:
 
 ```bash
 .venv/bin/python3 -m pytest tests/test_quantitative_models.py -k garch -v
@@ -1325,7 +1328,7 @@ The platform can send proactive ntfy push notifications whenever a symbol's advi
 ### Prerequisites
 
 1. **ntfy app** — install on your phone from the App Store or Google Play (search "ntfy").
-2. **NTFY_TOPIC** must already be set in `.env` (see §14 of this guide for the one-time setup). Watch alerts piggyback on the same topic; no second subscription is needed.
+2. **ALERT_NTFY_TOPIC** must already be set in `.env` (see §14 of this guide for the one-time setup). Watch alerts piggyback on the same topic; no second subscription is needed.
 
 ### How it works
 
@@ -1379,7 +1382,7 @@ Conviction-above/below alerts use edge-triggering to avoid notification spam. If
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| No alerts ever fire | `NTFY_TOPIC` is unset or empty | Set `NTFY_TOPIC=your-topic` in `.env` |
+| No alerts ever fire | `ALERT_NTFY_TOPIC` is unset or empty (a bare `NTFY_TOPIC` is ignored) | Set `ALERT_NTFY_TOPIC=your-topic` in `.env` |
 | Rule in YAML but no alert | `alert_on` value not recognised, or threshold out of `[0, 1]` | Check `logs/investyo.log` for a WARNING "Skipping rule…" line |
 | `conviction_above` never re-fires | Edge suppression is working as intended | Delete `output/watch_state.json` to reset |
 | Stale symbol keeps alerting | Symbol was removed from universe but `watch_state.json` still has its entry | Automatic: state is pruned to the current universe each run; wait one cycle |
@@ -1635,11 +1638,15 @@ onboarding** on Settings → General.
 
 ### Help-key convention
 
-Metric tooltips are looked up via keys of the form `"<tab>.<metric_name>"` in
-`shared/help_content.METRIC_HELP`. A missing key returns `""` and renders no tooltip
-— it **never raises** (CONSTRAINT #6). All operator-facing definitions live in
-`shared/help_content.py`. The web app keeps its own help text in
-`webapp/src/help/helpContent.ts`.
+The web app keeps its own help text in `webapp/src/help/helpContent.ts`
+(`TAB_HELP` and `GLOSSARY`); that is what the screens render. The Python-side catalog,
+`shared/help_content.py`, is keyed the old way — metric tooltips by `"<tab>.<metric_name>"`
+in `METRIC_HELP`, where a missing key returns `""` and **never raises** (CONSTRAINT #6) —
+and its only consumers are the Streamlit-era wrappers in `shared/help_widgets.py`, the
+`MODEL_RETRAIN_WINDOW_DAYS` constant, and tests. Its `TAB_HELP` ids are the legacy tab
+ids; each entry says which web app screen replaced the tab (or that the surface was
+archived). `tests/test_help_content_live_surfaces.py` fails if that text describes the
+deleted Streamlit app or the archived `--agent` loop as live.
 
 ### Anchor-contract invariant
 
@@ -1647,7 +1654,7 @@ Every glossary entry's `guide_anchor` field **must** resolve to a real heading s
 this file. The contract is enforced by:
 
 - `tests/test_help_content.py::TestAnchorValidity` (runs in CI on every push).
-- Gravity step 68 check 3.
+- Gravity step 77 check 3.
 
 If you rename any heading in this file, search for the old slug in `shared/help_content.py`
 and update it to match the new slug; otherwise the anchor test will fail.
@@ -1812,15 +1819,19 @@ Each symbol's detail page (`/symbol/:ticker`) has on-demand AI sections:
 | Claude analyst note | Plain-English rationale for the current Action Signal | `LLM_COMMENTARY_ENABLED=true` + `ANTHROPIC_API_KEY` |
 | Gemini chart pattern read | Sends a price chart to Gemini Vision and returns a structured pattern/trend/support-resistance read | `LLM_COMMENTARY_ENABLED=true` + `GEMINI_API_KEY` |
 
-Nothing calls out to an AI provider until you click. The old desktop app's Claude-vs-Gemini
-disagreement view has no web app equivalent yet.
+Nothing calls out to an AI provider until you click. The **Strategy Health** screen
+(`/strategy-health`) has an AI disagreement section comparing the latest Claude analyst
+verdict and Gemini chart-pattern verdict per symbol (read from the durable commentary cache).
 
 ### AI Control Center (Settings → AI)
 
-One toggle per AI master switch (Claude analyst rationale, Gemini alert commentary, Gemini
-chart vision, the Gravity AI audit runner, Opal research), with a provider selector where a
-capability can be routed to more than one provider. Writes go to `.env`. Run the Gravity
-audit from the **Console** screen; set the pipeline schedule on Settings → Data & Automation.
+A **Capabilities** section with one toggle per underlying master switch (several capabilities
+share `LLM_COMMENTARY_ENABLED`, so one toggle covers them all) and a provider selector where a
+capability can be routed to more than one provider, plus a **Provider telemetry** section
+showing the last real call per capability. The capability list is whatever the backend
+registry reports (`GET /llm/status`). Writes go to `.env` through the Pilots API
+(`LLM_WRITES_ENABLED`). Run the Gravity audit from the **Console** screen; set the pipeline
+schedule on Settings → Data & Automation.
 
 Provider API keys (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`)
 are secret-only and can never be set from the web app — edit `.env` directly.
@@ -1841,34 +1852,35 @@ each agent, and `docs/plans/OPAL_BUILD_SPEC.md` for Opal's design record.
 
 ### Standing rule
 
-Every AI action in the web app is either a button click or an operator-started,
-operator-stoppable loop. Nothing here calls another AI agent, watches a PR, or
-re-invokes itself automatically — the same "no automatic AI invocation" rule
+Every AI action in the web app is operator-triggered (a button click). Nothing here
+calls another AI agent, watches a PR, or re-invokes itself automatically — the same "no automatic AI invocation" rule
 that applies to Claude Code sessions on this repo applies to the platform's
 own AI features.
 
 ## 17. Report Library
 
 The web app's **Report Library** screen (`/operations/reports`) is a single place to browse and read every report
-file the platform produces. It is read-only and file-backed — it renders files
-that already exist on disk and never calls the broker or fetches live market
-data. Think of it as a document viewer over the pipeline's output folder.
+file the platform produces. It is file-backed — it renders files that already exist on
+disk and never calls the broker or fetches live market data (the only writes are its two
+Generate buttons, for the daily briefing and the NotebookLM export). Think of it as a
+document viewer over the pipeline's output folder.
 
 ### What it surfaces
 
-- **Daily HTML report.** The primary end-of-cycle report (holdings, P&L, action
-  signals, rationale). This file is regenerated on **every** advisory refresh
-  cycle, so it is always current — whatever the most recent run produced is what
-  you see here.
-- **Daily briefings.** One human-readable briefing per day. Older briefings stay
-  available so you can look back at a previous day's read. (The old desktop app's
-  "generate today's briefing" button has no web app equivalent; run
-  `python scripts/daily_briefing.py` instead.)
-- **Orchestrator dashboards.** The full-pipeline daily report and its
-  volatility-band chart. Unlike the daily HTML report, these only refresh when
-  you kick off a **manual full-orchestrator run** (from the Pipeline screen). If
-  they look out of date, that just means no full-orchestrator run has happened
-  since — run one to refresh them.
+- **Orchestrator dashboards.** The full-pipeline daily report
+  (`daily_report_dashboard.html`, holdings, P&L, action signals, rationale and the
+  "Δ Since Last Run" band) and its volatility-band chart
+  (`volatility_bands_dashboard.html`). The daemon rewrites both at the end of each full
+  cycle that reaches its snapshot step; a cycle skipped by the kill switch, or one that
+  returned early because the data was still fresh, leaves them as they were. If they look
+  out of date, trigger a cycle from the Pipeline screen.
+- **Daily HTML report (retired).** The older holdings-aware `daily_report.html` was written
+  only by the archived `main.py` (step 5.5). It is listed only if an old copy is still on
+  disk and is no longer refreshed.
+- **Daily briefings.** One human-readable briefing per day. Older briefings stay available
+  so you can look back at a previous day's read. The screen has a button to generate
+  today's briefing (the same job as `python scripts/daily_briefing.py`), and one to
+  generate the NotebookLM export.
 - **Validation reports.** Per-strategy validation output (PBO / DSR / Sharpe /
   Max Drawdown gate verdicts and the walk-forward/CPCV detail). A validation
   report appears here only **once a strategy has been through the validation
@@ -1882,11 +1894,10 @@ opening or downloading a report never changes it or re-runs any analysis.
 
 ### A note on freshness
 
-Keep the two refresh cadences in mind: the **daily HTML report is always
-current** (rebuilt every advisory cycle), while the **orchestrator dashboards
-lag until you run the full orchestrator manually**. When a dashboard and the
-daily report seem to disagree, the dashboard is usually just older — launch a
-full-orchestrator run to bring it up to date.
+Each file shows its modified time, so you can see how old it is. The dashboards track the
+daemon's last completed full cycle; a validation report is as old as the last harness run
+for that strategy. When a dashboard and the web app seem to disagree, trust the web app
+(it reads the latest state snapshot) and refresh the dashboard with a new cycle.
 
 ---
 
@@ -1900,8 +1911,9 @@ Use the **Commands** screen (`/commands`) to build a
 `python -m scripts.refresh_validations --strategies ...` run, or press
 **🧪 Bulk Validate All Strategies** to start with every registered strategy selected.
 Executing from the web app needs `COMMAND_EXECUTION_ENABLED=true`; otherwise the screen
-composes the command for you to paste into a terminal. The harness never calls the broker
-or submits any order.
+composes the command for you to paste into a terminal. The **Console** screen's
+**Run Backtest** form launches the same harness for a comma-separated list of strategy ids
+and a date range. The harness never calls the broker or submits any order.
 
 ### Watching the run
 

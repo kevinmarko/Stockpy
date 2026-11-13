@@ -2039,7 +2039,6 @@ const MOCK_CAPTURE_SITES: Record<string, string[]> = {
     "data/market_data.py:2287",
   ],
   FUNDAMENTALS_SOURCE: ["data/market_data.py:1892"],
-  DASHBOARD_REFRESH_SECONDS: ["api/pilots_api.py:4194", "pilots/settings_domains.py:132"],
   CORS_ALLOWED_ORIGINS: ["api/control_api.py:169", "api/data_api.py:131", "api/metrics_api.py:74", "api/pilots_api.py:342", "api/state_api.py:87"],
   SENTIMENT_SOURCES: ["data/sentiment_sources.py:1932"],
   SENTIMENT_INGESTION_MAX_SECONDS_PER_CYCLE: ["data/sentiment_sources.py:1962"],
@@ -2710,30 +2709,6 @@ const TUNABLE_DEFS: MockTunableDef[] = [
   // ---- Runtime & Ops ----
   {
     group: "Runtime & Ops",
-    key: "DASHBOARD_REFRESH_SECONDS",
-    type: "number",
-    value: 1800,
-    default: 1800,
-    min: 1,
-    max: 86400,
-    step: 1,
-    description:
-      "Auto-refresh interval for the Streamlit observability dashboard (seconds). Default 1800 = 30 min.",
-  },
-  {
-    group: "Runtime & Ops",
-    key: "PROGRESS_POLL_SECONDS",
-    type: "number",
-    value: 5,
-    default: 5,
-    min: 1,
-    max: 3600,
-    step: 1,
-    description:
-      "Poll interval (seconds) for the Launcher pipeline-progress indicator.",
-  },
-  {
-    group: "Runtime & Ops",
     key: "LOG_LEVEL",
     type: "enum",
     value: "INFO",
@@ -2896,7 +2871,7 @@ const TUNABLE_DEFS: MockTunableDef[] = [
     default: true,
     type: "boolean",
     description:
-      "Fix for the CNN-LSTM/TensorFlow deadlock documented in docs/known_issues/cnn_lstm_tf_deadlock.md (issue #381). Root cause: TensorFlow and pyarrow each ship an independently-compiled copy of the same Abseil sync primitive; whichever library's Python-level init runs first in the PROCESS wins that symbol, and if pandas/pyarrow initialize first, the first real multi-threaded TF eager op (a Conv1D/LSTM .fit()) deadlocks forever. Reordering forecasting_engine.py's own imports (always-on, unconditional) only helps when this module is the first thing in the whole process to touch pandas -- true in an isolated test script, false in main.py/main_orchestrator.py/pipeline/production_steps.py, which all import pandas before forecasting_engine is ever reached (those three files carry their own guarded `import tensorflow` before their own `import pandas` as a defense-in-depth second layer -- see Fix 2 in the doc -- but that convention is unenforced for any OTHER entry point, script, or notebook that happens to reach this code path). When True (the default), ForecastingEngine.run_cnn_lstm_forecast runs the actual TF-touching work (model fit+predict, and cached-model load+predict) in a persistent worker pool (repo-root cnn_lstm_process_pool.py) whose worker module (repo-root cnn_lstm_worker.py -- deliberately NOT inside forecasting/, since that package's __init__ eagerly imports pandas) imports tensorflow before anything else and runs as its own genuine OS process, launched via subprocess.Popen -- a fresh interpreter per worker means the parent process's import order can no longer matter, unlike the module-level reorder alone or the entry-point guards. This is what actually removes the process-scope constraint, rather than merely mitigating it by convention: it protects EVERY caller, known or not, not just the three files that remember the guard. As of 2026-08-04 (Round 8 of the known-issues doc), workers are launched with subprocess.Popen rather than multiprocessing -- a second, distinct deadlock (unrelated to the Abseil ODR collision above) was found in multiprocessing-managed worker processes specifically; see Round 8 for the full ablation matrix. All feature engineering / windowing / scaling stays in the parent process unchanged (pandas-only, never touches TF). Any subprocess failure (timeout, a dead/unresponsive worker, real training exception) is caught by run_cnn_lstm_forecast's existing outer try/except and degrades to the zero-result sentinel -- never crashes the pipeline (CONSTRAINT #6). This default flipped True on 2026-07-31 (Round 7 of the known-issues doc) once Round 6 (2026-07-27) verified subprocess isolation end-to-end against the real native deadlock on real production data in the actual macOS arm64 + Framework-Python environment the deadlock was originally confirmed on -- the earlier caveat about this being verified only against the mocked test suite no longer applies. Set False only to restore the legacy in-process path (byte-identical to this flag's original pre-2026-07-31 default); doing so re-exposes the process-scope import-order hazard for any entry point that doesn't carry its own guarded `import tensorflow` before `import pandas`/`import pyarrow`.",
+      "Fix for the CNN-LSTM/TensorFlow deadlock documented in docs/known_issues/cnn_lstm_tf_deadlock.md (issue #381). Root cause: TensorFlow and pyarrow each ship an independently-compiled copy of the same Abseil sync primitive; whichever library's Python-level init runs first in the PROCESS wins that symbol, and if pandas/pyarrow initialize first, the first real multi-threaded TF eager op (a Conv1D/LSTM .fit()) deadlocks forever. Reordering forecasting_engine.py's own imports (always-on, unconditional) only helps when this module is the first thing in the whole process to touch pandas -- true in an isolated test script, false in main_orchestrator.py/pipeline/production_steps.py, which all import pandas before forecasting_engine is ever reached (those two files carry their own guarded `import tensorflow` before their own `import pandas` as a defense-in-depth second layer -- see Fix 2 in the doc -- but that convention is unenforced for any OTHER entry point, script, or notebook that happens to reach this code path). When True (the default), ForecastingEngine.run_cnn_lstm_forecast runs the actual TF-touching work (model fit+predict, and cached-model load+predict) in a persistent worker pool (repo-root cnn_lstm_process_pool.py) whose worker module (repo-root cnn_lstm_worker.py -- deliberately NOT inside forecasting/, since that package's __init__ eagerly imports pandas) imports tensorflow before anything else and runs as its own genuine OS process, launched via subprocess.Popen -- a fresh interpreter per worker means the parent process's import order can no longer matter, unlike the module-level reorder alone or the entry-point guards. This is what actually removes the process-scope constraint, rather than merely mitigating it by convention: it protects EVERY caller, known or not, not just the three files that remember the guard. As of 2026-08-04 (Round 8 of the known-issues doc), workers are launched with subprocess.Popen rather than multiprocessing -- a second, distinct deadlock (unrelated to the Abseil ODR collision above) was found in multiprocessing-managed worker processes specifically; see Round 8 for the full ablation matrix. All feature engineering / windowing / scaling stays in the parent process unchanged (pandas-only, never touches TF). Any subprocess failure (timeout, a dead/unresponsive worker, real training exception) is caught by run_cnn_lstm_forecast's existing outer try/except and degrades to the zero-result sentinel -- never crashes the pipeline (CONSTRAINT #6). This default flipped True on 2026-07-31 (Round 7 of the known-issues doc) once Round 6 (2026-07-27) verified subprocess isolation end-to-end against the real native deadlock on real production data in the actual macOS arm64 + Framework-Python environment the deadlock was originally confirmed on -- the earlier caveat about this being verified only against the mocked test suite no longer applies. Set False only to restore the legacy in-process path (byte-identical to this flag's original pre-2026-07-31 default); doing so re-exposes the process-scope import-order hazard for any entry point that doesn't carry its own guarded `import tensorflow` before `import pandas`/`import pyarrow`.",
     group: "Forecasting",
   },
   {
@@ -4555,6 +4530,20 @@ function mockSettingsReference(): SettingsReferenceResponse {
       // backend's _build_editable_at_index() checks /settings/feature-flags
       // before /settings/tunables, first-match-wins -- this must match.
       editable_at: "/settings/feature-flags",
+    },
+    {
+      // The real GET /settings/reference sends dict/list-valued settings RAW with type "string"
+      // (api/pilots_api.py get_settings_reference); a scalar-only mock hid "[object Object]".
+      key: "SIGNAL_WEIGHTS",
+      category: "allowed",
+      value: { technical: 0.4, fundamental: 0.35, sentiment: 0.25 },
+      default: { technical: 0.4, fundamental: 0.35, sentiment: 0.25 },
+      type: "string",
+      description: "Per-module weights for the weighted-sum signal aggregator.",
+      domain: "Financial/Risk/Sizing",
+      dangerous: false,
+      liveness: mockLiveness("SIGNAL_WEIGHTS"),
+      editable_at: "/settings/modules",
     },
     {
       key: "KELLY_FRACTION",

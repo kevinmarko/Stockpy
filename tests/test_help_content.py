@@ -1,7 +1,7 @@
 """
 tests/test_help_content.py
 ==========================
-Tests for gui/help_content.py (§6 of the GUI Help Explainers plan).
+Tests for shared/help_content.py (§6 of the GUI Help Explainers plan).
 
 All tests are offline — no network calls, no Streamlit.
 
@@ -9,7 +9,8 @@ Coverage
 --------
 * GlossaryEntry and TabHelp are frozen dataclasses with the expected fields.
 * GLOSSARY contains every required term and returns correct types.
-* TAB_HELP contains all 14 Command Center tab IDs.
+* TAB_HELP contains every legacy tab ID that other code still looks up (each
+  entry describes the web app screen that replaced the Streamlit tab).
 * SECTION_HELP and METRIC_HELP are non-empty dicts.
 * get_tab_help / get_glossary return correct objects or None for unknown keys.
 * metric_help returns a non-empty string for known keys, empty string for unknown.
@@ -247,6 +248,9 @@ class TestTabHelp:
         "ai_insights",
         "ai_control_center",
         "report_library",
+        "validation_lab",
+        "analytics",
+        "sentiment_dynamics",
     }
 
     def test_all_tab_ids_present(self) -> None:
@@ -255,13 +259,15 @@ class TestTabHelp:
         missing = self._EXPECTED_TAB_IDS - set(TAB_HELP.keys())
         assert not missing, f"Missing tab IDs: {missing}"
 
-    def test_exactly_14_tabs(self) -> None:
+    def test_expected_tab_count(self) -> None:
         from shared.help_content import TAB_HELP
 
-        # All 19 gui/app.py Command Center tabs now have a TAB_HELP entry
-        # (14 original + "report_library" + "analytics" + "pairs" +
-        # "validation_lab" + "sentiment_dynamics", the Sentiment Dynamics tab).
-        assert len(TAB_HELP) == 19
+        # 18 legacy tab ids.  The Streamlit Command Center had 19; "pairs" was
+        # dropped (the Pairs radar was archived to legacy/ in 2026-10 and
+        # nothing looks the id up).  "options" stays as an explicitly
+        # archived entry because the Gravity audit still pins that id.
+        assert len(TAB_HELP) == 18
+        assert "pairs" not in TAB_HELP
 
     def test_values_are_tab_help(self) -> None:
         from shared.help_content import TAB_HELP, TabHelp

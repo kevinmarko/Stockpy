@@ -321,7 +321,9 @@ def launch_orchestrator(dry_run: bool = False) -> RunHandle:
                 attach_run_id: Optional[str] = None
                 # True once the daemon owns a run for this request. A 202 counts
                 # even without a run id: the daemon accepted it, so spawning a
-                # subprocess would duplicate the cycle.
+                # subprocess would duplicate the cycle. (A conforming daemon
+                # always returns a run id on 202 -- api/control_api.py::trigger_run
+                # -- so a None id only arises from a malformed reply.)
                 use_daemon = False
                 if result.ok:
                     attach_run_id = result.run_id
@@ -1343,7 +1345,7 @@ def read_telemetry_tail(max_lines: int = 120) -> str:
     """Return the last ``max_lines`` lines of ``logs/investyo.log``.
 
     ``alerting.setup_logging()`` rotates that file at 10 MB × 5 backups and is
-    invoked by both ``main.py`` and (indirectly) the orchestrator path; tailing
+    invoked by the daemon (``desktop/orchestrator_daemon.py``); tailing
     it gives the UI a single, entry-point-agnostic stream of structured
     diagnostics that survives across runs.
     """
@@ -1386,10 +1388,9 @@ def heartbeat_age_seconds() -> Optional[float]:
     A fresh heartbeat (< ~90 s) means the orchestrator is alive; a stale or
     missing one means it is idle or crashed. ``output/heartbeat.txt`` is
     written ONLY by ``main_orchestrator.py``'s async ``_heartbeat()`` task --
-    ``main.py`` (including its ``--interval``/``--agent`` scheduled-run modes)
-    never writes it. Callers wanting a liveness signal that covers BOTH
-    entry points should use :func:`state_snapshot_age_seconds` instead, or
-    combine both (see ``gui/engine_status.py``).
+    the persistent daemon (which calls ``_main_body()`` directly) never
+    writes it, so a daemon-only deployment has no heartbeat: read the age of
+    ``state_snapshot.json`` (rewritten every cycle) for that instead.
     """
     hb = settings.OUTPUT_DIR / "heartbeat.txt"
     if not hb.exists():
@@ -1399,23 +1400,6 @@ def heartbeat_age_seconds() -> Optional[float]:
     except Exception:
         return None
 
-
-def state_snapshot_age_seconds() -> Optional[float]:
-    """Seconds since ``output/state_snapshot.json`` was last written, or None
-    if absent.
-
-    Unlike :func:`heartbeat_age_seconds` (orchestrator-only), BOTH ``main.py``
-    (every ``run_once()`` cycle, including ``--interval``/``--agent`` mode)
-    and ``main_orchestrator.py`` rewrite this file, so it is the one liveness
-    signal common to every scheduled-run entry point this platform supports.
-    """
-    snap = settings.OUTPUT_DIR / "state_snapshot.json"
-    if not snap.exists():
-        return None
-    try:
-        return max(0.0, time.time() - snap.stat().st_mtime)
-    except Exception:
-        return None
 
 
 def compute_stage_status(
@@ -1494,225 +1478,3 @@ def compute_stage_status(
         else:
             status[label] = StageStatus.PENDING
     return status
-
-
-# ===========================================================================
-# Real 0-100% progress bar
-# ===========================================================================
-#
-# ``compute_stage_status`` above only ever gives 4 coarse stage badges scraped
-# from log text — it was never able to answer "how far along, as a real
-# percentage." ``reporting/progress.py`` (a sibling foundation module, see its
-# module docstring) closes that gap: the orchestrator/advisory pipelines write
-# ``output/progress.json`` as they work, and :func:`compute_run_progress`
-# below is the GUI-facing translation from "whatever telemetry is available
-# for this handle" to one ``RunProgress`` the Launcher tab can render as a
-# single ``st.progress`` call.
-#
-# Resolution order (best available signal first, coarsest last):
-#   1. ``handle is None`` -> ``None`` (nothing to show).
-#   2. Daemon-backed handle -> ask the Control API for a ``progress`` sub-dict
-#      on the run-status payload (populated by a parallel workstream; may not
-#      exist yet, guarded defensively).
-#   3. Subprocess-backed handle -> read ``output/progress.json`` via
-#      :func:`reporting.progress.read_progress`; used only while FRESH (age
-#      <= 3x the poll interval) so a crashed/orphaned progress file from a
-#      previous run is never presented as current.
-#   4. Fallback -> derive a COARSE percentage from
-#      :func:`compute_stage_status` (count of SUCCESS/ACTIVE stages over
-#      ``len(STAGES)``), flagged ``indeterminate=True`` so the UI never
-#      implies false precision (CONSTRAINT #4).
-#
-# Every branch is wrapped in try/except at the top level -- a progress-bar
-# computation must never raise into a Streamlit rerun (CONSTRAINT #6).
-
-
-@dataclass(frozen=True)
-class RunProgress:
-    """A single 0-100% progress reading for the Launcher tab's progress bar.
-
-    Attributes
-    ----------
-    percent:
-        0..100 float. When ``indeterminate`` is True this is still a
-        best-effort estimate (derived from coarse stage counting), never a
-        fabricated precise number — the UI must visually signal the
-        difference (see :func:`legacy.streamlit_command_center.panels.launcher._render_live_status_body`).
-    label:
-        Human-readable status string, e.g. ``"58% - Forecasting (12/48
-        symbols)"`` for the precise (``reporting.progress``-backed) case, or
-        ``"Stage 2 of 4 - Processing"`` for the coarse fallback.
-    indeterminate:
-        True when ``percent`` is a coarse stage-count estimate rather than a
-        real symbol-level reading from ``output/progress.json`` (or the
-        daemon's equivalent). The UI must render this distinctly (e.g. an
-        "(estimating...)" suffix) rather than implying false precision.
-    """
-
-    percent: float
-    label: str
-    indeterminate: bool
-
-
-def _clamp_progress_pct(value: float) -> float:
-    """Clamp to [0, 100], treating NaN as 0.0 (never fabricate a value)."""
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    if value != value:  # NaN check without importing math
-        return 0.0
-    return max(0.0, min(100.0, value))
-
-
-def _build_progress_label(state, percent: float) -> str:
-    """Build a human-readable label from a ``reporting.progress.ProgressState``
-    (or an equivalent dict-derived instance) and an already-resolved percent.
-
-    Kept as a small pure helper (not inlined) so both the subprocess path and
-    the daemon ``progress`` sub-dict path share identical formatting.
-    """
-    stage_disp = (state.stage or "Working").replace("_", " ").strip() or "Working"
-    stage_disp = stage_disp[:1].upper() + stage_disp[1:]
-    label = f"{percent:.0f}% - {stage_disp}"
-    if state.symbols_total > 0:
-        label += f" ({state.symbols_done}/{state.symbols_total} symbols)"
-    if state.message and state.message not in (state.stage, state.state):
-        label += f" - {state.message}"
-    return label
-
-
-def _progress_state_from_dict(payload: dict):
-    """Best-effort parse of a progress-shaped dict via
-    :class:`reporting.progress.ProgressState`. Returns ``None`` on any
-    failure (missing module, malformed payload) rather than raising —
-    ``compute_run_progress`` is the only caller and it degrades to the coarse
-    fallback when this returns ``None``."""
-    try:
-        from reporting.progress import ProgressState
-        return ProgressState.from_dict(payload)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Could not parse progress payload: %s", exc)
-        return None
-
-
-def _coarse_run_progress(handle: "RunHandle") -> Optional["RunProgress"]:
-    """Derive a coarse, ``indeterminate=True`` :class:`RunProgress` from
-    :func:`compute_stage_status` when no real ``progress.json``/daemon
-    ``progress`` telemetry is available (or it's stale).
-
-    Returns ``None`` when NOTHING has been observed yet (every stage still
-    PENDING — e.g. no log file exists) rather than fabricating a hollow "0%"
-    bar; the caller (or the Launcher panel) should render an indeterminate
-    spinner/caption in that case instead (CONSTRAINT #4).
-    """
-    try:
-        stage_status = compute_stage_status(handle)
-        order = [label for label, _ in STAGES]
-        total = len(order)
-        if total <= 0:
-            return None
-        reached = [stage_status.get(label) for label in order]
-        count = sum(1 for s in reached if s in (StageStatus.SUCCESS, StageStatus.ACTIVE))
-        if count <= 0:
-            # Nothing observed yet — do not fabricate a precise-looking 0%.
-            return None
-        pct = _clamp_progress_pct(100.0 * count / total)
-
-        # Prefer the current ACTIVE stage's label; fall back to the furthest
-        # SUCCESS stage if every reached stage has already completed.
-        current_label: Optional[str] = None
-        for label, st_ in zip(order, reached):
-            if st_ == StageStatus.ACTIVE:
-                current_label = label
-                break
-        if current_label is None:
-            for label, st_ in zip(reversed(order), reversed(reached)):
-                if st_ == StageStatus.SUCCESS:
-                    current_label = label
-                    break
-
-        text = f"Stage {count} of {total}"
-        if current_label:
-            text += f" - {current_label}"
-        return RunProgress(percent=pct, label=text, indeterminate=True)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("_coarse_run_progress failed: %s", exc)
-        return None
-
-
-def compute_run_progress(handle: Optional["RunHandle"]) -> Optional["RunProgress"]:
-    """Resolve the best-available :class:`RunProgress` reading for ``handle``.
-
-    See the module-level comment block above this function for the full
-    4-step resolution order. Never raises (CONSTRAINT #6) — any failure
-    (missing ``reporting.progress`` module, malformed JSON, daemon
-    unreachable, etc.) degrades to ``None`` so the Launcher tab simply omits
-    the progress bar rather than crashing the page.
-
-    Parameters
-    ----------
-    handle:
-        The active :class:`RunHandle`, or ``None`` if nothing has been
-        launched this session.
-
-    Returns
-    -------
-    Optional[RunProgress]
-        ``None`` when there is nothing worth showing (no handle, or the run
-        has already finished and left no fresh/terminal progress telemetry
-        behind). Otherwise a best-effort reading — see ``indeterminate`` to
-        distinguish a real percentage from a coarse stage-count estimate.
-    """
-    try:
-        if handle is None:
-            return None
-
-        poll_seconds = getattr(settings, "PROGRESS_POLL_SECONDS", 5)
-        try:
-            poll_seconds = float(poll_seconds)
-        except (TypeError, ValueError):
-            poll_seconds = 5.0
-        if poll_seconds <= 0:
-            poll_seconds = 5.0
-
-        backend = getattr(handle, "backend", "subprocess")
-        running = bool(handle.is_running())
-
-        if backend == "daemon":
-            status = _daemon_run_status(getattr(handle, "daemon_run_id", None))
-            progress_payload = status.get("progress") if isinstance(status, dict) else None
-            if isinstance(progress_payload, dict) and progress_payload:
-                state = _progress_state_from_dict(progress_payload)
-                if state is not None:
-                    pct = 100.0 if (state.is_terminal and state.state == "succeeded") else state.percent
-                    pct = _clamp_progress_pct(pct)
-                    return RunProgress(
-                        percent=pct,
-                        label=_build_progress_label(state, pct),
-                        indeterminate=False,
-                    )
-            if not running:
-                return None
-            return _coarse_run_progress(handle)
-
-        # Subprocess-backed (default / every other) handle.
-        from reporting.progress import read_progress
-
-        state = read_progress()
-        if state is not None and state.age_seconds() <= (3 * poll_seconds):
-            pct = 100.0 if (state.is_terminal and state.state == "succeeded") else state.percent
-            pct = _clamp_progress_pct(pct)
-            return RunProgress(
-                percent=pct,
-                label=_build_progress_label(state, pct),
-                indeterminate=False,
-            )
-
-        if not running:
-            return None
-
-        return _coarse_run_progress(handle)
-    except Exception as exc:  # noqa: BLE001 - a progress poll must never crash a rerun
-        logger.debug("compute_run_progress failed: %s", exc)
-        return None

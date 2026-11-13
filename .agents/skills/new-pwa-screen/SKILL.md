@@ -69,7 +69,7 @@ of screen this is:
 
 - **Read-only analytics/research screen** (no writes): a tile in
   Marketplace's "Explore" row (`webapp/src/screens/Marketplace.tsx`) — the
-  door `/models`, `/pairs`, and `/options` all use. Also add a `NAV_ITEMS`
+  door `/models`, `/calibration`, and `/sector-selection` all use. Also add a `NAV_ITEMS`
   entry so desktop's sidebar (which renders the full list) reaches it too.
 - **Settings/config/write screen**: a link card under `/settings`
   (`webapp/src/screens/Settings.tsx`'s `SectionCard` pattern) — the door

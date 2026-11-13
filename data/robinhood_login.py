@@ -51,7 +51,7 @@ Cross-process single-flight (2026-09 follow-up)
 -----------------------------------------------
 Logins can also start from OTHER processes: any process whose
 ``fetch_account_snapshot`` tier-3 auto-refresh fires (the standalone Data /
-Metrics APIs, ``investyo_mcp_server``, ``main.py``) when
+Metrics APIs, ``investyo_mcp_server``, a standalone ``main_orchestrator.py``) when
 ``ROBINHOOD_AUTO_REFRESH_ENABLED=true``. So, after the in-process check and
 before launching a worker, ``start_login`` also takes an OS advisory lock:
 ``fcntl.flock(LOCK_EX | LOCK_NB)`` on ``<OUTPUT_DIR>/robinhood_login.lock``.
@@ -583,8 +583,8 @@ def login_blocking(mode: LoginMode, *, username: str = "", password: str = "", p
     terminal state. Raises on anything but success — callers that need a
     result object for an HTTP response should use ``start_login`` +
     ``get_login_state`` instead; this is for the synchronous internal
-    callers (``data.robinhood_portfolio._fetch_live_snapshot``,
-    ``main.py --refresh-account``) that already expect a plain blocking
+    callers (``data.robinhood_portfolio._fetch_live_snapshot``, and so any
+    pipeline run that auto-refreshes) that already expect a plain blocking
     call and just need it to no longer be able to hang forever.
 
     If a ``refresh`` job is already running, a ``refresh`` call waits on

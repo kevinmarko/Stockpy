@@ -558,7 +558,13 @@ class TestCrossProcessLock:
         while job._xlock_fd is not None and time.time() < deadline:
             time.sleep(0.05)
         assert job._xlock_fd is None, "the deadline thread must release the lock once terminal"
-        assert not (robinhood_login._lock_dir() / robinhood_login.OWNER_FILENAME).exists()
+        # _release_cross_process_lock clears _xlock_fd first and removes the sidecar just after
+        # (still before the flock unlock, which is the guarantee that matters), so a loaded
+        # machine can observe the gap: wait for the file too, on the same bounded deadline.
+        owner_file = robinhood_login._lock_dir() / robinhood_login.OWNER_FILENAME
+        while owner_file.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        assert not owner_file.exists()
 
     def test_launch_failure_releases_the_lock(self, monkeypatch) -> None:
         import fcntl

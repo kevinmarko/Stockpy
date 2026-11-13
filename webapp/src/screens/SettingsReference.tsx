@@ -77,6 +77,17 @@ function ReferenceDangerousConfirmDialog({
   );
 }
 
+/** Readable text for a setting's value. The backend sends dict/list values raw
+ *  (type "string"), and `String({})` is "[object Object]". */
+export function fmtRefValue(v: unknown): string {
+  if (v === null || v === undefined) return "null";
+  if (typeof v === "object") return JSON.stringify(v, null, 1).replace(/\n\s*/g, " ");
+  return String(v);
+}
+
+/** Long keys, paths and JSON values have no break opportunities and would widen the page on a phone. */
+const WRAP_ANYWHERE = { overflowWrap: "anywhere", wordBreak: "break-word" } as const;
+
 export function SettingsReference() {
   const { data, loading, error, status, reload } = useApi<SettingsReferenceResponse>(
     () => api.getSettingsReference(),
@@ -264,6 +275,9 @@ export function SettingsReference() {
                       gap: "var(--s-1-5)",
                       borderBottom: `1px dashed ${theme.border}`,
                       paddingBottom: "var(--s-3)",
+                      // Inherited by the description, keys and values below: they hold paths and
+                      // identifiers with no break opportunity, which widened the page on a phone.
+                      ...WRAP_ANYWHERE,
                     }}
                   >
                     <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "baseline", gap: "var(--s-2)" }}>
@@ -276,6 +290,7 @@ export function SettingsReference() {
                             background: theme.surface2,
                             padding: "2px 6px",
                             borderRadius: "var(--r-sm)",
+                            ...WRAP_ANYWHERE,
                           }}
                         >
                           {field.key}
@@ -342,14 +357,14 @@ export function SettingsReference() {
                     >
                       <div>
                         <span>Current: </span>
-                        <code style={{ color: isSecret ? theme.textMuted : theme.textPrimary }}>
-                          {isSecret ? field.value : String(field.value)}
+                        <code style={{ color: isSecret ? theme.textMuted : theme.textPrimary, ...WRAP_ANYWHERE }}>
+                          {isSecret ? String(field.value) : fmtRefValue(field.value)}
                         </code>
                       </div>
                       <div>
                         <span>Default: </span>
-                        <code style={{ color: theme.textSecondary }}>
-                          {field.default === null || field.default === undefined ? "null" : String(field.default)}
+                        <code style={{ color: theme.textSecondary, ...WRAP_ANYWHERE }}>
+                          {fmtRefValue(field.default)}
                         </code>
                       </div>
                       <div>

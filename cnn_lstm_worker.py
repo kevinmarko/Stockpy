@@ -11,8 +11,8 @@ real multi-threaded TF eager op (a Conv1D/LSTM ``.fit()``, not a trivial op)
 deadlocks forever. ``forecasting_engine.py``'s own import reorder
 (tensorflow before pandas) only protects a process where that module is the
 first thing to touch pandas -- true in an isolated test script, false in
-this codebase's real entry points (main.py / main_orchestrator.py /
-pipeline/production_steps.py all import pandas well before
+this codebase's real entry points (main_orchestrator.py /
+pipeline/production_steps.py both import pandas well before
 forecasting_engine is ever reached).
 
 Round 8 (2026-08, see docs/known_issues/cnn_lstm_tf_deadlock.md) found a

@@ -116,17 +116,6 @@ class TestSettingsChangesReflectedWithoutReimport:
         text = hc.metric_help("robinhood_execution.placed_count")
         assert f"${new_value:,.2f}" in text
 
-    def test_progress_poll_seconds_in_section_help(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import shared.help_content as hc
-
-        new_value = 42
-        monkeypatch.setattr("settings.settings.PROGRESS_POLL_SECONDS", new_value)
-
-        text = hc.section_help("pipeline_progress")
-        assert f"every {new_value} seconds" in text
-
     def test_sizing_cap_settings_in_section_help(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

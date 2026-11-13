@@ -620,7 +620,7 @@ def evaluate(
         ``HistoricalStore`` failure (CONSTRAINT #6) or when the flag is
         disabled.  Closes the gap where this per-symbol loop — the platform's
         highest-frequency data-fetch site — bypassed the DB even though
-        ``main.py``'s bars pre-compute pass had already DB-cached bars for the
+        ``fetch_bars_for_universe``'s bars pre-compute pass had already DB-cached bars for the
         same symbols moments earlier in the same cycle.
 
     Returns

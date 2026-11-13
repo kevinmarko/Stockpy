@@ -390,7 +390,9 @@ export default function AIChatInterface({ isOpen, onClose, contextText }: AIChat
       style={{
         background: theme.surface,
         borderLeft: `1px solid ${theme.borderStrong}`,
-        boxShadow: '-8px 0 30px rgba(0,0,0,0.35)',
+        // Only while open: a closed drawer sits just off-screen and an always-on 30px
+        // blur reached back into the viewport as a grey band down every page's right edge.
+        boxShadow: isOpen ? '-8px 0 30px rgba(0,0,0,0.35)' : 'none',
         display: 'flex',
         flexDirection: 'column',
       }}

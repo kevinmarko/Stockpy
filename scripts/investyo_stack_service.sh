@@ -56,9 +56,9 @@
 # (no `wait -n`, no associative arrays); the poll loop below (rather than a
 # second `wait $DAEMON_PID` inside the trap) is chosen for that reason — a
 # `wait` on an already-signalled/reaped pid can return without blocking on
-# this bash version, so an explicit `kill -0` poll (mirroring
-# launch_app.command's own previous-instance-replace loop) is the reliable
-# primitive here.
+# this bash version, so an explicit `kill -0` poll (the pattern the deleted
+# launch_app.command used for its previous-instance-replace loop) is the
+# reliable primitive here.
 #
 # macOS NOTE: launchd runs in a restricted TCC context. If this repo lives
 # under ~/Desktop / ~/Documents / ~/Downloads, you MUST grant Full Disk Access
@@ -142,7 +142,7 @@ fi
 DAEMON_PID=$!
 
 # Idempotency guard -- mirrors this codebase's Python _torn_down pattern
-# (app_shell.py, desktop/orchestrator_daemon.py): a signal arriving while
+# (desktop/orchestrator_daemon.py): a signal arriving while
 # `wait` below is blocked interrupts that `wait` and runs this trap; once it
 # returns, execution resumes after `wait` and immediately reaches the
 # script's natural end, which fires the EXIT trap a SECOND time. Without
@@ -157,8 +157,8 @@ _teardown() {
     kill -TERM "$DAEMON_PID" 2>/dev/null
     # Bounded poll for the daemon's OWN graceful teardown to actually finish
     # (settings.DAEMON_SHUTDOWN_TIMEOUT_SECONDS, default 25s) plus a margin
-    # -- mirrors desktop/engine_supervisor.py's stop_engine() daemon-mode
-    # timeout (DAEMON_SHUTDOWN_TIMEOUT_SECONDS + 5s grace). 60 iterations *
+    # -- DAEMON_SHUTDOWN_TIMEOUT_SECONDS + 5s grace (the budget the deleted
+    # desktop/engine_supervisor.py's stop_engine() used). 60 iterations *
     # 0.5s = 30s.
     for _ in $(seq 1 60); do
         kill -0 "$DAEMON_PID" 2>/dev/null || break
