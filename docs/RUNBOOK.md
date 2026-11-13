@@ -1048,6 +1048,42 @@ harmless otherwise).
   disabled and the daemon logs a warning.
 - **Turn off:** `ROBINHOOD_SCHEDULED_LOGIN_ENABLED=false`.
 
+#### 5.1b Nightly local CI (optional timer)
+
+`scripts/com.investyo.nightly-local-ci.plist` runs `scripts/nightly_local_ci.sh` every day at
+22:30 local time, which runs `make local-ci ARGS="--profile nightly"`: the full pytest suite with
+no marker filter (network and slow tests included), the local replacement for the retired
+`nightly.yml`. There is no GitHub Actions in this repo, so this timer is the only scheduled CI. It
+tests the checkout it is installed from exactly as it is (no fetch, pull or checkout), so install it
+from the checkout that tracks `main`. 22:30 is after the close and after the daemon's 04:00–20:00 ET
+window, and the run (3 h timeout at most) ends before the Sunday 02:00 `weekly-edgar` job.
+
+`install_schedule.command` does **not** install it. Install it by hand, from the repo root:
+
+```bash
+sed "s|__STOCKPY_REPO__|$PWD|g" scripts/com.investyo.nightly-local-ci.plist > ~/Library/LaunchAgents/com.investyo.nightly-local-ci.plist
+launchctl load ~/Library/LaunchAgents/com.investyo.nightly-local-ci.plist
+launchctl list | grep com.investyo.nightly-local-ci     # expect a line (no PID between runs)
+```
+
+The plist's only path is the placeholder `__STOCKPY_REPO__` (no user home is hard-coded; launchd
+does not expand `~`), and the `sed` swaps in the real checkout. A plain `cp` installs a job that
+cannot start. Run it once now without waiting for 22:30:
+`launchctl start com.investyo.nightly-local-ci`.
+
+**Logs** are written under `settings.LOCAL_DATA_ROOT` (default `~/.stockpy_local`), never inside
+the repo: `<LOCAL_DATA_ROOT>/logs/nightly_ci/latest.log` (newest run, the `local_ci.py` summary
+table is at the end), one `nightly_ci_<stamp>.log` per run (kept 30 days) and `last_status`
+(`<stamp> exit=<rc> log=<path>`; `exit=0` means every step passed). The nightly suite hits live
+upstreams, so a red run can be upstream flake: read the failing test before acting on it.
+
+**Uninstall:**
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.investyo.nightly-local-ci.plist
+rm ~/Library/LaunchAgents/com.investyo.nightly-local-ci.plist
+```
+
 ### 5.2 Track-record status report
 
 `scripts/track_record_status.py` (no network calls) reports how close you are
