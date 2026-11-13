@@ -23,7 +23,7 @@ Operator approved building this screen on 2026-11-13. **No backend change**: the
      | Symbol | `/forecasts` row | `/forecast-summary` |
      |---|---|---|
      | AAPL | all horizons; +6 pts moved BUY vs HOLD; bullish boost; sell-zone top from the forecast | gate admitted arima + holt_winters, rejected blend / cnn_lstm ("too few scored pairs") / monte_carlo; 90d has no matured outcomes |
-     | MSFT | 30d/60d `gated_naive` (forecast = price); `advisory_effects: []`; sell top from ATR | gate falls back to naive, all rejected |
+     | MSFT | 30d/60d `gated_naive` and `is_fallback` (the engine sets both, `settings.py` `FORECAST_NAIVE_GATE_ENABLED`; forecast = price); `advisory_effects: []`; sell top from ATR | gate falls back to naive, all rejected |
      | JNJ | 90d fallback with no band; points not recorded; no advisory recommendation (null); "Sell Now" | pre-F3 ledger (no recorded decision) |
      | AGNC | 60d/90d not recorded (null flags too); Case A | ledger read error everywhere |
      | other | not in the snapshot | cold start (live shape) |
@@ -32,7 +32,8 @@ Operator approved building this screen on 2026-11-13. **No backend change**: the
      The empty `/forecasts` (no snapshot) branch is exercised by a test spy and by the live cold-start backend.
 
 2. **Screen** (`webapp/src/screens/ForecastViewer.tsx`, rewritten in place; route `/forecast` kept)
-   - Universe table: published forecast, % vs price, band (cell tooltip), `naive` / `fallback` badges,
+   - Universe table: published forecast, % vs price, band (cell tooltip), `naive` / `fallback` badges (a
+     gated-naive horizon shows only `naive`, since its `is_fallback` is also true but the models did converge),
      forecast pts, tier and (tier without forecast). Inside an `overflowX: auto` wrapper, so the page never scrolls
      sideways at 390px.
    - Gate line from `view.gate` (on vs shadow, min improvement, min pairs, window) and a z line ("unavailable" +
@@ -56,6 +57,7 @@ Operator approved building this screen on 2026-11-13. **No backend change**: the
    `docs/HOW_TO_GUIDE.md` section under §6.
 
 ## Verification
+Rebased onto `origin/main` @ `b588a7d7` (#1146, vite 8.3.8 / vitest 4.1.12) and re-verified after `npm ci`.
 See the PR body for the command output. Summary: typecheck clean; full vitest suite green; production build OK;
 `make lint` clean; `tests/test_help_content.py` + `tests/test_pilots_forecasts.py` and the other doc/help tests green.
 
