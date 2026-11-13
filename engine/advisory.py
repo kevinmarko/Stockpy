@@ -510,6 +510,24 @@ class Recommendation:
     # constructions unaffected.
     sizing_was_capped: bool = False
     sizing_binding_constraint: Optional[str] = None
+    # Forecasting rebuild F6a: which forecast-driven holding rules changed this
+    # recommendation, as stable tags in a fixed order -- ``"case_a_exit"``
+    # (loss + bearish 30-day forecast escalated to a full-exit SELL),
+    # ``"case_c_hold"`` (a gain + a forecast that is neither bullish nor
+    # bearish turned a BUY into a HOLD) and ``"bullish_conviction_boost"``
+    # (a bullish forecast raised a surviving BUY's conviction). Until this
+    # field the case lived only in the free-text rationale. Purely a record of
+    # what already happened: it is set from the same flags the decision used
+    # and never feeds back into the decision (tests/test_forecasting_f6a_*
+    # pins every other field byte-identical). Empty when no rule fired.
+    # Trailing default keeps existing positional constructions unaffected.
+    forecast_effects: Tuple[str, ...] = ()
+
+
+# Stable tags for Recommendation.forecast_effects (forecasting rebuild F6a).
+FORECAST_EFFECT_CASE_A_EXIT = "case_a_exit"
+FORECAST_EFFECT_CASE_C_HOLD = "case_c_hold"
+FORECAST_EFFECT_BULLISH_BOOST = "bullish_conviction_boost"
 
 
 # ---------------------------------------------------------------------------
@@ -1134,6 +1152,7 @@ def evaluate(
     final_conviction = base_conviction
     holding_override_reason = ""
     _case_a_fired = False  # loss+bearish-forecast escalation -> full-exit sizing
+    _case_c_fired = False  # gain + non-bullish/non-bearish forecast -> BUY held (F6a record only)
 
     if is_holding:
         # ── CASE A: Below effective cost + bearish forecast → escalate to SELL ──
@@ -1181,6 +1200,7 @@ def evaluate(
             and not is_bearish_forecast
             and not is_bullish_forecast
         ):
+            _case_c_fired = True
             final_action = "HOLD"
             final_conviction = max(final_conviction, CONFIG["conviction_hold"])
             holding_override_reason = (
@@ -1193,7 +1213,9 @@ def evaluate(
     # Case A (loss + bearish → conviction_strong_sell): when the action is still
     # BUY and the independent 30-day forecast confirms upside, raise conviction
     # to the strong-buy level.
+    _bullish_boost_fired = False  # F6a record only; never read by the decision
     if final_action == "BUY" and is_bullish_forecast:
+        _bullish_boost_fired = final_conviction < CONFIG["conviction_strong_buy"]
         final_conviction = max(final_conviction, CONFIG["conviction_strong_buy"])
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -1486,6 +1508,15 @@ def evaluate(
         # above) -- see the Recommendation.sizing_was_capped docstring note.
         sizing_was_capped=sizing_was_capped,
         sizing_binding_constraint=sizing_binding_constraint,
+        # Forecasting rebuild F6a: a record of which forecast-driven rule
+        # fired above, built from the same flags (decision-neutral).
+        forecast_effects=tuple(
+            tag for tag, fired in (
+                (FORECAST_EFFECT_CASE_A_EXIT, _case_a_fired),
+                (FORECAST_EFFECT_CASE_C_HOLD, _case_c_fired),
+                (FORECAST_EFFECT_BULLISH_BOOST, _bullish_boost_fired),
+            ) if fired
+        ),
     )
 
 

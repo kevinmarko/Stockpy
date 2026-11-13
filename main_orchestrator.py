@@ -1003,6 +1003,28 @@ def _write_state_snapshot(
                     "forecast_60_upper": _safe_float_or_none(row.get("Forecast_60_Upper")),
                     "forecast_90_lower": _safe_float_or_none(row.get("Forecast_90_Lower")),
                     "forecast_90_upper": _safe_float_or_none(row.get("Forecast_90_Upper")),
+                    # Forecasting rebuild F6a: the published per-horizon point
+                    # forecast and its two disclosure flags, so the Forecasts
+                    # screen reads what the pipeline published instead of
+                    # refitting (pilots/forecasts.py). Additive, read-only
+                    # telemetry: nothing downstream of the snapshot decides on
+                    # them. JSON null when absent, never a fabricated 0.0
+                    # (CONSTRAINT #4). *_is_fallback is 1.0/0.0 like
+                    # forecast_is_fallback above; *_gated_naive exists on
+                    # dashboard_df only while FORECAST_NAIVE_GATE_ENABLED is on
+                    # (ForecastingStep), so it is null otherwise.
+                    "forecast_10": _safe_float_or_none(row.get("Forecast_10")),
+                    "forecast_30": _safe_float_or_none(row.get("Forecast_30")),
+                    "forecast_60": _safe_float_or_none(row.get("Forecast_60")),
+                    "forecast_90": _safe_float_or_none(row.get("Forecast_90")),
+                    "forecast_10_is_fallback": _safe_float_or_none(row.get("Forecast_10_Is_Fallback")),
+                    "forecast_30_is_fallback": _safe_float_or_none(row.get("Forecast_30_Is_Fallback")),
+                    "forecast_60_is_fallback": _safe_float_or_none(row.get("Forecast_60_Is_Fallback")),
+                    "forecast_90_is_fallback": _safe_float_or_none(row.get("Forecast_90_Is_Fallback")),
+                    "forecast_10_gated_naive": _safe_float_or_none(row.get("Forecast_10_Gated_Naive")),
+                    "forecast_30_gated_naive": _safe_float_or_none(row.get("Forecast_30_Gated_Naive")),
+                    "forecast_60_gated_naive": _safe_float_or_none(row.get("Forecast_60_Gated_Naive")),
+                    "forecast_90_gated_naive": _safe_float_or_none(row.get("Forecast_90_Gated_Naive")),
                     # Buy- and sell-side execution corridors surfaced so the
                     # Streamlit observability dashboard can render the full
                     # tactical plan without re-reading the SQLite DB.
@@ -1136,11 +1158,21 @@ def _write_state_snapshot(
                     if _rec is None:
                         signals[-1]["garch_vol"] = None
                         signals[-1]["suggested_exit_pct"] = None
+                        signals[-1]["advisory_forecast_effects"] = None
                     else:
                         _ki = getattr(_rec, "key_indicators", None) or {}
                         signals[-1]["garch_vol"] = _safe_float_or_none(_ki.get("garch_vol"))
                         signals[-1]["suggested_exit_pct"] = _safe_float_or_none(
                             getattr(_rec, "suggested_exit_pct", None)
+                        )
+                        # Forecasting rebuild F6a: which forecast-driven
+                        # advisory rule fired (Recommendation.forecast_effects).
+                        # [] = none fired; null = no recommendation this cycle
+                        # (never a fabricated "nothing happened").
+                        _effects = getattr(_rec, "forecast_effects", None)
+                        signals[-1]["advisory_forecast_effects"] = (
+                            [str(e) for e in _effects]
+                            if isinstance(_effects, (list, tuple)) else None
                         )
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(),

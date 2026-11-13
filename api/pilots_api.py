@@ -166,6 +166,7 @@ from pilots import (
     commands as commands_reader,
     discovery as discovery_reader,
     forecast_skill,
+    forecasts as forecasts_reader,
     gravity_audit as gravity_audit_reader,
     models,
     news_catalyst,
@@ -1518,6 +1519,37 @@ def get_symbol_forecast(
     return forecast_skill.forecast_skill_view(ticker, horizon_days=horizon)
 
 
+@app.get("/symbols/{ticker}/forecast-summary", dependencies=[Depends(require_read_token)])
+def get_symbol_forecast_summary(ticker: str) -> Dict[str, Any]:
+    """Forecasting rebuild F6a: one symbol's forecast ledger view for the
+    Forecasts screen, per horizon (10/30/60/90): skill vs naive per model, the
+    last recorded naive-gate decision plus the gate's evaluation on today's
+    matured outcomes (admitted / rejected with reasons), and Monte-Carlo band
+    coverage (``pilots/forecasts.py::forecast_summary``).
+
+    Reads ``forecast_errors`` through a read-only tracker; no engine, no
+    refit, no network. A symbol with no history is not a 404: empty lists and
+    an honest ``reason`` (CONSTRAINT #4). Never 500s (CONSTRAINT #6). The
+    single-horizon ``GET /symbols/{ticker}/forecast`` above is unchanged."""
+    return forecasts_reader.forecast_summary(ticker)
+
+
+@app.get("/forecasts", dependencies=[Depends(require_read_token)])
+def get_forecasts() -> Dict[str, Any]:
+    """Forecasting rebuild F6a: the Forecasts screen's universe table from the
+    pipeline's PERSISTED forecast (``state_snapshot.json``), never a refit:
+    per symbol and horizon the published forecast, its Monte-Carlo band and
+    the fallback / gate-published-naive disclosures, plus what the forecast
+    changed this cycle (``forecast_alignment`` points, an approximate action
+    tier without them, the advisory rules it fired, whether the sell-zone top
+    came from the forecast) — ``pilots/forecasts.py::forecasts_view``.
+
+    Cold start (no snapshot) is an empty ``rows`` list with a ``reason``, not
+    a 404. Forecast z (F5) is not built: ``z`` is null everywhere with a
+    ``z_reason``. Never 500s (CONSTRAINT #6)."""
+    return forecasts_reader.forecasts_view(_load_snapshot())
+
+
 @app.get("/sector/selection", dependencies=[Depends(require_read_token)])
 def get_sector_selection(
     target: str,
@@ -2056,6 +2088,10 @@ def get_thresholds() -> Dict[str, float]:
         "robinhood_max_notional_per_order": settings.ROBINHOOD_MAX_NOTIONAL_PER_ORDER,
         "agentic_max_candidates": float(settings.AGENTIC_MAX_CANDIDATES),
         "retrain_window_days": float(MODEL_RETRAIN_WINDOW_DAYS),
+        # Forecasting rebuild F6a: the F3 naive gate's live settings, so the
+        # Forecasts screen's help text quotes them instead of literals.
+        "forecast_gate_min_improvement": float(settings.FORECAST_NAIVE_GATE_MIN_IMPROVEMENT),
+        "forecast_gate_min_obs": float(settings.FORECAST_NAIVE_GATE_MIN_OBS),
     }
 
 

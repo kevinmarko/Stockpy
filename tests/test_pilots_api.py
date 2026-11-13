@@ -674,6 +674,7 @@ def test_thresholds_shape_and_live_values(monkeypatch):
         "stress_max_drawdown", "kelly_fraction", "kelly_cap",
         "robinhood_max_notional_per_order",
         "agentic_max_candidates", "retrain_window_days",
+        "forecast_gate_min_improvement", "forecast_gate_min_obs",
     }
     assert body["pbo_max"] == PBO_MAX
     assert body["dsr_min"] == DSR_MIN
@@ -686,6 +687,8 @@ def test_thresholds_shape_and_live_values(monkeypatch):
     assert "follow_min_amount" not in body  # Follow-a-Pilot archived (step 4c)
     assert body["agentic_max_candidates"] == float(settings.AGENTIC_MAX_CANDIDATES)
     assert body["retrain_window_days"] == float(MODEL_RETRAIN_WINDOW_DAYS)
+    assert body["forecast_gate_min_improvement"] == settings.FORECAST_NAIVE_GATE_MIN_IMPROVEMENT
+    assert body["forecast_gate_min_obs"] == float(settings.FORECAST_NAIVE_GATE_MIN_OBS)
 
 
 def test_thresholds_never_depends_on_snapshot(tmp_path, monkeypatch):

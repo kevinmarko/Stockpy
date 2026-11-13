@@ -92,6 +92,7 @@ One forecasting service that:
   - skill vs naive per horizon
   - what the forecast changed this cycle (alignment points, advisory case, sellRange)
 - Symbol Detail links to it. The ModelHealthPanel forecast section points there too.
+- *Status 2026-11-13:* run before F5 (operator OK). F6a (read contract + backend, `GET /forecasts`, `GET /symbols/{t}/forecast-summary`) built; F6b (the screen) next. Plan: `.claude/forecasting_rebuild_f5_f6_implementation_plan.md`.
 
 ## Order vs the rest of the cleanup
 **Recommended:** start F1 now, because measurement needs calendar time to accrue, and run step 4 (archive) in parallel, since the two don't touch the same files. F2 follows F1. F3's two-week shadow runs while step 4/5 proceed. F5 waits for data.

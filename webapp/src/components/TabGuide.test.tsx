@@ -79,6 +79,8 @@ describe("TabGuide", () => {
       robinhood_max_notional_per_order: 2500,
       agentic_max_candidates: 25,
       retrain_window_days: 30,
+      forecast_gate_min_improvement: 0.005,
+      forecast_gate_min_obs: 60,
     });
     const user = userEvent.setup();
     render(<TabGuide tabKey="strategy-health" />);
