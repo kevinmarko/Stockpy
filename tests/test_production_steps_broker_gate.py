@@ -217,6 +217,14 @@ class TestMarkerSetByAsyncDataFetchStep:
             advisory_evaluate_fn=lambda *a, **k: None,
         )
 
+        # A non-Mock engine, so this exercises the empty-fetch FALLBACK itself.
+        # With ctx.market left None the keyless step would pick MockDataEngine
+        # up front and the engine-identity check (pipeline/synthetic_gate.py)
+        # would flag the cycle before the fallback is ever reached.
+        class _RealLookingEngine:
+            last_macro_raw_fabricated_keys = frozenset()
+
+        ctx.market = _RealLookingEngine()
         empty_tech_raw = {"AAPL": pd.DataFrame()}
 
         async def _fake_fetch_all_data_async(de, tickers):
@@ -234,3 +242,5 @@ class TestMarkerSetByAsyncDataFetchStep:
             _asyncio.run(step.run(ctx))
 
         assert ctx.context_extras.get("data_is_synthetic") is True
+        assert ctx.context_extras.get("data_is_synthetic_reason") == "empty_price_fetch"
+        assert type(ctx.market).__name__ == "MockDataEngine"

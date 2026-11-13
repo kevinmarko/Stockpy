@@ -8,7 +8,7 @@ manually.
 """
 import sys
 import os
-from typing import Optional, Any
+from typing import Any, Iterator, Optional
 
 import pytest
 
@@ -992,3 +992,41 @@ def _stub_paper_marking_network_in_tests(request: pytest.FixtureRequest, monkeyp
         return
     monkeypatch.setattr(_pas, "_fetch_stock_prices", lambda symbols: {})
     monkeypatch.setattr(_pas, "_fetch_option_chain", lambda underlying, expiration: None)
+
+
+@pytest.fixture(autouse=True)
+def _allow_synthetic_outputs_when_marked(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Opt a single test back into Mock-cycle outputs (``synthetic_outputs_allowed``).
+
+    No-op unless the test carries ``@pytest.mark.synthetic_outputs_allowed``;
+    see ``tests/_synthetic_outputs.py``. The gate itself is never disabled
+    suite-wide.
+    """
+    if request.node.get_closest_marker("synthetic_outputs_allowed") is None:
+        yield
+        return
+    from tests._synthetic_outputs import allow_synthetic_outputs
+
+    with allow_synthetic_outputs():
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _stub_synthetic_cycle_alert_in_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never send the real synthetic-data CRITICAL alert from a test.
+
+    Every Mock-engine cycle in the suite is a synthetic cycle, and
+    ``pipeline/synthetic_gate.py::send_synthetic_cycle_alert`` dispatches
+    through ``observability.alerts.send_alert`` to every channel a
+    developer's ``.env`` configures (webhooks, SMTP, the alert file). The
+    stub records nothing and sends nothing. Tests of the real function opt
+    out with ``@pytest.mark.real_synthetic_cycle_alert`` (and patch
+    ``send_alert`` themselves).
+    """
+    if request.node.get_closest_marker("real_synthetic_cycle_alert") is not None:
+        return
+    try:
+        import pipeline.synthetic_gate as _sg
+    except Exception:
+        return
+    monkeypatch.setattr(_sg, "send_synthetic_cycle_alert", lambda reason: None)

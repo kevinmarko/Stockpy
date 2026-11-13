@@ -119,19 +119,19 @@
     {
       "expr": "getattr(settings, key, None)",
       "file": "scripts/step5_4_verify_cycle.py",
-      "line": 163,
+      "line": 167,
       "resolved_by_factory": null,
       "rules": []
     },
     {
       "expr": "getattr(settings, name)",
       "file": "scripts/step5_4_verify_cycle.py",
-      "line": 271,
+      "line": 275,
       "resolved_by_factory": null,
       "rules": []
     }
   ],
-  "files_scanned": 368,
+  "files_scanned": 369,
   "generator": "scripts/settings_liveness.py",
   "live_safe": [
     "ADVISORY_MAX_CONCURRENCY",
@@ -452,7 +452,7 @@
   "read_forms": {
     "attr": 798,
     "factory_param": 4,
-    "getattr_const": 293,
+    "getattr_const": 294,
     "os_environ": 2
   },
   "read_forms_distinct_fields": {
@@ -1961,7 +1961,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6408",
+        "site": "investyo_mcp_server.py:6430",
         "via": []
       }
     ],
@@ -1981,7 +1981,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6353",
+        "site": "investyo_mcp_server.py:6375",
         "via": []
       }
     ],
@@ -2021,7 +2021,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6361",
+        "site": "investyo_mcp_server.py:6383",
         "via": []
       }
     ],

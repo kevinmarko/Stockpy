@@ -32,11 +32,12 @@ full test suite, and one standalone dry-run pipeline cycle via
 daemon). That cycle forces `DAEMON_AGENTIC_QUEUE_MODE` to `off` in-process,
 turns off symbol-rating and cap-audit recording, never starts a Robinhood
 login, and suppresses every alert, so it writes no execution queue and sends
-no pushes or orders — but it still fetches live market data and rewrites
-`state_snapshot.json`, the dashboards and `dead_letter.json`. It exits
+no pushes or orders — but on real data it still fetches live market data and
+rewrites `state_snapshot.json`, the dashboards and `dead_letter.json` (a
+synthetic-data cycle skips the snapshot and dashboards by design). It exits
 non-zero if the cycle fails, does not refresh the snapshot, or runs on
-synthetic data (so a data outage or a missing `FRED_API_KEY` fails it rather
-than passing). It's available for a more thorough check but should be offered
+synthetic data (exit 4, so a data outage or a missing `FRED_API_KEY` fails it
+rather than passing). It's available for a more thorough check but should be offered
 to the operator, not run unprompted.
 
 $ARGUMENTS
