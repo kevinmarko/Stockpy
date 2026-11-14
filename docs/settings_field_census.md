@@ -4,7 +4,7 @@
 > `scripts/measure_settings_census.py` and re-derived on each run. Regenerate with:
 > `python3 scripts/measure_settings_census.py --write`
 
-- Measured at commit: `5c3d51381bb55068c8a1fa1608c87eb9c148d7cd`
+- Measured at commit: `69c1b246f5afb8e6e90303c1ae18923ff7383f28`
 - Machine-readable companion: [`settings_field_census.json`](settings_field_census.json)
 - Prose triage of these findings: [`settings_partition_notes.md`](settings_partition_notes.md)
 
@@ -222,7 +222,7 @@ Module-level helpers in this file that write `.env` directly: `_validate_and_wri
 
 ## 7. Read-form census
 
-Scope: **369** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
+Scope: **371** production `.py` files (excludes `tests/`, `test_*.py`, `conftest.py`, `.venv/`, `webapp/`, `node_modules/`).
 
 Files that could not be parsed: **0**
 
@@ -235,7 +235,7 @@ _S.settings, _dsr_settings, _gravity_settings, _guard_settings, _mt_settings, _o
 
 | Form | Total reads | Distinct fields reached |
 |---|---|---|
-| (a) `settings.KEY` | 725 | 254 |
+| (a) `settings.KEY` | 728 | 254 |
 | (b) `getattr(settings, "KEY", default)` | 298 | 171 |
 | (c) `getattr(settings, <var>)` (dynamic) | 16 sites | n/a — key not statically known |
 | (d) `os.environ` / `os.getenv("KEY")` | 2 | 2 |

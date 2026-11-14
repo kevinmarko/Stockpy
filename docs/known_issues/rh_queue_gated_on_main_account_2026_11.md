@@ -48,10 +48,14 @@ no-ops in the queue: `max_correlation` (`returns_df=None`), `daily_loss_limit`
 
 ## Not fixed here (follow-up)
 
-- **SELL intents come only from main-account holdings.** A position opened in the Agentic account
-  never gets a daemon exit intent. Fixing it needs the daemon to read the Agentic account (a new
-  account-number setting and a second robin_stocks fetch path). It matters once the burn-in opens
-  positions.
+- **SELL intents come only from main-account holdings — fixed 2026-11-14.** A position opened in the
+  Agentic account never got a daemon exit intent. Rather than a second robin_stocks login path, the
+  `rh-risk-manager` (each cycle) and `rh-reviewer` (daily) save the Agentic account's MCP positions to
+  `OUTPUT_DIR/agentic/agentic_holdings.json` (`execution/agentic_holdings.py`); the daemon adds those
+  symbols to the universe, evaluates them as held, and queues SELLs marked
+  `"holding_source": "agentic"`, sized by the preflight from the Agentic account's own shares.
+  The snapshot is ignored after 96 h; a position opened since the last refresh waits for the next one.
+  `.claude/agentic_exits_speed_partial_fills_walkthrough.md`.
 - **SELL quantity for names held in BOTH accounts — fixed 2026-11-14.** A full-exit SELL used the
   main account's held qty, so it either left Agentic shares behind or was vetoed as
   `sell_exceeds_sellable`. The queue now marks SELLs with `exit_kind` (`full` / `fraction` / `trim`)

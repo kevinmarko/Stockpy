@@ -259,14 +259,28 @@ def _parse_timestamp(raw: Any) -> Optional[datetime]:
         return None
 
 
+# Order states that can carry shares that really traded although the order did
+# not fill completely (cancelled after a partial fill, or still working).
+_PARTIAL_FILL_STATES = frozenset({"cancelled", "canceled", "partially_filled"})
+
+
 def parse_orders(
     raw_orders: List[Dict[str, Any]],
     symbol_resolver: Callable[[str], Optional[str]],
+    include_partial: bool = False,
 ) -> List[OrderFill]:
     """Normalise raw Robinhood stock-order dicts to a list of ``OrderFill``.
 
     Only orders with ``state == "filled"`` and a positive cumulative quantity
-    are kept.  ``symbol_resolver`` maps an instrument URL → ticker (cached by
+    are kept, unless ``include_partial`` is True: then a ``cancelled`` /
+    ``canceled`` / ``partially_filled`` order with ``cumulative_quantity > 0``
+    also yields a fill of that cumulative quantity at its ``average_price``
+    (the shares that really traded). Such an order without an
+    ``average_price`` is skipped — never priced from its limit ``price``
+    (CONSTRAINT #4). Default False keeps every main-account caller's
+    behaviour unchanged; the agentic Reviewer passes True.
+
+    ``symbol_resolver`` maps an instrument URL → ticker (cached by
     the caller to avoid repeat network calls).  Records that fail to parse are
     logged at DEBUG and skipped — one bad order never aborts the batch.
 
@@ -276,20 +290,26 @@ def parse_orders(
     fills: List[OrderFill] = []
     for od in raw_orders or []:
         try:
-            if str(od.get("state", "")).lower() != "filled":
-                continue
+            state = str(od.get("state", "")).lower()
+            partial = False
+            if state != "filled":
+                if not (include_partial and state in _PARTIAL_FILL_STATES):
+                    continue
+                partial = True
             side = str(od.get("side", "")).lower()
             if side not in ("buy", "sell"):
                 continue
             qty = float(od.get("cumulative_quantity") or 0.0)
-            if qty <= 0:
+            if qty <= 0 or (partial and not math.isfinite(qty)):
                 continue
             price_raw = od.get("average_price")
             if price_raw in (None, ""):
+                if partial:
+                    continue  # no execution price; the limit price is not one
                 # Fall back to the price field; skip if neither is usable.
                 price_raw = od.get("price")
             price = float(price_raw or 0.0)
-            if price <= 0:
+            if price <= 0 or (partial and not math.isfinite(price)):
                 continue
             ts = (
                 _parse_timestamp(od.get("last_transaction_at"))

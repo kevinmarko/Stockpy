@@ -160,7 +160,9 @@ reads a gated execution queue the pipeline writes.
   `docs/RUNBOOK.md` §3.15). `scripts/compare_shadow_queue.py` is only meaningful while the mode is
   `shadow`. Walkthroughs: `.claude/shrink_step5_*_walkthrough.md`.
 - **Symbol universe** — one builder, `pipeline/advisory_inputs.py::build_universe_detailed()`, used
-  by the daemon: held positions ∪ `WATCHLIST` env var ∪ `watchlist.txt` ∪
+  by the daemon: held positions (main account, plus the Agentic account's holdings the `rh-*`
+  agents save to `OUTPUT_DIR/agentic/agentic_holdings.json` — `execution/agentic_holdings.py`,
+  ignored when older than 96 h) ∪ `WATCHLIST` env var ∪ `watchlist.txt` ∪
   discovered scan candidates, minus rating auto-drops; `settings.DEFAULT_TICKERS` only when that
   union is empty (via `data/portfolio_sync.py::compute_tracked_universe()`); recently-closed
   positions (`CLOSED_POSITION_RETENTION_DAYS`) unioned last. Anything needing "the full tracked

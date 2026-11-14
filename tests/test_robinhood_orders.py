@@ -220,6 +220,47 @@ class TestParseOrders:
         fills = parse_orders(raw, self._resolver)
         assert len(fills) == 1 and fills[0].order_id == "a"
 
+    # -- include_partial (K4: the agentic Reviewer's partial fills) -----------
+    @staticmethod
+    def _row(state, qty, avg="90", oid="p", **over):
+        r = {"state": state, "side": "buy", "cumulative_quantity": qty, "average_price": avg,
+             "last_transaction_at": "2026-01-01T15:00:00Z",
+             "instrument": "https://x/inst/uuid1/", "id": oid}
+        r.update(over)
+        return r
+
+    def test_include_partial_defaults_off(self):
+        raw = [self._row("cancelled", "5"), self._row("partially_filled", "2")]
+        assert parse_orders(raw, self._resolver) == []
+
+    @pytest.mark.parametrize("state", ["cancelled", "canceled", "partially_filled", "CANCELLED"])
+    def test_include_partial_yields_cumulative_qty_at_average_price(self, state):
+        fills = parse_orders([self._row(state, "5", avg="90.5")], self._resolver, include_partial=True)
+        assert len(fills) == 1
+        f = fills[0]
+        assert (f.symbol, f.side, f.quantity, f.price, f.order_id) == ("AAPL", "buy", 5.0, 90.5, "p")
+
+    @pytest.mark.parametrize("qty", ["0", None, "", "nan", "-1"])
+    def test_include_partial_skips_orders_that_filled_nothing(self, qty):
+        assert parse_orders([self._row("cancelled", qty)], self._resolver, include_partial=True) == []
+
+    @pytest.mark.parametrize("avg", [None, "", "0", "nan"])
+    def test_include_partial_never_prices_from_the_limit(self, avg):
+        """No average_price → skipped, even though the order has a limit `price`."""
+        raw = [self._row("cancelled", "5", avg=avg, price="88.00")]
+        assert parse_orders(raw, self._resolver, include_partial=True) == []
+
+    def test_include_partial_ignores_other_states(self):
+        raw = [self._row(s, "5") for s in ("queued", "confirmed", "rejected", "failed", "unconfirmed")]
+        assert parse_orders(raw, self._resolver, include_partial=True) == []
+
+    def test_include_partial_keeps_filled_path_unchanged(self):
+        """The filled path still falls back to `price` when average_price is absent."""
+        raw = [self._row("filled", "3", avg=None, price="77", oid="f"),
+               self._row("cancelled", "2", oid="c")]
+        fills = parse_orders(raw, self._resolver, include_partial=True)
+        assert {(f.order_id, f.quantity, f.price) for f in fills} == {("f", 3.0, 77.0), ("c", 2.0, 90.0)}
+
     def test_symbol_resolution_and_skip_unresolved(self):
         raw = [
             {"state": "filled", "side": "buy", "cumulative_quantity": "1",

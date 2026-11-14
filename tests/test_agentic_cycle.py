@@ -108,6 +108,39 @@ class TestGate:
     def test_already_handled_never_retried(self, status):
         assert run_gate(existing_cycle={"status": status}).reason == ac.SKIP_ALREADY_HANDLED
 
+    # -- all_intents_handled (dedup before any LLM call) ------------------------
+    def test_all_actionable_intents_handled_skips(self):
+        g = run_gate(handled={("T", "buy")})
+        assert not g.run and g.reason == ac.SKIP_ALL_INTENTS_HANDLED == "all_intents_handled"
+        assert g.run_id == RUN_ID and g.n_actionable == 1
+
+    def test_only_actionable_intents_count(self):
+        # F is not actionable in live (allow_place False), so T alone decides.
+        assert run_gate(handled={("T", "buy")}).reason == ac.SKIP_ALL_INTENTS_HANDLED
+        assert run_gate(handled={("F", "buy")}).run
+
+    def test_one_unhandled_intent_runs_the_cycle(self):
+        q = queue()
+        q["intents"][1]["allow_place"] = True
+        g = run_gate(q, handled={("T", "buy")})
+        assert g.run and g.n_actionable == 2
+
+    def test_handled_match_is_symbol_and_side(self):
+        assert run_gate(handled={("T", "sell")}).run
+        assert run_gate(handled={("t", "buy")}).run                 # keys are normalised upstream
+        q = queue()
+        q["intents"][0]["symbol"] = " t "
+        q["intents"][0]["side"] = "BUY"
+        assert run_gate(q, handled={("T", "buy")}).reason == ac.SKIP_ALL_INTENTS_HANDLED
+
+    @pytest.mark.parametrize("handled", [None, set()])
+    def test_unknown_or_empty_handled_never_skips(self, handled):
+        assert run_gate(handled=handled).run
+
+    def test_already_handled_queue_reported_first(self):
+        assert run_gate(existing_cycle={"status": "completed"},
+                        handled={("T", "buy")}).reason == ac.SKIP_ALREADY_HANDLED
+
     def test_non_mapping_intents_ignored(self):
         q = queue()
         q["intents"] = ["junk", None]
@@ -178,6 +211,52 @@ class TestEvaluateGate:
         p = self._patch()
         with p[0], p[1], p[2]:
             assert ac.evaluate_gate(tmp_path, now=NOW).reason == ac.SKIP_QUEUE_UNREADABLE
+
+    def _run(self, tmp_path):
+        p = self._patch()
+        with p[0], p[1], p[2]:
+            return ac.evaluate_gate(tmp_path, now=NOW)
+
+    def test_todays_placed_ledger_skips(self, tmp_path):
+        (tmp_path / "execution_queue.json").write_text(json.dumps(queue()))
+        rs.append_placed({"symbol": "T", "side": "buy", "ts": "2026-11-10T14:00:00+00:00"}, tmp_path)
+        assert self._run(tmp_path).reason == ac.SKIP_ALL_INTENTS_HANDLED
+
+    def test_yesterdays_placement_does_not_skip(self, tmp_path):
+        (tmp_path / "execution_queue.json").write_text(json.dumps(queue()))
+        rs.append_placed({"symbol": "T", "side": "buy", "ts": "2026-11-09T19:00:00+00:00"}, tmp_path)
+        assert self._run(tmp_path).run
+
+    def test_pending_approval_skips_but_resolved_does_not(self, tmp_path):
+        (tmp_path / "execution_queue.json").write_text(json.dumps(queue()))
+        rs.append_approval_event({"approval_id": "a1", "state": "pending", "symbol": "T", "side": "buy",
+                                  "ts": "2026-11-09T19:00:00+00:00"}, tmp_path)
+        assert self._run(tmp_path).reason == ac.SKIP_ALL_INTENTS_HANDLED
+        rs.append_approval_event({"approval_id": "a1", "state": "declined", "symbol": "T", "side": "buy"},
+                                 tmp_path)
+        assert self._run(tmp_path).run
+
+    def test_other_side_placed_does_not_skip(self, tmp_path):
+        (tmp_path / "execution_queue.json").write_text(json.dumps(queue()))
+        rs.append_placed({"symbol": "T", "side": "sell", "ts": "2026-11-10T14:00:00+00:00"}, tmp_path)
+        assert self._run(tmp_path).run
+
+    def test_ledger_read_error_runs_the_cycle(self, tmp_path):
+        """Fail toward running: the preflight dedups again inside the cycle."""
+        (tmp_path / "execution_queue.json").write_text(json.dumps(queue()))
+        rs.append_placed({"symbol": "T", "side": "buy", "ts": "2026-11-10T14:00:00+00:00"}, tmp_path)
+        with mock.patch("execution.receipts_store.read_placed_ledger", side_effect=OSError("denied")):
+            assert ac.handled_intent_keys(tmp_path, now=NOW) is None
+            assert self._run(tmp_path).run
+
+    def test_handled_intent_keys(self, tmp_path):
+        rs.append_placed({"symbol": "t", "side": "BUY", "ts": "2026-11-10T14:00:00+00:00"}, tmp_path)
+        rs.append_placed({"symbol": "F", "side": "buy", "ts": "2026-11-09T14:00:00+00:00"}, tmp_path)
+        rs.append_approval_event({"approval_id": "a1", "state": "pending", "symbol": "msft", "side": "sell"},
+                                 tmp_path)
+        rs.append_approval_event({"approval_id": "a2", "state": "approved", "symbol": "AAPL", "side": "buy"},
+                                 tmp_path)
+        assert ac.handled_intent_keys(tmp_path, now=NOW) == {("T", "buy"), ("MSFT", "sell")}
 
     def test_state_error_fails_closed(self, tmp_path):
         with mock.patch("execution.kill_switch.GlobalKillSwitch.is_active", side_effect=RuntimeError("x")):
@@ -685,6 +764,7 @@ class TestLaunch:
         def runner(cmd, **kw):
             assert cmd[:3] == ["claude", "-p", "/rh-agentic-cycle --launched"]
             assert cmd[3] == "--allowedTools" and set(cmd[4].split(",")) == set(ac.allowed_tools())
+            assert cmd[5:] == ["--model", "sonnet"] and ac.COORDINATOR_MODEL == "sonnet"
             assert kw["timeout"] == ac.LAUNCH_TIMEOUT_SECONDS
             # The coordinator ran the whole cycle.
             started(tmp_path)

@@ -24,7 +24,8 @@ step 2 and end.
 
 As the `robinhood-execution` skill's Prerequisites step 1:
 `.venv/bin/python3 -c "from settings import settings; print(settings.OUTPUT_DIR)"`.
-Call it `$OUTPUT_DIR`.
+Call it `$OUTPUT_DIR`. **You resolve this once**; pass `$OUTPUT_DIR` into each
+agent's prompt below so no agent re-resolves it.
 
 ## 1. Gate and start
 
@@ -61,6 +62,16 @@ yourself, and never retry within the same cycle (the next queue gets a new run).
 Tell every agent below that it is running inside the unattended cycle and that
 its final report must be **five lines or fewer**.
 
+**Pass the resolved context into every agent prompt** so none re-resolves it:
+`$OUTPUT_DIR`, the run folder `$OUTPUT_DIR/agentic/<run_id>/` (as `$RUN_DIR`) and
+the Agentic account number (the Risk Manager finds it with `get_accounts`; pass
+it on to the Scout, Analyst and Trader from its saved
+`$RUN_DIR/inputs/portfolio.json`). Also tell the Risk Manager, Scout and Analyst
+that every Robinhood/investyo MCP response is captured automatically during a
+cycle: instead of re-typing a response into a file they run
+`.venv/bin/python3 -m execution.agentic_inputs assemble <run_id> --tool <tool name without prefix> --out <name>.json [--where key=value]`
+and fall back to writing the file by hand only if it exits 2.
+
 ### 2a. `risk` — `rh-risk-manager` (always first)
 
 The queue's staleness clock is already running, so the live-account check goes
@@ -69,7 +80,11 @@ files **and** `earnings.json` in this run's own folder
 `$OUTPUT_DIR/agentic/<run_id>/inputs/` (never the shared `agentic/inputs/`);
 **always** build `earnings.json` from `get_earnings_calendar` for every BUY
 symbol in the queue and run the preflight with
-`--earnings $OUTPUT_DIR/agentic/<run_id>/inputs/earnings.json --blackout-days 2`.
+`--earnings $OUTPUT_DIR/agentic/<run_id>/inputs/earnings.json --blackout-days 2`;
+and, after saving `positions.json` and `quotes.json`, record the Agentic
+holdings snapshot
+(`.venv/bin/python3 -m execution.agentic_holdings save --positions … --quotes … --source risk`;
+a non-zero exit is reported, not a reason to stop the preflight).
 
 Artifact check — the preflight for THIS queue, and which intents passed:
 
@@ -98,7 +113,7 @@ only those client_order_ids / symbols:
 | Stage | Agent | Tell it |
 |---|---|---|
 | `scout` | `rh-research-scout` | write `research.json` for the passed symbols; no discovery scans and do not load the `agentic-discovery` skill; do not add anything to `watchlist.txt` (no operator is here to name a symbol) |
-| `analyst` | `rh-strategy-analyst` | write `theses.json` for the passed client_order_ids, citing each intent's queue `context` first; don't wait for `research.json` (the Scout is running alongside — cite it only if it is already there) |
+| `analyst` | `rh-strategy-analyst` | write `theses.json` for the passed client_order_ids, citing each intent's queue `context` first; don't wait for `research.json` (the Scout is running alongside — cite it only if it is already there); **skip `get_recommendation`** in this unattended cycle and cite each intent's queue `context` instead |
 
 When both have returned, validate once:
 
@@ -117,8 +132,9 @@ If both fail, fail the `scout` stage (its reason first) and end.
 
 ### 2c. `trader` — `rh-trader`
 
-Record `trader` started. Tell it: run_id, mode, the passed list from 2a, and
-the **unattended rules** below, verbatim. Artifact check: it reports what it
+Record `trader` started. Tell it: run_id, mode, the passed list from 2a, the
+resolved `$OUTPUT_DIR`, run folder and Agentic account number, and the
+**unattended rules** below, verbatim. Artifact check: it reports what it
 previewed, sent to the phone, and skipped. Record `trader` completed.
 
 ### Unattended rules for the Trader (pass these verbatim)
@@ -136,6 +152,11 @@ unattended cycle:
 - `live` mode: if `get_trade_approval_setting` does not report that trades need
   approval, **place nothing** and report it as a failure (without the phone
   gate nothing may be placed unattended).
+- **Speed:** one `review_equity_order` per preflight-passed intent at the
+  preflight's `qty` and `limit_price`; never preview a vetoed intent; do not
+  re-fetch quotes or positions (the preflight exists); use the account number
+  from the coordinator's prompt / the Risk Manager's saved inputs; make one
+  `get_trade_approvals` call at the end.
 - Place only preflight-passed intents on the **approval path**
   (`customer_approval_required: true` and empty `order_checks` in THIS order's
   review response). **Never ask the operator in chat**: nobody is there. Any

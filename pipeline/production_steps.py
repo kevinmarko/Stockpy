@@ -2942,6 +2942,23 @@ class AdvisoryOverlayStep(PipelineStep):
             ctx.snapshot = _empty_account_snapshot()
         snapshot = ctx.snapshot
 
+        # Agentic-account holdings (contract K2): the daemon's snapshot is the
+        # MAIN account only, so a position the rh-* agents opened in the Agentic
+        # account is evaluated as held from the MCP-fed holdings file. Read once
+        # per cycle; the main account wins for a name held in both. Stashed for
+        # the queue step so it need not re-read the file. No file -> {}.
+        from execution.agentic_holdings import load_agentic_positions
+
+        agentic_positions = load_agentic_positions()
+        ctx.context_extras["agentic_positions"] = agentic_positions
+        if agentic_positions:
+            telemetry.info(
+                "Advisory: %d Agentic-account position(s) loaded (the main account "
+                "wins for a name held in both): %s", len(agentic_positions),
+                ", ".join(sorted(agentic_positions)),
+            )
+        main_positions = snapshot.positions or {}
+
         symbols = [str(s) for s in ctx.symbols if s]
         # Defensive: the dashboard is built from ctx.symbols, so this is
         # normally empty. A row that isn't in ctx.symbols still gets its
@@ -2986,7 +3003,7 @@ class AdvisoryOverlayStep(PipelineStep):
                 )
                 rec = _advisory_evaluate(
                     symbol=symbol,
-                    position=snapshot.positions.get(symbol),
+                    position=main_positions.get(symbol) or agentic_positions.get(symbol),
                     market=market,
                     snapshot=snapshot,
                     macro_dto=ctx.macro_dto,
@@ -3317,6 +3334,7 @@ class AgenticQueueStep(PipelineStep):
             now=now,
             macro_dto=ctx.macro_dto,
             side_effects=False,
+            agentic_positions=ctx.context_extras.get("agentic_positions"),
         )
         if queue_path is None:
             telemetry.info(
@@ -3396,6 +3414,7 @@ class AgenticQueueStep(PipelineStep):
             now=now,
             macro_dto=ctx.macro_dto,
             commit_guard=guard,
+            agentic_positions=ctx.context_extras.get("agentic_positions"),
         )
         if queue_path is None:
             telemetry.info(

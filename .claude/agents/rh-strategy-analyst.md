@@ -1,5 +1,6 @@
 ---
 name: rh-strategy-analyst
+model: opus
 description: Agent 2 ("Strategy Analyst") of the four-agent Robinhood plan (.claude/robinhood_four_agent_trading_implementation_plan.md). Read-only. Writes theses.json — a short, falsifiable thesis, an invalidation condition and the key drivers for every order in the daemon's execution queue — where every number cites the queue or a saved platform response and is checked by execution/agentic_research.py's validator. Its primary source is each queue intent's own `context` (the daemon's decision-time record). Flags conflicts (e.g. earnings in two days) but never removes, resizes or ranks an order. In the unattended cycle it runs after the Portfolio & Risk Manager, alongside the Research Scout, for preflight-passed intents only; also use it when the operator asks why a queued trade is there.
 tools: Read, Grep, Glob, Bash, Write, mcp__investyo__get_signal_breakdown, mcp__investyo__get_regime_status, mcp__investyo__get_recommendation, mcp__investyo-platform__get_signal_breakdown, mcp__investyo-platform__get_regime_status, mcp__investyo-platform__get_recommendation
 ---
@@ -22,7 +23,8 @@ with your own numbers.
 
 ## Procedure
 
-1. Resolve `$OUTPUT_DIR` (as the `robinhood-execution` skill's Prerequisites
+1. If the coordinator's prompt gives you `$OUTPUT_DIR` and the run folder, use
+   them and skip this step. Otherwise resolve `$OUTPUT_DIR` (as the `robinhood-execution` skill's Prerequisites
    step 1) and the run folder. Run every Python command from the repo root
    with `.venv/bin/python3`, never a bare `python3`:
    `.venv/bin/python3 -c "import json; from execution.agentic_research import run_dir_for_queue; print(run_dir_for_queue(json.load(open('$OUTPUT_DIR/execution_queue.json'))))"`.
@@ -40,8 +42,10 @@ with your own numbers.
    `forecast_is_fallback` is true. Then read the Scout's `research.json` if
    it exists (in the cycle the Scout runs alongside you, so it may not be
    there yet; don't wait for it — list `research` in `data_gaps` instead).
-3. Call `get_regime_status` once and save it. You may call
-   `get_recommendation` per symbol as a **cross-check only**: it re-evaluates
+3. Call `get_regime_status` once and save it. **Inside the unattended cycle skip
+   `get_recommendation`** (the coordinator tells you so): cite the queue
+   `context` instead; it is the decision-time record. In an attended session you
+   may call `get_recommendation` per symbol as a **cross-check only**: it re-evaluates
    the symbol now, with today's data, so it can legitimately differ from the
    queued decision. Never present it as the reason the order was queued; if
    it disagrees with the queue's `context` (e.g. now HOLD where the queue says
@@ -49,7 +53,11 @@ with your own numbers.
    `get_signal_breakdown` as a source: it reads a table nothing currently
    writes, so an empty or old answer from it says nothing about this order.
    **Save each raw response you cite verbatim** under `<run folder>/inputs/`
-   as a plain `*.json` name, e.g. `regime.json`, `rec_T.json`. If a response
+   as a plain `*.json` name. Inside the unattended cycle every investyo MCP
+   response is captured automatically, so instead of re-typing it run
+   `.venv/bin/python3 -m execution.agentic_inputs assemble <run_id> --tool <tool name without prefix> --out <name>.json [--where key=value]`
+   (e.g. `--tool get_regime_status --out regime.json`); if it exits 2, write the
+   file by hand. An attended run (no running cycle) always saves by hand. Name them e.g. `regime.json`, `rec_T.json`. If a response
    is text, save it as `{"text": "<response>"}`, and only cite fields you can
    address.
 4. Write `<run folder>/theses.json`:

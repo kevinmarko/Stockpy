@@ -225,6 +225,26 @@ overrides (the coordinator passes them verbatim):
   non-zero, **stop sending**: the order just sent is on the phone but not in
   the ledger, so the next run's idempotency check cannot see it. Report it as
   a failure, naming the order and its approval id.
+- **Speed procedure (every safety rule above and below still holds).** The
+  Risk Manager already priced and sized everything, so do not repeat it:
+  - Make **one `review_equity_order` per preflight-PASSED intent**, at the
+    preflight verdict's `qty` and `limit_price`. **Never preview a vetoed
+    intent**: it cannot be placed, so a preview only costs time.
+  - **When a preflight exists for this queue, do not re-fetch quotes or
+    positions** (the verdict's qty/limit price are the sizing; step 3's quote
+    and `get_equity_positions` lookups are the preflight's job). Only the
+    in-chat fallback, which the unattended cycle never uses, re-sizes.
+  - **Account number:** take it from the coordinator's prompt, else from the Risk
+    Manager's saved `$OUTPUT_DIR/agentic/<run_id>/inputs/portfolio.json`
+    (`account_number`) or `positions.json`. Skip the `get_accounts` /
+    `get_portfolio` discovery. If no source gives it, fail the stage rather than
+    guess.
+  - Make **one `get_trade_approvals` call at the end** (this run's ids plus any
+    still pending from earlier) and record every state; skip step 2's earlier
+    approval refresh.
+  - Still required, unchanged: the market-open re-check right before each send,
+    stopping on a non-zero ledger exit code, never approving, and the
+    deterministic `ref_id` so a repeat is idempotent.
 - Keep the final report to five lines or fewer: counts previewed / sent /
   skipped (with reasons) and the approval states you fetched.
 
