@@ -1,6 +1,6 @@
 {
   "meta": {
-    "git_commit": "5c3d51381bb55068c8a1fa1608c87eb9c148d7cd",
+    "git_commit": "69c1b246f5afb8e6e90303c1ae18923ff7383f28",
     "generator": "scripts/measure_settings_census.py"
   },
   "field_types": {
@@ -2933,7 +2933,7 @@
     }
   ],
   "read_forms": {
-    "files_scanned": 369,
+    "files_scanned": 371,
     "files_unparseable_count": 0,
     "files_unparseable": [],
     "distinct_settings_aliases_found": [
@@ -2961,10 +2961,10 @@
     ],
     "distinct_settings_alias_count": 21,
     "form_a_attribute": {
-      "total_reads": 725,
+      "total_reads": 728,
       "distinct_fields": 254,
       "counts": {
-        "OUTPUT_DIR": 102,
+        "OUTPUT_DIR": 105,
         "LOCAL_DATA_ROOT": 25,
         "SIGNAL_WEIGHTS": 18,
         "FRED_API_KEY": 13,

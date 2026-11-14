@@ -324,6 +324,9 @@ class _ComposedRunResult:
     recommendations: List[ComposedIntent] = field(default_factory=list)
     snapshot: Any = None
     macro_dto: Any = None
+    # Agentic-account holdings (contract K2), read by queue_builder for SELLs
+    # of symbols the main account does not hold. None/{} = main account only.
+    agentic_positions: Optional[Dict[str, Any]] = None
 
 
 def _advisory_min_conviction() -> float:
@@ -408,6 +411,7 @@ def compose_and_emit(
     macro_dto: Optional[Any] = None,
     side_effects: bool = True,
     commit_guard: Optional[Callable[[], ContextManager[bool]]] = None,
+    agentic_positions: Optional[Dict[str, Any]] = None,
 ) -> Optional[Path]:
     """Read the advisory source, compose, gate, and emit ONE
     ``execution_queue.json``. ``AgenticQueueStep`` calls this right after
@@ -438,6 +442,16 @@ def compose_and_emit(
     ``emit_execution_queue``, which then refuses to build or replace the
     queue once the writing run no longer owns it. ``None`` for every other
     caller.
+
+    ``agentic_positions`` (contract K2): the Agentic account's holdings, so a
+    SELL can be queued for a symbol only that account holds (marked
+    ``"holding_source": "agentic"``). ``None`` (the default) reads them with
+    ``execution.agentic_holdings.load_agentic_positions()`` from
+    ``settings.OUTPUT_DIR`` -- the holdings file lives there even when
+    ``output_dir`` is the shadow directory; no file -> ``{}``, today's queue
+    byte-for-byte. A caller that already loaded them this cycle
+    (``ctx.context_extras["agentic_positions"]``) passes them to skip the
+    re-read; ``{}`` disables the lookup.
     """
     now = now or datetime.now(timezone.utc)
     if output_dir is None:
@@ -481,8 +495,12 @@ def compose_and_emit(
             # Nothing to write -- avoid unnecessary queue churn.
             return None
 
+        if agentic_positions is None:
+            from execution.agentic_holdings import load_agentic_positions
+            agentic_positions = load_agentic_positions()
         run_result = _ComposedRunResult(
             recommendations=composed, snapshot=account_snapshot, macro_dto=resolved_macro,
+            agentic_positions=agentic_positions or None,
         )
         from execution.queue_builder import emit_execution_queue
         # min_conviction 0.0 at the queue_builder stage: the advisory floor

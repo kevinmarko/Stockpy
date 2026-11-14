@@ -160,3 +160,29 @@ def test_robinhood_tools_identical_under_every_server_spelling(agent):
     assert base, f"{agent} lists no Robinhood tools"
     for server, names in by_server.items():
         assert names == base, f"{agent}: {server} differs from robinhood-trading"
+
+
+REVIEWER = REPO / ".claude" / "agents" / "rh-reviewer.md"
+_REVIEWER_READ_TOOLS = ("get_accounts", "get_equity_orders", "get_equity_positions",
+                        "get_equity_quotes", "get_trade_approvals", "get_trade_approval_setting")
+
+
+def test_rh_reviewer_is_read_only_and_has_positions_read():
+    """The Reviewer fetches the Agentic holdings (get_equity_positions) for the
+    daemon's exit path; its MCP tools stay exactly this read set under every
+    server spelling, with no order, decline or cancel power."""
+    tools = _frontmatter_tools(REVIEWER)
+    assert not ORDER_POWER_TOOL.findall(tools)
+    expected = {f"mcp__{s}__{t}" for s in RH_SERVERS for t in _REVIEWER_READ_TOOLS}
+    assert _mcp_tools(REVIEWER) == expected
+
+
+@pytest.mark.parametrize("agent,model", [
+    ("rh-research-scout.md", "sonnet"), ("rh-risk-manager.md", "sonnet"),
+    ("rh-reviewer.md", "sonnet"), ("rh-strategy-analyst.md", "opus"),
+    ("rh-trader.md", "opus"),
+])
+def test_agent_models_opus_only_for_judgment_and_money(agent, model):
+    text = (REPO / ".claude" / "agents" / agent).read_text(encoding="utf-8")
+    front = re.match(r"^---\n(.*?)\n---\n", text, re.S).group(1)
+    assert f"\nmodel: {model}\n" in f"\n{front}\n"

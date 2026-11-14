@@ -66,7 +66,6 @@ import json
 import logging
 import math
 import os
-import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -215,52 +214,60 @@ def read_placed_ledger(output_dir: Optional[Any] = None) -> List[Dict[str, Any]]
 
 
 # ---------------------------------------------------------------------------
-# Ledger append (atomic-append: write-then-rename over a rebuilt copy)
+# Ledger append (locked O_APPEND + fsync; a failed write is rolled back)
 # ---------------------------------------------------------------------------
+
+def _write_all(fd: int, data: bytes) -> None:
+    """``os.write`` until every byte is written (a short write is not an error)."""
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        if n <= 0:  # pragma: no cover - defensive
+            raise OSError("os.write wrote no bytes")
+        view = view[n:]
+
 
 def _append_jsonl_line(path: Path, rec: Dict[str, Any]) -> None:
     """Append one JSON line to ``path`` durably and safely under concurrency.
 
     Holds an exclusive ``fcntl`` lock on a sibling ``<name>.lock`` file for the
-    whole read-append-replace, so two writers (the Trader's one-liners, a
-    test, a second agent session) cannot both read the old file and have the
-    later ``os.replace`` drop the other's line. The existing bytes are kept
-    verbatim (a corrupt line stays for a human to inspect; readers skip it),
-    the new line is appended, the result is written to a unique
-    ``tempfile.mkstemp`` file in the same directory, fsynced, and
-    ``os.replace``d over the original — a crash mid-write never leaves a torn
-    file. Raises on any failure; the public wrappers turn that into ``False``.
+    whole append, so two writers (the Trader's one-liners, a test, a second
+    agent session) never interleave. The file is opened ``O_APPEND``; the
+    existing bytes are never rewritten (a corrupt line stays for a human to
+    inspect; readers skip it), so a long ledger costs one small write, not a
+    full copy. If the last existing byte is not a newline (a line torn by an
+    older crash), one is written first so the new record starts on its own
+    line. The bytes are flushed with ``fsync`` before returning. If the write
+    or the ``fsync`` fails, the file is truncated back to its size before the
+    append (still under the lock), so no torn half-line is left behind and
+    the caller's ``False`` ("not recorded") is the truth. Raises on any
+    failure; the public wrappers turn that into ``False``.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(rec, sort_keys=True) + "\n"
+    data = (json.dumps(rec, sort_keys=True) + "\n").encode("utf-8")
     lock_path = path.with_name(path.name + ".lock")
     with open(lock_path, "a", encoding="utf-8") as lock_fh:
         if _fcntl is not None:
             _fcntl.flock(lock_fh.fileno(), _fcntl.LOCK_EX)
         try:
+            fd = os.open(str(path), os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o644)
             try:
-                existing = path.read_text(encoding="utf-8")
-            except FileNotFoundError:
-                existing = ""
-            # A read failure other than "absent" propagates: rewriting from an
-            # empty read would erase the ledger.
-            if existing and not existing.endswith("\n"):
-                existing += "\n"
-            fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp",
-                                            dir=str(path.parent))
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    fh.write(existing)
-                    fh.write(line)
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                os.replace(tmp_name, path)
-            except BaseException:
+                size = os.fstat(fd).st_size
+                if size > 0 and os.pread(fd, 1, size - 1) != b"\n":
+                    data = b"\n" + data
                 try:
-                    os.unlink(tmp_name)
-                except OSError:
-                    pass
-                raise
+                    _write_all(fd, data)
+                    os.fsync(fd)
+                except BaseException:
+                    try:
+                        os.ftruncate(fd, size)
+                        os.fsync(fd)
+                    except OSError as exc:  # pragma: no cover - disk already failing
+                        logger.warning("receipts_store: could not roll back a failed append to %s (%s)",
+                                       path, exc)
+                    raise
+            finally:
+                os.close(fd)
         finally:
             if _fcntl is not None:
                 _fcntl.flock(lock_fh.fileno(), _fcntl.LOCK_UN)
@@ -272,7 +279,8 @@ def append_placed(record: Dict[str, Any], output_dir: Optional[Any] = None) -> b
     A ``dedup_key`` is derived (from the record's ``symbol``/``side``/``ts``)
     when absent, and missing optional fields are normalised to ``None`` so every
     line conforms to the ledger schema (including ``est_notional``, the
-    preflight's dollar estimate). The write is locked, atomic and fsynced (see
+    preflight's dollar estimate). The write is locked, appended with
+    ``O_APPEND``, fsynced and rolled back on failure (see
     :func:`_append_jsonl_line`).
 
     Returns ``False`` — never raises on I/O (CONSTRAINT #6) — when the record
@@ -389,7 +397,7 @@ def append_approval_event(record: Dict[str, Any], output_dir: Optional[Any] = No
     ``record`` needs an ``approval_id`` and a ``state`` (raw Robinhood value or
     an already-normalised one). Returns ``True`` on a durable write, ``False``
     when the record is unusable (no approval_id) or the write failed. Never
-    raises on I/O (CONSTRAINT #6); same locked, atomic append as
+    raises on I/O (CONSTRAINT #6); same locked, fsynced append as
     :func:`append_placed`, and the same ``RuntimeError`` for an unresolvable
     output directory.
     """

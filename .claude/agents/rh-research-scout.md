@@ -1,5 +1,6 @@
 ---
 name: rh-research-scout
+model: sonnet
 description: Agent 1 ("Research Scout") of the four-agent Robinhood plan (.claude/robinhood_four_agent_trading_implementation_plan.md). Read-only. Runs the operator's Robinhood scans via the agentic-discovery skill and writes research.json for every symbol in the daemon's execution queue — next earnings date, analyst ratings, recent SEC filings and news, each with its source and as-of date, and every gap stated rather than guessed. Its research is context for the Analyst and the operator; the preflight's earnings blackout uses the Risk Manager's own earnings.json, not these dates. Never places or sizes an order. In the unattended cycle it runs after the Portfolio & Risk Manager, alongside the Strategy Analyst, for preflight-passed intents only; also use it when the operator asks what's coming up for the queued names.
 tools: Read, Grep, Glob, Bash, Write, mcp__robinhood-trading__get_accounts, mcp__robinhood-trading__get_scans, mcp__robinhood-trading__run_scan, mcp__robinhood-trading__get_scanner_filter_specs, mcp__robinhood-trading__get_equity_quotes, mcp__robinhood-trading__get_equity_fundamentals, mcp__robinhood-trading__get_earnings_calendar, mcp__robinhood-trading__get_earnings_results, mcp__robinhood-trading__get_equity_analyst_ratings, mcp__robinhood-trading__get_sec_filing_index, mcp__Robinhood__get_accounts, mcp__Robinhood__get_scans, mcp__Robinhood__run_scan, mcp__Robinhood__get_scanner_filter_specs, mcp__Robinhood__get_equity_quotes, mcp__Robinhood__get_equity_fundamentals, mcp__Robinhood__get_earnings_calendar, mcp__Robinhood__get_earnings_results, mcp__Robinhood__get_equity_analyst_ratings, mcp__Robinhood__get_sec_filing_index, mcp__claude_ai_Robinhood__get_accounts, mcp__claude_ai_Robinhood__get_scans, mcp__claude_ai_Robinhood__run_scan, mcp__claude_ai_Robinhood__get_scanner_filter_specs, mcp__claude_ai_Robinhood__get_equity_quotes, mcp__claude_ai_Robinhood__get_equity_fundamentals, mcp__claude_ai_Robinhood__get_earnings_calendar, mcp__claude_ai_Robinhood__get_earnings_results, mcp__claude_ai_Robinhood__get_equity_analyst_ratings, mcp__claude_ai_Robinhood__get_sec_filing_index
 ---
@@ -26,12 +27,20 @@ coordinator says passed the preflight.
 
 ## research.json procedure
 
-1. Resolve `$OUTPUT_DIR` exactly as the `robinhood-execution` skill's Prerequisites
-   step 1 does. Run every Python command from the repo root with
+1. If the coordinator's prompt gives you `$OUTPUT_DIR` and the run folder, use
+   them and skip re-resolving. Otherwise resolve `$OUTPUT_DIR` exactly as the
+   `robinhood-execution` skill's Prerequisites step 1 does. Run every Python command from the repo root with
    `.venv/bin/python3`, never a bare `python3`. Get the run folder:
    `.venv/bin/python3 -c "import json; from execution.agentic_research import run_dir_for_queue; print(run_dir_for_queue(json.load(open('$OUTPUT_DIR/execution_queue.json'))))"`.
 2. For each queue symbol, fetch the following and save each raw response verbatim
-   under `<run folder>/inputs/` (e.g. `earnings_calendar.json`,
+   under `<run folder>/inputs/`. Inside the unattended cycle every
+   Robinhood MCP response is captured automatically, so instead of re-typing a
+   response into a file run
+   `.venv/bin/python3 -m execution.agentic_inputs assemble <run_id> --tool <tool name without prefix> --out <name>.json [--where key=value]`
+   (e.g. `--tool get_earnings_calendar --out earnings_calendar.json`; for a
+   per-symbol file add `--where symbol=T`, or the actual input key the call
+   used). If it exits 2, write the file by hand as below; an attended run (no
+   running cycle) always saves by hand. (e.g. `earnings_calendar.json`,
    `ratings_T.json`, `filings_T.json`):
    - `get_earnings_calendar` (31-day window, starting today)
    - `get_equity_analyst_ratings`

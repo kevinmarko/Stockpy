@@ -14,9 +14,15 @@ deterministic code lives here, so no "should we run?", "did it finish?" or
   It skips (cheaply, with no LLM call) when the mode is off, the kill switch
   is on, the US market is closed or closes within 20 minutes, the queue is
   missing/stale (or within 10 minutes of stale, so the cycle can finish
-  before the preflight's own staleness veto), has nothing actionable, or
-  this queue was already handled. Anything unreadable is a skip
-  (CONSTRAINT #6: fail closed).
+  before the preflight's own staleness veto), has nothing actionable, this
+  queue was already handled, or every actionable intent's symbol + side was
+  already sent today or is still awaiting the operator's tap
+  (``all_intents_handled``: a refreshed queue that only repeats orders
+  already sent would end in preflight vetoes, after four agents' worth of
+  MCP calls).
+  Anything unreadable is a skip (CONSTRAINT #6: fail closed), except the
+  ledger read behind ``all_intents_handled``: an unreadable ledger never
+  skips, because the preflight dedups again.
 * ``cycle.json`` per run (``OUTPUT_DIR/agentic/<run_id>/``) — each stage's
   start, end, status and reason. It is the audit trail and how :func:`gate`
   knows a queue was already handled. Every read-modify-write holds a per-run
@@ -92,6 +98,12 @@ REASON_NOTHING_PASSED = "nothing_passed"
 # The coordinator's own tools, on top of the four agents' allowlists.
 # "Agent" is Claude Code's subagent tool ("Task" in older releases).
 COORDINATOR_TOOLS: Tuple[str, ...] = ("Agent", "Task", "Read", "Bash", "Glob", "Grep")
+# Model for the headless coordinator session (``claude -p ... --model``). The
+# coordinator only sequences the agents and runs this module's CLI, so it does
+# not need the strongest model; each agent's own ``model:`` frontmatter
+# decides what that agent runs on (operator, 2026-11-14: Opus only for the
+# complex agents).
+COORDINATOR_MODEL = "sonnet"
 
 # Hard ceiling on one unattended cycle. A code constant, not a setting (the
 # feature freeze forbids new flags): four agents with a handful of MCP calls
@@ -124,6 +136,9 @@ SKIP_QUEUE_NEAR_STALE = "queue_near_stale"
 SKIP_NEAR_CLOSE = "near_market_close"
 SKIP_NO_ACTIONABLE = "no_actionable_intents"
 SKIP_ALREADY_HANDLED = "already_handled"
+# Every actionable intent's (symbol, side) is already in today's placed ledger
+# or awaiting the operator's tap (latest approval event ``pending``).
+SKIP_ALL_INTENTS_HANDLED = "all_intents_handled"
 SKIP_IN_PROGRESS = "cycle_in_progress"
 SKIP_STATE_UNAVAILABLE = "state_unavailable"
 
@@ -235,6 +250,7 @@ def gate(
     market_open: bool,
     existing_cycle: Optional[Mapping[str, Any]] = None,
     queue_error: Optional[str] = None,
+    handled: Optional[Set[Tuple[str, str]]] = None,
     stale_after_minutes: float = DEFAULT_STALE_AFTER_MINUTES,
     stale_headroom_minutes: float = QUEUE_STALE_HEADROOM_MINUTES,
     close_buffer_minutes: float = CLOSE_BUFFER_MINUTES,
@@ -253,6 +269,11 @@ def gate(
     ``stale_after_minutes - stale_headroom_minutes`` (``queue_near_stale``):
     started later, the preflight's own ``queue_stale`` veto would fire
     mid-cycle.
+
+    ``handled`` is the set of ``(SYMBOL, side)`` pairs already dealt with
+    today (see :func:`handled_intent_keys`). When every actionable intent is
+    in it the cycle is skipped (``all_intents_handled``): the preflight would
+    only veto them as duplicates. ``None`` (unknown) never skips.
     """
     now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
     s_mode = str(settings_mode or "off").strip().lower()
@@ -291,12 +312,55 @@ def gate(
     intents = [i for i in (queue.get("intents") or []) if isinstance(i, Mapping)]
     # Actionability follows the QUEUE's own mode (that is what the daemon's
     # gate fields mean), the same rule the preflight applies.
-    n_act = sum(1 for i in intents if _actionable(i, q_mode))
+    actionable = [i for i in intents if _actionable(i, q_mode)]
+    n_act = len(actionable)
     if n_act == 0:
         return GateResult(False, SKIP_NO_ACTIONABLE, run_id=run_id, mode=mode)
     if existing_cycle is not None:
         return GateResult(False, SKIP_ALREADY_HANDLED, run_id=run_id, mode=mode, n_actionable=n_act)
+    if handled and all(_intent_key(i) in handled for i in actionable):
+        return GateResult(False, SKIP_ALL_INTENTS_HANDLED, run_id=run_id, mode=mode, n_actionable=n_act)
     return GateResult(True, None, run_id=run_id, mode=mode, n_actionable=n_act)
+
+
+def _intent_key(intent: Mapping[str, Any]) -> Tuple[str, str]:
+    return (str(intent.get("symbol") or "").strip().upper(), str(intent.get("side") or "").strip().lower())
+
+
+def handled_intent_keys(output_dir: Optional[Any] = None, *,
+                        now: Optional[datetime] = None) -> Optional[Set[Tuple[str, str]]]:
+    """``(SYMBOL, side)`` pairs already dealt with, from files only.
+
+    A pair is handled when today's placed ledger has it (its ``dedup_key`` is
+    today's UTC key for that symbol + side, the preflight's own duplicate
+    rule) or the latest approval event for some approval of that symbol +
+    side is ``pending`` (sent, still awaiting the operator's tap).
+
+    Returns ``None`` when the ledger or approval log cannot be read, so the
+    gate never skips on an unknown: the preflight dedups again inside the
+    cycle (fail toward running here, closed there).
+    """
+    now = now or _now()
+    try:
+        from execution.receipts_store import latest_approval_states, make_dedup_key, read_placed_ledger
+
+        out = _output_dir(output_dir)
+        keys: Set[Tuple[str, str]] = set()
+        for rec in read_placed_ledger(out):
+            sym = str(rec.get("symbol") or "").strip().upper()
+            side = str(rec.get("side") or "").strip().lower()
+            if sym and side and rec.get("dedup_key") == make_dedup_key(sym, side, now):
+                keys.add((sym, side))
+        for rec in latest_approval_states(out).values():
+            sym = str(rec.get("symbol") or "").strip().upper()
+            side = str(rec.get("side") or "").strip().lower()
+            if rec.get("state") == "pending" and sym and side:
+                keys.add((sym, side))
+        return keys
+    except Exception as exc:
+        logger.warning("agentic_cycle: placed ledger / approvals unreadable for the gate (%s); "
+                       "not skipping on that basis", exc)
+        return None
 
 
 def _load_queue(output_dir: Optional[Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -323,6 +387,7 @@ def evaluate_gate(output_dir: Optional[Any] = None, *, now: Optional[datetime] =
             rid = run_id_for_queue(queue)
             if rid is not None:
                 existing = read_cycle(rid, output_dir)
+        handled = handled_intent_keys(output_dir, now=now) if queue is not None else None
         return gate(
             queue,
             now=now,
@@ -331,6 +396,7 @@ def evaluate_gate(output_dir: Optional[Any] = None, *, now: Optional[datetime] =
             market_open=is_us_market_open_now(now),
             existing_cycle=existing,
             queue_error=q_err,
+            handled=handled,
         )
     except Exception as exc:
         logger.warning("agentic_cycle: gate state unavailable (%s); skipping", exc)
@@ -985,7 +1051,8 @@ def launch(*, output_dir: Optional[Any] = None, now: Optional[datetime] = None,
             fail_cycle(g.run_id, "launch", f"agent definitions unreadable: {exc}",
                        output_dir=output_dir, notifier=notifier)
             return EXIT_ERROR
-        cmd = [claude_bin, "-p", "/rh-agentic-cycle --launched", "--allowedTools", ",".join(tools)]
+        cmd = [claude_bin, "-p", "/rh-agentic-cycle --launched", "--allowedTools", ",".join(tools),
+               "--model", COORDINATOR_MODEL]
         reason: Optional[str] = None
         proc: Any = None
         try:

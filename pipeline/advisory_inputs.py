@@ -186,14 +186,19 @@ class UniverseBuild:
     watchlist: FrozenSet[str]
     discovered: FrozenSet[str]
     recently_closed: FrozenSet[str]
+    #: Symbols held in the separate Robinhood Agentic account, read from the
+    #: MCP-fed ``OUTPUT_DIR/agentic/agentic_holdings.json``
+    #: (``execution/agentic_holdings.py``). They get the same protection as
+    #: ``held`` (never rating-dropped); ``held`` itself stays main-account only.
+    agentic_held: FrozenSet[str] = frozenset()
 
     @property
     def default_tickers_is_fallback(self) -> bool:
-        """True when held ∪ watchlist ∪ discovered was empty, i.e. the
-        ``DEFAULT_TICKERS`` fallback was eligible to fire this cycle (the
-        same presence test the daemon's funnel used before step 5.1, now
+        """True when held ∪ agentic_held ∪ watchlist ∪ discovered was empty,
+        i.e. the ``DEFAULT_TICKERS`` fallback was eligible to fire this cycle
+        (the same presence test the daemon's funnel used before step 5.1, now
         including ``held``). It ignores the rating-exclusion subtraction."""
-        return not (self.held or self.watchlist or self.discovered)
+        return not (self.held or self.agentic_held or self.watchlist or self.discovered)
 
 
 def build_universe(snapshot: AccountSnapshot) -> List[str]:
@@ -229,6 +234,23 @@ def _open_pipeline_paper_symbols() -> set:
         return set()
 
 
+def _agentic_held_symbols() -> set:
+    """Symbols in the saved Agentic-account holdings (``execution/agentic_holdings.py``).
+
+    Resolved through ``settings.OUTPUT_DIR`` at call time. Only positions the
+    reader can evaluate (cost basis and price present, quantity > 0) count.
+    Never raises; any failure -> empty set (CONSTRAINT #6), and a missing or
+    stale file leaves the universe exactly as before.
+    """
+    try:
+        from execution.agentic_holdings import load_agentic_positions
+
+        return {str(s).upper() for s in load_agentic_positions(settings.OUTPUT_DIR)}
+    except Exception as exc:  # noqa: BLE001 -- universe build must never fail on this
+        logger.warning("Universe: could not read Agentic holdings: %s", exc)
+        return set()
+
+
 def build_universe_detailed(
     snapshot: Optional[AccountSnapshot],
     *,
@@ -243,7 +265,9 @@ def build_universe_detailed(
     one without positions) is treated as an account with no holdings.
 
     priority order when building the universe:
-      1. Robinhood held positions (always included when available).
+      1. Robinhood held positions (always included when available), plus the
+         Agentic account's holdings from ``OUTPUT_DIR/agentic/agentic_holdings.json``
+         (same rating-drop protection; reported as ``agentic_held``, never in ``held``).
       2. WATCHLIST env var or watchlist.txt (always merged in when present).
       3. Discovered scan candidates from `scan_candidates.json` (always merged).
       4. `settings.DEFAULT_TICKERS` (fallback if 1+2+3 are empty).
@@ -280,6 +304,10 @@ def build_universe_detailed(
 
     positions = getattr(snapshot, "positions", None) or {}
     held = set(positions.keys())
+    # Agentic-account holdings (contract K2): protected like held positions so
+    # the daemon keeps scoring them and can emit their exit. Read from
+    # settings.OUTPUT_DIR at call time (tests redirect it); no file -> empty.
+    agentic_held = _agentic_held_symbols()
     # Call load_watchlist() with no argument on the default path so a test
     # that patches pipeline.advisory_inputs.load_watchlist with a zero-arg
     # stub keeps working.
@@ -300,7 +328,7 @@ def build_universe_detailed(
     # AsyncDataFetchStep (the daemon's own per-cycle universe builder) so the
     # two can no longer silently diverge on this logic.
     universe = compute_tracked_universe(
-        held=held,
+        held=held | agentic_held,
         watchlist=watchlist,
         discovered=discovered,
         default_tickers=settings.DEFAULT_TICKERS,
@@ -314,7 +342,7 @@ def build_universe_detailed(
     # exclusion subtraction and the DEFAULT_TICKERS fallback decision above
     # (both now live inside compute_tracked_universe()), for the exact
     # reasons in this function's own docstring.
-    recently_closed = recently_closed_universe_symbols(held)
+    recently_closed = recently_closed_universe_symbols(held | agentic_held)
     if recently_closed:
         logger.info(
             "Universe: retaining %d recently-closed symbol(s): %s",
@@ -342,12 +370,18 @@ def build_universe_detailed(
         len(discovered - held),
         len(recently_closed),
     )
+    if agentic_held:
+        logger.info(
+            "Universe: %d Agentic-account holding(s) protected (%d not also held in main): %s",
+            len(agentic_held), len(agentic_held - held), ", ".join(sorted(agentic_held)),
+        )
     return UniverseBuild(
         symbols=universe,
         held=frozenset(held),
         watchlist=frozenset(watchlist),
         discovered=frozenset(discovered),
         recently_closed=frozenset(recently_closed),
+        agentic_held=frozenset(agentic_held),
     )
 
 

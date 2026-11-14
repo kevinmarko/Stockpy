@@ -439,6 +439,7 @@ def _intent_dict(
     min_conviction: float,
     strategy_id: str,
     limit_buffer_bps: int = 0,
+    agentic_positions: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Translate one Recommendation into a gated queue-intent dict, or ``None``.
 
@@ -458,6 +459,10 @@ def _intent_dict(
            ``"fraction"`` + ``exit_fraction`` (the advisory's
            ``suggested_exit_pct`` is below 1 — an ordinary SELL exits half) or
            ``"full"`` (a full exit, or a rec with no exit fraction at all).
+           A SELL is also built for a symbol held only in the Agentic account
+           (``agentic_positions``, contract K2; the main account wins when both
+           hold it); such an intent carries ``"holding_source": "agentic"``.
+           BUY sizing, ``total_equity`` and the risk context stay main-account only.
     Every intent carries ``context`` (:func:`build_decision_context`).
     """
     action = str(getattr(rec, "action", "")).upper()
@@ -470,6 +475,7 @@ def _intent_dict(
     raw_positions = getattr(snapshot, "positions", {}) or {}
     if isinstance(raw_positions, dict):
         held = raw_positions.get(symbol)
+    holding_source: Optional[str] = None  # "agentic" only for an Agentic-only SELL
 
     side = OrderSide.BUY if action == "BUY" else OrderSide.SELL
     qty: Optional[float] = None
@@ -495,6 +501,12 @@ def _intent_dict(
             if price > 0:
                 gate_qty = max(1.0, math.floor(notional / price))
     else:  # SELL
+        if held is None and agentic_positions:
+            # Not held in the main account: the Agentic account's own holding
+            # (execution/agentic_holdings.py) makes the exit possible.
+            held = agentic_positions.get(symbol)
+            if held is not None:
+                holding_source = "agentic"
         if held is None:
             return None  # cannot sell what is not held
         held_qty = _f(getattr(held, "quantity", 0.0))
@@ -652,6 +664,10 @@ def _intent_dict(
         out["exit_kind"] = exit_kind
         if exit_kind == "fraction":
             out["exit_fraction"] = exit_fraction
+    if holding_source is not None:
+        # Additive, Agentic-only SELLs only: main-held intents omit the key so
+        # their queue bytes are unchanged.
+        out["holding_source"] = holding_source
     if use_limit:
         # Only present on LIMIT intents — absent for MARKET so buffer==0 output
         # is byte-identical to the legacy MARKET-only queue.
@@ -671,6 +687,7 @@ def build_execution_queue(
     now: Optional[datetime] = None,
     macro_dto: Optional[Any] = None,
     side_effects: bool = True,
+    agentic_positions: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build the gated execution-queue payload from a `RunResult`.
 
@@ -689,6 +706,12 @@ def build_execution_queue(
     ``side_effects=False`` (the daemon's shadow queue, step 5.2) runs the same
     gate checks but tells the gate not to send alerts or append to
     ``risk_gate_blocks.jsonl``. The payload is identical either way.
+
+    ``agentic_positions`` (``{SYMBOL: PortfolioPosition}`` from
+    ``execution.agentic_holdings.load_agentic_positions``; contract K2) lets a
+    SELL be built for a symbol only the Agentic account holds. When not passed,
+    ``getattr(run_result, "agentic_positions", None)`` is used; ``None``/``{}``
+    is today's main-account-only behaviour.
     """
     cfg = {**CONFIG, **(config or {})}
     resolved_mode = _resolve_mode(mode)
@@ -696,6 +719,10 @@ def build_execution_queue(
     snapshot = getattr(run_result, "snapshot", None)
     recommendations = getattr(run_result, "recommendations", []) or []
     resolved_macro = macro_dto if macro_dto is not None else getattr(run_result, "macro_dto", None)
+    if agentic_positions is None:
+        agentic_positions = getattr(run_result, "agentic_positions", None)
+    if not isinstance(agentic_positions, dict):
+        agentic_positions = None
 
     kill_switch_active = False
     try:
@@ -727,6 +754,7 @@ def build_execution_queue(
                 min_conviction=float(cfg["min_conviction"]),
                 strategy_id=str(cfg["strategy_id"]),
                 limit_buffer_bps=limit_buffer_bps,
+                agentic_positions=agentic_positions,
             )
             if d is not None:
                 intents.append(d)

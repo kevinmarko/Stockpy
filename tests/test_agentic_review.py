@@ -83,10 +83,41 @@ def save_inputs(tmp, orders=None, quotes=None, approvals_on=True):
 
 class TestFills:
     def test_filled_rows_become_fills(self):
-        fills, unresolved = ar.fills_from_mcp([order(), order("F", state="cancelled")])
+        # A cancelled order that filled nothing is not a fill; neither is a queued one.
+        fills, unresolved = ar.fills_from_mcp([order(), order("F", state="cancelled", qty="0"),
+                                               order("G", state="queued")])
         assert unresolved == 0 and len(fills) == 1
         f = fills[0]
         assert (f.symbol, f.side, f.quantity, f.price) == ("T", "buy", 7.0, 21.30)
+
+    @pytest.mark.parametrize("state", ["cancelled", "canceled", "partially_filled"])
+    def test_partial_fill_counts_its_filled_shares(self, state):
+        """K4: shares that traded before a cancel (or while still working) are a fill."""
+        fills, unresolved = ar.fills_from_mcp([order("F", state=state, qty="3", price="10.50")])
+        assert unresolved == 0 and len(fills) == 1
+        assert (fills[0].symbol, fills[0].quantity, fills[0].price) == ("F", 3.0, 10.50)
+
+    def test_partial_fill_without_average_price_is_skipped_not_priced_from_limit(self):
+        row = order("F", state="cancelled", qty="3", price=None)
+        row["price"] = "10.00"   # the limit price: not an execution price
+        fills, _ = ar.fills_from_mcp([row])
+        assert fills == []
+
+    def test_partial_fill_without_symbol_counted_not_guessed(self):
+        fills, unresolved = ar.fills_from_mcp([order(symbol=None, state="cancelled", qty="2"),
+                                               order(symbol=None, state="cancelled", qty="0")])
+        assert fills == [] and unresolved == 1
+
+    def test_partial_fill_reconciles_against_the_ledger(self, tmp_path):
+        """A 7-share intent cancelled after 3 shares: the 3 reach reconcile, not 'no fill'."""
+        make_run(tmp_path, "20261110T150000Z", mode="live", verdicts=[PASS_T])
+        place(tmp_path, qty=None)
+        rs.append_approval_event({"approval_id": "a-T", "state": "approved"}, output_dir=tmp_path)
+        save_inputs(tmp_path, orders_payload(order(state="cancelled", qty="3")), quotes_payload(T=22.0))
+        res = ar.run_review(day=DAY, output_dir=tmp_path, now=NOW, max_notional=200)
+        assert res.review["orders"]["fills"] == 1
+        assert res.review["outcomes"][0]["status"] != "no_fill_found"
+        assert res.review["outcomes"][0]["entry_price"] == 21.30
 
     def test_filled_row_without_symbol_counted_not_guessed(self):
         fills, unresolved = ar.fills_from_mcp([order(symbol=None)])
@@ -314,7 +345,7 @@ class TestRunReview:
         res = ar.run_review(day=DAY, output_dir=tmp_path, now=NOW, max_notional=200)
         assert res.review["reconciliation"]["ok"]
         assert res.review["orders"] == {"total": 1, "agent_initiated": 0, "fills": 0,
-                                        "unresolved_filled_orders": 0}
+                                        "unresolved_filled_orders": 0, "from_cache": 0}
 
     def test_never_touches_the_shared_order_cache(self, tmp_path):
         save_inputs(tmp_path, orders_payload(order()))
@@ -332,6 +363,132 @@ class TestRunReview:
         (bad / "review.json").write_text("{bad")
         assert ar.latest_review(tmp_path)["day"] == "2026-11-20"
         assert ar.latest_review(tmp_path / "none") is None
+
+
+DAY0 = date(2026, 11, 18)   # an earlier completed review
+
+
+def _prior_review(tmp, day=DAY0, rows=(), *, merged=True, complete=True, raw_cache=None):
+    """A completed review on ``day`` with its order cache."""
+    folder = ar.review_dir(day, tmp)
+    (folder / "inputs").mkdir(parents=True, exist_ok=True)
+    (folder / ar.REVIEW_FILENAME).write_text(json.dumps({"day": day.isoformat(), "usable": True}))
+    if raw_cache is not None:
+        (folder / "inputs" / ar.ORDERS_CACHE_FILENAME).write_text(raw_cache)
+    elif merged:
+        (folder / "inputs" / ar.ORDERS_CACHE_FILENAME).write_text(
+            json.dumps({"orders": list(rows), "complete": complete}))
+    else:
+        (folder / "inputs" / "orders.json").write_text(json.dumps(orders_payload(*rows)))
+    return folder
+
+
+class TestSince:
+    def test_no_previous_review_fetches_everything(self, tmp_path):
+        assert ar.fetch_since(DAY, tmp_path)["since"] is None
+
+    def test_since_is_the_last_completed_reviews_day(self, tmp_path):
+        _prior_review(tmp_path, rows=[order(ts="2026-11-12T15:00:00+00:00")])
+        _prior_review(tmp_path, date(2026, 11, 10), rows=[])
+        ans = ar.fetch_since(DAY, tmp_path)
+        assert ans["since"] == "2026-11-18" and ans["cache_day"] == "2026-11-18"
+
+    def test_todays_own_review_is_not_the_cache(self, tmp_path):
+        _prior_review(tmp_path, DAY, rows=[])
+        assert ar.fetch_since(DAY, tmp_path)["since"] is None
+
+    def test_unusable_review_is_skipped(self, tmp_path):
+        _prior_review(tmp_path, date(2026, 11, 10), rows=[])
+        bad = _prior_review(tmp_path, DAY0, rows=[])
+        (bad / ar.REVIEW_FILENAME).write_text(json.dumps({"usable": False}))
+        assert ar.fetch_since(DAY, tmp_path)["since"] == "2026-11-10"
+
+    def test_open_order_reaches_back_to_its_creation_day(self, tmp_path):
+        """An order still queued at the last review may have filled since: re-fetch it."""
+        _prior_review(tmp_path, rows=[
+            order("A", state="queued", created_at="2026-11-14T15:00:00+00:00"),
+            order("B", state="partially_filled", created_at="2026-11-16T15:00:00+00:00"),
+            order("C", state="filled", created_at="2026-11-01T15:00:00+00:00")])
+        assert ar.fetch_since(DAY, tmp_path)["since"] == "2026-11-14"
+
+    def test_open_order_without_created_at_fetches_everything(self, tmp_path):
+        _prior_review(tmp_path, rows=[order("A", state="queued", created_at=None)])
+        assert ar.fetch_since(DAY, tmp_path)["since"] is None
+
+    @pytest.mark.parametrize("kw", [{"raw_cache": "{corrupt"}, {"complete": False}])
+    def test_unusable_or_incomplete_cache_fetches_everything(self, tmp_path, kw):
+        _prior_review(tmp_path, rows=[order()], **kw)
+        assert ar.fetch_since(DAY, tmp_path)["since"] is None
+
+    def test_legacy_orders_json_counts_as_a_full_cache(self, tmp_path):
+        _prior_review(tmp_path, rows=[order()], merged=False)
+        assert ar.fetch_since(DAY, tmp_path)["since"] == "2026-11-18"
+
+    def test_cli_prints_and_records(self, tmp_path, capsys):
+        _prior_review(tmp_path, rows=[order()])
+        assert ar.main(["--output-dir", str(tmp_path), "since", "--day", DAY.isoformat()]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["since"] == "2026-11-18"
+        saved = json.loads((ar.review_dir(DAY, tmp_path) / "inputs" / ar.SINCE_FILENAME).read_text())
+        assert saved["since"] == "2026-11-18"
+
+    def test_cli_null_when_nothing_cached(self, tmp_path, capsys):
+        assert ar.main(["--output-dir", str(tmp_path), "since", "--day", DAY.isoformat()]) == 0
+        assert json.loads(capsys.readouterr().out)["since"] is None
+
+
+class TestMergeOrders:
+    def test_today_wins_and_cache_fills_the_rest(self):
+        today = [order("T", state="filled", id="o1")]
+        cached = [order("T", state="queued", id="o1"), order("F", id="o2"), order("G", id=None)]
+        merged, n_cache, n_no_id = ar.merge_orders(today, cached)
+        assert [o["id"] for o in merged] == ["o1", "o2"]
+        assert merged[0]["state"] == "filled"
+        assert (n_cache, n_no_id) == (1, 1)
+
+    def test_run_merges_previous_cache_and_records_it(self, tmp_path):
+        old = order("F", side="buy", id="o-old", ts="2026-11-12T15:00:00+00:00")
+        changed = order("T", state="queued", id="o-T", ts="2026-11-17T15:00:00+00:00")
+        _prior_review(tmp_path, rows=[old, changed])
+        ar.record_since(DAY, ar.fetch_since(DAY, tmp_path), tmp_path)
+        save_inputs(tmp_path, orders_payload(order("T", state="filled", id="o-T",
+                                                   ts="2026-11-17T15:00:00+00:00")))
+        res = ar.run_review(day=DAY, output_dir=tmp_path, now=NOW, max_notional=200)
+        r = res.review
+        assert r["orders"]["total"] == 2 and r["orders"]["from_cache"] == 1
+        assert r["orders_cache"]["status"] == "merged" and r["orders_cache"]["cache_day"] == "2026-11-18"
+        assert r["orders"]["fills"] == 2      # today's filled T + the cached filled F
+        cache = json.loads((ar.review_dir(DAY, tmp_path) / "inputs" / ar.ORDERS_CACHE_FILENAME).read_text())
+        assert cache["complete"] is True
+        assert {o["id"]: o["state"] for o in cache["orders"]} == {"o-T": "filled", "o-old": "filled"}
+        # ...and it is the next day's cache.
+        assert ar.fetch_since(date(2026, 11, 21), tmp_path)["since"] == DAY.isoformat()
+
+    def test_unreadable_previous_cache_uses_todays_fetch_and_says_so(self, tmp_path):
+        _prior_review(tmp_path, raw_cache="{corrupt")
+        (ar.review_dir(DAY, tmp_path) / "inputs").mkdir(parents=True)
+        ar.record_since(DAY, {"since": "2026-11-18"}, tmp_path)   # an incremental fetch...
+        save_inputs(tmp_path, orders_payload(order()))
+        res = ar.run_review(day=DAY, output_dir=tmp_path, now=NOW, max_notional=200)
+        oc = res.review["orders_cache"]
+        assert res.review["usable"] and oc["status"] == "unreadable" and oc["n_from_cache"] == 0
+        assert "unreadable" in oc["note"] and "missing" in oc["note"]
+        assert res.review["orders"]["total"] == 1
+        # ...so today's cache is incomplete and tomorrow fetches everything.
+        assert oc["complete"] is False
+        assert ar.fetch_since(date(2026, 11, 21), tmp_path)["since"] is None
+
+    def test_unreadable_cache_after_a_full_fetch_is_still_complete(self, tmp_path):
+        _prior_review(tmp_path, raw_cache="{corrupt")
+        save_inputs(tmp_path, orders_payload(order()))      # no since.json: a full fetch
+        res = ar.run_review(day=DAY, output_dir=tmp_path, now=NOW, max_notional=200)
+        assert res.review["orders_cache"]["complete"] is True
+
+    def test_no_previous_review(self, tmp_path):
+        save_inputs(tmp_path, orders_payload(order()))
+        res = ar.run_review(day=DAY, output_dir=tmp_path, now=NOW, max_notional=200)
+        assert res.review["orders_cache"]["status"] == "none"
+        assert res.review["orders"]["from_cache"] == 0
 
 
 class TestPush:
@@ -406,6 +563,7 @@ class TestLaunch:
         notifier = mock.Mock()
         assert ar.launch(runner=runner, notifier=notifier, output_dir=tmp_path) == ar.EXIT_NOT_READY
         assert seen["cmd"][:3] == ["claude", "-p", "/rh-agentic-review"]
+        assert seen["cmd"][5:] == ["--model", "sonnet"] and ar.COORDINATOR_MODEL == "sonnet"
         assert seen["kw"]["timeout"] == ar.LAUNCH_TIMEOUT_SECONDS
         tools = set(seen["cmd"][4].split(","))
         assert tools == set(ac.agent_tools("rh-reviewer")) | set(ar.COORDINATOR_TOOLS)
@@ -511,8 +669,8 @@ PLIST = REPO / "scripts" / "com.investyo.rh-agentic-review.plist"
 
 
 def test_reviewer_has_exactly_its_read_tools():
-    read = {"get_accounts", "get_equity_orders", "get_equity_quotes", "get_trade_approvals",
-            "get_trade_approval_setting"}
+    read = {"get_accounts", "get_equity_orders", "get_equity_positions", "get_equity_quotes",
+            "get_trade_approvals", "get_trade_approval_setting"}
     tools = ac.agent_tools("rh-reviewer")
     mcp = {t for t in tools if t.startswith("mcp__")}
     assert mcp == {f"mcp__{s}__{t}"

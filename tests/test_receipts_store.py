@@ -520,33 +520,81 @@ def test_append_returns_true_on_durable_write(out_dir):
 
 
 def test_append_returns_false_on_write_failure_and_keeps_ledger(out_dir, monkeypatch):
+    """fsync fails → False, and the appended bytes are rolled back (no torn line)."""
     assert rs.append_placed({"symbol": "AAPL", "side": "buy"}, out_dir) is True
     before = (out_dir / rs.PLACED_FILENAME).read_text()
 
     def boom(*a, **k):
         raise OSError("disk full")
 
-    monkeypatch.setattr(rs.os, "replace", boom)
+    # The rollback's own fsync fails too; the truncation alone must restore the file.
+    monkeypatch.setattr(rs.os, "fsync", boom)
     assert rs.append_placed({"symbol": "MSFT", "side": "buy"}, out_dir) is False
     assert rs.append_approval_event({"approval_id": "a1", "state": "pending"}, out_dir) is False
+    monkeypatch.undo()
     assert (out_dir / rs.PLACED_FILENAME).read_text() == before
+    assert not (out_dir / rs.APPROVALS_FILENAME).exists() or \
+        (out_dir / rs.APPROVALS_FILENAME).read_text() == ""
     assert not any(p.name.endswith(".tmp") for p in out_dir.iterdir())
 
 
-def test_append_returns_false_when_existing_ledger_unreadable(out_dir, monkeypatch):
-    """Rewriting from a failed read would erase the ledger, so it must refuse."""
+def test_partial_write_is_rolled_back(out_dir, monkeypatch):
+    """A write that dies half-way leaves the ledger exactly as it was."""
     assert rs.append_placed({"symbol": "AAPL", "side": "buy"}, out_dir) is True
-    real_read_text = rs.Path.read_text
+    before = (out_dir / rs.PLACED_FILENAME).read_bytes()
+    real_write = rs.os.write
+    calls = {"n": 0}
 
-    def flaky(self, *a, **k):
-        if self.name == rs.PLACED_FILENAME:
+    def half_then_fail(fd, data):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_write(fd, bytes(data[: len(data) // 2]))
+        raise OSError("I/O error")
+
+    monkeypatch.setattr(rs.os, "write", half_then_fail)
+    assert rs.append_placed({"symbol": "MSFT", "side": "buy"}, out_dir) is False
+    monkeypatch.undo()
+    assert (out_dir / rs.PLACED_FILENAME).read_bytes() == before
+    assert rs.append_placed({"symbol": "NVDA", "side": "buy"}, out_dir) is True
+    assert [r["symbol"] for r in rs.read_placed_ledger(out_dir)] == ["AAPL", "NVDA"]
+
+
+def test_append_returns_false_when_ledger_cannot_be_opened(out_dir, monkeypatch):
+    """An unopenable ledger is a refused write, and the existing lines are untouched."""
+    assert rs.append_placed({"symbol": "AAPL", "side": "buy"}, out_dir) is True
+    real_open = rs.os.open
+
+    def denied(path, *a, **k):
+        if str(path).endswith(rs.PLACED_FILENAME):
             raise PermissionError("denied")
-        return real_read_text(self, *a, **k)
+        return real_open(path, *a, **k)
 
-    monkeypatch.setattr(rs.Path, "read_text", flaky)
+    monkeypatch.setattr(rs.os, "open", denied)
     assert rs.append_placed({"symbol": "MSFT", "side": "buy"}, out_dir) is False
     monkeypatch.undo()
     assert [r["symbol"] for r in rs.read_placed_ledger(out_dir)] == ["AAPL"]
+
+
+def test_append_is_o_append_not_a_rewrite(out_dir, monkeypatch):
+    """The ledger is appended in place: no temp copy, no os.replace, same inode."""
+    assert rs.append_placed({"symbol": "AAPL", "side": "buy"}, out_dir) is True
+    inode = (out_dir / rs.PLACED_FILENAME).stat().st_ino
+
+    def no_replace(*a, **k):
+        raise AssertionError("append must not rewrite the ledger")
+
+    monkeypatch.setattr(rs.os, "replace", no_replace)
+    assert rs.append_placed({"symbol": "MSFT", "side": "buy"}, out_dir) is True
+    assert (out_dir / rs.PLACED_FILENAME).stat().st_ino == inode
+
+
+def test_missing_trailing_newline_gets_one_before_the_new_line(out_dir):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / rs.PLACED_FILENAME).write_text('{"symbol": "OLD", "side": "buy"}')   # no "\n"
+    assert rs.append_placed({"symbol": "NEW", "side": "sell"}, out_dir) is True
+    text = (out_dir / rs.PLACED_FILENAME).read_text()
+    assert text.startswith('{"symbol": "OLD", "side": "buy"}\n{') and text.endswith("\n")
+    assert [r["symbol"] for r in rs.read_placed_ledger(out_dir)] == ["OLD", "NEW"]
 
 
 def test_append_placed_rejects_record_without_symbol_or_side(out_dir):

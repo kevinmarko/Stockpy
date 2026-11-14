@@ -6,8 +6,10 @@ Run the **`rh-reviewer`** agent once (Phase 5 of
 `.claude/robinhood_four_agent_trading_implementation_plan.md`; plan
 `.claude/robinhood_four_agent_phase5_implementation_plan.md`). Arguments: `$ARGUMENTS`.
 
-1. Run `rh-reviewer` with the Agent tool. Tell it to follow its procedure and to
-   finish with `.venv/bin/python3 -m execution.agentic_review run --notify` (repo
+1. Run `rh-reviewer` with the Agent tool. Tell it to follow its procedure (run
+   `.venv/bin/python3 -m execution.agentic_review since` first and stop paging
+   past that date; save the Agentic holdings snapshot with `--source review`) and
+   to finish with `.venv/bin/python3 -m execution.agentic_review run --notify` (repo
    root; never a bare `python3`), so the daily
    push is built from `review.json` by code, not written by an agent.
 2. Print its report. Exit code 0 means READY, 1 NOT READY and 2 inputs
