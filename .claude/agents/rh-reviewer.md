@@ -25,12 +25,13 @@ a setting, a cap, the queue or an approval.
    piping it into the CLI on stdin:
    - `get_equity_orders(account_number, agent_initiated=true)`. Fetch every page
      (follow `next`), then save a JSON list of all pages:
-     `python3 -m execution.agentic_review save orders <<'JSON' ... JSON`
+     `.venv/bin/python3 -m execution.agentic_review save orders <<'JSON' ... JSON`
    - `get_equity_quotes` for every symbol in those orders and in the placed
      ledger (`$OUTPUT_DIR/execution_placed.jsonl`): `... save quotes`
    - `get_trade_approval_setting(account_number)`: `... save approval_setting`
-   - Use `.venv/bin/python3` if `python3` lacks the dependencies.
-3. Run `python3 -m execution.agentic_review run` (add `--notify` when the
+   - Run every Python command from the repo root with `.venv/bin/python3`,
+     never a bare `python3` (it may lack this repo's dependencies).
+3. Run `.venv/bin/python3 -m execution.agentic_review run` (add `--notify` when the
    `/rh-agentic-review` command asks for the daily push). Exit 0 = READY,
    1 = NOT READY, 2 = inputs unusable (say what's missing; don't guess).
 4. Report in plain words:

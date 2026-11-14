@@ -490,3 +490,115 @@ def test_declined_request_still_blocks_same_day_resubmit(out_dir):
     rs.append_placed({"symbol": "AAPL", "side": "buy", "ts": d.isoformat(), "approval_id": "d1"}, out_dir)
     rs.append_approval_event({"approval_id": "d1", "state": "declined"}, out_dir)
     assert rs.already_placed("AAPL", "buy", out_dir, on_date=d) is True
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (finding #1 / contract C4): no ./output fallback, bool appends,
+# concurrency-safe appends, est_notional on placed records.
+# ---------------------------------------------------------------------------
+
+def test_no_output_dir_and_no_settings_raises_instead_of_using_dot_output(tmp_path, monkeypatch):
+    """A python3 without this repo's deps used to write the ledger to ./output,
+    where the next run's idempotency check never looked (duplicate order)."""
+    import sys
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setitem(sys.modules, "settings", None)  # `from settings import …` → ImportError
+    with pytest.raises(RuntimeError, match="Refusing to fall back"):
+        rs._resolve_output_dir(None)
+    with pytest.raises(RuntimeError):
+        rs.append_placed({"symbol": "AAPL", "side": "buy"})
+    with pytest.raises(RuntimeError):
+        rs.append_approval_event({"approval_id": "a1", "state": "pending"})
+    with pytest.raises(RuntimeError):
+        rs.already_placed("AAPL", "buy")
+    assert not (tmp_path / "output").exists()
+
+
+def test_append_returns_true_on_durable_write(out_dir):
+    assert rs.append_placed({"symbol": "AAPL", "side": "buy"}, out_dir) is True
+    assert rs.append_approval_event({"approval_id": "a1", "state": "pending"}, out_dir) is True
+
+
+def test_append_returns_false_on_write_failure_and_keeps_ledger(out_dir, monkeypatch):
+    assert rs.append_placed({"symbol": "AAPL", "side": "buy"}, out_dir) is True
+    before = (out_dir / rs.PLACED_FILENAME).read_text()
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(rs.os, "replace", boom)
+    assert rs.append_placed({"symbol": "MSFT", "side": "buy"}, out_dir) is False
+    assert rs.append_approval_event({"approval_id": "a1", "state": "pending"}, out_dir) is False
+    assert (out_dir / rs.PLACED_FILENAME).read_text() == before
+    assert not any(p.name.endswith(".tmp") for p in out_dir.iterdir())
+
+
+def test_append_returns_false_when_existing_ledger_unreadable(out_dir, monkeypatch):
+    """Rewriting from a failed read would erase the ledger, so it must refuse."""
+    assert rs.append_placed({"symbol": "AAPL", "side": "buy"}, out_dir) is True
+    real_read_text = rs.Path.read_text
+
+    def flaky(self, *a, **k):
+        if self.name == rs.PLACED_FILENAME:
+            raise PermissionError("denied")
+        return real_read_text(self, *a, **k)
+
+    monkeypatch.setattr(rs.Path, "read_text", flaky)
+    assert rs.append_placed({"symbol": "MSFT", "side": "buy"}, out_dir) is False
+    monkeypatch.undo()
+    assert [r["symbol"] for r in rs.read_placed_ledger(out_dir)] == ["AAPL"]
+
+
+def test_append_placed_rejects_record_without_symbol_or_side(out_dir):
+    assert rs.append_placed({"side": "buy"}, out_dir) is False
+    assert rs.append_placed({"symbol": "AAPL", "side": "hold"}, out_dir) is False
+    assert rs.read_placed_ledger(out_dir) == []
+
+
+def test_concurrent_appends_lose_no_records(out_dir):
+    """Many writers at once: every line survives (the old shared `.tmp` name
+    and unlocked read-append-replace dropped lines)."""
+    import threading
+
+    n_threads, per_thread = 8, 25
+    barrier = threading.Barrier(n_threads)
+    results = []
+
+    def worker(t):
+        barrier.wait()
+        for i in range(per_thread):
+            results.append(rs.append_placed(
+                {"symbol": f"S{t}", "side": "buy", "client_order_id": f"c-{t}-{i}"}, out_dir))
+            results.append(rs.append_approval_event(
+                {"approval_id": f"a-{t}-{i}", "state": "pending"}, out_dir))
+
+    threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+
+    assert all(results) and len(results) == 2 * n_threads * per_thread
+    coids = {r["client_order_id"] for r in rs.read_placed_ledger(out_dir)}
+    assert coids == {f"c-{t}-{i}" for t in range(n_threads) for i in range(per_thread)}
+    assert len(rs.read_approval_events(out_dir)) == n_threads * per_thread
+    assert not any(p.name.endswith(".tmp") for p in out_dir.iterdir())
+
+
+def test_append_keeps_existing_lines_verbatim(out_dir):
+    """Append-only: an existing corrupt line is kept for a human, not dropped."""
+    _write_lines(out_dir / rs.PLACED_FILENAME, ['{"symbol": "OLD", "side": "buy"}', "{corrupt"])
+    assert rs.append_placed({"symbol": "NEW", "side": "sell"}, out_dir) is True
+    text = (out_dir / rs.PLACED_FILENAME).read_text()
+    assert "{corrupt" in text
+    assert [r["symbol"] for r in rs.read_placed_ledger(out_dir)] == ["OLD", "NEW"]
+
+
+def test_est_notional_preserved_and_never_fabricated(out_dir):
+    rs.append_placed({"symbol": "AAPL", "side": "buy", "est_notional": 191.2}, out_dir)
+    rs.append_placed({"symbol": "MSFT", "side": "buy"}, out_dir)
+    rs.append_placed({"symbol": "T", "side": "buy", "est_notional": float("nan")}, out_dir)
+    by_sym = {r["symbol"]: r for r in rs.read_placed_ledger(out_dir)}
+    assert by_sym["AAPL"]["est_notional"] == 191.2
+    assert by_sym["MSFT"]["est_notional"] is None
+    assert by_sym["T"]["est_notional"] is None

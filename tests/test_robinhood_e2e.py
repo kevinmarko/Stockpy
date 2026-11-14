@@ -1035,11 +1035,23 @@ class TestPreflightIntegration:
         assert summary["preflight_used"] is False
         assert asked == ["MSFT"] and mcp.approval_requests == {}
 
-    def test_full_exit_of_shares_already_sold_is_vetoed(self, tmp_output: Path):
+    def test_full_exit_sells_the_agentic_accounts_sellable_shares(self, tmp_output: Path):
+        # A full exit is sized from the AGENTIC account's sellable shares, not
+        # the main-account snapshot's qty (review finding #4, contract C2).
         payload = _build_and_emit([_rec("AAPL", "SELL", conviction=0.95, pct=0.0)], tmp_output, mode="live")
-        assert payload["intents"][0]["qty"] == 10.0          # full exit of the snapshot's 10 shares
+        intent = payload["intents"][0]
+        assert intent["qty"] == 10.0                          # main-account qty, display/back-compat only
+        assert intent["exit_kind"] == "full"
         mcp = _MockRobinhoodMCP()
         mcp.held = {"AAPL": 4.0}                              # live account has only 4
+        run_execution_skill(tmp_output, mcp)
+        (order,) = mcp.placed_orders
+        assert order["side"] == "sell" and order["quantity"] == 4.0
+
+    def test_full_exit_with_nothing_held_in_agentic_is_vetoed(self, tmp_output: Path):
+        _build_and_emit([_rec("AAPL", "SELL", conviction=0.95, pct=0.0)], tmp_output, mode="live")
+        mcp = _MockRobinhoodMCP()
+        mcp.held = {}                                         # the Agentic account holds none
         summary = run_execution_skill(tmp_output, mcp)
         assert summary["preflight_vetoed"] == ["AAPL"]
         assert mcp.placed_orders == []

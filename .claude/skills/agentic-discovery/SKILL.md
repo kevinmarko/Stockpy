@@ -34,6 +34,13 @@ Treat this as a conversation, not a script: tell the operator what scans you
 ran, what you found, and why a candidate did or didn't get an advisory score,
 and invite questions before writing the file.
 
+**Never run inside the unattended `/rh-agentic-cycle`.** Discovery is an
+attended, operator-requested job. The cycle's Research Scout covers only the
+queue's preflight-passed symbols and must not load this skill or run a scan:
+nobody is there to ask, and scans spend the queue's freshness budget.
+If you need Python for anything here, run it from the repo root with
+`.venv/bin/python3`, never a bare `python3`.
+
 ## Prerequisites (verify before doing anything else)
 
 1. The `robinhood-trading` MCP server is connected (tools `create_scan`,

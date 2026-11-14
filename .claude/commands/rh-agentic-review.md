@@ -7,7 +7,8 @@ Run the **`rh-reviewer`** agent once (Phase 5 of
 `.claude/robinhood_four_agent_phase5_implementation_plan.md`). Arguments: `$ARGUMENTS`.
 
 1. Run `rh-reviewer` with the Agent tool. Tell it to follow its procedure and to
-   finish with `python3 -m execution.agentic_review run --notify`, so the daily
+   finish with `.venv/bin/python3 -m execution.agentic_review run --notify` (repo
+   root; never a bare `python3`), so the daily
    push is built from `review.json` by code, not written by an agent.
 2. Print its report. Exit code 0 means READY, 1 NOT READY and 2 inputs
    unusable; NOT READY is the normal answer during the burn-in, not a failure.

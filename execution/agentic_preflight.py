@@ -15,10 +15,17 @@
 # Trader (rh-trader / the robinhood-execution skill) will send.
 #
 # Shape: parsers (`AccountState.from_mcp`, `quotes_from_mcp`,
-# `approvals_from_mcp`) turn raw MCP JSON into small frozen dataclasses;
+# `read_approvals`) turn raw MCP JSON into small frozen dataclasses;
 # `preflight()` is a PURE function of those inputs (no I/O, no MCP, no clock
 # reads — `now` is a parameter), so every rule is unit-testable;
 # `write_preflight()` is the one atomic writer; `main()` is a thin CLI.
+#
+# 2026-11-14 review fixes (.claude/agentic_trading_review_fixes_implementation_plan.md,
+# contracts C2/C3): unreadable approvals block the run; terminal approval
+# states don't count; pending BUY dollars are reserved; quote age, input-file
+# age and market hours are checked (the pure function leaves each off unless
+# passed — `main()` always passes them); SELLs size by `exit_kind` against the
+# Agentic holding; spread / quote age / drift vs the signal are measured.
 #
 # Honesty (CONSTRAINT #4) / fail-closed (CONSTRAINT #6): a value that cannot
 # be read is None, never 0.0; any check that needs a missing value VETOES the
@@ -47,7 +54,15 @@ logger = logging.getLogger(__name__)
 
 PREFLIGHT_FILENAME = "preflight.json"
 DEFAULT_STALE_AFTER_MINUTES = 30.0
+# CLI defaults for the freshness checks (review finding #3). The pure
+# ``preflight()`` leaves each check off unless its caller passes a value, like
+# the earnings blackout; ``main()`` (what the rh-risk-manager agent runs)
+# always passes them.
+DEFAULT_MAX_QUOTE_AGE_MINUTES = 15.0
+DEFAULT_MAX_INPUT_AGE_MINUTES = 10.0
 _EPS = 1e-9
+# Degenerate-denominator guard (CLAUDE.md: ``< 1e-12``, never ``== 0``).
+_DEGENERATE = 1e-12
 
 # --- Stable reason codes (the operator and the tests both read these) --------
 # Run-level blockers: veto every intent.
@@ -56,11 +71,26 @@ QUEUE_STALE = "queue_stale"
 QUEUE_TIMESTAMP_UNAVAILABLE = "queue_timestamp_unavailable"
 MODE_OFF = "mode_off"
 PENDING_APPROVAL_UNIDENTIFIED = "pending_approval_unidentified"
+# The saved get_trade_approvals payload has no recognizable approvals list
+# (an error dict, null, an unknown key): pending approvals are UNKNOWN, never
+# read as "nothing pending".
+APPROVALS_UNREADABLE = "approvals_unreadable"
+# One of the four live-input files (portfolio, positions, quotes, approvals) is
+# older than --max-input-age-minutes, or its age can't be read.
+INPUTS_STALE = "inputs_stale"
+# Outside regular US hours (holiday-aware, shared/market_hours.py).
+MARKET_CLOSED = "market_closed"
 # Per-intent vetoes.
 GATE_BLOCKED = "gate_blocked"
 ALREADY_SUBMITTED_TODAY = "already_submitted_today"
 APPROVAL_ALREADY_PENDING = "approval_already_pending"
 QUOTE_UNAVAILABLE = "quote_unavailable"
+# The quote's freshest timestamp is missing or older than max_quote_age_minutes.
+QUOTE_STALE = "quote_stale"
+# A pending BUY approval whose dollar amount can't be found (approval item,
+# else the placed ledger): the reservation can't be computed, so EVERY BUY is
+# vetoed rather than risk spending buying power the phone may already claim.
+PENDING_NOTIONAL_UNAVAILABLE = "pending_notional_unavailable"
 INTENT_MALFORMED = "intent_malformed"
 QTY_BELOW_ONE_SHARE = "qty_below_one_share"
 NOTIONAL_CAP_UNSET = "notional_cap_unset"
@@ -221,48 +251,207 @@ def quotes_from_mcp(payload: Any) -> Dict[str, Quote]:
             continue
         quote = Quote(bid=_pos(q.get("bid_price")), ask=_pos(q.get("ask_price")),
                       last=_pos(q.get("last_trade_price")),
-                      as_of=q.get("venue_last_trade_time"))
+                      as_of=_freshest_ts(q))
         if quote.bid or quote.ask or quote.last:
             out[sym] = quote
     return out
 
 
-def approvals_from_mcp(payload: Any) -> Tuple[List[Tuple[str, str]], int]:
-    """Parse ``get_trade_approvals`` (pending list) into ``[(SYMBOL, side)]``.
+# Robinhood quote timestamp fields. ``venue_last_trade_time`` alone goes stale
+# on a thinly traded name while its bid/ask keep updating, so the quote's age
+# is its FRESHEST real timestamp. Unparseable values are ignored, never guessed.
+_QUOTE_TS_FIELDS = ("updated_at", "venue_last_trade_time", "venue_bid_time", "venue_ask_time")
 
-    Returns ``(identified, n_unidentified)``. Robinhood's approval item fields
-    are not documented, so this looks in the obvious places; an item it cannot
-    tie to a symbol and side is COUNTED, never ignored — the caller blocks the
-    run on it rather than risk a duplicate request.
+
+def _freshest_ts(q: Mapping[str, Any]) -> Optional[str]:
+    best: Optional[Tuple[datetime, str]] = None
+    for key in _QUOTE_TS_FIELDS:
+        raw = q.get(key)
+        dt = _parse_dt(raw)
+        if dt is not None and (best is None or dt > best[0]):
+            best = (dt, str(raw))
+    return best[1] if best else None
+
+
+# --- Trade approvals -----------------------------------------------------------
+
+#: Keys a get_trade_approvals page may carry its item list under.
+_APPROVAL_LIST_KEYS = ("approvals", "results")
+#: States after which an approval request no longer blocks or holds money
+#: (approved → it became a real order, which Robinhood's buying power already
+#: reflects). Anything NOT here, including a missing or unrecognized state,
+#: counts as pending (fail closed).
+_APPROVAL_TERMINAL_STATES = frozenset({
+    "approved", "auto_approved", "declined", "denied", "rejected", "expired",
+    "cancelled", "canceled", "filled", "executed", "completed", "failed",
+})
+_APPROVAL_NESTED_KEYS = ("order", "equity_order", "trade", "details")
+#: Dollar-amount fields looked for on an approval item (undocumented shape).
+#: A bare ``amount`` key is deliberately NOT read: it could be a share count,
+#: and reading shares as dollars would UNDER-reserve (fail open).
+_APPROVAL_AMOUNT_KEYS = ("dollar_amount", "notional", "est_notional", "estimated_notional",
+                         "estimated_total", "estimated_cost", "total_notional")
+
+
+@dataclass(frozen=True)
+class PendingApproval:
+    """One still-pending approval request, tied to a symbol and side.
+
+    ``notional`` is the request's dollar amount when the item (or, in the CLI,
+    the placed ledger) states it; ``None`` = unknown — never 0.0.
     """
-    identified: List[Tuple[str, str]] = []
+    symbol: str
+    side: str
+    notional: Optional[float] = None
+    approval_id: Optional[str] = None
+    state: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ApprovalsRead:
+    """Parsed ``get_trade_approvals``. ``readable=False`` means some page had
+    no recognizable approvals list: pending approvals are UNKNOWN (the caller
+    blocks the run with :data:`APPROVALS_UNREADABLE`)."""
+    pending: Tuple[PendingApproval, ...]
+    unidentified: int
+    readable: bool
+    n_terminal: int = 0
+
+
+def _normalise_state(raw: Any) -> Optional[str]:
+    if raw is None or raw == "":
+        return None
+    s = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    for prefix in ("trade_approval_state_", "approval_state_", "state_", "status_"):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+            break
+    return "auto_approved" if s == "autoapproved" else s
+
+
+def read_approvals(payload: Any) -> ApprovalsRead:
+    """Parse ``get_trade_approvals`` output, failing CLOSED on an unreadable shape.
+
+    Every page must be a mapping with a list under ``approvals`` or
+    ``results``; otherwise (an error dict, ``null``, an unknown key) the result
+    is ``readable=False`` and nothing is treated as known. Items in a terminal
+    state (:data:`_APPROVAL_TERMINAL_STATES`) are skipped; an item with no
+    recognizable state stays pending. An item that can't be tied to a symbol
+    and side is COUNTED as unidentified, never ignored.
+    """
+    pages = _pages(payload)
+    pending: List[PendingApproval] = []
     unidentified = 0
-    for page in _pages(payload):
-        items = page.get("approvals") if isinstance(page, Mapping) else None
-        if not isinstance(items, list):
+    terminal = 0
+    readable = bool(pages)
+    for page in pages:
+        items = None
+        if isinstance(page, Mapping):
+            for key in _APPROVAL_LIST_KEYS:
+                if isinstance(page.get(key), list):
+                    items = page[key]
+                    break
+        if items is None:
+            readable = False
             continue
         for item in items:
+            state = _approval_state(item)
+            if state in _APPROVAL_TERMINAL_STATES:
+                terminal += 1
+                continue
             sym, side = _approval_symbol_side(item)
             if sym and side:
-                identified.append((sym, side))
+                aid = (item.get("approval_id") or item.get("id")) if isinstance(item, Mapping) else None
+                pending.append(PendingApproval(sym, side, _approval_amount(item),
+                                               str(aid) if aid else None, state))
             else:
                 unidentified += 1
-    return identified, unidentified
+    if not readable:
+        logger.warning("agentic_preflight: get_trade_approvals payload has no approvals list; "
+                       "pending approvals unknown (run blocked)")
+        return ApprovalsRead(pending=(), unidentified=0, readable=False, n_terminal=0)
+    return ApprovalsRead(pending=tuple(pending), unidentified=unidentified, readable=True,
+                         n_terminal=terminal)
+
+
+def approvals_from_mcp(payload: Any) -> Tuple[List[Tuple[str, str]], int]:
+    """Back-compat view of :func:`read_approvals`: ``([(SYMBOL, side)], n_unidentified)``.
+
+    Fails closed for 2-tuple callers too: an unreadable payload is reported as
+    one unidentified approval (→ ``pending_approval_unidentified`` blocker),
+    never as ``([], 0)`` = "nothing pending". New callers should use
+    :func:`read_approvals`, which names the cause (``approvals_unreadable``)
+    and carries each request's dollar amount.
+    """
+    r = read_approvals(payload)
+    if not r.readable:
+        return [], 1
+    return [(p.symbol, p.side) for p in r.pending], r.unidentified
+
+
+def _approval_candidates(item: Mapping[str, Any]) -> List[Mapping[str, Any]]:
+    return [item] + [v for k, v in item.items() if isinstance(v, Mapping) and k in _APPROVAL_NESTED_KEYS]
+
+
+def _approval_state(item: Any) -> Optional[str]:
+    if not isinstance(item, Mapping):
+        return None
+    for c in _approval_candidates(item):
+        for key in ("state", "status", "approval_state"):
+            st_ = _normalise_state(c.get(key))
+            if st_:
+                return st_
+    return None
+
+
+def _money(x: Any) -> Optional[float]:
+    """A positive dollar figure from ``"12.3"`` / ``12.3`` / ``{"amount": "12.3"}``."""
+    if isinstance(x, Mapping):
+        x = x.get("amount")
+    return _pos(x)
+
+
+def _approval_amount(item: Any) -> Optional[float]:
+    """The request's dollar amount if the item states one, else ``None``.
+
+    An explicit dollar field wins; otherwise ``quantity × price`` when the item
+    itself carries both (a limit/stated price, not a quote we looked up)."""
+    if not isinstance(item, Mapping):
+        return None
+    cands = _approval_candidates(item)
+    for c in cands:
+        for key in _APPROVAL_AMOUNT_KEYS:
+            v = _money(c.get(key))
+            if v is not None:
+                return v
+    for c in cands:
+        qty = _pos(c.get("quantity") if c.get("quantity") is not None else c.get("qty"))
+        price = _money(c.get("limit_price") if c.get("limit_price") is not None else c.get("price"))
+        if qty is not None and price is not None:
+            return qty * price
+    return None
 
 
 def _approval_symbol_side(item: Any) -> Tuple[Optional[str], Optional[str]]:
     if not isinstance(item, Mapping):
         return None, None
-    candidates = [item] + [v for k, v in item.items()
-                           if isinstance(v, Mapping) and k in ("order", "equity_order", "trade", "details")]
     sym = side = None
-    for c in candidates:
+    for c in _approval_candidates(item):
         sym = sym or (str(c.get("symbol")).upper() if c.get("symbol") else None)
         raw_side = c.get("side")
         if raw_side and not side:
             s = str(raw_side).lower().replace("side_", "")
             side = s if s in ("buy", "sell") else None
     return sym, side
+
+
+def _as_pending(x: Any) -> Optional[PendingApproval]:
+    """Accept a :class:`PendingApproval`, ``(sym, side)`` or ``(sym, side, notional)``."""
+    if isinstance(x, PendingApproval):
+        return PendingApproval(x.symbol.upper(), x.side.lower(), _pos(x.notional), x.approval_id, x.state)
+    if isinstance(x, (tuple, list)) and len(x) >= 2:
+        return PendingApproval(str(x[0]).upper(), str(x[1]).lower(), _pos(x[2]) if len(x) > 2 else None)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +474,11 @@ class IntentVerdict:
     quote_as_of: Optional[str] = None
     est_notional: Optional[float] = None
     target_notional: Optional[float] = None
+    exit_kind: Optional[str] = None
+    # Measurement only (finding #10) — never a veto. None = unmeasurable.
+    spread_bps: Optional[float] = None          # (ask - bid) / mid, basis points
+    quote_age_s: Optional[float] = None         # now - quote_as_of, seconds
+    drift_vs_signal_pct: Optional[float] = None  # side price vs context.decision_price, percent
 
 
 @dataclass
@@ -294,7 +488,7 @@ class PreflightReport:
     evaluated_at: str
     run_blockers: List[str]
     verdicts: List[IntentVerdict]
-    limits: Dict[str, Optional[float]]
+    limits: Dict[str, Any]
 
     @property
     def n_passed(self) -> int:
@@ -351,6 +545,28 @@ def portfolio_heat(account: AccountState, quotes: Mapping[str, Quote]) -> Option
     return adverse / account.total_value
 
 
+def _exit_kind(intent: Mapping[str, Any]) -> Optional[str]:
+    raw = intent.get("exit_kind")
+    return None if raw is None or raw == "" else str(raw).strip().lower()
+
+
+def _measure(v: "IntentVerdict", intent: Mapping[str, Any], quote: Quote, now: datetime) -> None:
+    """Fill the measurement-only fields (finding #10). Never vetoes; any value
+    that can't be measured honestly stays ``None``."""
+    if quote.bid is not None and quote.ask is not None:
+        mid = (quote.bid + quote.ask) / 2.0
+        if abs(mid) >= _DEGENERATE:
+            v.spread_bps = round((quote.ask - quote.bid) / mid * 10_000.0, 2)
+    as_of = _parse_dt(quote.as_of)
+    if as_of is not None:
+        v.quote_age_s = round((now - as_of).total_seconds(), 1)
+    ctx = intent.get("context")
+    decision = _pos(ctx.get("decision_price")) if isinstance(ctx, Mapping) else None
+    current = quote.price_for(v.side)
+    if decision is not None and abs(decision) >= _DEGENERATE and current is not None:
+        v.drift_vs_signal_pct = round((current - decision) / decision * 100.0, 4)
+
+
 def _resolve_quantity(intent: Mapping[str, Any], side: str, quote: Quote,
                       holding: Optional[Holding]) -> Tuple[Optional[float], Optional[float], Optional[float], List[str]]:
     """Return ``(qty, price_used, limit_price, reasons)`` — the skill's sizing rules, in code.
@@ -360,6 +576,14 @@ def _resolve_quantity(intent: Mapping[str, Any], side: str, quote: Quote,
     ask. SELL full exit: the queue's ``qty``. SELL trim (qty null): sized like a
     BUY, then capped at the sellable shares (the skill's rule; a trim is never
     allowed to oversell).
+
+    SELL with ``exit_kind`` (contract C2; the queue's ``qty`` is the MAIN
+    account's, so it is never used for these): ``"full"`` → the Agentic
+    holding's ``sellable`` shares, fractional kept; ``"fraction"`` →
+    ``floor(sellable × exit_fraction)`` whole shares. A missing holding or
+    ``sellable`` → :data:`SELL_EXCEEDS_SELLABLE` (fail closed). ``"trim"`` (or
+    no ``exit_kind``) keeps the rules above. An unknown ``exit_kind`` or an
+    ``exit_fraction`` outside (0, 1) is :data:`INTENT_MALFORMED`.
     """
     reasons: List[str] = []
     ref = quote.price_for(side)
@@ -379,6 +603,23 @@ def _resolve_quantity(intent: Mapping[str, Any], side: str, quote: Quote,
 
     queue_qty = _num(intent.get("qty"))
     target = _pos(intent.get("target_notional"))
+    exit_kind = _exit_kind(intent) if side == "sell" else None
+    if exit_kind not in (None, "full", "fraction", "trim"):
+        return None, price, limit_price, [INTENT_MALFORMED]
+    if exit_kind in ("full", "fraction"):
+        sellable = holding.sellable if holding is not None else None
+        if sellable is None or sellable <= _EPS:
+            return None, price, limit_price, [SELL_EXCEEDS_SELLABLE]
+        if exit_kind == "full":
+            # The whole Agentic position, fractional shares included.
+            return float(sellable), price, limit_price, reasons
+        frac = _num(intent.get("exit_fraction"))
+        if frac is None or not (0.0 < frac < 1.0):
+            return None, price, limit_price, [INTENT_MALFORMED]
+        qty = float(math.floor(sellable * frac + _EPS))
+        if qty < 1:
+            reasons.append(QTY_BELOW_ONE_SHARE)
+        return qty, price, limit_price, reasons
     if side == "sell" and queue_qty is not None:
         # Full exit: exactly the queue's quantity, fractional shares included —
         # flooring would silently leave a remainder behind.
@@ -403,8 +644,9 @@ def preflight(
     quotes: Mapping[str, Quote],
     *,
     now: datetime,
-    pending_approvals: Iterable[Tuple[str, str]] = (),
+    pending_approvals: Iterable[Any] = (),
     unidentified_pending_approvals: int = 0,
+    approvals_readable: bool = True,
     placed_dedup_keys: Iterable[str] = (),
     kill_switch_active: bool,
     max_notional: Optional[float] = None,
@@ -417,6 +659,10 @@ def preflight(
     theses: Optional[Mapping[str, Mapping[str, Any]]] = None,
     invalid_thesis_ids: Iterable[str] = (),
     critical_gap_fields: Iterable[str] = (),
+    max_quote_age_minutes: Optional[float] = None,
+    market_open: Optional[bool] = None,
+    input_ages_s: Optional[Mapping[str, Optional[float]]] = None,
+    max_input_age_minutes: Optional[float] = None,
 ) -> PreflightReport:
     """Veto-only check of every queue intent against the live account.
 
@@ -431,6 +677,21 @@ def preflight(
     only VALID theses, keyed by client_order_id), was rejected by
     ``execution.agentic_research.validate_theses`` (``invalid_thesis_ids``),
     or lists one of those fields in its ``data_gaps``.
+
+    Approvals: ``pending_approvals`` holds :class:`PendingApproval` items (or
+    legacy ``(sym, side)`` / ``(sym, side, notional)`` tuples).
+    ``approvals_readable=False`` blocks the run (:data:`APPROVALS_UNREADABLE`).
+    Every pending BUY's dollars are reserved against buying power and the gross
+    cap before this cycle's BUYs are fitted; a pending BUY with no known amount
+    vetoes every BUY (:data:`PENDING_NOTIONAL_UNAVAILABLE`).
+
+    Freshness / hours (each off unless passed; the CLI always passes them):
+    ``max_quote_age_minutes`` vetoes an intent whose quote timestamp is missing
+    or older (:data:`QUOTE_STALE`); ``market_open=False`` blocks the run
+    (:data:`MARKET_CLOSED`) — the caller decides it (``shared.market_hours``)
+    so this function stays clock-free; ``input_ages_s`` (file → age in
+    seconds, ``None`` = unknown) with ``max_input_age_minutes`` blocks the run
+    when any input is older or of unknown age (:data:`INPUTS_STALE`).
     """
     now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
     mode = str(queue.get("mode") or "off")
@@ -453,8 +714,21 @@ def preflight(
         blockers.append(QUEUE_STALE)
     if unidentified_pending_approvals > 0:
         blockers.append(PENDING_APPROVAL_UNIDENTIFIED)
+    if not approvals_readable:
+        blockers.append(APPROVALS_UNREADABLE)
+    if market_open is False:
+        blockers.append(MARKET_CLOSED)
+    if max_input_age_minutes is not None and input_ages_s is not None:
+        limit_s = max_input_age_minutes * 60.0
+        if any(a is None or a > limit_s for a in input_ages_s.values()):
+            blockers.append(INPUTS_STALE)
 
-    pending = {(s.upper(), d.lower()) for s, d in pending_approvals}
+    pending_items = [p for p in (_as_pending(x) for x in pending_approvals) if p is not None]
+    pending = {(p.symbol, p.side) for p in pending_items}
+    pending_buys = [p for p in pending_items if p.side == "buy"]
+    # Fail closed: one pending BUY of unknown size makes the reservation unknown.
+    pending_notional_unknown = any(p.notional is None for p in pending_buys)
+    reserved = 0.0 if pending_notional_unknown else sum(p.notional for p in pending_buys)
     critical = {str(f) for f in critical_gap_fields}
     invalid_theses = {str(c) for c in invalid_thesis_ids}
     placed = set(placed_dedup_keys)
@@ -470,6 +744,7 @@ def preflight(
             conviction=_num(intent.get("conviction")),
             order_type=str(intent.get("order_type") or "market"),
             target_notional=_num(intent.get("target_notional")),
+            exit_kind=_exit_kind(intent) if side == "sell" else None,
         )
         verdicts.append(v)
         if not symbol or side not in ("buy", "sell") or not v.client_order_id:
@@ -509,8 +784,16 @@ def preflight(
         v.qty, v.ref_price, v.limit_price, v.quote_as_of = qty, price, limit_price, quote.as_of
         if qty is not None and price is not None:
             v.est_notional = round(qty * price, 2)
+        _measure(v, intent, quote, now)
+        # 3b. a quote older than the window (or with no timestamp) can't size an order
+        if max_quote_age_minutes is not None and (
+                v.quote_age_s is None or v.quote_age_s > max_quote_age_minutes * 60.0):
+            v.reasons.append(QUOTE_STALE)
 
         if side == "buy":
+            # 2b. pending phone approvals of unknown size: nothing can be reserved
+            if pending_notional_unknown:
+                v.reasons.append(PENDING_NOTIONAL_UNAVAILABLE)
             # 5. per-order notional cap
             if cap is None or cap <= 0:
                 v.reasons.append(NOTIONAL_CAP_UNSET)
@@ -548,6 +831,7 @@ def preflight(
                     v.reasons.append(SELL_EXCEEDS_SELLABLE)
             elif qty is not None and qty > holding.sellable + _EPS:
                 v.reasons.append(SELL_EXCEEDS_SELLABLE)
+        v.reasons[:] = list(dict.fromkeys(v.reasons))  # one code once, order kept
 
     # -- cycle-wide: buys together must fit buying power and the gross cap ---
     survivors = sorted(
@@ -556,7 +840,11 @@ def preflight(
     )
     bp = account.buying_power
     equity = account.equity_value
-    cumulative = 0.0
+    # Pending phone approvals are not orders yet, so Robinhood's buying power
+    # doesn't reflect them; once tapped they will spend it. Reserve them first.
+    # (When any pending BUY's size is unknown every BUY was already vetoed above,
+    # so ``reserved`` is never a guessed 0.0 that lets a BUY through.)
+    cumulative = reserved
     for v in survivors:
         if bp is None or equity is None or gross_cap is None:
             v.reasons.append(ACCOUNT_VALUES_UNAVAILABLE)
@@ -583,7 +871,12 @@ def preflight(
                 "max_notional_per_order": cap, "max_position_weight": weight_cap,
                 "max_portfolio_gross": gross_cap, "buying_power": bp,
                 "portfolio_heat": heat, "max_portfolio_heat": heat_cap,
-                "total_value": account.total_value, "equity_value": equity},
+                "total_value": account.total_value, "equity_value": equity,
+                "pending_buy_reserved_notional": None if pending_notional_unknown else round(reserved, 2),
+                "max_quote_age_minutes": max_quote_age_minutes,
+                "max_input_age_minutes": max_input_age_minutes,
+                "input_ages_s": dict(input_ages_s) if input_ages_s is not None else None,
+                "market_open": market_open},
     )
 
 
@@ -651,6 +944,52 @@ def _earnings_from_json(payload: Any) -> Dict[str, Optional[date]]:
     return out
 
 
+def _market_open_now(now: datetime) -> bool:
+    """Holiday-aware regular-hours check for the CLI; any failure reads as CLOSED."""
+    try:
+        from shared.market_hours import is_us_market_open_now
+        return bool(is_us_market_open_now(now))
+    except Exception as exc:  # noqa: BLE001 -- fail closed
+        logger.warning("agentic_preflight: market-hours check failed (%s); treating market as closed", exc)
+        return False
+
+
+def _file_age_s(path: Optional[str], now: datetime) -> Optional[float]:
+    """Seconds since ``path`` was last written, or None when it can't be read."""
+    if not path:
+        return None
+    try:
+        mtime = datetime.fromtimestamp(os.stat(path).st_mtime, tz=timezone.utc)
+    except OSError:
+        return None
+    return round((now - mtime).total_seconds(), 1)
+
+
+def _with_ledger_notionals(pending: Iterable[PendingApproval], placed: Sequence[Mapping[str, Any]],
+                           now: datetime) -> List[PendingApproval]:
+    """Fill a pending BUY's unknown dollar amount from the placed ledger.
+
+    Match by ``approval_id`` first, else by today's ``dedup_key`` for the same
+    symbol + side. Uses the record's ``est_notional``, else its
+    ``target_notional`` (a BUY's est_notional never exceeds it, so this can only
+    over-reserve). Several matches → the largest (conservative). No match →
+    left ``None`` and the preflight vetoes every BUY.
+    """
+    out: List[PendingApproval] = []
+    for p in pending:
+        if p.side != "buy" or p.notional is not None:
+            out.append(p)
+            continue
+        key = make_dedup_key(p.symbol, p.side, now)
+        by_id = [r for r in placed if p.approval_id and str(r.get("approval_id") or "") == p.approval_id]
+        matches = by_id or [r for r in placed if r.get("dedup_key") == key]
+        amounts = [a for a in ((_pos(r.get("est_notional")) or _pos(r.get("target_notional")))
+                               for r in matches) if a is not None]
+        out.append(PendingApproval(p.symbol, p.side, max(amounts) if amounts else None,
+                                   p.approval_id, p.state))
+    return out
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Agent 3 preflight: veto queue intents against the live Robinhood account.")
     ap.add_argument("--portfolio", required=True, help="saved get_portfolio output (JSON)")
@@ -664,6 +1003,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--critical-gaps", default="",
                     help="comma-separated data_gaps fields that veto a BUY/SELL (plan check 10; "
                          "also vetoes intents with no valid thesis). Default: off")
+    ap.add_argument("--max-quote-age-minutes", type=float, default=DEFAULT_MAX_QUOTE_AGE_MINUTES,
+                    help="veto an intent whose quote is older than this or has no timestamp "
+                         f"(default {DEFAULT_MAX_QUOTE_AGE_MINUTES:g})")
+    ap.add_argument("--max-input-age-minutes", type=float, default=DEFAULT_MAX_INPUT_AGE_MINUTES,
+                    help="block the run when any of the four input files is older than this "
+                         f"(default {DEFAULT_MAX_INPUT_AGE_MINUTES:g})")
     ap.add_argument("--queue", help="queue path (default: $OUTPUT_DIR/execution_queue.json)")
     ap.add_argument("--output-dir", help="override $OUTPUT_DIR")
     ap.add_argument("--no-write", action="store_true", help="print only; do not write preflight.json")
@@ -680,7 +1025,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps({"error": f"queue unreadable: {queue_path} ({exc})"}))
         return 2
 
-    approvals, unidentified = approvals_from_mcp(_load_json(args.approvals))
+    now = datetime.now(timezone.utc)
+    input_ages = {name: _file_age_s(getattr(args, name), now)
+                  for name in ("portfolio", "positions", "quotes", "approvals")}
+    try:
+        approvals_payload = _load_json(args.approvals)
+    except Exception as exc:  # unparseable file → unknown approvals → run blocked, not a crash
+        logger.warning("agentic_preflight: approvals file unreadable (%s)", exc)
+        approvals_payload = None
+    approvals = read_approvals(approvals_payload)
+    placed = read_placed_ledger(out_dir)
+    pending = _with_ledger_notionals(approvals.pending, placed, now)
     critical = [f.strip() for f in args.critical_gaps.split(",") if f.strip()]
     earnings = _earnings_from_json(_load_json(args.earnings)) if args.earnings else None
     theses: Dict[str, Any] = {}
@@ -697,16 +1052,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         queue,
         AccountState.from_mcp(_load_json(args.portfolio), _load_json(args.positions)),
         quotes_from_mcp(_load_json(args.quotes)),
-        now=datetime.now(timezone.utc),
-        pending_approvals=approvals,
-        unidentified_pending_approvals=unidentified,
-        placed_dedup_keys=[r.get("dedup_key") for r in read_placed_ledger(out_dir) if r.get("dedup_key")],
+        now=now,
+        pending_approvals=pending,
+        unidentified_pending_approvals=approvals.unidentified,
+        approvals_readable=approvals.readable,
+        placed_dedup_keys=[r.get("dedup_key") for r in placed if r.get("dedup_key")],
         kill_switch_active=GlobalKillSwitch().is_active(),
         earnings_dates=earnings or {},
         earnings_blackout_days=args.blackout_days,
         theses=theses,
         invalid_thesis_ids=invalid,
         critical_gap_fields=critical,
+        max_quote_age_minutes=args.max_quote_age_minutes,
+        market_open=_market_open_now(now),
+        input_ages_s=input_ages,
+        max_input_age_minutes=args.max_input_age_minutes,
     )
     summary = report.to_dict()
     if not args.no_write:

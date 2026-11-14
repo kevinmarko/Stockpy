@@ -52,6 +52,12 @@ no-ops in the queue: `max_correlation` (`returns_df=None`), `daily_loss_limit`
   never gets a daemon exit intent. Fixing it needs the daemon to read the Agentic account (a new
   account-number setting and a second robin_stocks fetch path). It matters once the burn-in opens
   positions.
+- **SELL quantity for names held in BOTH accounts — fixed 2026-11-14.** A full-exit SELL used the
+  main account's held qty, so it either left Agentic shares behind or was vetoed as
+  `sell_exceeds_sellable`. The queue now marks SELLs with `exit_kind` (`full` / `fraction` / `trim`)
+  and the preflight sizes `full`/`fraction` from the Agentic account's own sellable shares
+  (`.claude/agentic_trading_review_fixes_walkthrough.md`). Agentic-only positions still get no
+  exit intent (the bullet above).
 - **No daily-loss-limit measurement for the Agentic account** anywhere. It was a no-op before this
   change too.
 - **`max_correlation` was already a no-op in the queue** (`returns_df=None`) and is still not

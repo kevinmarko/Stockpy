@@ -124,6 +124,184 @@ def _f(x: Any, default: float = 0.0) -> float:
         return default
 
 
+# ---------------------------------------------------------------------------
+# Decision context (contract C1 in
+# .claude/agentic_trading_review_fixes_implementation_plan.md)
+# ---------------------------------------------------------------------------
+
+#: Keys of every intent's ``context`` dict, in order. Each value is the real
+#: value the advisory decision used, or ``None`` when that value is unavailable
+#: -- never a placeholder (CONSTRAINT #4). Deliberately absent: the
+#: ``regime_multiplier`` / ``meta_label_composite`` key indicators, which
+#: ``engine.advisory`` defaults to 1.0 when the strategy engine did not produce
+#: them, so a 1.0 there cannot be told apart from a real 1.0.
+#:
+#: Sources (``engine.advisory.Recommendation``):
+#:   decision_price            rec.current_price/decision_price when a rec has one;
+#:                             otherwise derived as forecast / (1 + forecast_30d_pct),
+#:                             the exact inverse of how advisory computed the pct
+#:                             from the price it used (null without a forecast)
+#:   data_quality              rec.data_quality ("OK" | "STALE" | "PARTIAL")
+#:   synthetic_inputs          rec.synthetic_inputs
+#:   forecast_30d_pct          rec.key_indicators["forecast_30d_pct"]
+#:   forecast_is_fallback      rec.key_indicators["forecast_is_fallback"] (1.0/0.0 -> bool)
+#:   forecast_effects          rec.forecast_effects (F6a tags, e.g. "case_a_exit")
+#:   score_components          rec.score_components (per-signal weighted contributions)
+#:   buy_range / sell_range    rec.buy_range / rec.sell_range ("" -> null)
+#:   suggested_exit_pct        rec.suggested_exit_pct (null unless > 0: advisory
+#:                             writes 0.0 for "not a held SELL")
+#:   sector                    rec.sector ("" / "Unknown" -> null)
+#:   sizing_binding_constraint rec.sizing_binding_constraint
+#:   regime                    the queue run's macro DTO ``market_regime`` (null
+#:                             when the DTO is missing or flags data_unavailable,
+#:                             whose fail-closed "RECESSION" is not a measurement)
+#:   news_sentiment            rec.key_indicators["news_sentiment"]
+CONTEXT_KEYS: Tuple[str, ...] = (
+    "decision_price",
+    "data_quality",
+    "synthetic_inputs",
+    "forecast_30d_pct",
+    "forecast_is_fallback",
+    "forecast_effects",
+    "score_components",
+    "buy_range",
+    "sell_range",
+    "suggested_exit_pct",
+    "sector",
+    "sizing_binding_constraint",
+    "regime",
+    "news_sentiment",
+)
+
+_DATA_QUALITY_VALUES = ("OK", "STALE", "PARTIAL")
+_UNKNOWN_SECTORS = ("", "unknown", "n/a", "none")
+
+
+def _opt_num(x: Any) -> Optional[float]:
+    """A finite float (numpy scalars included), or ``None``. Bools are not numbers here."""
+    if x is None or isinstance(x, bool):
+        return None
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _opt_str(x: Any, *, unknown: Tuple[str, ...] = ("",)) -> Optional[str]:
+    if not isinstance(x, str):
+        return None
+    s = x.strip()
+    return None if s.lower() in unknown else s
+
+
+def _json_safe(value: Any) -> Any:
+    """Recursively make ``value`` strict-JSON safe: NaN/inf -> None, numpy
+    scalars -> Python, tuples/sets -> lists, dict keys -> str."""
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_safe(v) for v in value]
+    item = getattr(value, "item", None)  # numpy scalar
+    if callable(item) and not isinstance(value, (int, float)):
+        try:
+            value = item()
+        except Exception:
+            return None
+        if isinstance(value, (bool, str)) or value is None:
+            return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return None  # anything else is not a value a JSON reader can trust
+
+
+def _decision_price(rec: Any, key_indicators: Dict[str, Any]) -> Optional[float]:
+    for attr in ("decision_price", "current_price"):
+        p = _opt_num(getattr(rec, attr, None))
+        if p is not None and p > 0:
+            return round(p, 4)
+    forecast = _opt_num(getattr(rec, "forecast", None))
+    pct = _opt_num(key_indicators.get("forecast_30d_pct"))
+    if forecast is None or forecast <= 0 or pct is None or (1.0 + pct) <= 1e-12:
+        return None
+    return round(forecast / (1.0 + pct), 4)
+
+
+def _regime(macro_dto: Any) -> Optional[str]:
+    if macro_dto is None or bool(getattr(macro_dto, "data_unavailable", False)):
+        return None
+    try:
+        return _opt_str(getattr(macro_dto, "market_regime", None))
+    except Exception:
+        return None
+
+
+def build_decision_context(rec: Any, *, macro_dto: Any = None) -> Dict[str, Any]:
+    """The intent's ``context`` dict (keys :data:`CONTEXT_KEYS`), JSON-safe.
+
+    A rec that already carries a ``context`` dict (a composed intent that
+    passed the advisory decision through ``execution.compose``) has it
+    re-sanitised and keyed to :data:`CONTEXT_KEYS`, with ``regime`` filled from
+    ``macro_dto`` when it is null. Otherwise the context is read off an
+    ``engine.advisory.Recommendation``-shaped rec. Every missing value is null.
+    """
+    carried = getattr(rec, "context", None)
+    if isinstance(carried, dict):
+        ctx = {k: _json_safe(carried.get(k)) for k in CONTEXT_KEYS}
+        if ctx["regime"] is None:
+            ctx["regime"] = _regime(macro_dto)
+        return ctx
+
+    ki = getattr(rec, "key_indicators", None)
+    ki = ki if isinstance(ki, dict) else {}
+
+    dq = getattr(rec, "data_quality", None)
+    synthetic = getattr(rec, "synthetic_inputs", None)
+    fb = _opt_num(ki.get("forecast_is_fallback"))
+    effects = getattr(rec, "forecast_effects", None)
+    components = getattr(rec, "score_components", None)
+    score_components: Optional[Dict[str, float]] = None
+    if isinstance(components, dict):
+        score_components = {
+            str(k): round(v, 6)
+            for k, v in ((k, _opt_num(v)) for k, v in components.items())
+            if v is not None
+        } or None
+    exit_pct = _opt_num(getattr(rec, "suggested_exit_pct", None))
+
+    ctx: Dict[str, Any] = {
+        "decision_price": _decision_price(rec, ki),
+        "data_quality": dq if dq in _DATA_QUALITY_VALUES else None,
+        "synthetic_inputs": synthetic if isinstance(synthetic, bool) else None,
+        "forecast_30d_pct": _opt_num(ki.get("forecast_30d_pct")),
+        "forecast_is_fallback": None if fb is None else bool(fb >= 0.5),
+        "forecast_effects": (
+            [str(e) for e in effects] if isinstance(effects, (list, tuple)) else None
+        ),
+        "score_components": score_components,
+        "buy_range": _opt_str(getattr(rec, "buy_range", None)),
+        "sell_range": _opt_str(getattr(rec, "sell_range", None)),
+        "suggested_exit_pct": exit_pct if exit_pct is not None and exit_pct > 0 else None,
+        "sector": _opt_str(getattr(rec, "sector", None), unknown=_UNKNOWN_SECTORS),
+        "sizing_binding_constraint": _opt_str(getattr(rec, "sizing_binding_constraint", None)),
+        "regime": _regime(macro_dto),
+        "news_sentiment": _opt_num(ki.get("news_sentiment")),
+    }
+    return _json_safe(ctx)
+
+
+def _exit_fraction(rec: Any, decision_context: Dict[str, Any]) -> Optional[float]:
+    """The advisory's suggested fraction of the held position to sell, or None."""
+    v = _opt_num(getattr(rec, "suggested_exit_pct", None))
+    if v is None or v <= 0:
+        v = _opt_num(decision_context.get("suggested_exit_pct"))
+    return v if v is not None and v > 0 else None
+
+
 def _resolve_mode(mode: Optional[str]) -> str:
     """Return a validated execution mode, falling back to settings, then ``off``."""
     if mode is None:
@@ -276,6 +454,11 @@ def _intent_dict(
            the held market value); the execution agent resolves the share count
            from a live quote like a BUY and caps it at the held quantity.  A SELL
            of an unheld symbol is dropped (nothing to sell — no fabricated position).
+           Every SELL carries ``exit_kind``: ``"trim"`` (the notional trim),
+           ``"fraction"`` + ``exit_fraction`` (the advisory's
+           ``suggested_exit_pct`` is below 1 — an ordinary SELL exits half) or
+           ``"full"`` (a full exit, or a rec with no exit fraction at all).
+    Every intent carries ``context`` (:func:`build_decision_context`).
     """
     action = str(getattr(rec, "action", "")).upper()
     symbol = str(getattr(rec, "symbol", "")).upper()
@@ -292,6 +475,10 @@ def _intent_dict(
     qty: Optional[float] = None
     target_notional: Optional[float] = None
     gate_qty = 1.0  # provisional, for the gate object only
+    # The decision's own inputs, carried to the agents that act on the intent.
+    decision_context = build_decision_context(rec, macro_dto=getattr(context, "macro", None))
+    exit_kind: Optional[str] = None  # SELL only: "full" | "fraction" | "trim"
+    exit_fraction: Optional[float] = None  # set only when exit_kind == "fraction"
 
     if action == "BUY":
         equity = _f(getattr(snapshot, "total_equity", 0.0))
@@ -334,14 +521,29 @@ def _intent_dict(
                 return None
             qty = None  # resolved downstream, capped at held_qty (see qty contract)
             target_notional = round(notional, 2)
+            exit_kind = "trim"
             price = _f(getattr(held, "current_price", 0.0))
             gate_qty = held_qty
             if price > 0:
                 gate_qty = max(1.0, min(held_qty, math.floor(notional / price)))
         else:
+            # Exit size (contract C1): the advisory's suggested_exit_pct says how
+            # much of the HELD position to sell -- 1.0 for a Case-A full exit,
+            # 0.5 for an ordinary SELL / RISK REDUCE. `qty` stays the held
+            # quantity for back-compat (an older reader sells exactly `qty`);
+            # `exit_kind`/`exit_fraction` tell the Agentic preflight what to
+            # sell out of the Agentic account's own holding. A fraction we do
+            # not know (a rec without the field) keeps the legacy full exit.
             qty = held_qty
             gate_qty = held_qty
             target_notional = round(held_mv, 2)
+            fraction = _exit_fraction(rec, decision_context)
+            if fraction is not None and fraction < 1.0:
+                exit_kind = "fraction"
+                exit_fraction = round(fraction, 4)
+                target_notional = round(held_mv * fraction, 2)
+            else:
+                exit_kind = "full"
 
     # -----------------------------------------------------------------------
     # LIMIT-PRICE CONTRACT (verbatim — the robinhood-execution skill/docs copy
@@ -439,7 +641,17 @@ def _intent_dict(
         # see BOTH sides' reasoning, not just the winning number. [] (never
         # omitted) when there was nothing to override.
         "overridden": list(getattr(rec, "overridden", None) or []),
+        # The advisory decision's own inputs (keys: CONTEXT_KEYS; each null when
+        # unavailable, never a default). Additive key -- readers that don't know
+        # it ignore it.
+        "context": decision_context,
     }
+    if exit_kind is not None:
+        # SELL only. "full" = exit the whole position, "fraction" = sell
+        # `exit_fraction` of it, "trim" = the notional trim above (qty null).
+        out["exit_kind"] = exit_kind
+        if exit_kind == "fraction":
+            out["exit_fraction"] = exit_fraction
     if use_limit:
         # Only present on LIMIT intents — absent for MARKET so buffer==0 output
         # is byte-identical to the legacy MARKET-only queue.

@@ -19,11 +19,14 @@
 #
 #   output/execution_placed.jsonl    — the placed-intent ledger, OWNED here:
 #       {"ts", "dedup_key", "symbol", "side", "qty", "target_notional",
-#        "client_order_id", "mcp_order_id", "approval_id", "ref_id", "run_id"}
+#        "est_notional", "client_order_id", "mcp_order_id", "approval_id",
+#        "ref_id", "run_id"}
 #     In Robinhood trade-approval mode a ledger line means "submitted for the
 #     operator's approval", not "executed": `approval_id` carries the id the
 #     MCP returned and the approval's outcome lives in the approvals log below.
-#     The last three fields are optional (None on pre-approval-mode rows).
+#     `est_notional` is the dollar estimate the Trader copied from the
+#     preflight verdict (the preflight reserves it against buying power while
+#     the approval is pending). The optional fields are None on older rows.
 #
 #   output/execution_approvals.jsonl — the approval-outcome log, OWNED here:
 #       {"ts", "approval_id", "state", "state_raw", "symbol", "side",
@@ -34,9 +37,18 @@
 #     the same day is recognised as already-placed.
 #
 # Everything is dead-letter resilient (CONSTRAINT #6): blank/corrupt JSONL lines
-# are skipped (logged at DEBUG), reconciliation never raises (returns an
-# error-shaped report with ok=False on any failure), and the atomic-append helper
-# swallows write failures rather than crashing a best-effort caller.
+# are skipped on read (logged at DEBUG), reconciliation never raises (returns an
+# error-shaped report with ok=False on any failure), and the append helpers
+# never raise on I/O: they return True on a durable write and False otherwise,
+# so the skill's one-liners can exit non-zero and stop instead of carrying on
+# with an unrecorded placement.
+#
+# The one thing that DOES raise is an unresolvable output directory: with no
+# explicit `output_dir` and no importable `settings`, `_resolve_output_dir`
+# raises RuntimeError. It used to fall back to ./output, which split the
+# ledger whenever the skill ran under a python3 without this repo's deps — a
+# placement recorded in the wrong folder is invisible to the next run's
+# idempotency check, i.e. a same-day duplicate order.
 #
 # Reviewed false positive (stockpy_codebase_auditor `orphaned_module`, 2026-08):
 # this module has no in-repo Python caller by design — its producer is the
@@ -54,10 +66,16 @@ import json
 import logging
 import math
 import os
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+try:  # POSIX advisory locks; absent on Windows, where appends run unlocked.
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - non-POSIX
+    _fcntl = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +109,11 @@ def _resolve_output_dir(output_dir: Optional[Any]) -> Path:
     ``settings`` is imported lazily so this module stays import-light and does
     not pull the whole settings graph into cheap unit tests that pass an
     explicit ``output_dir``.
+
+    Raises ``RuntimeError`` when no ``output_dir`` is given and ``settings``
+    cannot be imported (e.g. a ``python3`` without this repo's dependencies).
+    There is deliberately no ``./output`` fallback: a ledger written or read
+    in the wrong folder makes an already-placed order look unplaced.
     """
     if output_dir is not None:
         return Path(output_dir)
@@ -98,8 +121,11 @@ def _resolve_output_dir(output_dir: Optional[Any]) -> Path:
         from settings import settings  # local import — avoid import cycle
         return Path(settings.OUTPUT_DIR)
     except Exception as exc:
-        logger.debug("receipts_store: settings.OUTPUT_DIR unavailable (%s); using ./output", exc)
-        return Path("./output")
+        raise RuntimeError(
+            "receipts_store: settings.OUTPUT_DIR is unavailable "
+            f"({type(exc).__name__}: {exc}); pass output_dir explicitly or run with "
+            "this repo's .venv/bin/python3. Refusing to fall back to ./output."
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -192,35 +218,85 @@ def read_placed_ledger(output_dir: Optional[Any] = None) -> List[Dict[str, Any]]
 # Ledger append (atomic-append: write-then-rename over a rebuilt copy)
 # ---------------------------------------------------------------------------
 
-def append_placed(record: Dict[str, Any], output_dir: Optional[Any] = None) -> None:
-    """Append one placed-intent record to the ledger, atomically.
+def _append_jsonl_line(path: Path, rec: Dict[str, Any]) -> None:
+    """Append one JSON line to ``path`` durably and safely under concurrency.
+
+    Holds an exclusive ``fcntl`` lock on a sibling ``<name>.lock`` file for the
+    whole read-append-replace, so two writers (the Trader's one-liners, a
+    test, a second agent session) cannot both read the old file and have the
+    later ``os.replace`` drop the other's line. The existing bytes are kept
+    verbatim (a corrupt line stays for a human to inspect; readers skip it),
+    the new line is appended, the result is written to a unique
+    ``tempfile.mkstemp`` file in the same directory, fsynced, and
+    ``os.replace``d over the original — a crash mid-write never leaves a torn
+    file. Raises on any failure; the public wrappers turn that into ``False``.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(rec, sort_keys=True) + "\n"
+    lock_path = path.with_name(path.name + ".lock")
+    with open(lock_path, "a", encoding="utf-8") as lock_fh:
+        if _fcntl is not None:
+            _fcntl.flock(lock_fh.fileno(), _fcntl.LOCK_EX)
+        try:
+            try:
+                existing = path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                existing = ""
+            # A read failure other than "absent" propagates: rewriting from an
+            # empty read would erase the ledger.
+            if existing and not existing.endswith("\n"):
+                existing += "\n"
+            fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp",
+                                            dir=str(path.parent))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(existing)
+                    fh.write(line)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp_name, path)
+            except BaseException:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
+        finally:
+            if _fcntl is not None:
+                _fcntl.flock(lock_fh.fileno(), _fcntl.LOCK_UN)
+
+
+def append_placed(record: Dict[str, Any], output_dir: Optional[Any] = None) -> bool:
+    """Append one placed-intent record to the ledger. ``True`` = durably written.
 
     A ``dedup_key`` is derived (from the record's ``symbol``/``side``/``ts``)
     when absent, and missing optional fields are normalised to ``None`` so every
-    line conforms to the ledger schema.  The write is atomic: the existing
-    ledger is read, the new line appended in-memory, then the whole file is
-    written to a temp path and ``os.replace``d over the original — so a crash
-    mid-write never leaves a truncated/torn JSONL file.  Never raises
-    (CONSTRAINT #6): any failure is logged and swallowed.
+    line conforms to the ledger schema (including ``est_notional``, the
+    preflight's dollar estimate). The write is locked, atomic and fsynced (see
+    :func:`_append_jsonl_line`).
+
+    Returns ``False`` — never raises on I/O (CONSTRAINT #6) — when the record
+    has no symbol or a side other than buy/sell, or the write failed. A caller
+    that placed an order must treat ``False`` as "the next run will not see
+    this placement" and stop. An unresolvable output directory (no
+    ``output_dir`` and no importable settings) raises ``RuntimeError`` instead,
+    which is a setup error, not an I/O one.
     """
+    out_dir = _resolve_output_dir(output_dir)
     try:
-        out_dir = _resolve_output_dir(output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / PLACED_FILENAME
-
         norm = _normalise_placed_record(record)
-        existing = _read_jsonl(path)
-        existing.append(norm)
-
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            for rec in existing:
-                fh.write(json.dumps(rec, sort_keys=True) + "\n")
-        os.replace(tmp, path)
+        if not norm["symbol"] or norm["side"] not in ("buy", "sell"):
+            logger.warning("receipts_store: placed record needs a symbol and side buy|sell "
+                           "(got %r/%r); not recorded", norm["symbol"], norm["side"])
+            return False
+        path = out_dir / PLACED_FILENAME
+        _append_jsonl_line(path, norm)
         logger.debug("receipts_store: appended placed record %s → %s",
                      norm.get("dedup_key"), path)
+        return True
     except Exception as exc:
-        logger.warning("receipts_store: failed to append placed record (%s); skipping", exc)
+        logger.warning("receipts_store: failed to append placed record (%s); NOT recorded", exc)
+        return False
 
 
 def _normalise_placed_record(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -239,6 +315,7 @@ def _normalise_placed_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "side": side,
         "qty": _opt_float(rec.get("qty")),
         "target_notional": _opt_float(rec.get("target_notional")),
+        "est_notional": _opt_float(rec.get("est_notional")),
         "client_order_id": str(rec.get("client_order_id", "") or ""),
         "mcp_order_id": (str(rec["mcp_order_id"]) if rec.get("mcp_order_id") not in (None, "") else None),
         "approval_id": _opt_str(rec.get("approval_id")),
@@ -310,10 +387,13 @@ def append_approval_event(record: Dict[str, Any], output_dir: Optional[Any] = No
     """Append one approval-state observation to ``execution_approvals.jsonl``.
 
     ``record`` needs an ``approval_id`` and a ``state`` (raw Robinhood value or
-    an already-normalised one). Returns ``True`` on success, ``False`` when the
-    record is unusable (no approval_id) or the write failed. Never raises
-    (CONSTRAINT #6). Same atomic rewrite-and-replace as :func:`append_placed`.
+    an already-normalised one). Returns ``True`` on a durable write, ``False``
+    when the record is unusable (no approval_id) or the write failed. Never
+    raises on I/O (CONSTRAINT #6); same locked, atomic append as
+    :func:`append_placed`, and the same ``RuntimeError`` for an unresolvable
+    output directory.
     """
+    out_dir = _resolve_output_dir(output_dir)
     try:
         rec = dict(record or {})
         approval_id = _opt_str(rec.get("approval_id"))
@@ -335,19 +415,10 @@ def append_approval_event(record: Dict[str, Any], output_dir: Optional[Any] = No
             "ref_id": _opt_str(rec.get("ref_id")),
             "note": _opt_str(rec.get("note")),
         }
-        out_dir = _resolve_output_dir(output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / APPROVALS_FILENAME
-        existing = _read_jsonl(path)
-        existing.append(norm)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as fh:
-            for r in existing:
-                fh.write(json.dumps(r, sort_keys=True) + "\n")
-        os.replace(tmp, path)
+        _append_jsonl_line(out_dir / APPROVALS_FILENAME, norm)
         return True
     except Exception as exc:
-        logger.warning("receipts_store: failed to append approval event (%s); skipping", exc)
+        logger.warning("receipts_store: failed to append approval event (%s); NOT recorded", exc)
         return False
 
 
@@ -391,13 +462,16 @@ def already_placed(
     ``symbol``/``side`` on the given UTC date (default: today).
 
     Uses the ``dedup_key`` contract, so it is robust to the 60s
-    ``client_order_id`` bucketing.  Never raises — on any read failure it
-    conservatively returns ``False`` (an unknown state is treated as "not yet
-    placed" so the operator is prompted rather than silently skipped).
+    ``client_order_id`` bucketing. A read failure of an existing ledger returns
+    ``False`` (the operator is prompted rather than silently skipped), but an
+    unresolvable output directory raises ``RuntimeError``: answering "not
+    placed" about a ledger we could not even locate is how a duplicate order
+    gets sent.
     """
+    out_dir = _resolve_output_dir(output_dir)
     try:
         key = make_dedup_key(symbol, side, on_date)
-        for rec in read_placed_ledger(output_dir):
+        for rec in read_placed_ledger(out_dir):
             if rec.get("dedup_key") == key:
                 return True
         return False
