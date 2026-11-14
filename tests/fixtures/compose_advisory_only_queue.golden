@@ -35,7 +35,23 @@
           "target_notional": 3000.0
         }
       ],
-      "overridden": []
+      "overridden": [],
+      "context": {
+        "decision_price": null,
+        "data_quality": null,
+        "synthetic_inputs": null,
+        "forecast_30d_pct": null,
+        "forecast_is_fallback": null,
+        "forecast_effects": null,
+        "score_components": null,
+        "buy_range": null,
+        "sell_range": null,
+        "suggested_exit_pct": null,
+        "sector": null,
+        "sizing_binding_constraint": null,
+        "regime": "RISK ON",
+        "news_sentiment": null
+      }
     },
     {
       "client_order_id": "0d3cbd0fe7e5ed1f4cdec8cf9cc883a4a9a07d76d9775ee2",
@@ -58,7 +74,24 @@
           "target_notional": 0.0
         }
       ],
-      "overridden": []
+      "overridden": [],
+      "context": {
+        "decision_price": null,
+        "data_quality": null,
+        "synthetic_inputs": null,
+        "forecast_30d_pct": null,
+        "forecast_is_fallback": null,
+        "forecast_effects": null,
+        "score_components": null,
+        "buy_range": null,
+        "sell_range": null,
+        "suggested_exit_pct": null,
+        "sector": null,
+        "sizing_binding_constraint": null,
+        "regime": "RISK ON",
+        "news_sentiment": null
+      },
+      "exit_kind": "full"
     },
     {
       "client_order_id": "610884579b0ae481dabf54e8d6f306a470a1605f02cc5216",
@@ -81,7 +114,23 @@
           "target_notional": 4000.0
         }
       ],
-      "overridden": []
+      "overridden": [],
+      "context": {
+        "decision_price": null,
+        "data_quality": null,
+        "synthetic_inputs": null,
+        "forecast_30d_pct": null,
+        "forecast_is_fallback": null,
+        "forecast_effects": null,
+        "score_components": null,
+        "buy_range": null,
+        "sell_range": null,
+        "suggested_exit_pct": null,
+        "sector": null,
+        "sizing_binding_constraint": null,
+        "regime": "RISK ON",
+        "news_sentiment": null
+      }
     }
   ]
 }

@@ -456,16 +456,26 @@ class TestLimitOrderBuffer:
 
 
 class TestGateIntent:
-    def test_gate_intent_returns_reasons_on_block(self):
-        # Force a block: tiny equity so a large notional trips max_position_size.
+    def test_gate_intent_returns_reasons_on_block(self, monkeypatch):
+        # Force a block with a check the queue still runs. (This used to trip
+        # max_position_size, which the queue defers to the Agentic preflight
+        # since #1148, so it no longer blocked anything here.) A macro DTO
+        # flagged data_unavailable forces killSwitch on, and the macro kill
+        # switch check vetoes every BUY.
+        import settings as settings_mod
+        monkeypatch.setattr(settings_mod.settings, "MACRO_REGIME_GATE_ENABLED", True,
+                            raising=False)
         intent = OrderIntent(strategy_id="advisory", symbol="AAPL",
                              side=OrderSide.BUY, qty=1000.0)
         ctx = RiskContext(
+            macro=MacroEconomicDTO(0.5, 3.0, 2.0, data_unavailable=True),
             account=type("A", (), {"equity": 100.0, "cash": 0.0, "buying_power": 0.0})(),
             current_prices={"AAPL": 100.0},
+            timestamp=_RTH,
         )
         allowed, reasons = qb.gate_intent(intent, ctx)
         assert allowed is False and reasons
+        assert any(r.startswith("macro_kill_switch") for r in reasons)
 
     def test_gate_intent_fails_closed_on_exception(self):
         class _BoomGate:
@@ -571,3 +581,239 @@ class TestDeferredAccountChecks:
         p = qb.build_execution_queue(_rr([_Rec("NVDA", "SELL", 0.9)]), mode="review", now=_RTH)
         assert p["deferred_account_checks"] == sorted(ACCOUNT_LEVEL_CHECKS)
         assert p["account_checks_owner"] == "agentic_preflight"
+
+
+# ===========================================================================
+# Decision context + SELL exit_kind (contract C1, 2026-11-14 agentic review
+# findings #10 and #4; .claude/agentic_trading_review_fixes_implementation_plan.md)
+# ===========================================================================
+
+
+def _advisory_rec(symbol: str = "NVDA", action: str = "BUY", **overrides):
+    """A real engine.advisory.Recommendation, with every context field set."""
+    from engine.advisory import Recommendation
+
+    fields = dict(
+        symbol=symbol,
+        action=action,
+        strategy="multi-signal composite [RISK ON]",
+        conviction=0.9,
+        rationale="because",
+        suggested_position_pct=0.1 if action == "BUY" else 0.0,
+        forecast=126.0,
+        key_indicators={
+            "forecast_30d_pct": 0.05,
+            "forecast_is_fallback": 0.0,
+            "news_sentiment": 0.25,
+            "regime_multiplier": 1.0,
+            "meta_label_composite": 1.0,
+        },
+        data_quality="OK",
+        synthetic_inputs=False,
+        score_components={"momentum": 0.31, "value": -0.12},
+        buy_range="Buy Zone: $118.00 - $121.00",
+        sell_range="Stop: $110.00",
+        suggested_exit_pct=0.5 if action == "SELL" else 0.0,
+        sector="Technology",
+        sizing_binding_constraint="advisory_max_position_pct" if action == "BUY" else None,
+        forecast_effects=(),
+    )
+    fields.update(overrides)
+    return Recommendation(**fields)
+
+
+def _calm_macro() -> MacroEconomicDTO:
+    return MacroEconomicDTO(yield_curve_10y_2y=0.5, high_yield_oas=3.0, inflation_rate=2.5,
+                            sahm_rule_indicator=0.1, vix_value=15.0)
+
+
+def _strict_json(payload) -> str:
+    """json.dumps that refuses NaN/inf, i.e. what a strict JSON reader needs."""
+    return json.dumps(payload, allow_nan=False)
+
+
+class TestDecisionContext:
+    def test_every_intent_carries_the_full_key_set(self, cap5k):
+        rr = _rr([_Rec("NVDA", "SELL", 0.9),
+                  _Rec("AAPL", "BUY", 0.9, suggested_position_pct=0.05)])
+        p = qb.build_execution_queue(rr, mode="review", now=_RTH)
+        assert len(p["intents"]) == 2
+        for i in p["intents"]:
+            assert tuple(i["context"].keys()) == qb.CONTEXT_KEYS
+
+    def test_real_recommendation_values_flow_through(self, cap5k):
+        rr = _rr([_advisory_rec("AAPL", "BUY")])
+        p = qb.build_execution_queue(rr, mode="review", now=_RTH, macro_dto=_calm_macro())
+        ctx = p["intents"][0]["context"]
+        # decision_price is the price advisory used: forecast / (1 + pct).
+        assert ctx["decision_price"] == pytest.approx(120.0)
+        assert ctx["data_quality"] == "OK"
+        assert ctx["synthetic_inputs"] is False
+        assert ctx["forecast_30d_pct"] == pytest.approx(0.05)
+        assert ctx["forecast_is_fallback"] is False
+        assert ctx["forecast_effects"] == []
+        assert ctx["score_components"] == {"momentum": 0.31, "value": -0.12}
+        assert ctx["buy_range"] == "Buy Zone: $118.00 - $121.00"
+        assert ctx["sell_range"] == "Stop: $110.00"
+        assert ctx["suggested_exit_pct"] is None  # a BUY exits nothing
+        assert ctx["sector"] == "Technology"
+        assert ctx["sizing_binding_constraint"] == "advisory_max_position_pct"
+        assert ctx["regime"] == "RISK ON"
+        assert ctx["news_sentiment"] == pytest.approx(0.25)
+
+    def test_missing_fields_are_null_never_defaults(self, cap5k):
+        # The bare duck-typed rec (no advisory fields at all) and no macro DTO:
+        # every context value is null -- no 0.0, no 1.0, no False, no "".
+        rr = _rr([_Rec("NVDA", "SELL", 0.9),
+                  _Rec("AAPL", "BUY", 0.9, suggested_position_pct=0.05)])
+        p = qb.build_execution_queue(rr, mode="review", now=_RTH)
+        for i in p["intents"]:
+            assert all(v is None for v in i["context"].values()), i["context"]
+
+    def test_unavailable_markers_become_null(self, cap5k):
+        rec = _advisory_rec(
+            "AAPL", "BUY",
+            forecast=None,
+            key_indicators={"forecast_30d_pct": float("nan"),
+                            "forecast_is_fallback": float("nan"),
+                            "news_sentiment": float("nan"),
+                            "regime_multiplier": 1.0, "meta_label_composite": 1.0},
+            score_components=None, buy_range="", sell_range="", sector="Unknown",
+            sizing_binding_constraint=None,
+        )
+        p = qb.build_execution_queue(_rr([rec]), mode="review", now=_RTH)
+        ctx = p["intents"][0]["context"]
+        for key in ("decision_price", "forecast_30d_pct", "forecast_is_fallback",
+                    "score_components", "buy_range", "sell_range", "sector",
+                    "sizing_binding_constraint", "regime", "news_sentiment"):
+            assert ctx[key] is None, key
+
+    def test_defaulted_multipliers_are_never_copied(self, cap5k):
+        # advisory defaults regime_multiplier / meta_label_composite to 1.0 when
+        # the strategy engine didn't produce them; a 1.0 there is not a measurement.
+        p = qb.build_execution_queue(_rr([_advisory_rec("AAPL", "BUY")]), mode="review", now=_RTH)
+        ctx = p["intents"][0]["context"]
+        assert "regime_multiplier" not in ctx and "meta_label_composite" not in ctx
+        assert 1.0 not in [v for v in ctx.values() if isinstance(v, float)]
+
+    def test_regime_null_when_macro_data_unavailable(self, cap5k):
+        # The DTO's fail-closed "RECESSION" is a safety posture, not a reading.
+        macro = MacroEconomicDTO(0.5, 3.0, 2.5, data_unavailable=True)
+        rec = _advisory_rec("NVDA", "SELL")
+        p = qb.build_execution_queue(_rr([rec]), mode="review", now=_RTH, macro_dto=macro)
+        assert p["intents"][0]["context"]["regime"] is None
+
+    def test_nan_and_numpy_inputs_are_strict_json_safe(self, cap5k, tmp_path):
+        np = pytest.importorskip("numpy")
+        rec = _advisory_rec(
+            "AAPL", "BUY",
+            forecast=np.float64(126.0),
+            key_indicators={"forecast_30d_pct": np.float64(0.05),
+                            "forecast_is_fallback": np.float64(1.0),
+                            "news_sentiment": np.float32("nan")},
+            score_components={"momentum": np.float64(0.5), "broken": float("nan"),
+                              "inf": float("inf"), "vol": np.float32(0.25)},
+            forecast_effects=("bullish_conviction_boost",),
+        )
+        path = qb.emit_execution_queue(_rr([rec]), mode="review", output_dir=tmp_path, now=_RTH)
+        text = path.read_text()
+        assert "NaN" not in text and "Infinity" not in text
+        payload = json.loads(text)
+        _strict_json(payload)  # raises on any NaN/inf
+        ctx = payload["intents"][0]["context"]
+        assert ctx["forecast_is_fallback"] is True
+        assert ctx["news_sentiment"] is None
+        assert ctx["score_components"] == {"momentum": 0.5, "vol": 0.25}
+        assert ctx["forecast_effects"] == ["bullish_conviction_boost"]
+        assert type(ctx["decision_price"]) is float
+
+    def test_carried_context_is_resanitised_and_gets_the_regime(self, cap5k):
+        # A composed intent that passed the advisory decision through
+        # execution.compose carries a ready `context` dict.
+        @dataclass
+        class _Composed:
+            symbol: str
+            action: str
+            conviction: float
+            suggested_position_pct: float = 0.05
+            strategy: str = "advisory"
+            rationale: str = "because"
+            context: dict = field(default_factory=dict)
+
+        carried = {"decision_price": 120.0, "news_sentiment": float("nan"),
+                   "data_quality": "OK", "bogus_extra": 1}
+        rr = _rr([_Composed("AAPL", "BUY", 0.9, context=carried)])
+        p = qb.build_execution_queue(rr, mode="review", now=_RTH, macro_dto=_calm_macro())
+        ctx = p["intents"][0]["context"]
+        assert tuple(ctx.keys()) == qb.CONTEXT_KEYS
+        assert ctx["decision_price"] == 120.0 and ctx["data_quality"] == "OK"
+        assert ctx["news_sentiment"] is None
+        assert ctx["regime"] == "RISK ON"
+        _strict_json(p)
+
+    def test_build_decision_context_never_raises_on_garbage(self):
+        class _Weird:
+            key_indicators = "not a dict"
+            score_components = ["not", "a", "dict"]
+            data_quality = "MAYBE"
+            synthetic_inputs = "yes"
+            forecast = "abc"
+            sector = 7
+        ctx = qb.build_decision_context(_Weird())
+        assert all(v is None for v in ctx.values()), ctx
+
+
+class TestSellExitKind:
+    _HELD = {"NVDA": _Pos("NVDA", 10, 100.0, 120.0, 1200.0, 200.0)}
+
+    def _sell(self, rec):
+        p = qb.build_execution_queue(_rr([rec], held=self._HELD), mode="review", now=_RTH)
+        assert len(p["intents"]) == 1
+        return p["intents"][0]
+
+    def test_normal_sell_is_a_fraction_of_the_position(self, no_cap):
+        # advisory: an ordinary SELL / RISK REDUCE exits half (exit_fraction_normal_sell).
+        i = self._sell(_advisory_rec("NVDA", "SELL", suggested_exit_pct=0.5))
+        assert i["exit_kind"] == "fraction"
+        assert i["exit_fraction"] == 0.5
+        assert i["qty"] == 10  # unchanged, back-compat
+        assert i["target_notional"] == 600.0  # half the held market value
+        assert i["context"]["suggested_exit_pct"] == 0.5
+
+    def test_case_a_strong_sell_is_a_full_exit(self, no_cap):
+        i = self._sell(_advisory_rec("NVDA", "SELL", suggested_exit_pct=1.0,
+                                     forecast_effects=("case_a_exit",)))
+        assert i["exit_kind"] == "full"
+        assert "exit_fraction" not in i
+        assert i["qty"] == 10 and i["target_notional"] == 1200.0
+
+    def test_unknown_fraction_keeps_the_legacy_full_exit(self, no_cap):
+        i = self._sell(_Rec("NVDA", "SELL", 0.9))
+        assert i["exit_kind"] == "full"
+        assert "exit_fraction" not in i
+        assert i["qty"] == 10 and i["target_notional"] == 1200.0
+
+    def test_fraction_from_a_carried_context(self, no_cap):
+        @dataclass
+        class _Composed:
+            symbol: str
+            action: str
+            conviction: float
+            suggested_position_pct: float = 0.0
+            strategy: str = "advisory"
+            rationale: str = "because"
+            context: dict = field(default_factory=dict)
+
+        i = self._sell(_Composed("NVDA", "SELL", 0.9, context={"suggested_exit_pct": 0.5}))
+        assert i["exit_kind"] == "fraction" and i["exit_fraction"] == 0.5
+
+    def test_notional_trim_is_trim(self, no_cap):
+        i = self._sell(_Rec("NVDA", "SELL", 0.9, suggested_position_pct=0.05))
+        assert i["exit_kind"] == "trim"
+        assert i["qty"] is None and i["target_notional"] == 500.0
+        assert "exit_fraction" not in i
+
+    def test_buy_has_no_exit_kind(self, no_cap):
+        p = qb.build_execution_queue(_rr([_advisory_rec("AAPL", "BUY")]), mode="review", now=_RTH)
+        assert "exit_kind" not in p["intents"][0]
+        assert "exit_fraction" not in p["intents"][0]

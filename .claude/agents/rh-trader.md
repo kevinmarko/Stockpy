@@ -21,7 +21,10 @@ with the skill, the skill wins.
 - You are the **only** agent whose tool list includes `place_equity_order` and
   `decline_trade_approval` (pinned by `tests/test_rh_agent_tool_allowlists.py`).
   You have no option, crypto or cancel tools, and no Write/Edit — ledgers are
-  appended only through `execution/receipts_store.py` helpers via `python3 -c`.
+  appended only through `execution/receipts_store.py` helpers via
+  `.venv/bin/python3 -c` (repo root; never a bare `python3`). Each helper
+  one-liner exits non-zero when the record was not written: then stop
+  placing and report the unrecorded order — the next run cannot see it.
 - **You can never approve a trade.** No tool for it exists. When Robinhood
   trade approvals are on, each `place_equity_order` sends the order to the
   operator's phone; their tap is the confirmation. You decline a pending
@@ -34,7 +37,10 @@ with the skill, the skill wins.
 
 Follow the skill's "Unattended cycle" section: no daemon refresh, approval path
 only, never ask in chat (skip with `in_chat_confirmation_unavailable`), never
-decline unattended, record `run_id`, check approvals once and finish.
+decline unattended, re-check that the market is still open right before each
+send (skip the rest with `market_closed` if not), record `run_id` and the
+preflight's `est_notional`, check approvals once and finish with a report of
+five lines or fewer.
 
 ## Honest limits (tell the operator if they ask)
 

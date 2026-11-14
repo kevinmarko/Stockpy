@@ -36,9 +36,10 @@ import logging
 import math
 import re
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from zoneinfo import ZoneInfo
 
 from execution.agentic_preflight import PreflightReport, _output_dir, run_id_for
 
@@ -55,6 +56,14 @@ _ABS_TOL = 1e-12
 _MISSING = object()
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9_.-]+\.json$")
 _SEGMENT = re.compile(r"([^.\[\]]+)|\[([^\]]*)\]")
+_ET = ZoneInfo("America/New_York")
+# Sentinel: "read the preflight for this queue from disk yourself".
+_READ_PREFLIGHT = object()
+
+
+def _today_et() -> date:
+    """Today's date on the US market calendar (America/New_York)."""
+    return datetime.now(_ET).date()
 
 
 # ---------------------------------------------------------------------------
@@ -165,13 +174,16 @@ def values_match(claimed: Any, source: Any) -> bool:
     return claimed == source
 
 
-_NUMBER_IN_TEXT = re.compile(r"(?<![\w.])-?\d+(?:,\d{3})*(?:\.\d+)?(%)?")
+# A leading-decimal number (".5%") is a token too: the alternation tries the
+# integer form first, then ``\.\d+``. The lookbehind still keeps digits inside
+# words/tickers/versions (``S&P500``, ``v2.5``) out.
+_NUMBER_IN_TEXT = re.compile(r"(?<![\w.])-?(?:\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)(%)?")
 
 
 def _numbers_in(text: Any) -> List[Tuple[float, bool]]:
     """Numeric tokens in free text, as ``(value, is_percent)``. ``$27.48`` →
-    27.48; ``1,200`` → 1200; ``12%`` → (12, True). Digits inside a word or a
-    ticker (``S&P500``, ``Q3``) are not tokens."""
+    27.48; ``1,200`` → 1200; ``12%`` → (12, True); ``.5%`` → (0.5, True).
+    Digits inside a word or a ticker (``S&P500``, ``Q3``) are not tokens."""
     if not isinstance(text, str):
         return []
     out = []
@@ -207,63 +219,124 @@ def _check_queue_match(doc: Mapping[str, Any], queue: Mapping[str, Any], label: 
     return []
 
 
-def validate_research(doc: Any, queue: Mapping[str, Any]) -> List[str]:
-    """Errors in a Scout ``research.json`` (empty list = clean)."""
+def required_coverage(queue: Mapping[str, Any],
+                      preflight: Optional[Mapping[str, Any]] = None) -> Tuple[List[str], Set[str]]:
+    """``(client_order_ids, symbols)`` the Scout and Analyst must cover.
+
+    With a preflight for THIS queue (same ``queue_generated_at``), only the
+    intents it PASSED: research and theses for vetoed orders are wasted work
+    and burn the queue's staleness budget (the cycle runs the risk stage
+    first). Zero passed means nothing is required. Without a usable preflight
+    the rule is every queue intent, as before.
+    """
+    intents = _queue_intents(queue)
+    if (isinstance(preflight, Mapping)
+            and preflight.get("queue_generated_at") == queue.get("generated_at")
+            and isinstance(preflight.get("verdicts"), list)):
+        passed = {str(v.get("client_order_id")) for v in preflight["verdicts"]
+                  if isinstance(v, Mapping) and v.get("passed") is True}
+        coids = sorted(c for c in intents if c in passed)
+    else:
+        coids = sorted(intents)
+    symbols = {str(intents[c].get("symbol", "")).upper() for c in coids}
+    return coids, symbols
+
+
+def _research_entry_errors(sym: Any, entry: Any, today: date) -> List[str]:
+    """Errors in one ``research.json`` symbol entry."""
+    where = f"research[{sym}]"
+    errors: List[str] = []
+    if str(sym).upper() != sym:
+        errors.append(f"{where}: symbol keys must be upper case")
+    if not isinstance(entry, Mapping):
+        return errors + [f"{where}: not an object"]
+    gaps = entry.get("data_gaps", [])
+    if not isinstance(gaps, list):
+        errors.append(f"{where}.data_gaps: must be a list")
+        gaps = []
+    ne = entry.get("next_earnings")
+    if not isinstance(ne, Mapping):
+        errors.append(f"{where}.next_earnings: required (a date, or date null with a reason)")
+    else:
+        d = ne.get("date")
+        if d is None:
+            if not ne.get("reason") and "next_earnings" not in gaps:
+                errors.append(f"{where}.next_earnings: date is null with no reason")
+        else:
+            try:
+                parsed = date.fromisoformat(str(d))
+            except ValueError:
+                errors.append(f"{where}.next_earnings.date {d!r} is not YYYY-MM-DD")
+            else:
+                # A past date is last quarter's report, not the NEXT one: the
+                # blackout and the push would both be wrong. Today is allowed
+                # (a same-day report is upcoming until it happens).
+                if parsed < today:
+                    errors.append(f"{where}.next_earnings.date {d} is in the past (today is "
+                                  f"{today.isoformat()}); it is not the next report")
+        if not ne.get("source"):
+            errors.append(f"{where}.next_earnings: missing 'source'")
+    ratings = entry.get("analyst_ratings", _MISSING)
+    if ratings is None or ratings is _MISSING:
+        if "analyst_ratings" not in gaps:
+            errors.append(f"{where}.analyst_ratings: missing without a data_gaps entry")
+    elif isinstance(ratings, Mapping):
+        for k in ("buy", "hold", "sell"):
+            v = ratings.get(k)
+            if v is not None and (_as_number(v) is None or _as_number(v) < 0):
+                errors.append(f"{where}.analyst_ratings.{k} {v!r} is not a non-negative number")
+        if not ratings.get("source"):
+            errors.append(f"{where}.analyst_ratings: missing 'source'")
+    else:
+        errors.append(f"{where}.analyst_ratings: must be an object or null")
+    for kind, url_key in (("news", "url"), ("recent_filings", "url")):
+        items = entry.get(kind, [])
+        if not isinstance(items, list):
+            errors.append(f"{where}.{kind}: must be a list")
+            continue
+        for n, item in enumerate(items):
+            if not isinstance(item, Mapping) or not str(item.get(url_key) or "").startswith(("http://", "https://")):
+                errors.append(f"{where}.{kind}[{n}]: needs an http(s) {url_key}")
+    return errors
+
+
+def research_symbol_errors(doc: Any, *, today: Optional[date] = None) -> Dict[str, List[str]]:
+    """Per-symbol errors in a ``research.json`` (symbols with none are absent).
+
+    Only the entries themselves; document-level problems (wrong queue, no
+    ``symbols`` object, coverage) are :func:`validate_research`'s.
+    """
+    symbols = doc.get("symbols") if isinstance(doc, Mapping) else None
+    if not isinstance(symbols, Mapping):
+        return {}
+    today = today or _today_et()
+    out: Dict[str, List[str]] = {}
+    for sym, entry in symbols.items():
+        errs = _research_entry_errors(sym, entry, today)
+        if errs:
+            out[str(sym)] = errs
+    return out
+
+
+def validate_research(doc: Any, queue: Mapping[str, Any], *,
+                      preflight: Optional[Mapping[str, Any]] = None,
+                      today: Optional[date] = None) -> List[str]:
+    """Errors in a Scout ``research.json`` (empty list = clean).
+
+    Every entry present is checked (``today`` defaults to the US/Eastern date).
+    Coverage follows :func:`required_coverage`: with this queue's
+    ``preflight``, only the symbols of passed intents must have an entry.
+    """
     if not isinstance(doc, Mapping):
         return ["research: not a JSON object"]
     errors = _check_queue_match(doc, queue, "research")
     symbols = doc.get("symbols")
     if not isinstance(symbols, Mapping):
         return errors + ["research: 'symbols' must be an object keyed by symbol"]
-    queue_syms = {str(i.get("symbol", "")).upper() for i in _queue_intents(queue).values()}
-    for sym, entry in symbols.items():
-        where = f"research[{sym}]"
-        if str(sym).upper() != sym:
-            errors.append(f"{where}: symbol keys must be upper case")
-        if not isinstance(entry, Mapping):
-            errors.append(f"{where}: not an object")
-            continue
-        gaps = entry.get("data_gaps", [])
-        if not isinstance(gaps, list):
-            errors.append(f"{where}.data_gaps: must be a list")
-            gaps = []
-        ne = entry.get("next_earnings")
-        if not isinstance(ne, Mapping):
-            errors.append(f"{where}.next_earnings: required (a date, or date null with a reason)")
-        else:
-            d = ne.get("date")
-            if d is None:
-                if not ne.get("reason") and "next_earnings" not in gaps:
-                    errors.append(f"{where}.next_earnings: date is null with no reason")
-            else:
-                try:
-                    date.fromisoformat(str(d))
-                except ValueError:
-                    errors.append(f"{where}.next_earnings.date {d!r} is not YYYY-MM-DD")
-            if not ne.get("source"):
-                errors.append(f"{where}.next_earnings: missing 'source'")
-        ratings = entry.get("analyst_ratings", _MISSING)
-        if ratings is None or ratings is _MISSING:
-            if "analyst_ratings" not in gaps:
-                errors.append(f"{where}.analyst_ratings: missing without a data_gaps entry")
-        elif isinstance(ratings, Mapping):
-            for k in ("buy", "hold", "sell"):
-                v = ratings.get(k)
-                if v is not None and (_as_number(v) is None or _as_number(v) < 0):
-                    errors.append(f"{where}.analyst_ratings.{k} {v!r} is not a non-negative number")
-            if not ratings.get("source"):
-                errors.append(f"{where}.analyst_ratings: missing 'source'")
-        else:
-            errors.append(f"{where}.analyst_ratings: must be an object or null")
-        for kind, url_key in (("news", "url"), ("recent_filings", "url")):
-            items = entry.get(kind, [])
-            if not isinstance(items, list):
-                errors.append(f"{where}.{kind}: must be a list")
-                continue
-            for n, item in enumerate(items):
-                if not isinstance(item, Mapping) or not str(item.get(url_key) or "").startswith(("http://", "https://")):
-                    errors.append(f"{where}.{kind}[{n}]: needs an http(s) {url_key}")
-    missing = sorted(queue_syms - {str(s).upper() for s in symbols})
+    for errs in research_symbol_errors(doc, today=today).values():
+        errors.extend(errs)
+    _, required = required_coverage(queue, preflight)
+    missing = sorted(required - {str(s).upper() for s in symbols})
     if missing:
         errors.append(f"research: no entry for queue symbol(s) {', '.join(missing)}")
     return errors
@@ -401,26 +474,62 @@ def load_cite_sources(run_dir: Path) -> Tuple[Dict[str, Any], List[str]]:
     return sources, errors
 
 
-def load_run_artifacts(queue: Mapping[str, Any], output_dir: Optional[Any] = None) -> Dict[str, Any]:
+def _preflight_for(queue: Mapping[str, Any], output_dir: Optional[Any]) -> Optional[Mapping[str, Any]]:
+    """This queue's ``preflight.json`` or None. Never raises."""
+    try:
+        from execution.agentic_preflight import read_preflight_for_queue
+        pf = read_preflight_for_queue(queue, output_dir)
+    except Exception as exc:  # noqa: BLE001 -- unreadable preflight = no preflight
+        logger.warning("agentic_research: preflight unreadable (%s); covering every intent", exc)
+        return None
+    return pf if isinstance(pf, Mapping) else None
+
+
+def load_run_artifacts(queue: Mapping[str, Any], output_dir: Optional[Any] = None, *,
+                       preflight: Any = _READ_PREFLIGHT,
+                       today: Optional[date] = None) -> Dict[str, Any]:
     """Read and validate both artifacts for THIS queue. Never raises.
 
     Returns ``{"research", "theses", "research_errors", "thesis_errors",
-    "valid_thesis_ids", "input_errors"}``; a missing file is reported as an
-    error and its document is ``None``.
+    "valid_thesis_ids", "input_errors", "required_client_order_ids",
+    "missing_thesis_ids", "valid_research_symbols", "has_preflight"}``; a
+    missing file is reported as an error and its document is ``None``.
+
+    ``preflight`` defaults to this queue's ``preflight.json`` on disk (pass
+    ``None`` to ignore it): with one, only its passed intents must be covered
+    (:func:`required_coverage`). ``missing_thesis_ids`` (required ids without
+    a valid thesis) is information, not an error: the push says "thesis
+    unavailable" for those orders.
     """
     run_dir = run_dir_for_queue(queue, output_dir)
+    if preflight is _READ_PREFLIGHT:
+        preflight = _preflight_for(queue, output_dir)
+    today = today or _today_et()
     sources, input_errors = load_cite_sources(run_dir)
     research, r_err = _read_json(run_dir / RESEARCH_FILENAME)
     theses, t_err = _read_json(run_dir / THESES_FILENAME)
-    research_errors = [r_err] if r_err else validate_research(research, queue)
+    research_errors = ([r_err] if r_err
+                       else validate_research(research, queue, preflight=preflight, today=today))
     thesis_errors = {"_doc": [t_err]} if t_err else validate_theses(theses, queue, sources)
+    valid_ids = valid_thesis_ids(theses, thesis_errors) if not t_err else []
+    required_ids, _ = required_coverage(queue, preflight)
+
+    valid_symbols: List[str] = []
+    if not r_err and isinstance(research, Mapping) and isinstance(research.get("symbols"), Mapping) \
+            and not _check_queue_match(research, queue, "research"):
+        bad = research_symbol_errors(research, today=today)
+        valid_symbols = sorted(str(s) for s in research["symbols"] if str(s) not in bad)
     return {
         "research": research if not r_err else None,
         "theses": theses if not t_err else None,
         "research_errors": research_errors,
         "thesis_errors": thesis_errors,
-        "valid_thesis_ids": valid_thesis_ids(theses, thesis_errors) if not t_err else [],
+        "valid_thesis_ids": valid_ids,
         "input_errors": input_errors,
+        "has_preflight": preflight is not None,
+        "required_client_order_ids": required_ids,
+        "missing_thesis_ids": [c for c in required_ids if c not in valid_ids],
+        "valid_research_symbols": valid_symbols,
     }
 
 
@@ -447,6 +556,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "thesis_errors": res["thesis_errors"],
         "input_errors": res["input_errors"],
         "valid_thesis_ids": res["valid_thesis_ids"],
+        "has_preflight": res["has_preflight"],
+        "required_client_order_ids": res["required_client_order_ids"],
+        "missing_thesis_ids": res["missing_thesis_ids"],
     }, indent=2, sort_keys=True))
     return 0 if ok else 1
 

@@ -16,6 +16,15 @@ from execution import agentic_preflight as ap
 from execution import agentic_research as ar
 
 GEN = "2026-11-03T15:00:00+00:00"
+TODAY = date(2026, 11, 3)
+_REAL_TODAY_ET = ar._today_et
+
+
+@pytest.fixture(autouse=True)
+def _frozen_today(monkeypatch):
+    """The validator rejects past earnings dates relative to the US/Eastern
+    date; pin it so the fixtures' 2026-11-20 date is not a date bomb."""
+    monkeypatch.setattr(ar, "_today_et", lambda: TODAY)
 
 
 def queue():
@@ -146,6 +155,59 @@ class TestResearch:
         doc["symbols"]["F"]["next_earnings"] = {"date": None}
         assert ar.earnings_dates_from_research(doc) == {}
 
+    # -- past earnings date (review #5) -------------------------------------
+    def test_past_earnings_date_is_an_error_for_that_symbol(self):
+        doc = research()
+        doc["symbols"]["T"]["next_earnings"]["date"] = "2026-11-02"
+        errs = ar.validate_research(doc, queue(), today=TODAY)
+        assert any("research[T].next_earnings.date 2026-11-02 is in the past" in e for e in errs)
+        assert set(ar.research_symbol_errors(doc, today=TODAY)) == {"T"}
+
+    def test_earnings_today_is_not_past(self):
+        doc = research()
+        doc["symbols"]["T"]["next_earnings"]["date"] = TODAY.isoformat()
+        assert ar.validate_research(doc, queue(), today=TODAY) == []
+
+    def test_past_check_uses_injected_today(self):
+        assert ar.validate_research(research(), queue(), today=date(2026, 11, 21))
+        assert ar.validate_research(research(), queue(), today=date(2026, 11, 20)) == []
+
+    def test_today_defaults_to_us_eastern_date(self, monkeypatch):
+        # 2026-11-04 03:00 UTC is still 2026-11-03 in New York.
+        class _DT(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 11, 4, 3, 0, tzinfo=timezone.utc).astimezone(tz)
+        monkeypatch.setattr(ar, "datetime", _DT)
+        assert _REAL_TODAY_ET() == date(2026, 11, 3)
+
+    # -- coverage follows the preflight (review #9) --------------------------
+    def _pf(self, passed_coids, gen=GEN):
+        return {"queue_generated_at": gen, "verdicts": [
+            {"client_order_id": c, "passed": c in passed_coids} for c in ("c-T", "c-F")]}
+
+    def test_with_preflight_only_passed_symbols_required(self):
+        doc = research()
+        del doc["symbols"]["F"]
+        assert ar.validate_research(doc, queue(), preflight=self._pf({"c-T"})) == []
+        assert any("F" in e for e in ar.validate_research(doc, queue(), preflight=self._pf({"c-F"})))
+
+    def test_with_preflight_nothing_passed_requires_nothing(self):
+        doc = research(symbols={})
+        assert ar.validate_research(doc, queue(), preflight=self._pf(set())) == []
+
+    def test_preflight_for_other_queue_keeps_todays_rule(self):
+        doc = research()
+        del doc["symbols"]["F"]
+        errs = ar.validate_research(doc, queue(), preflight=self._pf({"c-T"}, gen="2026-11-03T14:00:00+00:00"))
+        assert any("no entry for queue symbol(s) F" in e for e in errs)
+
+    def test_required_coverage(self):
+        assert ar.required_coverage(queue()) == (["c-F", "c-T"], {"F", "T"})
+        assert ar.required_coverage(queue(), self._pf({"c-F"})) == (["c-F"], {"F"})
+        assert ar.required_coverage(queue(), {"queue_generated_at": GEN, "verdicts": "junk"}) == (
+            ["c-F", "c-T"], {"F", "T"})
+
 
 # ---------------------------------------------------------------------------
 # theses.json — the anti-fabrication gate
@@ -259,6 +321,33 @@ class TestOnDisk:
         assert ar.main(["validate", "--output-dir", str(tmp_path)]) == 1
         assert "c-T" in json.loads(capsys.readouterr().out)["thesis_errors"]
 
+    def test_coverage_and_missing_theses_follow_the_preflight(self, tmp_path):
+        doc = research()
+        del doc["symbols"]["F"]
+        _write_run(tmp_path, doc, theses(("c-T", thesis())))
+        art = ar.load_run_artifacts(queue(), tmp_path)        # no preflight on disk
+        assert not art["has_preflight"] and art["research_errors"]
+        assert art["required_client_order_ids"] == ["c-F", "c-T"] and art["missing_thesis_ids"] == ["c-F"]
+        report = ap.PreflightReport(GEN, "live", "", [], [], {})
+        folder = ar.run_dir_for_queue(queue(), tmp_path)
+        (folder / ap.PREFLIGHT_FILENAME).write_text(json.dumps({
+            "queue_generated_at": GEN, "run_blockers": [], "verdicts": [
+                {"client_order_id": "c-T", "passed": True}, {"client_order_id": "c-F", "passed": False}]}))
+        assert folder.name == ap.run_id_for(report)
+        art = ar.load_run_artifacts(queue(), tmp_path)
+        assert art["has_preflight"] and art["research_errors"] == []
+        assert art["required_client_order_ids"] == ["c-T"] and art["missing_thesis_ids"] == []
+        # an explicit preflight=None ignores the file (today's rule)
+        assert ar.load_run_artifacts(queue(), tmp_path, preflight=None)["research_errors"]
+
+    def test_valid_research_symbols_exclude_bad_entries(self, tmp_path):
+        doc = research()
+        doc["symbols"]["T"]["next_earnings"]["date"] = "2026-10-01"
+        _write_run(tmp_path, doc, theses(("c-T", thesis())))
+        art = ar.load_run_artifacts(queue(), tmp_path)
+        assert art["valid_research_symbols"] == ["F"]
+        assert any("in the past" in e for e in art["research_errors"])
+
     def test_cli_unreadable_queue(self, tmp_path, capsys):
         assert ar.main(["validate", "--output-dir", str(tmp_path)]) == 2
 
@@ -296,6 +385,13 @@ class TestThesisTextNumbers:
         ("$27.48 and 1,200 and -3.5 and 12%", [(27.48, False), (1200.0, False), (-3.5, False), (12.0, True)]),
         ("Q3 S&P500 v2", []),
         (None, []),
+        (".5% and -.25 and 0.42.", [(0.5, True), (-0.25, False), (0.42, False)]),
+        ("v2.5 and S&P500.5", []),
     ])
     def test_number_extraction(self, text, expected):
         assert ar._numbers_in(text) == expected
+
+    def test_leading_decimal_number_is_checked(self):
+        """Review #5: '.5%' used to slip past the check (the lookbehind saw '.')."""
+        assert any("quotes 0.5%" in e for e in self._errs("Analysts see .5% upside."))
+        assert self._errs("Momentum of .42 leads.") == []

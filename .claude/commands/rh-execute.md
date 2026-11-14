@@ -29,10 +29,13 @@ review (they may be arriving here because of an ntfy push
    whatever the operator asks about it.
 4. If `mode == "review"`, STOP after previews — this is the paper/dry-run stage.
 4b. If `mode == "live"`, get the Portfolio & Risk preflight for this queue (the
-   `rh-risk-manager` agent, or `python3 -m execution.agentic_preflight` per the
-   skill's step 4b). Its vetoes are final; place only `passed: true` intents at
-   its `qty` and `limit_price`. With no usable preflight, every order takes the
-   in-chat confirmation path.
+   `rh-risk-manager` agent, or `.venv/bin/python3 -m execution.agentic_preflight`
+   per the skill's step 4b; inputs go in this run's own
+   `$OUTPUT_DIR/agentic/<run_id>/inputs/` folder). Its vetoes are final; place
+   only `passed: true` intents at its `qty` and `limit_price`. With no usable
+   preflight, every order takes the in-chat confirmation path. Add an
+   earnings blackout (`--earnings … --blackout-days N`) only when the
+   operator asks for one.
 4c. Say each order's validated thesis, invalidation and flags (the
    `rh-strategy-analyst`'s `theses.json`, loaded per the skill's step 4c) before
    it is sent; "thesis unavailable" when there is none. Narration only.
@@ -45,8 +48,14 @@ review (they may be arriving here because of an ntfy push
    only sends it to the operator's phone — their tap there is the per-order
    confirmation, so don't also ask in chat. Every `place_equity_order` carries
    the deterministic `ref_id` from `execution.receipts_store.make_ref_id`.
+   Record each placement with `append_placed` (including the preflight's
+   `est_notional`) through the skill's exit-code one-liner; if it exits
+   non-zero, stop and tell the operator which order is unrecorded.
 6. Track every approval you submitted with `get_trade_approvals` and record
    each observed state via `append_approval_event` — per the skill's step 6.
+
+Every Python command runs from the repo root with `.venv/bin/python3`, never a
+bare `python3`.
 
 Never place an order in `review` mode, never place an `allow_place: false`
 intent, never batch-confirm (discussion is not consent — the explicit

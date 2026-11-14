@@ -3259,11 +3259,29 @@ def run_lookahead_check(symbol: str, decision_date: str) -> str:
         return f"Lookahead check failed: {e!s}"
 
 
+# No production code writes the DailySignals table (see the comment on its
+# CREATE TABLE in database_setup.py), so an empty result is the normal case,
+# not "this symbol has no signals". Say so, and point at where the queued
+# decision's signal numbers really live.
+_NO_DAILY_SIGNALS_MESSAGE = (
+    "No signals found for {symbol} in the database. The DailySignals table "
+    "this tool reads is not written by the live pipeline (see database_setup.py), "
+    "so this is not evidence that {symbol} has no signals. For a queued order, "
+    "the decision's per-signal score_components, forecast, data quality and "
+    "ranges are in that intent's `context` in execution_queue.json; for a fresh "
+    "evaluation, call get_recommendation."
+)
+
+
 @mcp.tool(meta=_SIGNAL_TREE_UI)
 def get_signal_breakdown(symbol: str) -> str:
     """
-    Returns the full composite signal decomposition for a ticker,
-    including individual signal scores, factor weights, and final conviction.
+    Returns the most recent DailySignals row for a ticker (individual signal
+    scores, factor weights, final conviction) when one exists.
+
+    The live pipeline does not write DailySignals, so this usually returns an
+    explicit "not written" message instead. For a queued order, read the
+    intent's `context` in execution_queue.json (score_components etc.).
 
     Args:
         symbol: Stock ticker (e.g., AAPL).
@@ -3276,7 +3294,7 @@ def get_signal_breakdown(symbol: str) -> str:
             (symbol.upper(),),
         )
         if not rows:
-            return f"No signals found for {symbol.upper()} in the database."
+            return _NO_DAILY_SIGNALS_MESSAGE.format(symbol=symbol.upper())
 
         row = rows[0]
         data = dict(zip(columns, row))
@@ -3691,6 +3709,11 @@ def get_execution_queue() -> str:
             qty_str = (
                 f"{qty:g}" if isinstance(qty, (int, float)) else "resolved at review"
             )
+            # A partial exit (queue_builder exit_kind "fraction") keeps the held
+            # qty in `qty` for back-compat; show the fraction actually intended.
+            exit_fraction = intent.get("exit_fraction")
+            if intent.get("exit_kind") == "fraction" and isinstance(exit_fraction, (int, float)):
+                qty_str = f"{exit_fraction:.0%} of held ({qty_str})"
             target_notional = intent.get("target_notional")
             notional_str = (
                 f"${target_notional:,.2f}"
@@ -3732,6 +3755,11 @@ def get_execution_queue() -> str:
                     "allow_place": bool(i.get("allow_place", False)),
                     "rationale": i.get("rationale"),
                     "gate_reasons": i.get("gate_reasons") or [],
+                    # Additive (contract C1): SELL exit sizing and the
+                    # decision's own inputs, null on older queues.
+                    "exit_kind": i.get("exit_kind"),
+                    "exit_fraction": i.get("exit_fraction"),
+                    "context": i.get("context"),
                 }
                 for i in intents
                 if isinstance(i, dict)
@@ -4121,10 +4149,18 @@ def check_overnight_liquidity(symbol: str) -> str:
 @mcp.tool()
 def get_recommendation(symbol: str) -> str:
     """
-    Runs the platform's PRIMARY output — the holding-aware advisory engine — for
-    one symbol and returns its BUY/SELL/HOLD recommendation, conviction, strategy,
-    suggested position %, 30-day forecast, data quality, key indicators, and the
-    full plain-English rationale. READ-ONLY: no Robinhood login, no order code.
+    Runs the holding-aware advisory engine FRESH, right now, for one symbol and
+    returns its BUY/SELL/HOLD recommendation, conviction, strategy, suggested
+    position %, 30-day forecast, data quality, key indicators, and the full
+    plain-English rationale.
+
+    This is a NEW evaluation on current data, as if the symbol were not held:
+    it can differ from the decision behind a queued order (other prices, other
+    forecast, no position). For what a queued order was actually decided on,
+    read that intent's `context` in execution_queue.json.
+
+    READ-ONLY: no Robinhood login, no order code, and no forecast-ledger rows
+    are written (persist_forecast=False).
     """
     import json
     import math
@@ -4135,7 +4171,12 @@ def get_recommendation(symbol: str) -> str:
 
         sym = symbol.upper().strip()
         # position=None, snapshot=None -> clean read-only non-held recommendation.
-        rec = evaluate(sym, position=None, market=get_provider(), snapshot=None)
+        # persist_forecast=False: a read-only tool must never append rows to the
+        # forecast ledger (finding #6 of the 2026-11-14 agentic review).
+        rec = evaluate(
+            sym, position=None, market=get_provider(), snapshot=None,
+            persist_forecast=False,
+        )
 
         def _num(v):
             try:

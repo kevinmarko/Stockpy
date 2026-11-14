@@ -91,7 +91,7 @@
     {
       "expr": "getattr(settings, name)",
       "file": "execution/agentic_preflight.py",
-      "line": 317,
+      "line": 511,
       "resolved_by_factory": null,
       "rules": []
     },
@@ -1961,7 +1961,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6430",
+        "site": "investyo_mcp_server.py:6471",
         "via": []
       }
     ],
@@ -1981,7 +1981,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6375",
+        "site": "investyo_mcp_server.py:6416",
         "via": []
       }
     ],
@@ -2021,7 +2021,7 @@
         "rules": [
           "module_level"
         ],
-        "site": "investyo_mcp_server.py:6383",
+        "site": "investyo_mcp_server.py:6424",
         "via": []
       }
     ],

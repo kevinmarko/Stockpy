@@ -1,19 +1,27 @@
 """Phase 4 of the four-agent Robinhood plan: the unattended cycle's plumbing.
 
 ``/rh-agentic-cycle`` (``.claude/commands/rh-agentic-cycle.md``) is an LLM
-command that runs the four agents in order: Research Scout → Strategy Analyst
-→ Portfolio & Risk Manager → Trader. Everything around it that can be
+command that runs the four agents: Portfolio & Risk Manager first (so the
+preflight's quotes are fresh and the queue's 30-minute staleness budget is
+not spent on research), then Research Scout and Strategy Analyst (in either
+order or in parallel, covering only the preflight-passed orders), then the
+Trader. When the preflight passes nothing, ``finish --nothing-passed`` ends
+the cycle without the other three. Everything around it that can be
 deterministic code lives here, so no "should we run?", "did it finish?" or
 "what goes in the push?" decision is left to model judgement:
 
 * :func:`gate` — whether a cycle should run for the current queue at all.
   It skips (cheaply, with no LLM call) when the mode is off, the kill switch
-  is on, the US market is closed, the queue is missing/stale/has nothing
-  actionable, or this queue was already handled. Anything unreadable is a
-  skip (CONSTRAINT #6: fail closed).
+  is on, the US market is closed or closes within 20 minutes, the queue is
+  missing/stale (or within 10 minutes of stale, so the cycle can finish
+  before the preflight's own staleness veto), has nothing actionable, or
+  this queue was already handled. Anything unreadable is a skip
+  (CONSTRAINT #6: fail closed).
 * ``cycle.json`` per run (``OUTPUT_DIR/agentic/<run_id>/``) — each stage's
   start, end, status and reason. It is the audit trail and how :func:`gate`
-  knows a queue was already handled. ``OUTPUT_DIR/agentic/cycles.jsonl`` gets
+  knows a queue was already handled. Every read-modify-write holds a per-run
+  file lock and replaces the file atomically, so the Scout and Analyst can
+  record their stages at the same moment. ``OUTPUT_DIR/agentic/cycles.jsonl`` gets
   one line per finished or failed cycle.
 * :func:`fail_cycle` — marks the cycle failed and sends ONE push.
 * :func:`build_summary` — the push text, built only from files
@@ -38,10 +46,12 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence, Set, Tuple
 
 from execution.agentic_preflight import (
     DEFAULT_STALE_AFTER_MINUTES,
@@ -59,14 +69,26 @@ CYCLE_FILENAME = "cycle.json"
 CYCLE_LOG_FILENAME = "cycles.jsonl"
 LOCK_FILENAME = "cycle.lock"
 
-# Stage order is the plan's: each agent reads the previous one's file.
-STAGES: Tuple[str, ...] = ("scout", "analyst", "risk", "trader")
+# Risk runs first: its preflight needs fresh quotes and decides which orders
+# the Scout and Analyst must cover. Scout and Analyst need only risk, so they
+# may run in either order or concurrently; the Trader needs all three.
+STAGES: Tuple[str, ...] = ("risk", "scout", "analyst", "trader")
+STAGE_PREREQS: Dict[str, Tuple[str, ...]] = {
+    "risk": (),
+    "scout": ("risk",),
+    "analyst": ("risk",),
+    "trader": ("risk", "scout", "analyst"),
+}
 STAGE_AGENTS: Dict[str, str] = {
+    "risk": "rh-risk-manager",
     "scout": "rh-research-scout",
     "analyst": "rh-strategy-analyst",
-    "risk": "rh-risk-manager",
     "trader": "rh-trader",
 }
+# Stage statuses that count as "done" when finishing a cycle.
+_STAGE_DONE = ("completed", "skipped")
+# Reason recorded on the stages ``finish --nothing-passed`` skips.
+REASON_NOTHING_PASSED = "nothing_passed"
 # The coordinator's own tools, on top of the four agents' allowlists.
 # "Agent" is Claude Code's subagent tool ("Task" in older releases).
 COORDINATOR_TOOLS: Tuple[str, ...] = ("Agent", "Task", "Read", "Bash", "Glob", "Grep")
@@ -75,6 +97,14 @@ COORDINATOR_TOOLS: Tuple[str, ...] = ("Agent", "Task", "Read", "Bash", "Glob", "
 # feature freeze forbids new flags): four agents with a handful of MCP calls
 # each finish in minutes; 30 min means something is stuck.
 LAUNCH_TIMEOUT_SECONDS = 1800
+# Gate headroom (code constants, not settings: the feature freeze forbids new
+# flags). A cycle takes minutes; starting one with less than this left before
+# the preflight's own QUEUE_STALE veto, or this close to the bell, would only
+# end in a vetoed or after-hours run.
+QUEUE_STALE_HEADROOM_MINUTES = 10.0
+CLOSE_BUFFER_MINUTES = 20.0
+# Bound on waiting for another writer's cycle.json lock (writes take ms).
+STATE_LOCK_TIMEOUT_SECONDS = 30.0
 # ntfy accepts 4096 bytes; leave room for the multibyte "…" and headers.
 NTFY_MAX_CHARS = 3800
 
@@ -90,6 +120,8 @@ SKIP_QUEUE_MISSING = "queue_missing"
 SKIP_QUEUE_UNREADABLE = "queue_unreadable"
 SKIP_QUEUE_TIMESTAMP = "queue_timestamp_unavailable"
 SKIP_QUEUE_STALE = "queue_stale"
+SKIP_QUEUE_NEAR_STALE = "queue_near_stale"
+SKIP_NEAR_CLOSE = "near_market_close"
 SKIP_NO_ACTIONABLE = "no_actionable_intents"
 SKIP_ALREADY_HANDLED = "already_handled"
 SKIP_IN_PROGRESS = "cycle_in_progress"
@@ -126,10 +158,18 @@ def _read_json(path: Path) -> Optional[Any]:
 
 
 def _write_json_atomic(path: Path, data: Mapping[str, Any]) -> None:
+    """Write via a unique temp file + ``os.replace`` (readers never see a
+    partial file, and two writers never share a temp name)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(data, indent=2, sort_keys=True))
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
 
 
 def _append_log(output_dir: Optional[Any], record: Mapping[str, Any]) -> None:
@@ -166,6 +206,26 @@ class GateResult:
         return asdict(self)
 
 
+def minutes_to_regular_close(now: datetime) -> Optional[float]:
+    """Minutes until today's regular 16:00 ET close, or None outside regular
+    hours (weekend, before 09:30 or at/after 16:00 ET). Pure.
+
+    Uses ``shared.market_hours``' regular-session clock. Disclosed gap: it has
+    no early-close calendar, so on a half day the 20-minute buffer is measured
+    from 16:00; :func:`gate`'s ``market_open`` input (FMP's live
+    ``isMarketOpen``) still stops a cycle once the half day has closed.
+    """
+    from shared.market_hours import _ET, _RTH_CLOSE_HM, is_us_market_open
+
+    now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    if not is_us_market_open(now):
+        return None
+    now_et = now.astimezone(_ET)
+    close_et = now_et.replace(hour=_RTH_CLOSE_HM[0], minute=_RTH_CLOSE_HM[1], second=0, microsecond=0)
+    left = (close_et - now_et).total_seconds() / 60.0
+    return left if left > 0 else None
+
+
 def gate(
     queue: Optional[Mapping[str, Any]],
     *,
@@ -176,6 +236,8 @@ def gate(
     existing_cycle: Optional[Mapping[str, Any]] = None,
     queue_error: Optional[str] = None,
     stale_after_minutes: float = DEFAULT_STALE_AFTER_MINUTES,
+    stale_headroom_minutes: float = QUEUE_STALE_HEADROOM_MINUTES,
+    close_buffer_minutes: float = CLOSE_BUFFER_MINUTES,
 ) -> GateResult:
     """Decide whether one cycle should run for ``queue``. Pure.
 
@@ -184,6 +246,13 @@ def gate(
     any status (running, completed, failed) means the queue was already
     handled, so a failed cycle is never retried automatically every 15
     minutes. A new queue from the daemon gets a fresh run.
+
+    Headroom: a cycle needs time, so it is skipped when ``now`` is outside
+    regular hours or within ``close_buffer_minutes`` of the regular close
+    (``near_market_close``), and when the queue is older than
+    ``stale_after_minutes - stale_headroom_minutes`` (``queue_near_stale``):
+    started later, the preflight's own ``queue_stale`` veto would fire
+    mid-cycle.
     """
     now = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
     s_mode = str(settings_mode or "off").strip().lower()
@@ -193,6 +262,11 @@ def gate(
         return GateResult(False, SKIP_KILL_SWITCH, mode=s_mode)
     if not market_open:
         return GateResult(False, SKIP_MARKET_CLOSED, mode=s_mode)
+    to_close = minutes_to_regular_close(now)
+    if to_close is None:
+        return GateResult(False, SKIP_MARKET_CLOSED, mode=s_mode)
+    if to_close <= close_buffer_minutes:
+        return GateResult(False, SKIP_NEAR_CLOSE, mode=s_mode)
     if queue_error is not None:
         return GateResult(False, queue_error, mode=s_mode)
     if queue is None:
@@ -209,8 +283,11 @@ def gate(
     gen = _parse_dt(queue.get("generated_at"))
     if gen is None or run_id is None:
         return GateResult(False, SKIP_QUEUE_TIMESTAMP, mode=mode)
-    if (now - gen).total_seconds() / 60.0 > stale_after_minutes:
+    age_min = (now - gen).total_seconds() / 60.0
+    if age_min > stale_after_minutes:
         return GateResult(False, SKIP_QUEUE_STALE, run_id=run_id, mode=mode)
+    if age_min > stale_after_minutes - stale_headroom_minutes:
+        return GateResult(False, SKIP_QUEUE_NEAR_STALE, run_id=run_id, mode=mode)
     intents = [i for i in (queue.get("intents") or []) if isinstance(i, Mapping)]
     # Actionability follows the QUEUE's own mode (that is what the daemon's
     # gate fields mean), the same rule the preflight applies.
@@ -316,6 +393,51 @@ def read_cycle(run_id: str, output_dir: Optional[Any] = None) -> Optional[Dict[s
     return data if isinstance(data, dict) else None
 
 
+@contextlib.contextmanager
+def _state_lock(run_id: str, output_dir: Optional[Any] = None,
+                timeout: float = STATE_LOCK_TIMEOUT_SECONDS) -> Iterator[None]:
+    """Exclusive lock on ``<run>/cycle.json.lock`` around a read-modify-write.
+
+    Separate from :func:`cycle_lock` (which ``launch`` holds for the whole
+    cycle). Waits up to ``timeout`` seconds, then raises ``TimeoutError``.
+    Without ``fcntl`` (non-POSIX) it does not lock.
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - non-POSIX
+        yield
+        return
+    path = cycle_path(run_id, output_dir).with_name(CYCLE_FILENAME + ".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as fh:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"cycle.json for run {run_id} is locked by another writer")
+                time.sleep(0.02)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _new_stage_entry() -> Dict[str, Any]:
+    return {"status": "pending", "started_at": None, "finished_at": None, "reason": None}
+
+
+def _stage_entry(state: Dict[str, Any], stage: str) -> Dict[str, Any]:
+    """``state['stages'][stage]``, created pending if absent (a cycle.json
+    written before a stage existed must not crash the update)."""
+    stages = state.setdefault("stages", {})
+    if not isinstance(stages.get(stage), dict):
+        stages[stage] = _new_stage_entry()
+    return stages[stage]
+
+
 def start_cycle(gate_result: GateResult, queue: Mapping[str, Any], *, now: Optional[datetime] = None,
                 output_dir: Optional[Any] = None, launched: bool = False) -> Dict[str, Any]:
     now = now or _now()
@@ -329,60 +451,124 @@ def start_cycle(gate_result: GateResult, queue: Mapping[str, Any], *, now: Optio
         "finished_at": None,
         "failed_stage": None,
         "reason": None,
-        "stages": {s: {"status": "pending", "started_at": None, "finished_at": None, "reason": None}
-                   for s in STAGES},
+        "stages": {s: _new_stage_entry() for s in STAGES},
     }
-    _write_json_atomic(cycle_path(str(gate_result.run_id), output_dir), state)
+    with _state_lock(str(gate_result.run_id), output_dir):
+        _write_json_atomic(cycle_path(str(gate_result.run_id), output_dir), state)
     return state
 
 
 def record_stage(run_id: str, stage: str, status: str, *, reason: Optional[str] = None,
                  now: Optional[datetime] = None, output_dir: Optional[Any] = None) -> Dict[str, Any]:
-    """Mark ``stage`` as ``started`` or ``completed``. Stages must run in order."""
+    """Mark ``stage`` as ``started`` or ``completed``.
+
+    A stage may start only once its prerequisites (:data:`STAGE_PREREQS`) have
+    completed: ``risk`` first, then ``scout`` and ``analyst`` in either order
+    or at the same time, then ``trader``. Concurrent calls are serialised by
+    a per-run file lock, so neither update is lost.
+    """
     if stage not in STAGES:
         raise ValueError(f"unknown stage {stage!r}; expected one of {STAGES}")
     if status not in ("started", "completed"):
         raise ValueError("status must be 'started' or 'completed' (use fail for failures)")
-    state = read_cycle(run_id, output_dir)
-    if state is None:
-        raise ValueError(f"no cycle.json for run {run_id}")
-    if state.get("status") != "running":
-        raise ValueError(f"cycle {run_id} is {state.get('status')}, not running")
-    idx = STAGES.index(stage)
-    for earlier in STAGES[:idx]:
-        if state["stages"][earlier]["status"] != "completed":
-            raise ValueError(f"stage {stage!r} cannot start before {earlier!r} completed")
-    now = now or _now()
-    entry = state["stages"][stage]
-    if status == "started":
-        entry.update(status="running", started_at=_iso(now))
-    else:
-        entry.update(status="completed", finished_at=_iso(now), reason=reason)
-    _write_json_atomic(cycle_path(run_id, output_dir), state)
+    with _state_lock(run_id, output_dir):
+        state = read_cycle(run_id, output_dir)
+        if state is None:
+            raise ValueError(f"no cycle.json for run {run_id}")
+        if state.get("status") != "running":
+            raise ValueError(f"cycle {run_id} is {state.get('status')}, not running")
+        for earlier in STAGE_PREREQS[stage]:
+            if _stage_entry(state, earlier).get("status") != "completed":
+                raise ValueError(f"stage {stage!r} cannot start before {earlier!r} completed")
+        entry = _stage_entry(state, stage)
+        if entry.get("status") in ("completed", "skipped", "failed"):
+            raise ValueError(f"stage {stage!r} is already {entry.get('status')}")
+        now = now or _now()
+        if status == "started":
+            entry.update(status="running", started_at=_iso(now))
+        else:
+            entry.update(status="completed", finished_at=_iso(now), reason=reason)
+        _write_json_atomic(cycle_path(run_id, output_dir), state)
     return state
 
 
 def _current_stage(state: Mapping[str, Any]) -> str:
+    """The stage a failure belongs to: the first one running, else the first
+    one not done yet, else ``finish``."""
+    stages = state.get("stages", {}) if isinstance(state.get("stages"), Mapping) else {}
     for s in STAGES:
-        if state.get("stages", {}).get(s, {}).get("status") != "completed":
+        if (stages.get(s) or {}).get("status") == "running":
+            return s
+    for s in STAGES:
+        if (stages.get(s) or {}).get("status") not in _STAGE_DONE:
             return s
     return "finish"
 
 
-def finish_cycle(run_id: str, *, now: Optional[datetime] = None,
-                 output_dir: Optional[Any] = None) -> Dict[str, Any]:
-    """Mark the cycle completed. Every stage must have completed."""
+def preflight_passed(run_id: str, output_dir: Optional[Any] = None) -> Optional[Dict[str, Any]]:
+    """What this run's preflight passed, read from files only, or None.
+
+    ``{"n_passed", "passed_client_order_ids", "symbols", "run_blockers"}``.
+    None when ``cycle.json`` or ``preflight.json`` is missing/unreadable or the
+    preflight is for another queue (fail closed: unknown is not "zero").
+    """
     state = read_cycle(run_id, output_dir)
-    if state is None:
-        raise ValueError(f"no cycle.json for run {run_id}")
-    missing = [s for s in STAGES if state["stages"][s]["status"] != "completed"]
-    if missing:
-        raise ValueError(f"cannot finish: stages not completed: {missing}")
-    now = now or _now()
-    state.update(status="completed", finished_at=_iso(now))
-    _write_json_atomic(cycle_path(run_id, output_dir), state)
-    _append_log(output_dir, {"run_id": run_id, "status": "completed", "mode": state.get("mode"),
-                             "finished_at": state["finished_at"]})
+    pf = _read_json(_agentic_dir(output_dir) / run_id / PREFLIGHT_FILENAME)
+    if state is None or not isinstance(pf, dict) or not isinstance(pf.get("verdicts"), list):
+        return None
+    if pf.get("queue_generated_at") != state.get("queue_generated_at"):
+        return None
+    passed = [v for v in pf["verdicts"] if isinstance(v, Mapping) and v.get("passed") is True]
+    return {
+        "n_passed": len(passed),
+        "passed_client_order_ids": sorted(str(v.get("client_order_id")) for v in passed),
+        "symbols": sorted({str(v.get("symbol") or "").upper() for v in passed if v.get("symbol")}),
+        "run_blockers": list(pf.get("run_blockers") or []),
+    }
+
+
+def finish_cycle(run_id: str, *, now: Optional[datetime] = None,
+                 output_dir: Optional[Any] = None, nothing_passed: bool = False) -> Dict[str, Any]:
+    """Mark the cycle completed.
+
+    Normally every stage must have completed. With ``nothing_passed`` the
+    cycle may end right after ``risk``: this run's ``preflight.json`` must
+    exist, be for this queue and pass zero intents (checked here, from the
+    file, not taken on the coordinator's word); every stage not yet done is
+    then recorded ``skipped`` with reason ``nothing_passed``.
+    """
+    with _state_lock(run_id, output_dir):
+        state = read_cycle(run_id, output_dir)
+        if state is None:
+            raise ValueError(f"no cycle.json for run {run_id}")
+        if state.get("status") != "running":
+            raise ValueError(f"cycle {run_id} is {state.get('status')}, not running")
+        now = now or _now()
+        if nothing_passed:
+            if _stage_entry(state, "risk").get("status") != "completed":
+                raise ValueError("cannot finish with nothing passed: the risk stage has not completed")
+            facts = preflight_passed(run_id, output_dir)
+            if facts is None:
+                raise ValueError("cannot finish with nothing passed: no readable preflight for this queue")
+            if facts["n_passed"]:
+                raise ValueError(f"cannot finish with nothing passed: the preflight passed "
+                                 f"{facts['n_passed']} intent(s)")
+            for s in STAGES:
+                entry = _stage_entry(state, s)
+                if entry.get("status") not in _STAGE_DONE:
+                    entry.update(status="skipped", finished_at=_iso(now), reason=REASON_NOTHING_PASSED)
+        missing = [s for s in STAGES if _stage_entry(state, s).get("status") not in _STAGE_DONE]
+        if missing:
+            raise ValueError(f"cannot finish: stages not completed: {missing}")
+        state.update(status="completed", finished_at=_iso(now))
+        if nothing_passed:
+            state["reason"] = REASON_NOTHING_PASSED
+        _write_json_atomic(cycle_path(run_id, output_dir), state)
+    record = {"run_id": run_id, "status": "completed", "mode": state.get("mode"),
+              "finished_at": state["finished_at"]}
+    if nothing_passed:
+        record["reason"] = REASON_NOTHING_PASSED
+    _append_log(output_dir, record)
     return state
 
 
@@ -396,17 +582,31 @@ def fail_cycle(run_id: Optional[str], stage: Optional[str], reason: str, *,
     """
     now = now or _now()
     state: Dict[str, Any] = {}
-    try:
+
+    def _record() -> None:
+        nonlocal state, stage
         if run_id:
             state = read_cycle(run_id, output_dir) or {}
         stage = stage or (_current_stage(state) if state else "launch")
-        if stage in STAGES and state.get("stages"):
-            state["stages"][stage].update(status="failed", finished_at=_iso(now), reason=reason)
+        if stage in STAGES and isinstance(state.get("stages"), dict):
+            _stage_entry(state, stage).update(status="failed", finished_at=_iso(now), reason=reason)
         state.update(run_id=run_id, status="failed", failed_stage=stage, reason=reason,
                      finished_at=_iso(now))
         state.setdefault("started_at", _iso(now))
         if run_id:
             _write_json_atomic(cycle_path(run_id, output_dir), state)
+
+    try:
+        try:
+            if run_id:
+                with _state_lock(run_id, output_dir):
+                    _record()
+            else:
+                _record()
+        except TimeoutError as exc:
+            # Recording the failure matters more than the lock: write anyway.
+            logger.warning("agentic_cycle: %s; recording the failure without the lock", exc)
+            _record()
         _append_log(output_dir, {"run_id": run_id, "status": "failed", "failed_stage": stage,
                                  "reason": reason, "finished_at": state["finished_at"]})
     except Exception as exc:  # pragma: no cover - defensive
@@ -461,6 +661,31 @@ def _trim(text: str, limit: int = NTFY_MAX_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _clip(text: str, limit: Optional[int]) -> str:
+    if limit is None or len(text) <= limit:
+        return text
+    if limit <= 1:
+        return "…"
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _flags_of(t: Any) -> List[str]:
+    """The Analyst's flags on a thesis: short strings only, at most five."""
+    raw = t.get("flags") if isinstance(t, Mapping) else None
+    if not isinstance(raw, list):
+        return []
+    out = [str(f).strip()[:_FLAG_MAX_CHARS] for f in raw if isinstance(f, (str, int, float)) and str(f).strip()]
+    return out[:_FLAGS_MAX]
+
+
+_FLAG_MAX_CHARS = 40
+_FLAGS_MAX = 5
+# Thesis/invalidation length caps tried in turn until the push fits; the
+# per-order warnings (flags, earnings) and the veto/pending lists are never
+# shortened before the theses are.
+_THESIS_CAPS: Tuple[Optional[int], ...] = (None, 160, 100, 60, 30, 0)
+
+
 def build_summary(
     *,
     mode: str,
@@ -468,62 +693,135 @@ def build_summary(
     placed_records: Sequence[Mapping[str, Any]],
     valid_theses: Mapping[str, Mapping[str, Any]],
     stale_pending: Sequence[Mapping[str, Any]] = (),
+    earnings: Optional[Mapping[str, Any]] = None,
+    not_sent_notes: Optional[Mapping[str, str]] = None,
 ) -> Tuple[str, str]:
     """``(title, body)`` for the end-of-cycle push. Pure.
 
-    Every number comes from ``preflight`` (qty, limit price) or the placed
-    records; every thesis is one the validator accepted. An order without a
-    valid thesis says "thesis unavailable". Nothing here is model prose.
+    Every number comes from ``preflight`` (qty, limit price), the placed
+    records or the research file's ``next_earnings`` date (``earnings``:
+    ``{SYMBOL: "YYYY-MM-DD"}``, validated entries only); every thesis,
+    invalidation and flag list is from a thesis the validator accepted. An
+    order without a valid thesis says "thesis unavailable". In live mode a
+    preflight-passed order the Trader did not send is listed too, with the
+    Trader's skip note when ``not_sent_notes`` has one, so it never vanishes
+    from the push. Nothing here is model prose the validator did not see.
+
+    To fit ntfy's limit the theses and invalidations are shortened first;
+    only if that is not enough is the tail cut.
     """
     verdicts = [v for v in (preflight or {}).get("verdicts") or [] if isinstance(v, Mapping)]
     by_coid = {str(v.get("client_order_id")): v for v in verdicts}
     blockers = list((preflight or {}).get("run_blockers") or [])
+    earnings = earnings or {}
+    not_sent_notes = not_sent_notes or {}
 
-    def thesis_for(coid: str) -> str:
-        t = valid_theses.get(coid)
-        text = str(t.get("thesis") or "").strip() if isinstance(t, Mapping) else ""
-        return text or "thesis unavailable"
-
-    def order_line(sym: str, side: str, qty: Any, coid: str) -> str:
+    def order_line(sym: str, side: str, qty: Any, coid: str, cap: Optional[int]) -> str:
         v = by_coid.get(coid) or {}
         limit = v.get("limit_price")
-        price = f", limit ${float(limit):.2f}" if isinstance(limit, (int, float)) else ""
-        return f"{side.upper()} {_fmt_qty(qty)} {sym}{price}: {thesis_for(coid)}"
+        price = f", limit ${float(limit):.2f}" if isinstance(limit, (int, float)) and not isinstance(limit, bool) else ""
+        t = valid_theses.get(coid)
+        thesis = str(t.get("thesis") or "").strip() if isinstance(t, Mapping) else ""
+        invalid = str(t.get("invalidation") or "").strip() if isinstance(t, Mapping) else ""
+        if not thesis:
+            text = "thesis unavailable"
+        elif cap == 0:
+            text = "thesis omitted for length"
+        else:
+            text = _clip(thesis, cap)
+        parts = [f"{side.upper()} {_fmt_qty(qty)} {sym}{price}: {text}"]
+        if thesis and invalid and cap != 0:
+            parts.append(f"Invalid if: {_clip(invalid, cap)}")
+        flags = _flags_of(t)
+        if flags:
+            parts.append("Flags: " + ", ".join(flags))
+        ne = earnings.get(sym.upper())
+        if ne:
+            parts.append(f"Next earnings {ne}")
+        return " | ".join(parts)
 
-    lines: List[str] = []
-    if preflight is None:
-        lines.append("No preflight for this queue, so nothing was checked against the account.")
-    if blockers:
-        lines.append("Blocked for the whole cycle: " + ", ".join(blockers) + ".")
-
+    passed = [v for v in verdicts if v.get("passed")]
+    placed_coids = {str(r.get("client_order_id") or "") for r in placed_records}
     if mode == "live":
         n = len(placed_records)
         title = (f"{n} trade{'s' if n != 1 else ''} awaiting your approval in Robinhood"
                  if n else "Agentic cycle: no orders sent")
-        for r in placed_records:
-            lines.append(order_line(str(r.get("symbol") or "?"), str(r.get("side") or "?"),
-                                    r.get("qty"), str(r.get("client_order_id") or "")))
     else:
-        passed = [v for v in verdicts if v.get("passed")]
         title = f"Review run: {len(passed)} would pass, {len(verdicts) - len(passed)} vetoed"
-        for v in passed:
-            lines.append("Would send " + order_line(str(v.get("symbol") or "?"), str(v.get("side") or "?"),
-                                                    v.get("qty"), str(v.get("client_order_id") or "")))
 
-    vetoed = [v for v in verdicts if not v.get("passed")]
-    if vetoed:
-        lines.append("Vetoed: " + "; ".join(
-            f"{v.get('symbol')} {str(v.get('side') or '').upper()} ({', '.join(v.get('reasons') or []) or 'no reason recorded'})"
-            for v in vetoed) + ".")
-    for p in stale_pending:
-        lines.append(f"Still pending from earlier: {p.get('side', '?')} {p.get('symbol', '?')}. "
-                     "It is no longer in the queue; decline it in the Robinhood app if you don't want it.")
-    return title, _trim("\n".join(lines) or "Nothing to report.")
+    def render(cap: Optional[int]) -> str:
+        lines: List[str] = []
+        if preflight is None:
+            lines.append("No preflight for this queue, so nothing was checked against the account.")
+        if blockers:
+            lines.append("Blocked for the whole cycle: " + ", ".join(blockers) + ".")
+        if mode == "live":
+            for r in placed_records:
+                lines.append(order_line(str(r.get("symbol") or "?"), str(r.get("side") or "?"),
+                                        r.get("qty"), str(r.get("client_order_id") or ""), cap))
+            not_sent = [v for v in passed if str(v.get("client_order_id") or "") not in placed_coids]
+            for v in not_sent:
+                coid = str(v.get("client_order_id") or "")
+                note = not_sent_notes.get(coid)
+                lines.append(f"Passed but not sent: {str(v.get('side') or '?').upper()} {_fmt_qty(v.get('qty'))} "
+                             f"{v.get('symbol') or '?'} ({note or 'no send recorded by the Trader'}).")
+        else:
+            for v in passed:
+                lines.append("Would send " + order_line(str(v.get("symbol") or "?"), str(v.get("side") or "?"),
+                                                        v.get("qty"), str(v.get("client_order_id") or ""), cap))
+        vetoed = [v for v in verdicts if not v.get("passed")]
+        if vetoed:
+            lines.append("Vetoed: " + "; ".join(
+                f"{v.get('symbol')} {str(v.get('side') or '').upper()} "
+                f"({', '.join(v.get('reasons') or []) or 'no reason recorded'})"
+                for v in vetoed) + ".")
+        for p in stale_pending:
+            lines.append(f"Still pending from earlier: {p.get('side', '?')} {p.get('symbol', '?')}. "
+                         "It is no longer in the queue; decline it in the Robinhood app if you don't want it.")
+        return "\n".join(lines) or "Nothing to report."
+
+    body = render(None)
+    for cap in _THESIS_CAPS[1:]:
+        if len(body) <= NTFY_MAX_CHARS:
+            break
+        body = render(cap)
+    return title, _trim(body)
+
+
+def _skip_notes(output_dir: Optional[Any], verdicts: Sequence[Mapping[str, Any]],
+                since: Optional[datetime]) -> Dict[str, str]:
+    """``{client_order_id: note}`` from this cycle's ``skipped`` receipts.
+
+    Receipts carry no client_order_id, so a passed verdict is matched on
+    symbol + side, newest receipt since the cycle started. Never raises.
+    """
+    try:
+        from execution.receipts_store import read_receipts
+        receipts = read_receipts(output_dir)
+    except Exception as exc:
+        logger.warning("agentic_cycle: receipts unavailable for summary (%s)", exc)
+        return {}
+    latest: Dict[Tuple[str, str], str] = {}
+    for r in receipts:
+        if not isinstance(r, Mapping) or str(r.get("action") or "").lower() != "skipped":
+            continue
+        ts = _parse_dt(r.get("ts"))
+        if since is not None and (ts is None or ts < since):
+            continue
+        note = str(r.get("note") or "").strip()[:120]
+        latest[(str(r.get("symbol") or "").upper(), str(r.get("side") or "").lower())] = (
+            f"skipped: {note}" if note else "skipped")
+    out: Dict[str, str] = {}
+    for v in verdicts:
+        key = (str(v.get("symbol") or "").upper(), str(v.get("side") or "").lower())
+        if key in latest:
+            out[str(v.get("client_order_id") or "")] = latest[key]
+    return out
 
 
 def summary_for_run(run_id: str, output_dir: Optional[Any] = None) -> Tuple[str, str, Dict[str, Any]]:
     """Load the files for ``run_id`` and build the push. Returns (title, body, facts)."""
-    from execution.agentic_research import load_run_artifacts
+    from execution.agentic_research import earnings_dates_from_research, load_run_artifacts
     from execution.receipts_store import latest_approval_states, read_placed_ledger
 
     state = read_cycle(run_id, output_dir) or {}
@@ -536,15 +834,19 @@ def summary_for_run(run_id: str, output_dir: Optional[Any] = None) -> Tuple[str,
         preflight = None
 
     valid: Dict[str, Mapping[str, Any]] = {}
-    coids: set = set()
+    earnings: Dict[str, str] = {}
+    coids: Set[str] = set()
     if same_queue:
         coids = {str(i.get("client_order_id")) for i in queue.get("intents") or [] if isinstance(i, Mapping)}
         try:
-            art = load_run_artifacts(queue, _output_dir(output_dir))
+            art = load_run_artifacts(queue, _output_dir(output_dir), preflight=preflight)
             doc = (art.get("theses") or {}).get("theses") or {}
             valid = {c: doc[c] for c in art.get("valid_thesis_ids") or [] if c in doc}
+            ok_syms = set(art.get("valid_research_symbols") or [])
+            earnings = {sym: d.isoformat() for sym, d in earnings_dates_from_research(art.get("research")).items()
+                        if d is not None and sym in ok_syms}
         except Exception as exc:
-            logger.warning("agentic_cycle: theses unavailable for summary (%s)", exc)
+            logger.warning("agentic_cycle: theses/research unavailable for summary (%s)", exc)
     elif preflight is not None:
         coids = {str(v.get("client_order_id")) for v in preflight.get("verdicts") or []}
 
@@ -559,11 +861,23 @@ def summary_for_run(run_id: str, output_dir: Optional[Any] = None) -> Tuple[str,
              if rec.get("state") == "pending"
              and (str(rec.get("symbol") or "").upper(), str(rec.get("side") or "").lower()) not in queue_keys]
 
+    notes: Dict[str, str] = {}
+    n_not_sent = 0
+    if mode == "live" and preflight is not None:
+        placed_coids = {str(r.get("client_order_id") or "") for r in placed}
+        not_sent = [v for v in preflight.get("verdicts") or [] if isinstance(v, Mapping)
+                    and v.get("passed") and str(v.get("client_order_id") or "") not in placed_coids]
+        n_not_sent = len(not_sent)
+        if not_sent:
+            notes = _skip_notes(output_dir, not_sent, _parse_dt(state.get("started_at")))
+
     title, body = build_summary(mode=mode, preflight=preflight, placed_records=placed,
-                                valid_theses=valid, stale_pending=stale)
+                                valid_theses=valid, stale_pending=stale, earnings=earnings,
+                                not_sent_notes=notes)
     facts = {"run_id": run_id, "mode": mode, "n_placed": len(placed),
              "has_preflight": preflight is not None, "n_valid_theses": len(valid),
-             "valid_thesis_ids": sorted(valid), "n_stale_pending": len(stale)}
+             "valid_thesis_ids": sorted(valid), "n_stale_pending": len(stale),
+             "n_passed_not_sent": n_not_sent}
     return title, body, facts
 
 
@@ -576,12 +890,13 @@ def record_summary(run_id: str, title: str, body: str, facts: Mapping[str, Any],
     has since been replaced. Never raises.
     """
     try:
-        state = read_cycle(run_id, output_dir)
-        if state is None:
-            return
-        state["summary"] = {"title": title, "body": body}
-        state["valid_thesis_ids"] = list(facts.get("valid_thesis_ids") or [])
-        _write_json_atomic(cycle_path(run_id, output_dir), state)
+        with _state_lock(run_id, output_dir):
+            state = read_cycle(run_id, output_dir)
+            if state is None:
+                return
+            state["summary"] = {"title": title, "body": body}
+            state["valid_thesis_ids"] = list(facts.get("valid_thesis_ids") or [])
+            _write_json_atomic(cycle_path(run_id, output_dir), state)
     except Exception as exc:
         logger.warning("agentic_cycle: could not record summary (%s)", exc)
 
@@ -672,6 +987,7 @@ def launch(*, output_dir: Optional[Any] = None, now: Optional[datetime] = None,
             return EXIT_ERROR
         cmd = [claude_bin, "-p", "/rh-agentic-cycle --launched", "--allowedTools", ",".join(tools)]
         reason: Optional[str] = None
+        proc: Any = None
         try:
             proc = runner(cmd, cwd=str(REPO_ROOT), timeout=LAUNCH_TIMEOUT_SECONDS,
                           capture_output=True, text=True)
@@ -695,7 +1011,21 @@ def launch(*, output_dir: Optional[Any] = None, now: Optional[datetime] = None,
             if reason:  # it never got as far as starting the cycle
                 fail_cycle(g.run_id, "launch", reason, output_dir=output_dir, notifier=notifier)
                 return EXIT_ERROR
-            # The coordinator's own gate skipped (state changed in between).
+            # claude exited 0 without a cycle.json. Legitimate only if the
+            # coordinator's own `begin` gate skipped because state changed in
+            # between; re-gate to tell that apart from a coordinator that
+            # never started the cycle (which must alert, not stay silent).
+            g2 = evaluate_gate(output_dir, now=now)
+            if g2.run:
+                said = _said(proc) if proc is not None else ""
+                why = "coordinator exited without starting the cycle although the gate still allows it"
+                if said:
+                    why = f"{why}: {said}"
+                logger.warning("agentic_cycle: %s (run %s)", why, g.run_id)
+                fail_cycle(g.run_id, "launch", why, output_dir=output_dir, notifier=notifier)
+                return EXIT_ERROR
+            logger.info("agentic_cycle: coordinator skipped run %s; gate now says %s", g.run_id, g2.reason)
+            print(json.dumps(g2.to_dict()))
             return EXIT_SKIP
         if state.get("status") == "running":
             fail_cycle(g.run_id, None, reason or "coordinator ended without finishing the cycle",
@@ -725,7 +1055,7 @@ def _cmd_begin(args: argparse.Namespace) -> int:
 def _cmd_stage(args: argparse.Namespace) -> int:
     try:
         record_stage(args.run_id, args.stage, args.status, reason=args.reason, output_dir=args.output_dir)
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         print(json.dumps({"error": str(exc)}))
         return EXIT_ERROR
     print(json.dumps({"run_id": args.run_id, "stage": args.stage, "status": args.status}))
@@ -741,8 +1071,8 @@ def _cmd_fail(args: argparse.Namespace) -> int:
 
 def _cmd_finish(args: argparse.Namespace) -> int:
     try:
-        finish_cycle(args.run_id, output_dir=args.output_dir)
-    except ValueError as exc:
+        finish_cycle(args.run_id, output_dir=args.output_dir, nothing_passed=args.nothing_passed)
+    except (ValueError, OSError) as exc:
         fail_cycle(args.run_id, None, str(exc), output_dir=args.output_dir)
         print(json.dumps({"error": str(exc)}))
         return EXIT_ERROR
@@ -756,6 +1086,15 @@ def _cmd_summary(args: argparse.Namespace) -> int:
     if args.notify:
         sent = bool(_default_notifier()(title, body))
     print(json.dumps({"title": title, "body": body, "facts": facts, "notified": sent}, indent=2))
+    return EXIT_RUN
+
+
+def _cmd_passed(args: argparse.Namespace) -> int:
+    facts = preflight_passed(args.run_id, args.output_dir)
+    if facts is None:
+        print(json.dumps({"error": f"no readable preflight for this queue in run {args.run_id}"}))
+        return EXIT_ERROR
+    print(json.dumps(facts))
     return EXIT_RUN
 
 
@@ -786,9 +1125,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     f.add_argument("run_id")
     f.add_argument("stage")
     f.add_argument("--reason", required=True)
+    pa = sub.add_parser("passed", help="print what this run's preflight passed (n_passed, ids, symbols)")
+    pa.add_argument("run_id")
     fi = sub.add_parser("finish", help="mark the cycle completed, then print (and push) the summary")
     fi.add_argument("run_id")
     fi.add_argument("--notify", action="store_true")
+    fi.add_argument("--nothing-passed", action="store_true",
+                    help="end right after `risk` when the preflight passed zero intents "
+                         "(scout/analyst/trader are recorded skipped: nothing_passed)")
     su = sub.add_parser("summary", help="print the summary push for a run")
     su.add_argument("run_id")
     su.add_argument("--notify", action="store_true")
@@ -800,7 +1144,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("\n".join(allowed_tools()))
         return EXIT_RUN
     handlers = {"gate": _cmd_gate, "begin": _cmd_begin, "stage": _cmd_stage, "fail": _cmd_fail,
-                "finish": _cmd_finish, "summary": _cmd_summary, "launch": _cmd_launch}
+                "passed": _cmd_passed, "finish": _cmd_finish, "summary": _cmd_summary,
+                "launch": _cmd_launch}
     return handlers[args.cmd](args)
 
 

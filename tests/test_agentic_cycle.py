@@ -10,6 +10,7 @@ import json
 import plistlib
 import re
 import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -112,6 +113,37 @@ class TestGate:
         q["intents"] = ["junk", None]
         assert run_gate(q).reason == ac.SKIP_NO_ACTIONABLE
 
+    # -- headroom (review #9) -------------------------------------------------
+    def test_queue_near_stale_skips(self):
+        # stale_after 30 - headroom 10 = 20 minutes of queue age is the last start
+        assert run_gate(now=NOW + timedelta(minutes=10)).run          # age 20 min
+        g = run_gate(now=NOW + timedelta(minutes=10, seconds=1))
+        assert g.reason == ac.SKIP_QUEUE_NEAR_STALE and g.run_id == RUN_ID
+
+    def test_fully_stale_still_reports_stale(self):
+        assert run_gate(now=NOW + timedelta(minutes=21)).reason == ac.SKIP_QUEUE_STALE
+
+    def test_near_close_skips(self):
+        close = datetime(2026, 11, 10, 21, 0, tzinfo=timezone.utc)   # 16:00 ET (EST)
+        q = queue(gen=(close - timedelta(minutes=25)).isoformat())
+        assert run_gate(q, now=close - timedelta(minutes=21)).run
+        assert run_gate(q, now=close - timedelta(minutes=20)).reason == ac.SKIP_NEAR_CLOSE
+        assert run_gate(q, now=close - timedelta(minutes=1)).reason == ac.SKIP_NEAR_CLOSE
+
+    @pytest.mark.parametrize("when", [
+        datetime(2026, 11, 10, 14, 0, tzinfo=timezone.utc),    # 09:00 ET, before the open
+        datetime(2026, 11, 10, 21, 30, tzinfo=timezone.utc),   # 16:30 ET, after the close
+        datetime(2026, 11, 14, 16, 0, tzinfo=timezone.utc),    # Saturday
+    ])
+    def test_outside_regular_hours_skips_even_if_market_flag_says_open(self, when):
+        q = queue(gen=(when - timedelta(minutes=1)).isoformat())
+        assert run_gate(q, now=when, market_open=True).reason == ac.SKIP_MARKET_CLOSED
+
+    def test_minutes_to_regular_close(self):
+        assert ac.minutes_to_regular_close(NOW) == pytest.approx(350.0)   # 10:10 ET
+        assert ac.minutes_to_regular_close(datetime(2026, 11, 10, 21, 0, tzinfo=timezone.utc)) is None
+        assert ac.minutes_to_regular_close(datetime(2026, 11, 10, 15, 10)) == pytest.approx(350.0)  # naive = UTC
+
 
 class TestEvaluateGate:
     def _patch(self, *, mode="live", kill=False, market=True):
@@ -127,6 +159,12 @@ class TestEvaluateGate:
         with self._patch()[0], self._patch()[1], self._patch()[2]:
             g = ac.evaluate_gate(tmp_path, now=NOW)
         assert g.run, g
+
+    def test_headroom_applies_through_evaluate_gate(self, tmp_path):
+        (tmp_path / "execution_queue.json").write_text(json.dumps(queue()))
+        p = self._patch()
+        with p[0], p[1], p[2]:
+            assert ac.evaluate_gate(tmp_path, now=NOW + timedelta(minutes=15)).reason == ac.SKIP_QUEUE_NEAR_STALE
 
     def test_existing_cycle_detected(self, tmp_path):
         (tmp_path / "execution_queue.json").write_text(json.dumps(queue()))
@@ -187,10 +225,81 @@ class TestCycleState:
         assert all(v["status"] == "pending" for v in s["stages"].values())
         assert not list((tmp_path / "agentic" / RUN_ID).glob("*.tmp"))
 
-    def test_stages_must_run_in_order(self, tmp_path):
+    def test_stage_order_is_risk_first(self):
+        assert ac.STAGES == ("risk", "scout", "analyst", "trader")
+        assert ac.STAGE_PREREQS["scout"] == ("risk",) and ac.STAGE_PREREQS["analyst"] == ("risk",)
+        assert set(ac.STAGE_PREREQS["trader"]) == {"risk", "scout", "analyst"}
+
+    @pytest.mark.parametrize("stage", ["scout", "analyst", "trader"])
+    def test_nothing_starts_before_risk(self, tmp_path, stage):
         started(tmp_path)
-        with pytest.raises(ValueError, match="before 'scout'"):
-            ac.record_stage(RUN_ID, "analyst", "started", output_dir=tmp_path)
+        with pytest.raises(ValueError, match="before 'risk'"):
+            ac.record_stage(RUN_ID, stage, "started", output_dir=tmp_path)
+
+    @pytest.mark.parametrize("first,second", [("scout", "analyst"), ("analyst", "scout")])
+    def test_scout_and_analyst_in_either_order_and_overlapping(self, tmp_path, first, second):
+        started(tmp_path)
+        ac.record_stage(RUN_ID, "risk", "started", output_dir=tmp_path)
+        ac.record_stage(RUN_ID, "risk", "completed", output_dir=tmp_path)
+        ac.record_stage(RUN_ID, first, "started", output_dir=tmp_path)
+        ac.record_stage(RUN_ID, second, "started", output_dir=tmp_path)    # overlap
+        ac.record_stage(RUN_ID, second, "completed", output_dir=tmp_path)
+        with pytest.raises(ValueError, match=f"before '{first}'"):
+            ac.record_stage(RUN_ID, "trader", "started", output_dir=tmp_path)
+        ac.record_stage(RUN_ID, first, "completed", output_dir=tmp_path)
+        state = ac.record_stage(RUN_ID, "trader", "started", output_dir=tmp_path)
+        assert state["stages"]["trader"]["status"] == "running"
+
+    def test_completed_stage_cannot_be_rerecorded(self, tmp_path):
+        started(tmp_path)
+        ac.record_stage(RUN_ID, "risk", "completed", output_dir=tmp_path)
+        with pytest.raises(ValueError, match="already completed"):
+            ac.record_stage(RUN_ID, "risk", "started", output_dir=tmp_path)
+
+    def test_concurrent_scout_and_analyst_updates_are_not_lost(self, tmp_path):
+        """Two agents record their stages at the same moment: the per-run lock
+        serialises the read-modify-write, so neither update is lost (without
+        it, the slow read below would make one overwrite the other)."""
+        import threading
+        started(tmp_path)
+        ac.record_stage(RUN_ID, "risk", "completed", output_dir=tmp_path)
+        real_read = ac.read_cycle
+
+        def slow_read(*a, **kw):
+            data = real_read(*a, **kw)
+            time.sleep(0.05)
+            return data
+
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def worker(stage):
+            try:
+                barrier.wait()
+                ac.record_stage(RUN_ID, stage, "started", output_dir=tmp_path)
+                barrier.wait()
+                ac.record_stage(RUN_ID, stage, "completed", output_dir=tmp_path)
+            except Exception as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+
+        with mock.patch.object(ac, "read_cycle", side_effect=slow_read):
+            threads = [threading.Thread(target=worker, args=(s,)) for s in ("scout", "analyst")]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(10)
+        assert not errors
+        stages = ac.read_cycle(RUN_ID, tmp_path)["stages"]
+        assert stages["scout"]["status"] == "completed" and stages["analyst"]["status"] == "completed"
+        assert not list((tmp_path / "agentic" / RUN_ID).glob("*.tmp"))
+
+    def test_lock_timeout_is_an_error_not_a_lost_write(self, tmp_path):
+        started(tmp_path)
+        with ac._state_lock(RUN_ID, tmp_path):
+            with pytest.raises(TimeoutError):
+                with ac._state_lock(RUN_ID, tmp_path, timeout=0.05):
+                    pass
+        assert ac.main(["--output-dir", str(tmp_path), "stage", RUN_ID, "risk", "started"]) == ac.EXIT_RUN
 
     def test_full_run_completes_and_logs(self, tmp_path):
         started(tmp_path)
@@ -211,7 +320,7 @@ class TestCycleState:
         started(tmp_path)
         ac.fail_cycle(RUN_ID, "scout", "x", output_dir=tmp_path, notify=False)
         with pytest.raises(ValueError, match="failed"):
-            ac.record_stage(RUN_ID, "scout", "started", output_dir=tmp_path)
+            ac.record_stage(RUN_ID, "risk", "started", output_dir=tmp_path)
 
     def test_unknown_stage_rejected(self, tmp_path):
         started(tmp_path)
@@ -219,11 +328,89 @@ class TestCycleState:
             ac.record_stage(RUN_ID, "bogus", "started", output_dir=tmp_path)
 
 
+def _write_preflight(tmp_path, verdicts, gen=GEN, blockers=()):
+    run = tmp_path / "agentic" / RUN_ID
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "preflight.json").write_text(json.dumps(
+        {"queue_generated_at": gen, "run_blockers": list(blockers), "verdicts": verdicts}))
+
+
+VETOED_ALL = [
+    {"client_order_id": "c-T", "symbol": "T", "side": "buy", "passed": False, "reasons": ["quote_stale"]},
+    {"client_order_id": "c-F", "symbol": "F", "side": "buy", "passed": False, "reasons": ["buying_power_exhausted"]},
+]
+
+
+class TestNothingPassed:
+    def _risk_done(self, tmp_path):
+        started(tmp_path)
+        ac.record_stage(RUN_ID, "risk", "started", output_dir=tmp_path)
+        ac.record_stage(RUN_ID, "risk", "completed", output_dir=tmp_path)
+
+    def test_finish_skips_the_rest(self, tmp_path):
+        self._risk_done(tmp_path)
+        _write_preflight(tmp_path, VETOED_ALL)
+        state = ac.finish_cycle(RUN_ID, output_dir=tmp_path, nothing_passed=True)
+        assert state["status"] == "completed" and state["reason"] == ac.REASON_NOTHING_PASSED
+        for s in ("scout", "analyst", "trader"):
+            assert state["stages"][s]["status"] == "skipped"
+            assert state["stages"][s]["reason"] == ac.REASON_NOTHING_PASSED
+        assert state["stages"]["risk"]["status"] == "completed"
+        log = json.loads((tmp_path / "agentic" / ac.CYCLE_LOG_FILENAME).read_text().splitlines()[-1])
+        assert log["status"] == "completed" and log["reason"] == ac.REASON_NOTHING_PASSED
+
+    def test_run_blocker_counts_as_nothing_passed(self, tmp_path):
+        self._risk_done(tmp_path)
+        _write_preflight(tmp_path, VETOED_ALL, blockers=["market_closed"])
+        assert ac.finish_cycle(RUN_ID, output_dir=tmp_path, nothing_passed=True)["status"] == "completed"
+
+    def test_refused_when_something_passed(self, tmp_path):
+        self._risk_done(tmp_path)
+        _write_preflight(tmp_path, PREFLIGHT["verdicts"])
+        with pytest.raises(ValueError, match="passed 1 intent"):
+            ac.finish_cycle(RUN_ID, output_dir=tmp_path, nothing_passed=True)
+        assert ac.read_cycle(RUN_ID, tmp_path)["status"] == "running"
+
+    @pytest.mark.parametrize("setup", ["no_preflight", "other_queue", "risk_not_done"])
+    def test_refused_without_proof(self, tmp_path, setup):
+        if setup == "risk_not_done":
+            started(tmp_path)
+            _write_preflight(tmp_path, VETOED_ALL)
+        else:
+            self._risk_done(tmp_path)
+            if setup == "other_queue":
+                _write_preflight(tmp_path, VETOED_ALL, gen="2026-11-10T14:00:00+00:00")
+        with pytest.raises(ValueError, match="nothing passed"):
+            ac.finish_cycle(RUN_ID, output_dir=tmp_path, nothing_passed=True)
+
+    def test_passed_cli(self, tmp_path, capsys):
+        self._risk_done(tmp_path)
+        assert ac.main(["--output-dir", str(tmp_path), "passed", RUN_ID]) == ac.EXIT_ERROR
+        _write_preflight(tmp_path, PREFLIGHT["verdicts"])
+        capsys.readouterr()
+        assert ac.main(["--output-dir", str(tmp_path), "passed", RUN_ID]) == ac.EXIT_RUN
+        out = json.loads(capsys.readouterr().out)
+        assert out == {"n_passed": 1, "passed_client_order_ids": ["c-T"], "symbols": ["T"], "run_blockers": []}
+
+    def test_finish_nothing_passed_cli_sends_summary(self, tmp_path, capsys):
+        (tmp_path / "execution_queue.json").write_text(json.dumps(queue()))
+        self._risk_done(tmp_path)
+        _write_preflight(tmp_path, VETOED_ALL)
+        notifier = mock.Mock(return_value=True)
+        with mock.patch.object(ac, "_default_notifier", return_value=notifier):
+            assert ac.main(["--output-dir", str(tmp_path), "finish", RUN_ID, "--nothing-passed",
+                            "--notify"]) == ac.EXIT_RUN
+        title, body = notifier.call_args.args
+        assert title == "Agentic cycle: no orders sent" and "Vetoed:" in body
+        assert ac.read_cycle(RUN_ID, tmp_path)["status"] == "completed"
+
+
 class TestFailCycle:
     def test_marks_stage_and_pushes_once(self, tmp_path):
         started(tmp_path)
-        ac.record_stage(RUN_ID, "scout", "started", output_dir=tmp_path)
-        ac.record_stage(RUN_ID, "scout", "completed", output_dir=tmp_path)
+        for s in ("risk", "scout"):
+            ac.record_stage(RUN_ID, s, "started", output_dir=tmp_path)
+            ac.record_stage(RUN_ID, s, "completed", output_dir=tmp_path)
         notifier = mock.Mock(return_value=True)
         state = ac.fail_cycle(RUN_ID, None, "analyst crashed", output_dir=tmp_path, notifier=notifier)
         assert state["status"] == "failed" and state["failed_stage"] == "analyst"
@@ -233,6 +420,13 @@ class TestFailCycle:
         assert "stopped" in title and "analyst crashed" in body
         log = (tmp_path / "agentic" / ac.CYCLE_LOG_FILENAME).read_text().splitlines()
         assert json.loads(log[-1])["failed_stage"] == "analyst"
+
+    def test_unspecified_stage_prefers_the_running_one(self, tmp_path):
+        started(tmp_path)
+        ac.record_stage(RUN_ID, "risk", "completed", output_dir=tmp_path)
+        ac.record_stage(RUN_ID, "analyst", "started", output_dir=tmp_path)   # scout still pending
+        state = ac.fail_cycle(RUN_ID, None, "analyst hung", output_dir=tmp_path, notify=False)
+        assert state["failed_stage"] == "analyst"
 
     def test_creates_state_when_cycle_never_started(self, tmp_path):
         state = ac.fail_cycle(RUN_ID, "launch", "no cli", output_dir=tmp_path, notify=False)
@@ -309,11 +503,55 @@ class TestBuildSummary:
                                    stale_pending=[{"symbol": "AAPL", "side": "buy"}])
         assert "Still pending from earlier: buy AAPL" in body
 
-    def test_trimmed_to_ntfy_limit(self):
-        long = {"c-T": {"thesis": "x" * 10_000}}
+    def test_long_thesis_shortened_before_warnings_are_dropped(self):
+        long = {"c-T": {"thesis": "x" * 10_000, "invalidation": "y" * 5_000, "flags": ["earnings_in_2_days"]}}
         _, body = ac.build_summary(mode="live", preflight=PREFLIGHT, valid_theses=long,
-                                   placed_records=[{"symbol": "T", "side": "buy", "qty": 7, "client_order_id": "c-T"}])
+                                   earnings={"T": "2026-11-12"},
+                                   placed_records=[{"symbol": "T", "side": "buy", "qty": 7, "client_order_id": "c-T"}],
+                                   stale_pending=[{"symbol": "AAPL", "side": "buy"}])
+        assert len(body) <= ac.NTFY_MAX_CHARS
+        assert "x" * 10_000 not in body and "…" in body
+        # every warning survives
+        for must in ("Flags: earnings_in_2_days", "Next earnings 2026-11-12",
+                     "F BUY (buying_power_exhausted)", "Still pending from earlier: buy AAPL"):
+            assert must in body
+
+    def test_trimmed_to_ntfy_limit_as_last_resort(self):
+        many = [{"client_order_id": f"v{i}", "symbol": f"S{i}", "side": "buy", "passed": False,
+                 "reasons": ["buying_power_exhausted"]} for i in range(400)]
+        _, body = ac.build_summary(mode="live", preflight={"run_blockers": [], "verdicts": many},
+                                   placed_records=[], valid_theses={})
         assert len(body) <= ac.NTFY_MAX_CHARS and body.endswith("…")
+
+    def test_order_line_has_invalidation_flags_and_earnings(self):
+        _, body = ac.build_summary(
+            mode="live", preflight=PREFLIGHT,
+            placed_records=[{"symbol": "T", "side": "buy", "qty": 7.0, "client_order_id": "c-T"}],
+            valid_theses={"c-T": {"thesis": "Momentum leader.", "invalidation": "Close below the 50-day.",
+                                  "flags": ["earnings_in_2_days", "", None]}},
+            earnings={"T": "2026-11-12"})
+        assert ("BUY 7 T, limit $21.29: Momentum leader. | Invalid if: Close below the 50-day. | "
+                "Flags: earnings_in_2_days | Next earnings 2026-11-12") in body
+
+    def test_invalid_thesis_shows_no_invalidation_or_flags(self):
+        _, body = ac.build_summary(
+            mode="live", preflight=PREFLIGHT,
+            placed_records=[{"symbol": "T", "side": "buy", "qty": 7, "client_order_id": "c-T"}],
+            valid_theses={}, earnings={"T": "2026-11-12"})
+        assert "thesis unavailable | Next earnings 2026-11-12" in body and "Invalid if" not in body
+
+    def test_passed_but_not_sent_listed_in_live(self):
+        title, body = ac.build_summary(mode="live", preflight=PREFLIGHT, placed_records=[],
+                                       valid_theses={},
+                                       not_sent_notes={"c-T": "skipped: in_chat_confirmation_unavailable"})
+        assert title == "Agentic cycle: no orders sent"
+        assert "Passed but not sent: BUY 7 T (skipped: in_chat_confirmation_unavailable)." in body
+        _, body = ac.build_summary(mode="live", preflight=PREFLIGHT, placed_records=[], valid_theses={})
+        assert "Passed but not sent: BUY 7 T (no send recorded by the Trader)." in body
+
+    def test_review_mode_has_no_not_sent_section(self):
+        _, body = ac.build_summary(mode="review", preflight=PREFLIGHT, placed_records=[], valid_theses={})
+        assert "Passed but not sent" not in body
 
     def test_only_file_numbers_appear(self):
         """Every number in the push is a number in the inputs (no model prose)."""
@@ -363,6 +601,32 @@ class TestSummaryForRun:
                                  output_dir=tmp_path)
         _, body, facts = ac.summary_for_run(RUN_ID, tmp_path)
         assert facts["n_stale_pending"] == 1 and "AAPL" in body
+
+    def test_research_earnings_date_reaches_the_push(self, tmp_path):
+        self._setup(tmp_path)
+        (tmp_path / "agentic" / RUN_ID / "research.json").write_text(json.dumps({
+            "queue_generated_at": GEN, "symbols": {
+                "T": {"next_earnings": {"date": "2099-01-30", "source": "get_earnings_calendar"},
+                      "analyst_ratings": None, "data_gaps": ["analyst_ratings"]},
+                "F": {"next_earnings": {"date": "2000-01-01", "source": "get_earnings_calendar"},
+                      "analyst_ratings": None, "data_gaps": ["analyst_ratings"]}}}))
+        _, body, _ = ac.summary_for_run(RUN_ID, tmp_path)
+        assert "Next earnings 2099-01-30" in body
+        assert "2000-01-01" not in body       # a past date is a research error: never quoted
+
+    def test_skipped_receipt_note_for_passed_order_not_sent(self, tmp_path):
+        self._setup(tmp_path)
+        (tmp_path / "execution_placed.jsonl").write_text("")   # nothing was sent after all
+        (tmp_path / "execution_receipts.jsonl").write_text("\n".join(json.dumps(r) for r in [
+            {"ts": (NOW - timedelta(days=1)).isoformat(), "symbol": "T", "side": "buy", "action": "skipped",
+             "note": "old run"},
+            {"ts": "2099-01-01T00:00:00+00:00", "symbol": "T", "side": "buy", "action": "skipped",
+             "note": "in_chat_confirmation_unavailable"},
+        ]) + "\n")
+        _, body, facts = ac.summary_for_run(RUN_ID, tmp_path)
+        assert facts["n_passed_not_sent"] == 1
+        assert "Passed but not sent: BUY 7 T (skipped: in_chat_confirmation_unavailable)." in body
+        assert "old run" not in body
 
     def test_preflight_for_other_queue_ignored(self, tmp_path):
         self._setup(tmp_path)
@@ -437,6 +701,7 @@ class TestLaunch:
 
         def runner(cmd, **kw):
             started(tmp_path)
+            ac.record_stage(RUN_ID, "risk", "completed", output_dir=tmp_path)
             ac.record_stage(RUN_ID, "scout", "started", output_dir=tmp_path)
             raise subprocess.TimeoutExpired(cmd, kw["timeout"])
         with mock.patch.object(ac, "evaluate_gate", return_value=_gate_ok()):
@@ -489,10 +754,38 @@ class TestLaunch:
             rc = ac.launch(output_dir=tmp_path, runner=runner, notifier=mock.Mock())
         assert rc == ac.EXIT_ERROR and ac.read_cycle(RUN_ID, tmp_path)["status"] == "failed"
 
-    def test_coordinator_skipped_itself(self, tmp_path):
-        with mock.patch.object(ac, "evaluate_gate", return_value=_gate_ok()):
-            rc = ac.launch(output_dir=tmp_path, runner=mock.Mock(return_value=_Proc(0)), notifier=mock.Mock())
+    def test_coordinator_skipped_itself(self, tmp_path, caplog):
+        """claude exits 0 with no cycle.json and the re-run gate now skips
+        (state changed in between): a quiet, logged skip."""
+        notifier = mock.Mock()
+        skip = ac.GateResult(False, ac.SKIP_QUEUE_NEAR_STALE, run_id=RUN_ID, mode="live")
+        with caplog.at_level("INFO", logger=ac.logger.name), \
+                mock.patch.object(ac, "evaluate_gate", side_effect=[_gate_ok(), skip]) as eg:
+            rc = ac.launch(output_dir=tmp_path, runner=mock.Mock(return_value=_Proc(0)), notifier=notifier)
         assert rc == ac.EXIT_SKIP and ac.read_cycle(RUN_ID, tmp_path) is None
+        assert eg.call_count == 2
+        notifier.assert_not_called()
+        assert any(ac.SKIP_QUEUE_NEAR_STALE in r.getMessage() and r.levelname == "INFO" for r in caplog.records)
+
+    def test_coordinator_never_started_cycle_alerts(self, tmp_path, caplog):
+        """Review #8: claude exits 0, no cycle.json, and the gate STILL says
+        run: the coordinator failed to start the cycle. That is an alert and
+        an error, never a silent skip."""
+        notifier = mock.Mock(return_value=True)
+        with caplog.at_level("WARNING", logger=ac.logger.name), \
+                mock.patch.object(ac, "evaluate_gate", return_value=_gate_ok()):
+            rc = ac.launch(output_dir=tmp_path, notifier=notifier,
+                           runner=mock.Mock(return_value=_Proc(0, stdout="I could not find the command.")))
+        assert rc == ac.EXIT_ERROR
+        state = ac.read_cycle(RUN_ID, tmp_path)
+        assert state["status"] == "failed" and state["failed_stage"] == "launch"
+        assert "without starting the cycle" in state["reason"] and "could not find" in state["reason"]
+        notifier.assert_called_once()
+        assert any(r.levelname == "WARNING" and "without starting the cycle" in r.getMessage()
+                   for r in caplog.records)
+        # the failed cycle.json marks the queue handled: the next tick won't retry it
+        assert ac.gate(queue(), now=NOW, settings_mode="live", kill_switch_active=False, market_open=True,
+                       existing_cycle=state).reason == ac.SKIP_ALREADY_HANDLED
 
 
 class TestCli:
@@ -512,6 +805,7 @@ class TestCli:
     def test_out_of_order_stage_is_error(self, tmp_path):
         started(tmp_path)
         assert ac.main(["--output-dir", str(tmp_path), "stage", RUN_ID, "trader", "started"]) == ac.EXIT_ERROR
+        assert ac.main(["--output-dir", str(tmp_path), "stage", RUN_ID, "scout", "started"]) == ac.EXIT_ERROR
 
     def test_finish_early_fails_cycle(self, tmp_path):
         started(tmp_path)

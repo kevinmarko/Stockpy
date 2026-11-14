@@ -57,14 +57,18 @@ not — read them a checklist only if they ask for one.
    `$OUTPUT_DIR` throughout the rest of this skill) for every reference
    below — do not re-derive it per file or per step:
    ```bash
-   python3 -c "from settings import settings; print(settings.OUTPUT_DIR)"
+   .venv/bin/python3 -c "from settings import settings; print(settings.OUTPUT_DIR)"
    ```
-   If that errors (e.g. a missing dependency because the active `python3`
-   isn't this repo's own environment), retry with
-   `.venv/bin/python3 -c "from settings import settings; print(settings.OUTPUT_DIR)"`
-   if this worktree has its own `.venv`, or point at another checkout's
-   `.venv/bin/python` — the value doesn't depend on which worktree computed
-   it, since `settings.OUTPUT_DIR` is a fixed, operator-configured path, not
+   **Every Python command in this skill runs from the repo root with the
+   repo's own interpreter, `.venv/bin/python3` — never a bare `python3`.**
+   A bare `python3` can be a system/Homebrew interpreter without this repo's
+   dependencies (`pydantic_settings`); `execution/receipts_store.py` then
+   cannot resolve `settings.OUTPUT_DIR` and refuses to write (it used to fall
+   back to `./output`, which split the ledger and let a same-day order be
+   sent twice). In a git worktree that has no `.venv` of its own, use the main
+   checkout's `.venv/bin/python3` with this checkout as the working
+   directory — the value doesn't depend on which worktree computed it, since
+   `settings.OUTPUT_DIR` is a fixed, operator-configured path, not
    worktree-relative. If you still cannot resolve it, **stop and ask the
    operator** for the directory rather than guessing or falling back to a
    bare `output/` path — the whole point of this step is that a repo-relative
@@ -89,15 +93,14 @@ not — read them a checklist only if they ask for one.
    https://agent.robinhood.com/mcp/trading` and authenticate via `/mcp`. Stop.
 3. **Find out who writes the queue, and refresh it.** Read the writer mode once:
    ```bash
-   python3 -c "from settings import settings; print(settings.DAEMON_AGENTIC_QUEUE_MODE)"
+   .venv/bin/python3 -c "from settings import settings; print(settings.DAEMON_AGENTIC_QUEUE_MODE)"
    ```
-   (same `.venv/bin/python3` fallback as step 1).
    - **`primary`** (the live setting since 2026-10-12) — the orchestrator
      daemon writes the queue. `main.py` was archived to `legacy/` (step 5.5), so
      never tell the operator to run it for a fresh queue. Before loading the queue, trigger a
      daemon cycle and wait for it to finish:
      ```bash
-     python3 - <<'EOF'
+     .venv/bin/python3 - <<'EOF'
      import time
      from shared import daemon_client as dc
      r = dc.trigger_run(timeout=10)
@@ -148,7 +151,7 @@ not — read them a checklist only if they ask for one.
 4. `$OUTPUT_DIR/execution_placed.jsonl` is the append-only **placed-intent ledger**
    (may not exist yet — that just means nothing has been placed). Each line is
    one JSON record:
-   `{"ts","dedup_key","symbol","side","qty","target_notional","client_order_id","mcp_order_id","approval_id","ref_id","run_id"}`,
+   `{"ts","dedup_key","symbol","side","qty","target_notional","est_notional","client_order_id","mcp_order_id","approval_id","ref_id","run_id"}`,
    where `dedup_key = "YYYY-MM-DD:SYMBOL:SIDE"` in **UTC**. In trade-approval
    mode a ledger line means **submitted for the operator's approval**, not
    executed; `approval_id` links it to `$OUTPUT_DIR/execution_approvals.jsonl`. You consult it for
@@ -160,7 +163,7 @@ not — read them a checklist only if they ask for one.
 
 - `$OUTPUT_DIR/KILL_SWITCH` exists **OR** the queue's `kill_switch_active` is
   `true` → the platform is paused. Refuse all placement. (Deactivate with
-  `python -m execution.kill_switch --deactivate` only on operator instruction.)
+  `.venv/bin/python3 -m execution.kill_switch --deactivate` only on operator instruction.)
 - The queue's `mode` is `off` → nothing to do.
 - The queue's `generated_at` is more than ~30 minutes old → it is STALE. Refuse
   to place; offer to refresh it first (Prerequisites step 3: a daemon cycle via
@@ -213,6 +216,17 @@ overrides (the coordinator passes them verbatim):
   cycle's summary push for the operator.
 - Record `run_id` in every placed record, check approvals once, and don't wait
   for the operator's tap.
+- **Re-check that the market is open immediately before each send** (the
+  preflight's `market_closed` blocker was evaluated minutes earlier):
+  `.venv/bin/python3 -c "import sys; from datetime import datetime, timezone; from shared.market_hours import is_us_market_open_now; sys.exit(0 if is_us_market_open_now(datetime.now(timezone.utc)) else 1)"`.
+  Exit 1 → send nothing more this run, record a `skipped` receipt with the
+  note `market_closed` for each remaining order, and report it.
+- If a ledger one-liner (`append_placed` / `append_approval_event`) exits
+  non-zero, **stop sending**: the order just sent is on the phone but not in
+  the ledger, so the next run's idempotency check cannot see it. Report it as
+  a failure, naming the order and its approval id.
+- Keep the final report to five lines or fewer: counts previewed / sent /
+  skipped (with reasons) and the approval states you fetched.
 
 ## Procedure
 
@@ -237,7 +251,7 @@ overrides (the coordinator passes them verbatim):
    **Refresh earlier approvals.** List the approval ids still `pending` in the
    log:
    ```bash
-   python3 -c "from execution.receipts_store import pending_approval_ids; print(pending_approval_ids())"
+   .venv/bin/python3 -c "from execution.receipts_store import pending_approval_ids; print(pending_approval_ids())"
    ```
    If any, call `get_trade_approvals(account_number, approval_ids=[...])` and
    record every state you observe (step 6's recording recipe). An id the call
@@ -245,14 +259,24 @@ overrides (the coordinator passes them verbatim):
 3. **Preview every intent (ALWAYS), one at a time, narrated.** For each
    intent, call `review_equity_order` with its `symbol`, `side`, `order_type`,
    and quantity:
-   - SELL intents come in two shapes:
-     - **Full exit** — `qty` is a concrete number (the held share count). Sell
-       exactly that quantity.
-     - **Partial trim** — `qty: null` with a `target_notional` (a Pilot-follow
-       rebalance-down). Resolve it exactly like a BUY: call `get_equity_quotes`
-       for a live price, compute `qty = floor(target_notional / price)`, then
-       **cap `qty` at the held share count** (`get_equity_positions`) so a trim can
-       never oversell, and verify `qty > 0`. Preview only if the resolved qty is 0.
+   - SELL intents say how much to sell in `exit_kind` (older queues without
+     it: a concrete `qty` is a full exit, `qty: null` a trim). The queue's
+     `qty` comes from the daemon's snapshot, which is **not** the Agentic
+     account, so never sell it blindly — size from the Agentic account's own
+     holding (`get_equity_positions`, its sellable quantity). With a
+     preflight (step 4b), use the verdict's `qty`; it already did this.
+     - **Full exit** (`exit_kind: "full"`, or a concrete `qty` with no
+       `exit_kind`) — sell the Agentic account's whole sellable quantity
+       (fractional shares kept). If the account holds none, preview only.
+     - **Fraction** (`exit_kind: "fraction"`) — sell
+       `floor(sellable * exit_fraction)` whole shares; preview only if that
+       is below one share.
+     - **Partial trim** (`exit_kind: "trim"`, or `qty: null` with a
+       `target_notional`; a Pilot-follow rebalance-down). Resolve it exactly
+       like a BUY: call `get_equity_quotes` for a live price, compute
+       `qty = floor(target_notional / price)`, then **cap `qty` at the held
+       share count** (`get_equity_positions`) so a trim can never oversell,
+       and verify `qty > 0`. Preview only if the resolved qty is 0.
    - BUY intents carry `qty: null` and a `target_notional`. Call
      `get_equity_quotes` for a live price, compute
      `qty = floor(target_notional / price)`, and verify
@@ -290,13 +314,17 @@ overrides (the coordinator passes them verbatim):
      (`gate_reasons`).
 4b. **Portfolio & Risk preflight (live only).** Before placing anything, get
    the preflight for THIS queue — the code-enforced check of every intent
-   against the live Agentic account (cumulative buying power, concentration,
-   portfolio heat, notional cap, sellable shares, pending approvals, staleness, kill switch):
+   against the live Agentic account (cumulative buying power with pending
+   approvals' dollars reserved, concentration, portfolio heat, notional cap,
+   sellable shares, pending approvals, quote and input-file freshness, market
+   hours, staleness, kill switch):
    - Run the `rh-risk-manager` agent (or follow its procedure yourself), which
      saves fresh `get_portfolio` / `get_equity_positions` / `get_equity_quotes`
-     / `get_trade_approvals` output and runs `python3 -m execution.agentic_preflight`.
+     / `get_trade_approvals` output into this run's own
+     `$OUTPUT_DIR/agentic/<run_id>/inputs/` folder and runs
+     `.venv/bin/python3 -m execution.agentic_preflight`.
    - Load it with
-     `python3 -c "import json; from execution.agentic_preflight import read_preflight_for_queue; print(json.dumps(read_preflight_for_queue(json.load(open('$OUTPUT_DIR/execution_queue.json')))))"`.
+     `.venv/bin/python3 -c "import json; from execution.agentic_preflight import read_preflight_for_queue; print(json.dumps(read_preflight_for_queue(json.load(open('$OUTPUT_DIR/execution_queue.json')))))"`.
      It returns the preflight only if its `queue_generated_at` equals this
      queue's `generated_at`; anything else prints `null`.
    - **A preflight veto is final.** Place only intents whose verdict has
@@ -310,7 +338,7 @@ overrides (the coordinator passes them verbatim):
      looser.
 4c. **Thesis per order (narration only).** Load the Strategy Analyst's
    validated theses for this queue:
-   `python3 -c "import json; from execution.agentic_research import load_run_artifacts; a=load_run_artifacts(json.load(open('$OUTPUT_DIR/execution_queue.json'))); t=(a['theses'] or {}).get('theses', {}); print(json.dumps({c: t[c] for c in a['valid_thesis_ids']}))"`.
+   `.venv/bin/python3 -c "import json; from execution.agentic_research import load_run_artifacts; a=load_run_artifacts(json.load(open('$OUTPUT_DIR/execution_queue.json'))); t=(a['theses'] or {}).get('theses', {}); print(json.dumps({c: t[c] for c in a['valid_thesis_ids']}))"`.
    Only theses that pass `execution/agentic_research.py`'s validator are
    printed; every number in them is checked against its cited source.
    Before each order goes to the operator's phone, say its **thesis**,
@@ -351,7 +379,7 @@ overrides (the coordinator passes them verbatim):
    d. **Submit with a deterministic `ref_id`.** Compute it from the intent's
       `client_order_id` (never a random UUID):
       ```bash
-      python3 -c "from execution.receipts_store import make_ref_id; print(make_ref_id('<client_order_id>'))"
+      .venv/bin/python3 -c "from execution.receipts_store import make_ref_id; print(make_ref_id('<client_order_id>'))"
       ```
       If it prints `None` (blank `client_order_id`), do not place — skip the
       intent with a note. Call `place_equity_order` with that `ref_id` (and
@@ -362,17 +390,26 @@ overrides (the coordinator passes them verbatim):
    e. **On a successful placement, append to BOTH ledgers (append-only):**
       - `$OUTPUT_DIR/execution_placed.jsonl` — the placed-intent ledger:
         `{"ts","dedup_key","symbol","side","qty","target_notional",
-        "client_order_id","mcp_order_id","approval_id","ref_id"}` (use the same
-        `dedup_key` you computed in step 5b; this is what makes the next run's
-        idempotency check work). Write it through the helper, not by hand:
-        `python3 -c "from execution.receipts_store import append_placed; append_placed({...})"`.
+        "est_notional","client_order_id","mcp_order_id","approval_id","ref_id","run_id"}`
+        (use the same `dedup_key` you computed in step 5b; this is what makes
+        the next run's idempotency check work). Copy `est_notional` from the
+        preflight verdict for this order (the preflight reserves it against
+        buying power while the approval is pending); without a preflight, use
+        the `qty × price` you showed the operator, or `null` if you have none —
+        never a made-up number. Write it through the helper, not by hand, and
+        let the exit code tell you whether it was recorded:
+        `.venv/bin/python3 -c "import sys; from execution.receipts_store import append_placed; sys.exit(0 if append_placed({...}) else 1)"`.
         On the approval path, `approval_id` is the id the
         `place_equity_order` response returns. If the response carries none,
         call `get_trade_approvals` and match on symbol, side and quantity; if
         you still cannot identify it, record `approval_id: null` and tell the
-        operator — never invent one. Then record its first state:
-        `append_approval_event({"approval_id", "state": "pending", "symbol",
-        "side", "dedup_key", "ref_id"})`.
+        operator — never invent one. Then record its first state the same way:
+        `.venv/bin/python3 -c "import sys; from execution.receipts_store import append_approval_event; sys.exit(0 if append_approval_event({'approval_id': '<id>', 'state': 'pending', 'symbol': '<SYM>', 'side': '<side>', 'dedup_key': '<dedup_key>', 'ref_id': '<ref_id>'}) else 1)"`.
+      - **If either one-liner exits non-zero (or prints a traceback), STOP
+        placing.** The order went out but is not recorded, so the next run's
+        idempotency check cannot see it and could send it again. Tell the
+        operator exactly which order (symbol, side, qty, approval id) is
+        unrecorded and place nothing more this run.
       - `$OUTPUT_DIR/execution_receipts.jsonl` — the outcome audit trail:
         `{"ts","symbol","side","qty","action":"reviewed|placed|skipped",
         "mcp_order_id","note"}`.
@@ -383,8 +420,10 @@ overrides (the coordinator passes them verbatim):
    reporting. Record every state you observe — including `pending`, so the
    next run knows to re-check it:
    ```bash
-   python3 -c "from execution.receipts_store import append_approval_event; append_approval_event({'approval_id': '<id>', 'state': '<state as returned>', 'symbol': '<SYM>', 'side': '<side>'})"
+   .venv/bin/python3 -c "import sys; from execution.receipts_store import append_approval_event; sys.exit(0 if append_approval_event({'approval_id': '<id>', 'state': '<state as returned>', 'symbol': '<SYM>', 'side': '<side>'}) else 1)"
    ```
+   A non-zero exit means the state was not recorded: say so in the report
+   (the next run will re-check that id as if nothing were observed).
    Pass Robinhood's state string verbatim; the helper normalises it
    (pending / approved / declined / expired / auto_approved, else `unknown`
    with the raw value kept). Never state that something is or isn't pending

@@ -3130,6 +3130,29 @@ class TestGetRecommendation:
         assert "BUY" in result
         assert "```json" in result
 
+    def test_never_persists_forecast_ledger_rows(self, monkeypatch):
+        # Finding #6 (2026-11-14 agentic review): a read-only tool must not
+        # append forecast-ledger rows, so evaluate() gets persist_forecast=False.
+        import engine.advisory as adv_mod
+
+        calls = []
+
+        def _evaluate(*a, **k):
+            calls.append(k)
+            return self._fake_rec()
+
+        monkeypatch.setattr(adv_mod, "evaluate", _evaluate)
+        _patch_advisory_inputs(monkeypatch)
+
+        srv.get_recommendation("aapl")
+
+        assert len(calls) == 1
+        assert calls[0].get("persist_forecast") is False
+
+    def test_docstring_says_it_is_a_fresh_re_evaluation(self):
+        doc = (srv.get_recommendation.__doc__ or "").lower()
+        assert "fresh" in doc and "queued" in doc and "context" in doc
+
     def test_exception_degrades(self, monkeypatch):
         import engine.advisory as adv_mod
 
@@ -3757,6 +3780,29 @@ class TestGetExecutionQueue:
         for intent in payload["intents"]:
             assert intent["symbol"] in result
 
+    def test_partial_exit_shows_the_fraction_and_carries_context(self, monkeypatch, tmp_path):
+        # Contract C1: a "fraction" SELL keeps the held qty in `qty`; the tool
+        # shows the fraction actually intended and passes exit_kind/context on.
+        from settings import settings
+        monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
+
+        class _Rec:
+            symbol, action, conviction = "NVDA", "SELL", 0.9
+            suggested_position_pct, suggested_exit_pct = 0.0, 0.5
+            strategy, rationale = "advisory", "trim half"
+
+        payload = self._real_payload(recs=[_Rec()])
+        assert payload["intents"][0]["exit_kind"] == "fraction"
+        (tmp_path / "execution_queue.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        result = srv.get_execution_queue()
+
+        assert "50% of held (10)" in result
+        block = result.split("```json", 1)[1].rsplit("```", 1)[0]
+        order = json.loads(block)["orders"][0]
+        assert order["exit_kind"] == "fraction" and order["exit_fraction"] == 0.5
+        assert order["context"]["suggested_exit_pct"] == 0.5
+
     def test_gate_reasons_list_is_joined_not_a_python_repr(self, monkeypatch, tmp_path):
         from settings import settings
         monkeypatch.setattr(settings, "OUTPUT_DIR", tmp_path)
@@ -4158,7 +4204,12 @@ class TestGetSignalBreakdown:
         import database_setup
         database_setup.initialize_database("quant_platform.db")
 
-        assert "No signals found for AAPL" in srv.get_signal_breakdown("aapl")
+        result = srv.get_signal_breakdown("aapl")
+        assert "No signals found for AAPL" in result
+        # Finding #6: say the table has no live writer and point at the queue
+        # intent's context, instead of implying AAPL has no signals.
+        assert "not written by the live pipeline" in result
+        assert "`context`" in result and "execution_queue.json" in result
 
     def test_renders_most_recent_row_excluding_meta_keys(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)

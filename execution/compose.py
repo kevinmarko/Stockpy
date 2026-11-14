@@ -254,6 +254,8 @@ def write_advisory_source(
     ``queue_builder.CONFIG["min_conviction"]``), not here, so a later config
     change is honored without needing to rewrite this file.
     """
+    from execution.queue_builder import build_decision_context
+
     now = now or datetime.now(timezone.utc)
     targets: List[Dict[str, Any]] = []
     for rec in recommendations or []:
@@ -269,6 +271,11 @@ def write_advisory_source(
                 "suggested_position_pct": _coerce_float(getattr(rec, "suggested_position_pct", 0.0)) or 0.0,
                 "strategy": str(getattr(rec, "strategy", "")),
                 "rationale": str(getattr(rec, "rationale", "") or getattr(rec, "strategy", "")),
+                # Contract C1: the decision's own inputs (JSON-safe, nulls for
+                # anything unavailable) and the SELL exit fraction, so the queue
+                # built from this file can carry them.
+                "suggested_exit_pct": _coerce_float(getattr(rec, "suggested_exit_pct", None)),
+                "context": build_decision_context(rec),
             })
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("compose: skipping advisory rec for %s (%s)", getattr(rec, "symbol", "?"), exc)
@@ -304,6 +311,9 @@ class ComposedIntent:
     rationale: str
     strategy_id: str
     sources: List[Dict[str, Any]] = field(default_factory=list)
+    # Contract C1 passthrough (None on an advisory source written before it).
+    suggested_exit_pct: Optional[float] = None
+    context: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -343,6 +353,8 @@ def _advisory_intent(rec: Dict[str, Any], equity: float) -> Optional[ComposedInt
         suggested_position_pct=suggested_pct, target_notional=own_notional,
         rationale=rationale, strategy_id=ADVISORY_SOURCE_ID,
         sources=[{"source_id": ADVISORY_SOURCE_ID, "target_notional": own_notional}],
+        suggested_exit_pct=_coerce_float(rec.get("suggested_exit_pct")),
+        context=rec.get("context") if isinstance(rec.get("context"), dict) else None,
     )
 
 
